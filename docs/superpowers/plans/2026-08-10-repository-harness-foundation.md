@@ -545,7 +545,7 @@ Create `pom.xml`:
     <maven.site.version>3.22.0</maven.site.version>
     <maven.surefire.version>3.5.6</maven.surefire.version>
     <spotless.version>3.9.0</spotless.version>
-    <google-java-format.version>1.30.0</google-java-format.version>
+    <google-java-format.version>1.24.0</google-java-format.version>
   </properties>
 
   <dependencyManagement>

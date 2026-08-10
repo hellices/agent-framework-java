@@ -35,7 +35,7 @@
     <maven.site.version>3.22.0</maven.site.version>
     <maven.surefire.version>3.5.6</maven.surefire.version>
     <spotless.version>3.9.0</spotless.version>
-    <google-java-format.version>1.30.0</google-java-format.version>
+    <google-java-format.version>1.24.0</google-java-format.version>
     <checkstyle.maven.version>3.6.0</checkstyle.maven.version>
     <checkstyle.version>12.3.1</checkstyle.version>
     <maven.dependency.version>3.11.0</maven.dependency.version>
