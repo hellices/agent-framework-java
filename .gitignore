@@ -1,1 +1,32 @@
+# Maven and Java
+target/
+*.class
+*.log
+.flattened-pom.xml
+
+# Local worktrees
 .worktrees/
+.superpowers/
+
+# IDE and operating system
+.idea/
+*.iml
+.vscode/*
+!.vscode/extensions.json
+.DS_Store
+
+# Local agent settings and run artifacts
+CLAUDE.local.md
+GEMINI.local.md
+AGENTS.local.md
+.claude/settings.local.json
+.harness/runs/
+.harness/local/
+
+# Credentials and environment overrides
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+settings.local.xml
