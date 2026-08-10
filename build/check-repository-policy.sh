@@ -64,6 +64,7 @@ do
 done
 
 require_text .mvn/wrapper/maven-wrapper.properties "apache-maven-3.9.16"
+require_text .mvn/wrapper/maven-wrapper.properties "distributionSha256Sum="
 require_text pom.xml "<maven.compiler.release>17</maven.compiler.release>"
 
 if [ "$failures" -ne 0 ]; then
