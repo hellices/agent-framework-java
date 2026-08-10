@@ -1216,6 +1216,7 @@ Create `.harness/schemas/change-context.schema.json`:
     "repositoryRevision": { "type": "string", "minLength": 1 },
     "relevantFiles": {
       "type": "array",
+      "minItems": 1,
       "uniqueItems": true,
       "items": { "type": "string", "minLength": 1 }
     },

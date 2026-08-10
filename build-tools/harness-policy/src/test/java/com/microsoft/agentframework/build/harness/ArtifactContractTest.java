@@ -47,4 +47,16 @@ class ArtifactContractTest {
           .isTrue();
     }
   }
+
+  /** Reviewer finding: relevantFiles must have at least one item (minItems: 1). */
+  @org.junit.jupiter.api.Test
+  void changeContextRelevantFilesRequiresAtLeastOneItem() throws IOException {
+    Path root = RepositoryPaths.root();
+    JsonNode schema =
+        JSON.readTree(root.resolve(".harness/schemas/change-context.schema.json").toFile());
+    JsonNode relevantFiles = schema.path("properties").path("relevantFiles");
+    assertThat(relevantFiles.path("minItems").asInt())
+        .as("relevantFiles must have minItems: 1 so empty arrays are rejected")
+        .isEqualTo(1);
+  }
 }
