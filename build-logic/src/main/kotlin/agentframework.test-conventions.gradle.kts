@@ -26,13 +26,7 @@ tasks.withType<Test>().configureEach {
     }
 }
 
-tasks.register("testJava17") {
-    group = "verification"
-    description = "Runs tests with the Eclipse Temurin 17 launcher."
-    dependsOn(tasks.named("test"))
-}
-
-listOf(21, 25).forEach { javaVersion ->
+listOf(17, 21, 25).forEach { javaVersion ->
     val compatibilityTest =
         tasks.register<Test>("testJava$javaVersion") {
             group = "verification"

@@ -59,6 +59,9 @@ tasks.withType<SpotBugsTask>().configureEach {
     reports.create("xml") {
         required.set(true)
     }
+    reports.create("html") {
+        required.set(false)
+    }
 }
 
 tasks.named<JacocoReport>("jacocoTestReport") {

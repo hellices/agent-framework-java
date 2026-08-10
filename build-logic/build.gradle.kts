@@ -18,6 +18,7 @@ dependencies {
     testImplementation(platform(libs.junit.bom))
     testImplementation(libs.junit.jupiter)
     testImplementation(libs.assertj.core)
+    testImplementation(gradleTestKit())
     testRuntimeOnly(platform(libs.junit.bom))
     testRuntimeOnly(libs.junit.platform.launcher)
 }
