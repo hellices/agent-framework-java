@@ -1,5 +1,6 @@
 .worktrees/
-build/
+/build/
+**/build/
 .gradle/
 .kotlin/
 out/
