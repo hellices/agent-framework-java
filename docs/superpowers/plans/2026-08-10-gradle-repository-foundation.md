@@ -22,6 +22,7 @@
 - google-java-format runs only inside `agentframework.quality-conventions`, only on the Gradle runtime JDK 17, and never inside a JDK 21 or JDK 25 compatibility task. This is a deliberate, reviewed deviation from the design's preference for a formatter that does not touch javac internals: google-java-format 1.24.0 is pinned by decision, so the `--add-exports` flags in `gradle.properties` and the quality/compatibility split in the verification graph are what keep it from breaking the JDK matrix.
 - `AGENTS.md` is the canonical vendor-neutral instruction file. `CLAUDE.md`, `GEMINI.md`, and `.github/copilot-instructions.md` are thin adapters of at most 20 lines that point to it and never restate repository rules.
 - Every repository policy is a Gradle test wired into `check`. A shell script may exist only as a thin wrapper that a Gradle task invokes; a standalone shell gate that `check` does not run is prohibited.
+- A policy test that reads repository files declares those files as task inputs, so an edit to a workflow, instruction, contract, or documentation file can never leave the policy tasks `UP-TO-DATE`.
 - Workflow policy is enforced by parsing every `.github/workflows/*.yml` and `*.yaml` file as YAML, not by matching one regular expression against one file.
 - External GitHub Actions and reusable workflows are referenced by full 40-character commit SHA. Local composite actions use a `./` path. Pinned action SHAs for this plan:
   - `actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1`
@@ -34,6 +35,8 @@
 - Job-level `uses:` is prohibited, because a reusable workflow carries its own `runs-on` and would move a job off the reviewed runner allow list. Step-level `./` local composite actions stay allowed.
 - Only pull-request runs may be cancelled by concurrency. `main` pushes must never be cancelled.
 - Fork pull requests run the GitHub-hosted minimum verification; trusted jobs run on `arc-java-build`. The two paths are mutually exclusive and fan into one required `verify-result` job so a skipped job can never look green.
+- Trusted and fork job conditions are compared after stripping an optional `${{ }}` wrapper and collapsing whitespace runs. Reformatting a condition is allowed; changing an operator, an operand, or their order is not.
+- This plan's branch is not merged into `main` until the `arc-java-build` scale set from `2026-08-10-java-arc-platform.md` is deployed and one trusted `ci.yml` run has completed on it. The trusted jobs are never softened to `ubuntu-latest` to make the branch mergeable earlier. `docs/operations/github-actions-runner-contract.md` states the merge gate and `WorkflowPolicyTest` keeps it from being deleted silently.
 - No secret, credential, token, kubeconfig, Helm value, or personal agent setting is committed.
 - This plan creates no product modules, no provider adapters, no release automation, and no Azure or Kubernetes resources.
 - Every commit created by an agent includes:
@@ -74,14 +77,16 @@ Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
 
 ### Repository policy project
 
-- `build-tools/harness-policy/build.gradle.kts`: non-published policy project and its `policyCheck` task.
+- `build-tools/harness-policy/build.gradle.kts`: non-published policy project, the repository tree declared as a test input, and its `policyCheck` task.
 - `build-tools/harness-policy/gradle.lockfile`: generated dependency lock state.
 - `build-tools/harness-policy/src/main/java/com/microsoft/agentframework/build/harness/RepositoryPaths.java`: repository-root discovery.
 - `build-tools/harness-policy/src/test/java/com/microsoft/agentframework/build/harness/RepositoryGovernancePolicyTest.java`: instruction and adapter policy.
 - `build-tools/harness-policy/src/test/java/com/microsoft/agentframework/build/harness/BuildContractPolicyTest.java`: wrapper, version catalog, formatter placement, Maven-absence, and lock policy.
 - `build-tools/harness-policy/src/test/java/com/microsoft/agentframework/build/harness/ArtifactContractTest.java`: JSON Schema 2020-12 contract and example validation.
 - `build-tools/harness-policy/src/test/java/com/microsoft/agentframework/build/harness/WorkflowDocuments.java`: YAML workflow reader helper.
+- `build-tools/harness-policy/src/test/java/com/microsoft/agentframework/build/harness/WorkflowPolicy.java`: fail-closed workflow rules shared by the real-workflow scan and the bypass probes.
 - `build-tools/harness-policy/src/test/java/com/microsoft/agentframework/build/harness/WorkflowPolicyTest.java`: workflow trust, pinning, permission, and fan-in policy.
+- `build-tools/harness-policy/src/test/java/com/microsoft/agentframework/build/harness/WorkflowPolicyBypassProbeTest.java`: synthetic bypass documents that fail if a workflow rule stops rejecting them.
 
 ### Agent artifact contracts
 
@@ -3365,10 +3370,17 @@ Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
 **Files:**
 - Create: `docs/operations/github-actions-runner-contract.md`
 - Modify: `README.md`
+- Modify: `.github/CODEOWNERS`
+- Modify: `.gitignore`
+- Modify: `build-tools/harness-policy/build.gradle.kts`
+- Modify: `build-tools/harness-policy/src/test/java/com/microsoft/agentframework/build/harness/RepositoryGovernancePolicyTest.java`
+- Modify: `build-tools/harness-policy/src/test/java/com/microsoft/agentframework/build/harness/WorkflowPolicy.java`
+- Modify: `build-tools/harness-policy/src/test/java/com/microsoft/agentframework/build/harness/WorkflowPolicyTest.java`
+- Modify: `build-tools/harness-policy/src/test/java/com/microsoft/agentframework/build/harness/WorkflowPolicyBypassProbeTest.java`
 
 **Interfaces:**
 - Consumes: the CI graph from Task 6 and the `arc-java-build` scale-set contract owned by the platform plan.
-- Produces: the application-side runner contract document and README entry points; a fully green `./gradlew clean check`.
+- Produces: the application-side runner contract document and README entry points, both enforced by `RepositoryGovernancePolicyTest` and `WorkflowPolicyTest`; a fully green `./gradlew clean check`.
 
 - [ ] **Step 1: Document the application and platform runner contract**
 
@@ -3376,6 +3388,29 @@ Create `docs/operations/github-actions-runner-contract.md`:
 
 ````markdown
 # GitHub Actions Runner Contract
+
+## Merge gate: do not merge before `arc-java-build` exists
+
+**This branch must not be merged into `main` until the `arc-java-build` scale set is live.**
+
+`.github/workflows/ci.yml` schedules `trusted-quality` and `trusted-compatibility` on
+`runs-on: arc-java-build`. That label is created by the platform plan
+`docs/superpowers/plans/2026-08-10-java-arc-platform.md` in the sibling repository
+`agent-framework-java-platform`. Until the scale set is registered and accepting jobs:
+
+- every trusted job stays queued and eventually times out;
+- `verify-result` sees `trusted-quality=failure`/`cancelled` and fails, because a skipped or
+  timed-out trusted path is never reported as green;
+- `main` pushes therefore fail, not silently pass.
+
+The workflow is intentionally not softened to `ubuntu-latest` to make the branch mergeable earlier.
+Doing that would delete the only executable evidence that the runner contract below is honoured, and
+the runner label allow list in `WorkflowPolicyTest` would then permit a trusted path on a hosted
+runner. Merge order is fixed:
+
+1. `agent-framework-java-platform` deploys `arc-java-build` and its smoke workflow passes.
+2. A trusted run of this repository's `ci.yml` completes on `arc-java-build`.
+3. Only then is this branch merged and `verify-result` made a required status check.
 
 ## Application repository contract
 
@@ -3431,6 +3466,16 @@ a skipped job can never be reported as green.
 Never combine `pull_request_target`, checkout of pull-request head code, and execution of repository
 scripts. Docker or Testcontainers work requires a separately reviewed scale set, namespace, runner
 group, and network policy; this repository does not create one.
+
+## Executable enforcement
+
+Every clause above that this repository can enforce is a test, not prose. `./gradlew check` runs
+`WorkflowPolicyTest` and `WorkflowPolicyBypassProbeTest`, which parse every workflow as YAML and
+enforce the runner allow list in all `runs-on` forms, the ban on job-level `uses:`, full commit-SHA
+pinning, `read`/`none` permissions, `persist-credentials: false`, pull-request-only cancellation,
+mutually exclusive trusted and fork conditions, and the `verify-result` truth table. Conditions are
+compared after whitespace and `${{ }}` normalization only, so reformatting a condition is allowed and
+weakening one is not.
 ````
 
 - [ ] **Step 2: Link the new entry points from the README**
@@ -3452,7 +3497,53 @@ Add this section to `README.md` immediately after the `## 문서` list:
 ```
 ````
 
-- [ ] **Step 3: Run the complete foundation verification**
+Then close the `## 구현 계획` section with the merge gate, so the branch's non-mergeable state is
+visible from the repository front page:
+
+````markdown
+CI의 신뢰 경로는 `arc-java-build` ARC scale set에서 실행됩니다. 해당 scale set이 Java ARC
+Platform 계획으로 배포되기 전에는 이 Gradle foundation 브랜치를 `main`에 merge하지 않습니다.
+자세한 merge 순서는 [GitHub Actions runner 계약](docs/operations/github-actions-runner-contract.md)의
+merge gate 절을 따릅니다.
+````
+
+Add `/docs/operations/ @hwang-inhwan` to `.github/CODEOWNERS`.
+
+- [ ] **Step 3: Make the documentation executable**
+
+Documentation that nothing verifies rots, so Task 7's prose is backed by tests:
+
+- `RepositoryGovernancePolicyTest` adds `docs/operations/github-actions-runner-contract.md` to the
+  required governance files and asserts in `readmeLinksEveryHarnessEntryPoint` that `README.md`
+  links `AGENTS.md`, `CONTRIBUTING.md`, `SECURITY.md`, and the runner contract, names
+  `./gradlew check`, and never names `mvnw`.
+- `WorkflowPolicyTest.runnerContractDocumentsTheDeployedRunnerLabels` asserts the contract names
+  every selector in `WorkflowPolicy.ALLOWED_RUNNER_SELECTORS`, and
+  `runnerContractBlocksMergingBeforeTheTrustedScaleSetExists` asserts the merge gate section
+  survives.
+- `WorkflowPolicy` owns `TRUSTED_CONDITION`, `FORK_CONDITION`, `normalizedCondition`,
+  `isTrustedCondition`, `isForkCondition`, and `trustedRunnerConditionViolations`. A condition is
+  compared after stripping an optional `${{ }}` wrapper and collapsing whitespace runs, so YAML
+  folding and indentation are free while operators and operands must match exactly.
+- `WorkflowPolicyTest.trustedAndForkConditionsAreMutuallyExclusive` proves no job satisfies both
+  path conditions and that no trusted-runner job carries the fork condition.
+- `WorkflowPolicyBypassProbeTest` adds `weakenedTrustedConditionIsRejected` (six weaker guards),
+  `trustedJobWithoutAnyConditionIsRejected`, and `reformattedTrustedConditionStaysAccepted` (plain,
+  folded, and `${{ }}`-wrapped forms).
+
+None of that is worth anything while the policy tasks skip themselves, so
+`build-tools/harness-policy/build.gradle.kts` declares the repository tree — everything under the
+root except `build`, `.git`, `.gradle`, `.kotlin`, `.gradle-bootstrap`, `.worktrees`, and
+`.harness/runs` — as a relative-path-sensitive input of every `Test` task in the project. The policy
+tests read repository files that are on no compile classpath, so without this a workflow,
+instruction, contract, or documentation edit left every policy task `UP-TO-DATE` and `./gradlew
+check` reported success without executing a single policy.
+
+Delete the untracked `settings-gradle.lockfile`: settings-level dependency locking is not activated,
+so the file locks nothing. `.gitignore` keeps it from being committed by a later `--write-locks` run,
+while project lockfiles such as `build-tools/harness-policy/gradle.lockfile` stay committed.
+
+- [ ] **Step 4: Run the complete foundation verification**
 
 Run:
 
@@ -3465,7 +3556,7 @@ Expected: `BUILD SUCCESSFUL`. The build runs `:build-logic:test` (5 TestKit test
 `:build-tools:harness-policy:test` (governance, build contract, artifact contract, and workflow
 policy tests), `:build-tools:harness-policy:quality`, and `testJava17`, `testJava21`, `testJava25`.
 
-- [ ] **Step 4: Verify the individual entry points named in AGENTS.md**
+- [ ] **Step 5: Verify the individual entry points named in AGENTS.md**
 
 Run:
 
@@ -3478,7 +3569,7 @@ Run:
 Expected: all three commands report `BUILD SUCCESSFUL`, proving the documented commands exist and are
 not CI-only.
 
-- [ ] **Step 5: Verify no Maven artifact was reintroduced**
+- [ ] **Step 6: Verify no Maven artifact was reintroduced**
 
 Run:
 
@@ -3488,12 +3579,12 @@ git ls-files -- pom.xml mvnw mvnw.cmd .mvn '*/pom.xml' '**/pom.xml'
 
 Expected: no output.
 
-- [ ] **Step 6: Commit the runner contract and README entry points**
+- [ ] **Step 7: Commit the runner contract, README entry points, and their tests**
 
 Run:
 
 ```bash
-git add README.md docs/operations
+git add README.md .gitignore .github/CODEOWNERS docs build-tools
 git commit -m "docs: define the arc-java-build runner contract
 
 Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"

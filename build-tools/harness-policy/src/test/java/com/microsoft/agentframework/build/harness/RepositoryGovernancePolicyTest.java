@@ -25,7 +25,8 @@ class RepositoryGovernancePolicyTest {
           ".github/CODEOWNERS",
           ".editorconfig",
           ".gitattributes",
-          ".gitignore");
+          ".gitignore",
+          "docs/operations/github-actions-runner-contract.md");
 
   private static final List<String> VENDOR_ADAPTERS =
       List.of("CLAUDE.md", "GEMINI.md", ".github/copilot-instructions.md");
@@ -92,6 +93,18 @@ class RepositoryGovernancePolicyTest {
   void contributingGuideUsesTheGradleWrapper() throws IOException {
     String text = read("CONTRIBUTING.md");
 
+    assertThat(text).contains("./gradlew check");
+    assertThat(text).doesNotContain("mvnw");
+  }
+
+  @Test
+  void readmeLinksEveryHarnessEntryPoint() throws IOException {
+    String text = read("README.md");
+
+    assertThat(text).contains("(AGENTS.md)");
+    assertThat(text).contains("(CONTRIBUTING.md)");
+    assertThat(text).contains("(SECURITY.md)");
+    assertThat(text).contains("(docs/operations/github-actions-runner-contract.md)");
     assertThat(text).contains("./gradlew check");
     assertThat(text).doesNotContain("mvnw");
   }

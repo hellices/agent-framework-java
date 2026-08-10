@@ -14,8 +14,28 @@ final class WorkflowPolicy {
 
   static final Set<String> ALLOWED_RUNNER_SELECTORS = Set.of("arc-java-build", "ubuntu-latest");
 
+  static final String TRUSTED_RUNNER_SELECTOR = "arc-java-build";
+
+  /**
+   * The only condition under which a job may run on the trusted runner: never on a pull request
+   * that comes from a fork.
+   */
+  static final String TRUSTED_CONDITION =
+      "github.event_name != 'pull_request'"
+          + " || github.event.pull_request.head.repo.full_name == github.repository";
+
+  /** The exact negation of {@link #TRUSTED_CONDITION}, so the two paths cannot both run. */
+  static final String FORK_CONDITION =
+      "github.event_name == 'pull_request'"
+          + " && github.event.pull_request.head.repo.full_name != github.repository";
+
   private static final Pattern PINNED_EXTERNAL_REFERENCE =
       Pattern.compile("^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+(?:/[A-Za-z0-9._/-]+)?@[0-9a-f]{40}$");
+
+  private static final Pattern EXPRESSION_WRAPPER =
+      Pattern.compile("^\\$\\{\\{(?<body>.*)}}$", Pattern.DOTALL);
+
+  private static final Pattern WHITESPACE_RUN = Pattern.compile("\\s+");
 
   private WorkflowPolicy() {}
 
@@ -69,6 +89,62 @@ final class WorkflowPolicy {
       boolean pinned = PINNED_EXTERNAL_REFERENCE.matcher(reference).matches();
       if (!local && !pinned) {
         violations.add(reference + " is neither a ./ local action nor pinned to a commit SHA");
+      }
+    }
+    return violations;
+  }
+
+  /**
+   * Normalizes a job condition so that only its meaning is compared. YAML line folding,
+   * indentation, and the optional {@code ${{ }}} wrapper are formatting that GitHub Actions treats
+   * identically, so they are erased. Nothing else is rewritten: operators, operands, and their
+   * order survive, so a weakened condition never normalizes to an accepted one.
+   */
+  static String normalizedCondition(JsonNode job) {
+    JsonNode condition = job.path("if");
+    if (!condition.isTextual()) {
+      return "";
+    }
+    String text = condition.textValue().trim();
+    var wrapper = EXPRESSION_WRAPPER.matcher(text);
+    if (wrapper.matches()) {
+      text = wrapper.group("body").trim();
+    }
+    return WHITESPACE_RUN.matcher(text).replaceAll(" ").trim();
+  }
+
+  static boolean hasCondition(JsonNode job, String expectedCondition) {
+    return normalizedCondition(job)
+        .equals(WHITESPACE_RUN.matcher(expectedCondition).replaceAll(" "));
+  }
+
+  static boolean isTrustedCondition(JsonNode job) {
+    return hasCondition(job, TRUSTED_CONDITION);
+  }
+
+  static boolean isForkCondition(JsonNode job) {
+    return hasCondition(job, FORK_CONDITION);
+  }
+
+  /**
+   * Every job that selects the trusted runner must carry exactly the trusted condition, so fork
+   * pull-request code can never execute on {@code arc-java-build}.
+   */
+  static List<String> trustedRunnerConditionViolations(JsonNode workflow) {
+    List<String> violations = new ArrayList<>();
+    for (String jobName : WorkflowDocuments.jobNames(workflow)) {
+      JsonNode job = WorkflowDocuments.job(workflow, jobName);
+      if (!WorkflowDocuments.runnerSelectors(job).contains(TRUSTED_RUNNER_SELECTOR)) {
+        continue;
+      }
+      if (!isTrustedCondition(job)) {
+        violations.add(
+            jobName
+                + " runs on "
+                + TRUSTED_RUNNER_SELECTOR
+                + " under the condition \""
+                + normalizedCondition(job)
+                + "\" instead of the trusted condition");
       }
     }
     return violations;

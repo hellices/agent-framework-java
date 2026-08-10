@@ -27,14 +27,6 @@ class WorkflowPolicyTest {
 
   private static final Set<String> ALLOWED_PERMISSION_VALUES = Set.of("read", "none");
 
-  private static final String TRUSTED_CONDITION =
-      "github.event_name != 'pull_request' "
-          + "|| github.event.pull_request.head.repo.full_name == github.repository";
-
-  private static final String FORK_CONDITION =
-      "github.event_name == 'pull_request' "
-          + "&& github.event.pull_request.head.repo.full_name != github.repository";
-
   private static final String CANCEL_EXPRESSION = "${{ github.event_name == 'pull_request' }}";
 
   private static final String TRUSTED_LABEL = "arc-java-build";
@@ -44,6 +36,8 @@ class WorkflowPolicyTest {
   private static final String RESULT_JOB = "verify-result";
 
   private static final String CI_WORKFLOW = ".github/workflows/ci.yml";
+
+  private static final String RUNNER_CONTRACT = "docs/operations/github-actions-runner-contract.md";
 
   private static final String POSIX_SHELL = "sh";
 
@@ -128,17 +122,8 @@ class WorkflowPolicyTest {
   @ParameterizedTest(name = "{0} gates every trusted runner job")
   @MethodSource("workflows")
   void trustedJobsRequireTheSameRepositoryCondition(Path workflow) throws IOException {
-    JsonNode document = WorkflowDocuments.read(workflow);
-    List<String> jobNames = WorkflowDocuments.jobNames(document);
-
-    for (String jobName : jobNames) {
-      JsonNode job = document.path("jobs").path(jobName);
-      if (WorkflowDocuments.runnerLabels(job).contains(TRUSTED_LABEL)) {
-        assertThat(job.path("if").textValue())
-            .as("%s must only run trusted code", jobName)
-            .isEqualTo(TRUSTED_CONDITION);
-      }
-    }
+    assertThat(WorkflowPolicy.trustedRunnerConditionViolations(WorkflowDocuments.read(workflow)))
+        .isEmpty();
   }
 
   @ParameterizedTest(name = "{0} isolates fork verification on hosted runners")
@@ -149,14 +134,56 @@ class WorkflowPolicyTest {
 
     List<String> forkJobs = new ArrayList<>();
     for (String jobName : WorkflowDocuments.jobNames(document)) {
-      JsonNode job = document.path("jobs").path(jobName);
-      if (FORK_CONDITION.equals(job.path("if").textValue())) {
+      JsonNode job = WorkflowDocuments.job(document, jobName);
+      if (WorkflowPolicy.isForkCondition(job)) {
         forkJobs.add(jobName);
-        assertThat(WorkflowDocuments.runnerLabels(job)).containsExactly(HOSTED_LABEL);
+        assertThat(WorkflowDocuments.runnerSelectors(job)).containsExactly(HOSTED_LABEL);
       }
     }
 
     assertThat(forkJobs).isNotEmpty();
+  }
+
+  @ParameterizedTest(name = "{0} keeps the trusted and fork paths mutually exclusive")
+  @MethodSource("workflows")
+  void trustedAndForkConditionsAreMutuallyExclusive(Path workflow) throws IOException {
+    JsonNode document = WorkflowDocuments.read(workflow);
+    assumeTrue(WorkflowDocuments.triggerNames(document).contains("pull_request"));
+
+    for (String jobName : WorkflowDocuments.jobNames(document)) {
+      JsonNode job = WorkflowDocuments.job(document, jobName);
+      assertThat(WorkflowPolicy.isTrustedCondition(job) && WorkflowPolicy.isForkCondition(job))
+          .as("%s cannot belong to both verification paths", jobName)
+          .isFalse();
+      if (WorkflowDocuments.runnerSelectors(job).contains(TRUSTED_LABEL)) {
+        assertThat(WorkflowPolicy.isForkCondition(job))
+            .as("%s must never run under the fork condition", jobName)
+            .isFalse();
+      }
+    }
+  }
+
+  @Test
+  void runnerContractDocumentsTheDeployedRunnerLabels() throws IOException {
+    String contract = readRunnerContract();
+
+    for (String selector : WorkflowPolicy.ALLOWED_RUNNER_SELECTORS) {
+      assertThat(contract).contains(selector);
+    }
+  }
+
+  @Test
+  void runnerContractBlocksMergingBeforeTheTrustedScaleSetExists() throws IOException {
+    String contract = readRunnerContract();
+
+    assertThat(contract).contains("## Merge gate: do not merge before `arc-java-build` exists");
+    assertThat(contract).contains("agent-framework-java-platform");
+    assertThat(contract).contains("verify-result");
+  }
+
+  private static String readRunnerContract() throws IOException {
+    return Files.readString(
+        RepositoryPaths.root().resolve(RUNNER_CONTRACT), StandardCharsets.UTF_8);
   }
 
   @ParameterizedTest(name = "{0} fans in to the required result job")

@@ -130,4 +130,69 @@ class WorkflowPolicyBypassProbeTest {
         .containsExactly(
             "attacker/action@main is neither a ./ local action nor pinned to a commit SHA");
   }
+
+  static Stream<String> weakenedTrustedConditions() {
+    return Stream.of(
+        "github.event_name != 'pull_request'",
+        "true",
+        "always()",
+        "github.event.pull_request.head.repo.full_name == github.repository",
+        "github.event_name != 'pull_request'"
+            + " || github.event.pull_request.head.repo.full_name != github.repository",
+        "github.event_name != 'pull_request'"
+            + " && github.event.pull_request.head.repo.full_name == github.repository");
+  }
+
+  /**
+   * Condition comparison ignores formatting only. A trusted job whose guard is rewritten into any
+   * weaker or different expression is still rejected.
+   */
+  @ParameterizedTest(name = "weakened trusted condition {index} is rejected")
+  @MethodSource("weakenedTrustedConditions")
+  void weakenedTrustedConditionIsRejected(String condition) throws IOException {
+    JsonNode probe = WorkflowDocuments.parse(trustedJob("if: >-\n        " + condition + "\n"));
+
+    assertThat(WorkflowPolicy.trustedRunnerConditionViolations(probe)).hasSize(1);
+    assertThat(WorkflowPolicy.isTrustedCondition(WorkflowDocuments.job(probe, "trusted")))
+        .isFalse();
+  }
+
+  @Test
+  void trustedJobWithoutAnyConditionIsRejected() throws IOException {
+    JsonNode probe = WorkflowDocuments.parse(trustedJob(""));
+
+    assertThat(WorkflowPolicy.trustedRunnerConditionViolations(probe)).hasSize(1);
+  }
+
+  static Stream<String> equivalentTrustedConditions() {
+    return Stream.of(
+        "if: "
+            + "github.event_name != 'pull_request' || "
+            + "github.event.pull_request.head.repo.full_name == github.repository\n",
+        "if: >-\n"
+            + "        github.event_name != 'pull_request'\n"
+            + "        || github.event.pull_request.head.repo.full_name == github.repository\n",
+        "if: \"${{ github.event_name != 'pull_request' || "
+            + "github.event.pull_request.head.repo.full_name == github.repository }}\"\n");
+  }
+
+  /** Reformatting the trusted condition is allowed: only its meaning is compared. */
+  @ParameterizedTest(name = "equivalent trusted condition {index} is accepted")
+  @MethodSource("equivalentTrustedConditions")
+  void reformattedTrustedConditionStaysAccepted(String condition) throws IOException {
+    JsonNode probe = WorkflowDocuments.parse(trustedJob(condition));
+
+    assertThat(WorkflowPolicy.trustedRunnerConditionViolations(probe)).isEmpty();
+    assertThat(WorkflowPolicy.isForkCondition(WorkflowDocuments.job(probe, "trusted"))).isFalse();
+  }
+
+  private static String trustedJob(String conditionEntry) {
+    String indentedCondition = conditionEntry.isEmpty() ? "" : "      " + conditionEntry;
+    return HEADER
+        + "    trusted:\n"
+        + indentedCondition
+        + "      runs-on: arc-java-build\n"
+        + "      steps:\n"
+        + "        - run: echo probe\n";
+  }
 }

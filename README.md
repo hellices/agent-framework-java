@@ -34,6 +34,19 @@ Microsoft Agent Framework의 실행 의미론을 Java에서 사용할 수 있도
 - [엔지니어링 하네스 설계](docs/superpowers/specs/2026-08-10-agent-framework-java-engineering-harness-design.md)
 - [Gradle Kotlin DSL 및 Java ARC Foundation 설계](docs/superpowers/specs/2026-08-10-gradle-kotlin-arc-foundation-design.md)
 
+## 기여와 하네스
+
+- [저장소 작업 지침](AGENTS.md)
+- [기여 가이드](CONTRIBUTING.md)
+- [보안 정책](SECURITY.md)
+- [GitHub Actions runner 계약](docs/operations/github-actions-runner-contract.md)
+
+모든 로컬·CI 검증은 저장소에 포함된 Gradle Wrapper를 사용합니다.
+
+```bash
+./gradlew check
+```
+
 ## 구현 계획
 
 승인된 Gradle Kotlin DSL 및 Java ARC Foundation 설계를 두 개의 독립 실행 계획으로 나눕니다.
@@ -49,3 +62,8 @@ Microsoft Agent Framework의 실행 의미론을 Java에서 사용할 수 있도
   대신합니다.
 
 현재 저장소는 설계 기준을 확정하고 구현 계획을 승인한 단계입니다.
+
+CI의 신뢰 경로는 `arc-java-build` ARC scale set에서 실행됩니다. 해당 scale set이 Java ARC
+Platform 계획으로 배포되기 전에는 이 Gradle foundation 브랜치를 `main`에 merge하지 않습니다.
+자세한 merge 순서는 [GitHub Actions runner 계약](docs/operations/github-actions-runner-contract.md)의
+merge gate 절을 따릅니다.

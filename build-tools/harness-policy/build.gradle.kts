@@ -12,6 +12,28 @@ dependencies {
     testImplementation(libs.networknt.json.schema.validator)
 }
 
+// The policy tests read repository files that Gradle cannot infer from the compile classpath.
+// Without declaring them, a workflow, instruction, contract, or documentation edit leaves every
+// policy task UP-TO-DATE and `check` reports success without re-running a single policy.
+val repositoryPolicySources =
+    rootProject.layout.projectDirectory.asFileTree.matching {
+        exclude(
+            "**/build/**",
+            "**/.git/**",
+            "**/.gradle/**",
+            "**/.kotlin/**",
+            "**/.gradle-bootstrap/**",
+            ".worktrees/**",
+            ".harness/runs/**"
+        )
+    }
+
+tasks.withType<Test>().configureEach {
+    inputs.files(repositoryPolicySources)
+        .withPropertyName("repositoryPolicySources")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+}
+
 tasks.register("policyCheck") {
     group = "verification"
     description = "Runs repository, artifact, and workflow policy regression."
