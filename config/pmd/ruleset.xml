@@ -1,0 +1,16 @@
+<?xml version="1.0"?>
+<ruleset name="Agent Framework Java Rules"
+         xmlns="http://pmd.sourceforge.net/ruleset/2.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://pmd.sourceforge.net/ruleset/2.0.0 https://pmd.sourceforge.io/ruleset_2_0_0.xsd">
+  <description>High-signal source checks that do not duplicate formatting.</description>
+  <rule ref="category/java/errorprone.xml/CloseResource"/>
+  <rule ref="category/java/errorprone.xml/CompareObjectsWithEquals"/>
+  <rule ref="category/java/errorprone.xml/ConstructorCallsOverridableMethod"/>
+  <rule ref="category/java/errorprone.xml/EmptyCatchBlock"/>
+  <rule ref="category/java/errorprone.xml/ReturnFromFinallyBlock"/>
+  <rule ref="category/java/errorprone.xml/UseProperClassLoader"/>
+  <rule ref="category/java/bestpractices.xml/AvoidReassigningParameters"/>
+  <rule ref="category/java/bestpractices.xml/UnusedPrivateMethod"/>
+  <rule ref="category/java/bestpractices.xml/UnusedFormalParameter"/>
+</ruleset>

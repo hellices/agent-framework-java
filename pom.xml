@@ -1,7 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<project xmlns="http://maven.apache.org/POM/4.0.0"
-         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
   <modelVersion>4.0.0</modelVersion>
 
   <groupId>com.microsoft.agentframework</groupId>
@@ -34,6 +32,13 @@
     <maven.surefire.version>3.5.6</maven.surefire.version>
     <spotless.version>3.9.0</spotless.version>
     <google-java-format.version>1.30.0</google-java-format.version>
+    <checkstyle.maven.version>3.6.0</checkstyle.maven.version>
+    <checkstyle.version>12.3.1</checkstyle.version>
+    <maven.dependency.version>3.11.0</maven.dependency.version>
+    <maven.pmd.version>3.28.0</maven.pmd.version>
+    <pmd.version>7.26.0</pmd.version>
+    <spotbugs.maven.version>4.10.3.0</spotbugs.maven.version>
+    <jacoco.version>0.8.15</jacoco.version>
   </properties>
 
   <dependencyManagement>
@@ -136,8 +141,8 @@
                 <requireMavenVersion>
                   <version>[3.9.16,4.0.0)</version>
                 </requireMavenVersion>
-                <banDuplicatePomDependencyVersions />
-                <requirePluginVersions />
+                <banDuplicatePomDependencyVersions/>
+                <requirePluginVersions/>
               </rules>
             </configuration>
           </execution>
@@ -152,21 +157,133 @@
             <googleJavaFormat>
               <version>${google-java-format.version}</version>
             </googleJavaFormat>
-            <removeUnusedImports />
-            <trimTrailingWhitespace />
-            <endWithNewline />
+            <removeUnusedImports/>
+            <trimTrailingWhitespace/>
+            <endWithNewline/>
           </java>
           <pom>
-            <sortPom />
+            <sortPom/>
           </pom>
         </configuration>
         <executions>
           <execution>
             <id>spotless-check</id>
-            <phase>verify</phase>
             <goals>
               <goal>check</goal>
             </goals>
+            <phase>verify</phase>
+          </execution>
+        </executions>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-checkstyle-plugin</artifactId>
+        <version>${checkstyle.maven.version}</version>
+        <configuration>
+          <configLocation>${maven.multiModuleProjectDirectory}/config/checkstyle/checkstyle.xml</configLocation>
+          <includeTestSourceDirectory>true</includeTestSourceDirectory>
+          <failOnViolation>true</failOnViolation>
+        </configuration>
+        <dependencies>
+          <dependency>
+            <groupId>com.puppycrawl.tools</groupId>
+            <artifactId>checkstyle</artifactId>
+            <version>${checkstyle.version}</version>
+          </dependency>
+        </dependencies>
+        <executions>
+          <execution>
+            <id>checkstyle-check</id>
+            <goals>
+              <goal>check</goal>
+            </goals>
+            <phase>verify</phase>
+          </execution>
+        </executions>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-pmd-plugin</artifactId>
+        <version>${maven.pmd.version}</version>
+        <configuration>
+          <rulesets>
+            <ruleset>${maven.multiModuleProjectDirectory}/config/pmd/ruleset.xml</ruleset>
+          </rulesets>
+          <failOnViolation>true</failOnViolation>
+          <includeTests>true</includeTests>
+          <printFailingErrors>true</printFailingErrors>
+        </configuration>
+        <dependencies>
+          <dependency>
+            <groupId>net.sourceforge.pmd</groupId>
+            <artifactId>pmd-java</artifactId>
+            <version>${pmd.version}</version>
+          </dependency>
+        </dependencies>
+        <executions>
+          <execution>
+            <id>pmd-check</id>
+            <goals>
+              <goal>check</goal>
+            </goals>
+            <phase>verify</phase>
+          </execution>
+        </executions>
+      </plugin>
+      <plugin>
+        <groupId>com.github.spotbugs</groupId>
+        <artifactId>spotbugs-maven-plugin</artifactId>
+        <version>${spotbugs.maven.version}</version>
+        <configuration>
+          <effort>Max</effort>
+          <threshold>Medium</threshold>
+          <failOnError>true</failOnError>
+          <excludeFilterFile>${maven.multiModuleProjectDirectory}/config/spotbugs/exclude.xml</excludeFilterFile>
+        </configuration>
+        <executions>
+          <execution>
+            <id>spotbugs-check</id>
+            <goals>
+              <goal>check</goal>
+            </goals>
+            <phase>verify</phase>
+          </execution>
+        </executions>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-dependency-plugin</artifactId>
+        <version>${maven.dependency.version}</version>
+        <executions>
+          <execution>
+            <id>analyze-dependencies</id>
+            <goals>
+              <goal>analyze-only</goal>
+            </goals>
+            <phase>verify</phase>
+            <configuration>
+              <failOnWarning>true</failOnWarning>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+      <plugin>
+        <groupId>org.jacoco</groupId>
+        <artifactId>jacoco-maven-plugin</artifactId>
+        <version>${jacoco.version}</version>
+        <executions>
+          <execution>
+            <id>prepare-agent</id>
+            <goals>
+              <goal>prepare-agent</goal>
+            </goals>
+          </execution>
+          <execution>
+            <id>jacoco-report</id>
+            <goals>
+              <goal>report</goal>
+            </goals>
+            <phase>verify</phase>
           </execution>
         </executions>
       </plugin>

@@ -67,6 +67,19 @@ require_text .mvn/wrapper/maven-wrapper.properties "apache-maven-3.9.16"
 require_text .mvn/wrapper/maven-wrapper.properties "distributionSha256Sum="
 require_text pom.xml "<maven.compiler.release>17</maven.compiler.release>"
 
+for required_file in \
+  config/checkstyle/checkstyle.xml \
+  config/pmd/ruleset.xml \
+  config/spotbugs/exclude.xml
+do
+  require_file "$required_file"
+done
+
+require_text pom.xml "<checkstyle.version>12.3.1</checkstyle.version>"
+require_text pom.xml "<pmd.version>7.26.0</pmd.version>"
+require_text pom.xml "<spotbugs.maven.version>4.10.3.0</spotbugs.maven.version>"
+require_text pom.xml "<jacoco.version>0.8.15</jacoco.version>"
+
 if [ "$failures" -ne 0 ]; then
   exit 1
 fi
