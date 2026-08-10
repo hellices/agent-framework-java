@@ -1,0 +1,82 @@
+name: Runner smoke
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: runner-smoke-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  toolcache-smoke:
+    name: Runner tool cache smoke
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: arc-java-build
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Select preinstalled Eclipse Temurin toolchains
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+        with:
+          distribution: temurin
+          java-version: |
+            17
+            21
+            25
+
+      - name: Assert the runner is non-root and serves JDKs from the tool cache
+        run: |
+          set -eu
+          if [ "$(id -u)" = "0" ]; then
+            printf 'runner must not be root\n' >&2
+            exit 1
+          fi
+          printf 'uid=%s user=%s\n' "$(id -u)" "$(id -un)"
+          for version in 17 21 25; do
+            home_variable="JAVA_HOME_${version}_X64"
+            home_path=$(printenv "$home_variable")
+            case "$home_path" in
+              /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/*)
+                printf '%s=%s\n' "$home_variable" "$home_path"
+                "$home_path/bin/java" -version
+                ;;
+              *)
+                printf '%s is not served from the tool cache: %s\n' "$home_variable" "$home_path" >&2
+                exit 1
+                ;;
+            esac
+          done
+          if command -v docker >/dev/null 2>&1; then
+            printf 'the runner image must not ship docker\n' >&2
+            exit 1
+          fi
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
+        with:
+          validate-wrappers: true
+
+      - name: Run the Java compatibility matrix
+        env:
+          JAVA_HOME: ${{ env.JAVA_HOME_17_X64 }}
+        run: ./gradlew --no-daemon testJava17 testJava21 testJava25
+
+      - name: Upload verification reports
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: runner-smoke-reports
+          path: |
+            **/build/reports/
+            **/build/test-results/
+          if-no-files-found: ignore
+          retention-days: 7
