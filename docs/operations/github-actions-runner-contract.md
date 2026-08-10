@@ -44,8 +44,15 @@ caches, artifacts, and timeouts. Gradle itself is owned by the committed wrapper
 ## Platform contract
 
 The platform repository `agent-framework-java-platform` owns the runner image, the Azure Container
-Registry repository, the `arc-java-build` Helm release, namespace `arc-runners-java`, the service
-account, Pod Security Admission labels, the Cilium network policy, and log export.
+Registry *repository* `gha-runners/agent-framework-java`, the `arc-java-build` Helm release,
+namespace `arc-runners-java`, the service account, Pod Security Admission labels, the Cilium network
+policy, and log export.
+
+The registry itself is **not** owned here. `acrpensionguard` / `acrpensionguard.azurecr.io` in
+resource group `rg-pension-guard` already exists and is shared; the platform repository reuses it,
+never creates a registry, and never changes a registry property. The target cluster is
+`aks-shared-runners` (kubectl context `evalollama`) in subscription
+`95933ae5-0201-4a21-a1fc-8051a7437982`.
 
 `arc-java-build` is expected to:
 
@@ -56,8 +63,10 @@ account, Pod Security Admission labels, the Cilium network policy, and log expor
 - reference the runner image by immutable digest;
 - never enable Docker-in-Docker or Kubernetes container mode.
 
-The existing general-purpose `aks-runners` scale set is not modified by this repository or by the
-`arc-java-build` rollout.
+The pre-existing scale sets `aks-runners`, `aks-runners-flutter`, and `korvid-runners`, all in
+namespace `arc-runners`, are not modified by this repository or by the `arc-java-build` rollout. That
+namespace is read-only to the platform repository apart from one operator action: `gha-token` is
+namespace-scoped, so it is copied — never re-created and never rendered — into `arc-runners-java`.
 
 ## Tool cache regression
 

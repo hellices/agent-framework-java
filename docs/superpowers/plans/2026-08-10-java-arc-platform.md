@@ -12,15 +12,19 @@
 
 - The platform repository root is `/Users/hwang-inhwan/workspace/agent-framework-java-platform`. It is an independent Git repository and is never nested inside the application repository.
 - Every path in this plan that is not explicitly marked "application repository" is relative to the platform repository root.
-- Observed Azure environment, used verbatim:
-  - subscription `f752aff6-b20c-4973-b32b-0a60ba2c6764`
-  - resource group `rg-korvid-contract-test`
-  - AKS cluster `aks-korvid-contract-test`
+- Observed Azure and Kubernetes environment, re-verified on 2026-08-11 and used verbatim. It supersedes the earlier `rg-korvid-contract-test` target, which is decommissioned and must not appear anywhere in this plan or in the platform repository:
+  - kubectl context `evalollama`
+  - subscription `95933ae5-0201-4a21-a1fc-8051a7437982` (`ME-MngEnvMCAP310512-inhwanhwang-3`)
+  - resource group `rg-pension-guard`
+  - AKS cluster `aks-shared-runners`
   - location `koreacentral`
   - Kubernetes `1.35`
-  - Actions Runner Controller chart and controller version `0.14.2`
-  - Cilium is the active CNI daemonset, so network policy uses `cilium.io/v2` `CiliumNetworkPolicy`
-- No Azure Container Registry exists yet. The registry to create is `acrafjavaf752aff6`, SKU `Basic`, admin user disabled, in `rg-korvid-contract-test` / `koreacentral`.
+  - AKS kubelet managed identity object id `240fc4c5-da9d-4051-be2c-dcb4241b0f36`
+  - Actions Runner Controller chart and controller version `0.14.2`, controller release `arc` in namespace `arc-systems`
+  - existing scale sets `aks-runners`, `aks-runners-flutter`, and `korvid-runners`, all in namespace `arc-runners`
+  - `aks-runners` and `aks-runners-flutter` target `https://github.com/open-play-ground/grown-up`; `korvid-runners` targets `https://github.com/hellices/korvid`; all three reference the secret `gha-token` in `arc-runners`
+  - Cilium is the active dataplane, so network policy uses `cilium.io/v2` `CiliumNetworkPolicy`
+- **An Azure Container Registry already exists and is reused.** It is `acrpensionguard` / `acrpensionguard.azurecr.io`, SKU `Basic`, admin user disabled, in `rg-pension-guard` / `koreacentral`. This plan never creates a registry and never changes a property of this shared one. The `AcrPull` role assignment for the AKS kubelet identity, scoped to that registry, already exists; Task 3 re-checks it idempotently instead of assuming it.
 - The image repository is `gha-runners/agent-framework-java`. Tags are convenience only; Helm always references an immutable `@sha256:` digest.
 - There is no local Docker daemon. Every image build uses `az acr build` and every in-image test uses `az acr run`. No step may invoke `docker`.
 - Base image is exactly `ghcr.io/actions/actions-runner:2.336.0@sha256:0cfdcc701ce933c6d243c6b0b2da767366dc9f2e99961d4c3754b0b78084cdda`.
@@ -30,10 +34,11 @@
   - `25.0.4+7` — `https://github.com/adoptium/temurin25-binaries/releases/download/jdk-25.0.4%2B7/OpenJDK25U-jdk_x64_linux_hotspot_25.0.4_7.tar.gz` — `e58fcdcd637b25c03ca84cbbcefc70d11efb8f4b4cbd05decc9f661769d77f94`
 - Tool cache layout is exactly `/opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/<normalized-version>/x64` with the sibling marker file `/opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/<normalized-version>/x64.complete`. Normalized versions are `17.0.20-8`, `21.0.12-8`, and `25.0.4-7`.
 - The new scale set is `arc-java-build` in namespace `arc-runners-java` with `minRunners: 0` and `maxRunners: 5`. It is non-privileged, drops all capabilities, sets `allowPrivilegeEscalation: false`, uses a dedicated service account, and never enables `containerMode` (no Docker-in-Docker, no Kubernetes mode).
-- The existing ARC installation targets `https://github.com/open-play-ground/grown-up` with the pre-defined secret reference `gha-token`. The new scale set targets `https://github.com/open-play-ground/agent-framework-java` and reuses the pre-defined secret reference name `gha-token` in its own namespace. No secret value is ever created, read, decoded, logged, or committed by this plan.
+- The existing ARC installation targets `https://github.com/open-play-ground/grown-up` with the pre-defined secret reference `gha-token`. The new scale set targets `https://github.com/open-play-ground/agent-framework-java` and reuses the pre-defined secret reference name `gha-token` in its own namespace.
+- A Kubernetes Secret is namespace-scoped, so `gha-token` cannot be shared from `arc-runners` into `arc-runners-java`; it must be copied. The copy is an operator action performed by `scripts/copy-github-config-secret.sh`, which reads the secret as JSON only inside a single pipeline that ends in `kubectl apply --namespace "$ARC_NAMESPACE" -f -`. The document never reaches a terminal, a log, or a file, and only key *names* are ever echoed. No secret value is created, decoded, logged, or committed by this plan.
 - Existing scale sets must be byte-for-byte unchanged. Every deployment and rollback compares a committed baseline snapshot before and after and fails on any difference.
 - GitHub repository and credential authorization is an explicit preflight that blocks deployment. There is no fallback to a different repository, a different secret, or an unauthenticated path.
-- Read-only scripts contain no mutating `kubectl`, `helm`, or `az` verb. Cluster-mutating scripts scope every mutation to namespace `arc-runners-java` and Helm release `arc-java-build`. Azure-mutating scripts scope every mutation to resource group `rg-korvid-contract-test`, registry `acrafjavaf752aff6`, or the registry resource id. `scripts/check-script-safety.sh` proves this and is the first gate in every task.
+- Read-only scripts contain no mutating `kubectl`, `helm`, or `az` verb. Cluster-mutating scripts scope every mutation to namespace `arc-runners-java` and Helm release `arc-java-build`. Azure-mutating scripts scope every mutation to resource group `rg-pension-guard`, registry `acrpensionguard`, or the registry resource id, and no script may contain `az acr create`. Namespace `arc-runners` is read-only, and no script may name `aks-runners`, `aks-runners-flutter`, or `korvid-runners` on a mutating command. `scripts/check-script-safety.sh` proves all of this, `scripts/test-script-safety-gate.sh` proves the gate actually rejects each violation, and both are the first gate in every task.
 - Application-repository changes are permitted only in Task 9, only after the scale set is verified healthy, and only as an additive smoke workflow.
 - Every commit created by an agent includes:
 
@@ -51,7 +56,10 @@ Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
 - `README.md`: platform ownership, bring-up order, and rollback entry points.
 - `AGENTS.md`: platform-specific agent rules, including the secret-handling prohibition.
 - `scripts/lib/common.sh`: the single source of truth for environment identifiers and shared helpers.
-- `scripts/check-script-safety.sh`: executable proof that each script stays inside its declared blast radius.
+- `scripts/lib/sanitize-secret-metadata.py`: re-targets one Secret document at a new namespace with exactly one stdout sink and no `print`.
+- `scripts/check-script-safety.sh`: executable proof that each script stays inside its declared blast radius, honours the authoritative environment contract, and never leaks a secret projection.
+- `scripts/test-script-safety-gate.sh`: negative tests that drive the safety gate with nine injected violations and assert each is blocked.
+- `scripts/test-secret-sanitizer.sh`: fixture-driven proof that the secret copy strips cluster metadata, re-targets the namespace, and preserves the data verbatim.
 
 ### Runner image
 
@@ -64,7 +72,7 @@ Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
 
 ### Azure and image lifecycle scripts
 
-- `scripts/create-acr.sh`: idempotent registry creation and AcrPull grant to the AKS kubelet identity.
+- `scripts/verify-acr.sh`: read-only verification of the existing registry plus an idempotent AcrPull re-check for the AKS kubelet identity. It never creates or reconfigures a registry.
 - `scripts/build-java-runner.sh`: `az acr build` with a reproducible date-and-revision tag.
 - `scripts/verify-java-runner-image.sh`: resolves the digest and runs the in-image verifier through `az acr run`.
 - `scripts/update-image-digest.sh`: writes the verified digest into the Helm values file.
@@ -80,6 +88,7 @@ Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
 ### Deployment scripts
 
 - `scripts/snapshot-existing-runners.sh`: read-only baseline capture.
+- `scripts/copy-github-config-secret.sh`: operator-run, namespace-scoped copy of `gha-token` from `arc-runners` into `arc-runners-java`.
 - `scripts/check-helm-template.sh`: server dry-run and rendered-manifest assertions.
 - `scripts/preflight-github-authorization.sh`: blocking repository and credential authorization gate.
 - `scripts/deploy-arc-java-build.sh`: namespace, policy, and Helm release rollout with baseline diffing.
@@ -101,11 +110,15 @@ Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
 - Create: `/Users/hwang-inhwan/workspace/agent-framework-java-platform/AGENTS.md`
 - Create: `scripts/check-script-safety.sh`
 - Create: `scripts/lib/common.sh`
+- Create: `scripts/lib/sanitize-secret-metadata.py`
 - Create: `scripts/snapshot-existing-runners.sh`
+- Create: `scripts/copy-github-config-secret.sh`
+- Create: `scripts/test-script-safety-gate.sh`
+- Create: `scripts/test-secret-sanitizer.sh`
 
 **Interfaces:**
 - Consumes: the observed Azure and Kubernetes environment listed in Global Constraints.
-- Produces: `scripts/lib/common.sh` exporting `AZURE_SUBSCRIPTION_ID`, `AZURE_RESOURCE_GROUP`, `AZURE_LOCATION`, `AKS_CLUSTER_NAME`, `KUBE_CONTEXT`, `ACR_NAME`, `IMAGE_REPOSITORY`, `ARC_NAMESPACE`, `ARC_RELEASE`, `ARC_CHART`, `ARC_CHART_VERSION`, `GITHUB_CONFIG_URL`, `GITHUB_CONFIG_SECRET`, `EGRESS_PROFILE_LABEL`, and the helpers `fail`, `info`, `require_command`, `require_azure_subscription`, `require_kube_context`, `platform_repository_root`; `arc/arc-java-build/baseline/existing-runner-sets.json`.
+- Produces: `scripts/lib/common.sh` exporting `AZURE_SUBSCRIPTION_ID`, `AZURE_SUBSCRIPTION_NAME`, `AZURE_RESOURCE_GROUP`, `AZURE_LOCATION`, `AKS_CLUSTER_NAME`, `KUBE_CONTEXT`, `ACR_NAME`, `ACR_LOGIN_SERVER`, `IMAGE_REPOSITORY`, `ARC_NAMESPACE`, `EXISTING_ARC_NAMESPACE`, `ARC_RELEASE`, `ARC_CHART`, `ARC_CHART_VERSION`, `GITHUB_CONFIG_URL`, `GITHUB_CONFIG_SECRET`, `GITHUB_CONFIG_SECRET_SOURCE_NAMESPACE`, `GITHUB_TARGET_REPOSITORY`, `EGRESS_PROFILE_LABEL`, and the helpers `fail`, `info`, `require_command`, `require_azure_subscription`, `require_kube_context`, `platform_repository_root`; `arc/arc-java-build/baseline/existing-runner-sets.json` holding all three pre-existing scale sets.
 
 - [ ] **Step 1: Create the standalone platform repository**
 
@@ -141,39 +154,70 @@ kubeconfig
 
 Create `README.md`:
 
-````markdown
+`````markdown
 # Agent Framework for Java Platform
 
 This repository owns the Java runner image and the `arc-java-build` Actions Runner Controller scale
 set for `https://github.com/open-play-ground/agent-framework-java`. It is intentionally separate from
 the application repository so it can move to a private infrastructure repository later.
 
+## Authoritative target
+
+Verified against the live environment on 2026-08-11.
+
+| Concern | Value | Ownership |
+| --- | --- | --- |
+| kubectl context | `evalollama` | existing |
+| Azure subscription | `95933ae5-0201-4a21-a1fc-8051a7437982` (`ME-MngEnvMCAP310512-inhwanhwang-3`) | existing |
+| Resource group / location | `rg-pension-guard` / `koreacentral` | existing |
+| AKS cluster | `aks-shared-runners` (1.35, Cilium dataplane) | existing |
+| Container registry | `acrpensionguard` / `acrpensionguard.azurecr.io` (Basic, admin disabled) | **existing, reused** |
+| Image repository | `gha-runners/agent-framework-java` | created by this repository |
+| ARC chart | `gha-runner-scale-set` `0.14.2` | existing |
+| Existing scale sets | `aks-runners`, `aks-runners-flutter`, `korvid-runners` in `arc-runners` | existing, never touched |
+| New scale set | `arc-java-build` in `arc-runners-java` | created by this repository |
+| GitHub credential | secret `gha-token`, copied from `arc-runners` | existing, copied by an operator |
+
 ## Blast radius
 
-- Azure resource group: `rg-korvid-contract-test`
-- Azure Container Registry: `acrafjavaf752aff6`
-- AKS cluster: `aks-korvid-contract-test`
-- Kubernetes namespace: `arc-runners-java`
+- Azure resource group: `rg-pension-guard`
+- Azure Container Registry: `acrpensionguard` — **reused, never created and never reconfigured**
+- AKS cluster: `aks-shared-runners`
+- Kubernetes namespace: `arc-runners-java` — created here
 - Helm release: `arc-java-build`
 
-Nothing in this repository modifies an existing runner scale set. Every deployment compares the
-committed baseline in `arc/arc-java-build/baseline/existing-runner-sets.json` before and after.
+Namespace `arc-runners` is read-only to this repository. Nothing here modifies an existing runner
+scale set. Every deployment compares the committed baseline in
+`arc/arc-java-build/baseline/existing-runner-sets.json`, which currently holds all three
+pre-existing scale sets, before and after.
 
 ## Bring-up order
 
 ```bash
 sh scripts/check-script-safety.sh
+sh scripts/test-script-safety-gate.sh
+sh scripts/test-secret-sanitizer.sh
 sh scripts/snapshot-existing-runners.sh
 sh runner-images/java/check-manifest.sh
-sh scripts/create-acr.sh
+sh scripts/verify-acr.sh
 sh scripts/build-java-runner.sh
 sh scripts/verify-java-runner-image.sh
 sh scripts/update-image-digest.sh
 sh scripts/check-helm-template.sh
 sh scripts/preflight-github-authorization.sh
+sh scripts/copy-github-config-secret.sh
+sh scripts/preflight-github-authorization.sh
 sh scripts/deploy-arc-java-build.sh
 sh scripts/verify-arc-java-build.sh
 ```
+
+Until every script above exists, `sh scripts/check-script-safety.sh` is expected to exit 1 with
+one `missing required script:` line per script that a later task creates. That is the staged
+red state, not a failure of the scripts that do exist.
+
+`scripts/preflight-github-authorization.sh` appears twice on purpose: the first run creates
+namespace `arc-runners-java` and then blocks on the missing `gha-token`; `scripts/copy-github-config-secret.sh`
+copies the secret into that namespace; the second run performs the authorization probe.
 
 ## Rollback
 
@@ -184,13 +228,38 @@ sh scripts/verify-arc-java-build.sh
 
 ## Secrets
 
-No secret value is created, read, decoded, printed, or committed here. The `gha-token` secret is
-provisioned out of band by a cluster operator and only referenced by name.
-````
+No secret value is created, decoded, printed, or committed here.
+
+The `gha-token` credential already exists in namespace `arc-runners` and is namespace-scoped, so a
+Kubernetes Secret cannot be shared across namespaces. A cluster operator therefore copies it into
+`arc-runners-java` with:
+
+```bash
+sh scripts/copy-github-config-secret.sh
+```
+
+That script reads the secret as JSON only inside a single pipeline that ends in
+`kubectl apply --namespace "$ARC_NAMESPACE" -f -`. `scripts/lib/sanitize-secret-metadata.py` strips
+the cluster-assigned metadata and re-targets the namespace; it never prints, never touches base64,
+and has exactly one `json.dump(document, sys.stdout)` sink. The document never reaches a terminal,
+a log, or a file. Only key *names* are ever echoed.
+
+Operators who prefer not to run the script may create the secret by hand out of band; the plan and
+the preflight only require that `gha-token` exists in `arc-runners-java` and is authorized for the
+target repository.
+
+## Executable proofs
+
+```bash
+sh scripts/check-script-safety.sh       # blast radius, secret handling, environment contract
+sh scripts/test-script-safety-gate.sh   # negative tests: proves the gate rejects nine violations
+sh scripts/test-secret-sanitizer.sh     # proves the copy pipeline strips metadata and leaks nothing
+```
+`````
 
 Create `AGENTS.md`:
 
-````markdown
+`````markdown
 # Agent Framework for Java Platform Instructions
 
 ## Repository purpose
@@ -198,27 +267,56 @@ Create `AGENTS.md`:
 This repository owns the Java runner image and the `arc-java-build` ARC scale set. The application
 repository owns Gradle, workflows, and product code. Never move ownership across that line.
 
+## Authoritative target
+
+Every script and document in this repository targets exactly this environment. It was
+re-verified on 2026-08-11 against the live cluster and subscription; the earlier
+`rg-korvid-contract-test` / `aks-korvid-contract-test` / `acrafjavaf752aff6` target is
+decommissioned and must never reappear.
+
+- kubectl context: `evalollama`
+- Azure subscription: `95933ae5-0201-4a21-a1fc-8051a7437982` (`ME-MngEnvMCAP310512-inhwanhwang-3`)
+- Resource group: `rg-pension-guard` / `koreacentral`
+- AKS cluster: `aks-shared-runners` (Kubernetes 1.35, Cilium dataplane)
+- Container registry: **existing** `acrpensionguard` / `acrpensionguard.azurecr.io`
+- Existing ARC: chart `0.14.2`, namespace `arc-runners`, scale sets `aks-runners`,
+  `aks-runners-flutter`, `korvid-runners`
+- New scale set: `arc-java-build` in the new namespace `arc-runners-java`
+
 ## Blast radius
 
-Every mutation must stay inside resource group `rg-korvid-contract-test`, registry
-`acrafjavaf752aff6`, namespace `arc-runners-java`, or Helm release `arc-java-build`.
+Every mutation must stay inside resource group `rg-pension-guard`, registry
+`acrpensionguard`, namespace `arc-runners-java`, or Helm release `arc-java-build`.
 
-Run the executable proof before and after any script change:
+Namespace `arc-runners` is read-only. It is the source of the `gha-token` secret and the
+home of three scale sets this repository must never touch.
+
+Run the executable proofs before and after any script change:
 
 ```bash
 sh scripts/check-script-safety.sh
+sh scripts/test-script-safety-gate.sh
+sh scripts/test-secret-sanitizer.sh
 ```
 
 ## Sensitive data
 
 - Never create, read, decode, print, log, or commit a secret value.
 - Read Kubernetes secrets only through a key-name projection, never `-o yaml` or `-o json`.
+- The single exception is `scripts/copy-github-config-secret.sh`, which reads `gha-token` as
+  JSON only inside a pipeline that ends in `kubectl apply --namespace "$ARC_NAMESPACE" -f -`.
+  The document is never written to a file, a terminal, or a log. `scripts/check-script-safety.sh`
+  rejects any other shape, and `scripts/test-script-safety-gate.sh` proves that rejection.
+- `scripts/lib/sanitize-secret-metadata.py` may not `print`, may not touch base64, and must
+  contain exactly one `json.dump(document, sys.stdout)` sink.
 - Never use `base64 --decode`, `base64 -d`, or `--from-literal` in a committed script.
 - Never commit a kubeconfig, private key, GitHub App key, or registry credential.
 
 ## Verification contract
 
 - No local Docker daemon exists. Build with `az acr build` and test images with `az acr run`.
+- The registry already exists. No script may run `az acr create`; `scripts/verify-acr.sh` only
+  verifies `acrpensionguard` and re-checks the `AcrPull` grant idempotently.
 - Image builds verify the base image digest and every JDK archive checksum.
 - Helm values must reference an immutable `@sha256:` image digest.
 - Deployment is blocked unless `scripts/preflight-github-authorization.sh` succeeded.
@@ -226,14 +324,22 @@ sh scripts/check-script-safety.sh
 
 ## Prohibited changes
 
-- Do not modify, upgrade, or delete an existing runner scale set or its namespace.
+- Do not modify, upgrade, or delete `aks-runners`, `aks-runners-flutter`, `korvid-runners`, or
+  namespace `arc-runners`.
+- Do not create a new container registry, and do not change the SKU, admin-user setting, or any
+  other property of `acrpensionguard`.
 - Do not enable `containerMode`, Docker-in-Docker, privileged containers, or host mounts.
 - Do not grant the runner service account any Kubernetes RBAC permission.
 - Do not bake Gradle, dependency caches, cloud CLIs, or credentials into the runner image.
 - Do not replace a blocked preflight with a fallback path.
-````
+`````
 
 - [ ] **Step 3: Write the failing script safety gate**
+
+The gate classifies every script into one blast-radius class and proves the class holds. Beyond the
+namespace, release, and registry scoping it also asserts three things this correction added: the
+authoritative environment contract in `scripts/lib/common.sh`, the ban on `az acr create` and on the
+decommissioned identifiers, and the exact shape the secret copy pipeline is allowed to take.
 
 Create `scripts/check-script-safety.sh`:
 
@@ -249,14 +355,40 @@ library_scripts="scripts/lib/common.sh"
 read_only_scripts="scripts/snapshot-existing-runners.sh scripts/verify-arc-java-build.sh"
 dry_run_scripts="scripts/check-helm-template.sh"
 cluster_scoped_scripts="scripts/preflight-github-authorization.sh scripts/deploy-arc-java-build.sh scripts/rollback-arc-java-build.sh"
-azure_scoped_scripts="scripts/create-acr.sh scripts/build-java-runner.sh scripts/verify-java-runner-image.sh"
-plain_scripts="scripts/check-script-safety.sh scripts/update-image-digest.sh runner-images/java/check-manifest.sh runner-images/java/install-temurin.sh runner-images/java/verify-image.sh"
+secret_copy_scripts="scripts/copy-github-config-secret.sh"
+azure_scoped_scripts="scripts/verify-acr.sh scripts/build-java-runner.sh scripts/verify-java-runner-image.sh"
+plain_scripts="scripts/check-script-safety.sh scripts/test-script-safety-gate.sh scripts/test-secret-sanitizer.sh scripts/update-image-digest.sh runner-images/java/check-manifest.sh runner-images/java/install-temurin.sh runner-images/java/verify-image.sh"
 
-all_scripts="$library_scripts $read_only_scripts $dry_run_scripts $cluster_scoped_scripts $azure_scoped_scripts $plain_scripts"
+all_scripts="$library_scripts $read_only_scripts $dry_run_scripts $cluster_scoped_scripts $secret_copy_scripts $azure_scoped_scripts $plain_scripts"
+
+secret_sanitizer="scripts/lib/sanitize-secret-metadata.py"
+
+# These two files carry the forbidden literals as detection patterns or as probe
+# fixtures, so the literal scans skip them and their behaviour is proven instead by
+# scripts/test-script-safety-gate.sh.
+pattern_bearing_scripts="scripts/check-script-safety.sh scripts/test-script-safety-gate.sh"
 
 mutation_pattern='kubectl[[:space:]]+(apply|create|delete|patch|replace|edit|scale|annotate|label|rollout|cordon|drain|exec)|helm[[:space:]]+(install|upgrade|uninstall|rollback)|az[[:space:]]+[a-z-]+[[:space:]]+[a-z-]*[[:space:]]*(create|update|delete|set|add|remove|build|run|purge|import)|(^|[^A-Za-z0-9_-])docker[[:space:]]'
 inline_secret_pattern='base64[[:space:]]+(-d|--decode)|--from-literal'
 secret_command_pattern='kubectl[^|]*secret'
+registry_creation_pattern='az[[:space:]]+acr[[:space:]]+create'
+stale_identifier_pattern='rg-korvid-contract-test|aks-korvid-contract-test|acrafjavaf752aff6|f752aff6-b20c-4973-b32b-0a60ba2c6764'
+
+# The authoritative target, discovered on 2026-08-11 and asserted here so a stale
+# identifier can never be reintroduced silently.
+expected_environment='AZURE_SUBSCRIPTION_ID=95933ae5-0201-4a21-a1fc-8051a7437982
+AZURE_RESOURCE_GROUP=rg-pension-guard
+AZURE_LOCATION=koreacentral
+AKS_CLUSTER_NAME=aks-shared-runners
+ACR_NAME=acrpensionguard
+ACR_LOGIN_SERVER=acrpensionguard.azurecr.io
+IMAGE_REPOSITORY=gha-runners/agent-framework-java
+ARC_NAMESPACE=arc-runners-java
+EXISTING_ARC_NAMESPACE=arc-runners
+ARC_RELEASE=arc-java-build
+ARC_CHART_VERSION=0.14.2
+GITHUB_CONFIG_SECRET=gha-token
+GITHUB_CONFIG_SECRET_SOURCE_NAMESPACE=arc-runners'
 
 report() {
   printf '%s\n' "$1" >&2
@@ -283,6 +415,39 @@ normalize() {
 rm -rf "$work_dir"
 mkdir -p "$work_dir"
 
+printf '%s\n' "$expected_environment" > "$work_dir/expected-environment.txt"
+while IFS= read -r assignment; do
+  [ -n "$assignment" ] || continue
+  if ! grep -Fxq "$assignment" "$repository_root/scripts/lib/common.sh"; then
+    report "scripts/lib/common.sh must declare the authoritative value $assignment"
+  fi
+done < "$work_dir/expected-environment.txt"
+
+if ! grep -Fq 'KUBE_CONTEXT=${ARC_KUBE_CONTEXT:-evalollama}' "$repository_root/scripts/lib/common.sh"; then
+  report "scripts/lib/common.sh must default KUBE_CONTEXT to the evalollama context"
+fi
+
+if [ ! -f "$repository_root/$secret_sanitizer" ]; then
+  report "missing required module: $secret_sanitizer"
+else
+  if grep -qE "$inline_secret_pattern|base64" "$repository_root/$secret_sanitizer"; then
+    report "$secret_sanitizer must not touch base64 material"
+  fi
+  if grep -q 'print(' "$repository_root/$secret_sanitizer"; then
+    report "$secret_sanitizer must not print; it may only write the document to stdout"
+  fi
+  if ! grep -Fq 'json.dump(document, sys.stdout)' "$repository_root/$secret_sanitizer"; then
+    report "$secret_sanitizer must emit the sanitized document exactly once to stdout"
+  fi
+  if [ "$(grep -c 'json.dump' "$repository_root/$secret_sanitizer")" != "1" ]; then
+    report "$secret_sanitizer must contain exactly one json.dump sink"
+  fi
+fi
+
+if [ "$failures" -eq 0 ]; then
+  printf 'Environment contract and secret sanitizer contract hold.\n'
+fi
+
 for script in $all_scripts; do
   if [ ! -f "$repository_root/$script" ]; then
     report "missing required script: $script"
@@ -294,13 +459,20 @@ for script in $all_scripts; do
   if ! grep -q '^set -eu$' "$repository_root/$script"; then
     report "$script must declare 'set -eu'"
   fi
-  case "$script" in
-    scripts/check-script-safety.sh)
-      : # this file necessarily contains the forbidden literals as detection patterns
+  case " $pattern_bearing_scripts " in
+    *" $script "*)
+      : # these files necessarily contain the forbidden literals as patterns or fixtures
       ;;
     *)
       if grep -qE "$inline_secret_pattern" "$repository_root/$script"; then
         report "$script must not decode or inline secret material"
+      fi
+      if grep -qE "$registry_creation_pattern" "$repository_root/$script"; then
+        report "$script must not create a container registry; the existing acrpensionguard registry is reused"
+      fi
+      if grep -qE "$stale_identifier_pattern" "$repository_root/$script"; then
+        grep -nE "$stale_identifier_pattern" "$repository_root/$script" >&2
+        report "$script references a decommissioned environment identifier"
       fi
       ;;
   esac
@@ -313,14 +485,40 @@ if [ "$failures" -ne 0 ]; then
 fi
 
 for script in $all_scripts; do
+  case " $pattern_bearing_scripts " in
+    *" $script "*) continue ;;
+    *) ;;
+  esac
   normalized="$work_dir/$(basename "$script").normalized"
   grep -E "$secret_command_pattern" "$normalized" > "$work_dir/secret-lines.txt" || true
   while IFS= read -r command_line; do
-    case "$command_line" in
-      *"-o json"*|*"-o yaml"*|*jsonpath*|*--from-literal*)
-        report "$script must not project secret values: $command_line"
+    case " $secret_copy_scripts " in
+      *" $script "*)
+        case "$command_line" in
+          *"-o yaml"*|*jsonpath*|*--from-literal*)
+            report "$script must not project secret values: $command_line"
+            ;;
+          *"-o json"*)
+            case "$command_line" in
+              *'| kubectl apply --namespace "$ARC_NAMESPACE" -f -')
+                : # the projection is piped straight into a namespace-scoped apply
+                ;;
+              *)
+                report "$script may read a secret as JSON only when the pipeline ends in 'kubectl apply --namespace \"\$ARC_NAMESPACE\" -f -': $command_line"
+                ;;
+            esac
+            ;;
+          *) ;;
+        esac
         ;;
-      *) ;;
+      *)
+        case "$command_line" in
+          *"-o json"*|*"-o yaml"*|*jsonpath*|*--from-literal*)
+            report "$script must not project secret values: $command_line"
+            ;;
+          *) ;;
+        esac
+        ;;
     esac
   done < "$work_dir/secret-lines.txt"
 done
@@ -347,7 +545,7 @@ for script in $dry_run_scripts; do
   fi
 done
 
-for script in $cluster_scoped_scripts; do
+for script in $cluster_scoped_scripts $secret_copy_scripts; do
   normalized="$work_dir/$(basename "$script").normalized"
   grep -E 'kubectl[[:space:]]+(apply|create|delete|patch|replace|scale|annotate|label|rollout)' \
     "$normalized" > "$work_dir/kubectl-lines.txt" || true
@@ -371,6 +569,23 @@ for script in $cluster_scoped_scripts; do
       *) report "$script has an unscoped Helm command: $command_line" ;;
     esac
   done < "$work_dir/helm-lines.txt"
+done
+
+for script in $all_scripts; do
+  case " $pattern_bearing_scripts " in
+    *" $script "*) continue ;;
+    *) ;;
+  esac
+  normalized="$work_dir/$(basename "$script").normalized"
+  grep -E "$mutation_pattern" "$normalized" > "$work_dir/mutation-lines.txt" || true
+  while IFS= read -r command_line; do
+    case "$command_line" in
+      *aks-runners-flutter*|*korvid-runners*|*aks-runners*)
+        report "$script mutates a pre-existing runner scale set: $command_line"
+        ;;
+      *) ;;
+    esac
+  done < "$work_dir/mutation-lines.txt"
 done
 
 for script in $azure_scoped_scripts; do
@@ -409,7 +624,7 @@ Run:
 sh scripts/check-script-safety.sh
 ```
 
-Expected: exit 1 listing `missing required script:` for every script in the declared inventory except `scripts/check-script-safety.sh`.
+Expected: exit 1 listing `missing required script:` for every script in the declared inventory except `scripts/check-script-safety.sh`. The environment and sanitizer contract lines also fail at this point because `scripts/lib/common.sh` and `scripts/lib/sanitize-secret-metadata.py` do not exist yet.
 
 - [ ] **Step 5: Create the shared environment library**
 
@@ -419,27 +634,31 @@ Create `scripts/lib/common.sh`:
 #!/bin/sh
 set -eu
 
-AZURE_SUBSCRIPTION_ID=f752aff6-b20c-4973-b32b-0a60ba2c6764
-AZURE_RESOURCE_GROUP=rg-korvid-contract-test
+AZURE_SUBSCRIPTION_ID=95933ae5-0201-4a21-a1fc-8051a7437982
+AZURE_SUBSCRIPTION_NAME=ME-MngEnvMCAP310512-inhwanhwang-3
+AZURE_RESOURCE_GROUP=rg-pension-guard
 AZURE_LOCATION=koreacentral
-AKS_CLUSTER_NAME=aks-korvid-contract-test
-KUBE_CONTEXT=${ARC_KUBE_CONTEXT:-aks-korvid-contract-test}
-ACR_NAME=acrafjavaf752aff6
-ACR_LOGIN_SERVER=acrafjavaf752aff6.azurecr.io
+AKS_CLUSTER_NAME=aks-shared-runners
+KUBE_CONTEXT=${ARC_KUBE_CONTEXT:-evalollama}
+ACR_NAME=acrpensionguard
+ACR_LOGIN_SERVER=acrpensionguard.azurecr.io
 IMAGE_REPOSITORY=gha-runners/agent-framework-java
 ARC_NAMESPACE=arc-runners-java
+EXISTING_ARC_NAMESPACE=arc-runners
 ARC_RELEASE=arc-java-build
 ARC_CHART=oci://ghcr.io/actions/actions-runner-controller-charts/gha-runner-scale-set
 ARC_CHART_VERSION=0.14.2
 GITHUB_CONFIG_URL=https://github.com/open-play-ground/agent-framework-java
 GITHUB_CONFIG_SECRET=gha-token
+GITHUB_CONFIG_SECRET_SOURCE_NAMESPACE=arc-runners
 GITHUB_TARGET_REPOSITORY=open-play-ground/agent-framework-java
 EGRESS_PROFILE_LABEL=agentframework.io/egress-profile=java-build
 
-export AZURE_SUBSCRIPTION_ID AZURE_RESOURCE_GROUP AZURE_LOCATION AKS_CLUSTER_NAME KUBE_CONTEXT
-export ACR_NAME ACR_LOGIN_SERVER IMAGE_REPOSITORY ARC_NAMESPACE ARC_RELEASE ARC_CHART
-export ARC_CHART_VERSION GITHUB_CONFIG_URL GITHUB_CONFIG_SECRET GITHUB_TARGET_REPOSITORY
-export EGRESS_PROFILE_LABEL
+export AZURE_SUBSCRIPTION_ID AZURE_SUBSCRIPTION_NAME AZURE_RESOURCE_GROUP AZURE_LOCATION
+export AKS_CLUSTER_NAME KUBE_CONTEXT ACR_NAME ACR_LOGIN_SERVER IMAGE_REPOSITORY
+export ARC_NAMESPACE EXISTING_ARC_NAMESPACE ARC_RELEASE ARC_CHART ARC_CHART_VERSION
+export GITHUB_CONFIG_URL GITHUB_CONFIG_SECRET GITHUB_CONFIG_SECRET_SOURCE_NAMESPACE
+export GITHUB_TARGET_REPOSITORY EGRESS_PROFILE_LABEL
 
 platform_repository_root() {
   CDPATH= cd -- "$(dirname -- "$0")/.." && pwd
@@ -498,6 +717,13 @@ require_command python3
 
 mkdir -p "$baseline_dir"
 
+if ! kubectl get crd autoscalingrunnersets.actions.github.com >/dev/null 2>&1; then
+  info "ARC CRD not installed; baseline is empty"
+  printf '[]' > "$baseline_file"
+  info "baseline written to arc/arc-java-build/baseline/existing-runner-sets.json"
+  exit 0
+fi
+
 kubectl get autoscalingrunnersets.actions.github.com --all-namespaces -o json |
   python3 -c '
 import json
@@ -524,7 +750,370 @@ info "captured $(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[
 info "baseline written to arc/arc-java-build/baseline/existing-runner-sets.json"
 ```
 
-- [ ] **Step 7: Run the safety gate and verify the read-only classification**
+- [ ] **Step 7: Create the secret copy pipeline and its sanitizer**
+
+`gha-token` already exists in namespace `arc-runners`. A Kubernetes Secret is namespace-scoped, so
+the new scale set cannot reference it across namespaces; an operator must copy it into
+`arc-runners-java`. The copy never renders the document: it is read as JSON only inside one pipeline
+that ends in a namespace-scoped `kubectl apply`.
+
+Create `scripts/lib/sanitize-secret-metadata.py`:
+
+```python
+"""Re-target a Kubernetes Secret document at a new namespace.
+
+Reads one Secret JSON document on stdin and writes the same document on stdout with
+every cluster-assigned metadata field removed and ``metadata.namespace`` replaced by
+the namespace named in argv[1]. The document is never rendered to a terminal, a log,
+or a file by this module: it is written once to stdout so the caller can pipe it into
+``kubectl apply -f -``. No value is decoded, inspected, or summarised.
+"""
+
+import json
+import sys
+
+STRIPPED_METADATA_FIELDS = (
+    "creationTimestamp",
+    "deletionGracePeriodSeconds",
+    "deletionTimestamp",
+    "finalizers",
+    "generateName",
+    "generation",
+    "managedFields",
+    "ownerReferences",
+    "resourceVersion",
+    "selfLink",
+    "uid",
+)
+
+STRIPPED_ANNOTATIONS = ("kubectl.kubernetes.io/last-applied-configuration",)
+
+
+def sanitize(document, target_namespace):
+    if document.get("kind") != "Secret":
+        raise SystemExit("BLOCKED expected a Secret document but received %r" % document.get("kind"))
+
+    metadata = dict(document.get("metadata", {}))
+    for field in STRIPPED_METADATA_FIELDS:
+        metadata.pop(field, None)
+
+    annotations = dict(metadata.get("annotations", {}))
+    for annotation in STRIPPED_ANNOTATIONS:
+        annotations.pop(annotation, None)
+    if annotations:
+        metadata["annotations"] = annotations
+    else:
+        metadata.pop("annotations", None)
+
+    metadata["namespace"] = target_namespace
+
+    sanitized = dict(document)
+    sanitized.pop("status", None)
+    sanitized["metadata"] = metadata
+    return sanitized
+
+
+def main():
+    if len(sys.argv) != 2:
+        raise SystemExit("BLOCKED usage: sanitize-secret-metadata.py <target-namespace>")
+
+    document = sanitize(json.load(sys.stdin), sys.argv[1])
+    json.dump(document, sys.stdout)
+
+
+if __name__ == "__main__":
+    main()
+```
+
+Create `scripts/copy-github-config-secret.sh`:
+
+```sh
+#!/bin/sh
+set -eu
+
+. "$(dirname -- "$0")/lib/common.sh"
+
+repository_root=$(platform_repository_root)
+sanitizer="$repository_root/scripts/lib/sanitize-secret-metadata.py"
+
+require_kube_context
+require_command python3
+
+if [ ! -f "$sanitizer" ]; then
+  fail "missing sanitizer $sanitizer"
+fi
+
+if [ "$GITHUB_CONFIG_SECRET_SOURCE_NAMESPACE" = "$ARC_NAMESPACE" ]; then
+  fail "the source and target namespace are identical; nothing to copy"
+fi
+
+if ! kubectl get namespace "$ARC_NAMESPACE" >/dev/null 2>&1; then
+  fail "namespace $ARC_NAMESPACE does not exist yet; run scripts/preflight-github-authorization.sh first"
+fi
+
+if ! kubectl get secret "$GITHUB_CONFIG_SECRET" --namespace "$GITHUB_CONFIG_SECRET_SOURCE_NAMESPACE" >/dev/null 2>&1; then
+  fail "secret $GITHUB_CONFIG_SECRET is missing in namespace $GITHUB_CONFIG_SECRET_SOURCE_NAMESPACE"
+fi
+
+if kubectl get secret "$GITHUB_CONFIG_SECRET" --namespace "$ARC_NAMESPACE" >/dev/null 2>&1; then
+  if [ "${ARC_SECRET_COPY_OVERWRITE:-0}" != "1" ]; then
+    fail "secret $GITHUB_CONFIG_SECRET already exists in namespace $ARC_NAMESPACE; re-run with ARC_SECRET_COPY_OVERWRITE=1 to replace it"
+  fi
+  info "overwriting the existing $GITHUB_CONFIG_SECRET in namespace $ARC_NAMESPACE"
+fi
+
+info "copying $GITHUB_CONFIG_SECRET from $GITHUB_CONFIG_SECRET_SOURCE_NAMESPACE to $ARC_NAMESPACE without rendering any value"
+kubectl get secret "$GITHUB_CONFIG_SECRET" --namespace "$GITHUB_CONFIG_SECRET_SOURCE_NAMESPACE" -o json \
+  | python3 "$sanitizer" "$ARC_NAMESPACE" \
+  | kubectl apply --namespace "$ARC_NAMESPACE" -f -
+
+copied_keys=$(
+  kubectl get secret "$GITHUB_CONFIG_SECRET" --namespace "$ARC_NAMESPACE" \
+    -o go-template='{{range $key, $unused := .data}}{{$key}}{{" "}}{{end}}'
+)
+info "secret $GITHUB_CONFIG_SECRET is present in $ARC_NAMESPACE with key names: $copied_keys"
+```
+
+- [ ] **Step 8: Create the executable safety and sanitizer tests**
+
+A gate that is never driven with a violation is an assumption. These two scripts turn the gate and
+the copy pipeline into tests.
+
+Create `scripts/test-secret-sanitizer.sh`:
+
+```sh
+#!/bin/sh
+set -eu
+
+repository_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+sanitizer="$repository_root/scripts/lib/sanitize-secret-metadata.py"
+work_dir="$repository_root/build/secret-sanitizer-test"
+
+if [ ! -f "$sanitizer" ]; then
+  printf 'BLOCKED missing sanitizer %s\n' "$sanitizer" >&2
+  exit 1
+fi
+
+rm -rf "$work_dir"
+mkdir -p "$work_dir"
+
+cat > "$work_dir/fixture.json" <<'JSON'
+{
+  "apiVersion": "v1",
+  "kind": "Secret",
+  "type": "Opaque",
+  "metadata": {
+    "name": "gha-token",
+    "namespace": "arc-runners",
+    "uid": "11111111-2222-3333-4444-555555555555",
+    "resourceVersion": "123456",
+    "creationTimestamp": "2026-07-22T08:00:00Z",
+    "generation": 3,
+    "selfLink": "/api/v1/namespaces/arc-runners/secrets/gha-token",
+    "managedFields": [{"manager": "kubectl-client-side-apply"}],
+    "ownerReferences": [{"kind": "HelmRelease", "name": "aks-runners"}],
+    "finalizers": ["example.com/keep"],
+    "labels": {"app": "arc"},
+    "annotations": {
+      "kubectl.kubernetes.io/last-applied-configuration": "{\"metadata\":{\"namespace\":\"arc-runners\"}}",
+      "owner": "platform"
+    }
+  },
+  "data": {
+    "github_token": "ZmFrZS1ub3QtYS1yZWFsLXRva2Vu"
+  },
+  "status": {"phase": "Active"}
+}
+JSON
+
+python3 "$sanitizer" arc-runners-java < "$work_dir/fixture.json" > "$work_dir/actual.json"
+
+python3 - "$work_dir/fixture.json" "$work_dir/actual.json" <<'PY'
+import json
+import sys
+
+source = json.load(open(sys.argv[1]))
+actual = json.load(open(sys.argv[2]))
+metadata = actual.get("metadata", {})
+failures = []
+
+
+def check(description, condition):
+    if condition:
+        print("PASS %s" % description)
+    else:
+        failures.append(description)
+        print("FAIL %s" % description)
+
+
+check("namespace is retargeted", metadata.get("namespace") == "arc-runners-java")
+check("name is preserved", metadata.get("name") == "gha-token")
+check("type is preserved", actual.get("type") == "Opaque")
+check("labels are preserved", metadata.get("labels") == {"app": "arc"})
+for field in (
+    "uid",
+    "resourceVersion",
+    "creationTimestamp",
+    "generation",
+    "selfLink",
+    "managedFields",
+    "ownerReferences",
+    "finalizers",
+):
+    check("metadata.%s is stripped" % field, field not in metadata)
+check(
+    "last-applied-configuration annotation is stripped",
+    "kubectl.kubernetes.io/last-applied-configuration" not in metadata.get("annotations", {}),
+)
+check("unrelated annotations survive", metadata.get("annotations", {}).get("owner") == "platform")
+check("status is stripped", "status" not in actual)
+check("data key names are preserved", sorted(actual.get("data", {})) == sorted(source["data"]))
+check("data values are copied byte-for-byte", actual.get("data") == source["data"])
+
+if failures:
+    print("Secret sanitizer test failed with %d problem(s)." % len(failures), file=sys.stderr)
+    raise SystemExit(1)
+print("Secret sanitizer test passed.")
+PY
+
+printf 'stdout is the only sink: %s byte(s) written, never rendered by the copy script.\n' \
+  "$(wc -c < "$work_dir/actual.json" | tr -d ' ')"
+
+grep -q 'kubectl apply --namespace "$ARC_NAMESPACE" -f -' "$repository_root/scripts/copy-github-config-secret.sh" || {
+  printf 'BLOCKED the copy script must pipe the sanitized document straight into a namespace-scoped apply\n' >&2
+  exit 1
+}
+printf 'Copy pipeline terminates in a namespace-scoped kubectl apply.\n'
+
+rm -rf "$work_dir"
+```
+
+Create `scripts/test-script-safety-gate.sh`:
+
+```sh
+#!/bin/sh
+set -eu
+
+repository_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+probe_root="$repository_root/build/gate-probe"
+failures=0
+
+rm -rf "$probe_root"
+mkdir -p "$probe_root"
+
+stub_scripts="scripts/verify-arc-java-build.sh scripts/check-helm-template.sh scripts/preflight-github-authorization.sh scripts/deploy-arc-java-build.sh scripts/rollback-arc-java-build.sh scripts/verify-acr.sh scripts/build-java-runner.sh scripts/verify-java-runner-image.sh scripts/update-image-digest.sh runner-images/java/check-manifest.sh runner-images/java/install-temurin.sh runner-images/java/verify-image.sh"
+
+make_case() {
+  case_root="$probe_root/$1"
+  mkdir -p "$case_root"
+  cp -R "$repository_root/scripts" "$case_root/scripts"
+  rm -rf "$case_root/build"
+  for stub in $stub_scripts; do
+    mkdir -p "$case_root/$(dirname "$stub")"
+    printf '#!/bin/sh\nset -eu\n' > "$case_root/$stub"
+  done
+}
+
+run_case() {
+  case_root="$probe_root/$1"
+  sh "$case_root/scripts/check-script-safety.sh" > "$case_root/stdout.txt" 2> "$case_root/stderr.txt"
+}
+
+expect_pass() {
+  if run_case "$1"; then
+    printf 'PASS %s: a complete, compliant inventory exits zero\n' "$1"
+  else
+    printf 'FAIL %s: a complete, compliant inventory must exit zero\n' "$1" >&2
+    cat "$probe_root/$1/stderr.txt" >&2
+    failures=$((failures + 1))
+  fi
+}
+
+expect_block() {
+  probe_case=$1
+  expected=$2
+  if run_case "$probe_case"; then
+    printf 'FAIL %s: the gate accepted a violation it must reject\n' "$probe_case" >&2
+    failures=$((failures + 1))
+    return
+  fi
+  if grep -Fq "$expected" "$probe_root/$probe_case/stderr.txt"; then
+    printf 'PASS %s: blocked with "%s"\n' "$probe_case" "$expected"
+  else
+    printf 'FAIL %s: expected a block mentioning "%s"\n' "$probe_case" "$expected" >&2
+    cat "$probe_root/$probe_case/stderr.txt" >&2
+    failures=$((failures + 1))
+  fi
+}
+
+make_case baseline
+expect_pass baseline
+
+make_case stale-identifier
+printf 'AZURE_RESOURCE_GROUP=rg-korvid-contract-test\n' >> "$probe_root/stale-identifier/scripts/copy-github-config-secret.sh"
+expect_block stale-identifier "references a decommissioned environment identifier"
+
+make_case registry-creation
+printf 'az acr create --name "$ACR_NAME" --resource-group "$AZURE_RESOURCE_GROUP"\n' \
+  >> "$probe_root/registry-creation/scripts/copy-github-config-secret.sh"
+expect_block registry-creation "must not create a container registry"
+
+make_case drifted-environment
+sed 's/^ACR_NAME=acrpensionguard$/ACR_NAME=acrsomethingelse/' \
+  "$probe_root/drifted-environment/scripts/lib/common.sh" > "$probe_root/drifted-environment/common.tmp"
+mv "$probe_root/drifted-environment/common.tmp" "$probe_root/drifted-environment/scripts/lib/common.sh"
+expect_block drifted-environment "must declare the authoritative value ACR_NAME=acrpensionguard"
+
+make_case drifted-context
+sed 's/^KUBE_CONTEXT=.*$/KUBE_CONTEXT=${ARC_KUBE_CONTEXT:-aks-shared-runners}/' \
+  "$probe_root/drifted-context/scripts/lib/common.sh" > "$probe_root/drifted-context/common.tmp"
+mv "$probe_root/drifted-context/common.tmp" "$probe_root/drifted-context/scripts/lib/common.sh"
+expect_block drifted-context "must default KUBE_CONTEXT to the evalollama context"
+
+make_case leaked-secret-projection
+sed 's#| kubectl apply --namespace "$ARC_NAMESPACE" -f -#> "$repository_root/build/gha-token.json"#' \
+  "$probe_root/leaked-secret-projection/scripts/copy-github-config-secret.sh" \
+  > "$probe_root/leaked-secret-projection/copy.tmp"
+mv "$probe_root/leaked-secret-projection/copy.tmp" \
+  "$probe_root/leaked-secret-projection/scripts/copy-github-config-secret.sh"
+expect_block leaked-secret-projection "may read a secret as JSON only when the pipeline ends in"
+
+make_case printing-sanitizer
+printf '\nprint(STRIPPED_METADATA_FIELDS)\n' \
+  >> "$probe_root/printing-sanitizer/scripts/lib/sanitize-secret-metadata.py"
+expect_block printing-sanitizer "must not print"
+
+make_case foreign-scale-set
+printf 'kubectl delete autoscalingrunnerset aks-runners --namespace "$ARC_NAMESPACE"\n' \
+  >> "$probe_root/foreign-scale-set/scripts/copy-github-config-secret.sh"
+expect_block foreign-scale-set "mutates a pre-existing runner scale set"
+
+make_case unscoped-namespace
+printf 'kubectl delete secret "$GITHUB_CONFIG_SECRET"\n' \
+  >> "$probe_root/unscoped-namespace/scripts/copy-github-config-secret.sh"
+expect_block unscoped-namespace "has an unscoped kubectl mutation"
+
+rm -rf "$probe_root"
+
+if [ "$failures" -ne 0 ]; then
+  printf 'Script safety gate test failed with %s problem(s).\n' "$failures" >&2
+  exit 1
+fi
+
+printf 'Script safety gate test passed.\n'
+```
+
+Run both:
+
+```bash
+chmod +x scripts/copy-github-config-secret.sh scripts/test-secret-sanitizer.sh scripts/test-script-safety-gate.sh
+sh scripts/test-secret-sanitizer.sh
+sh scripts/test-script-safety-gate.sh
+```
+
+Expected: `Secret sanitizer test passed.` after seventeen `PASS` lines, then nine `PASS` lines and `Script safety gate test passed.` The gate test stubs the not-yet-written scripts in a scratch copy under `build/`, so its `baseline` case proves the gate goes green on a complete, compliant inventory while the real repository is still staged red.
+
+- [ ] **Step 9: Run the safety gate and verify the staged classification**
 
 Run:
 
@@ -533,9 +1122,9 @@ chmod +x scripts/lib/common.sh scripts/snapshot-existing-runners.sh
 sh scripts/check-script-safety.sh
 ```
 
-Expected: exit 1, and the remaining `missing required script:` lines no longer include `scripts/lib/common.sh` or `scripts/snapshot-existing-runners.sh`. The safety gate stays red until Task 7 creates the last script; that is the intended sequencing.
+Expected: exit 1 with `Environment contract and secret sanitizer contract hold.` on stdout and exactly twelve `missing required script:` lines on stderr — `scripts/verify-arc-java-build.sh`, `scripts/check-helm-template.sh`, `scripts/preflight-github-authorization.sh`, `scripts/deploy-arc-java-build.sh`, `scripts/rollback-arc-java-build.sh`, `scripts/verify-acr.sh`, `scripts/build-java-runner.sh`, `scripts/verify-java-runner-image.sh`, `scripts/update-image-digest.sh`, `runner-images/java/check-manifest.sh`, `runner-images/java/install-temurin.sh`, and `runner-images/java/verify-image.sh`. No Task 1 script is reported. The safety gate stays red until Task 7 creates the last script; that is the intended sequencing.
 
-- [ ] **Step 8: Capture the existing scale-set baseline**
+- [ ] **Step 10: Capture the existing scale-set baseline**
 
 Run:
 
@@ -545,9 +1134,9 @@ sh scripts/snapshot-existing-runners.sh
 python3 -c "import json;print([(r['namespace'], r['name']) for r in json.load(open('arc/arc-java-build/baseline/existing-runner-sets.json'))])"
 ```
 
-Expected: the context prints `aks-korvid-contract-test`; the snapshot script reports at least one existing scale set; the final command prints the namespace and name of every pre-existing scale set, and `arc-java-build` is absent.
+Expected: the context prints `evalollama`; the snapshot script prints `INFO captured 3 existing scale set(s)`; the final command prints exactly `[('arc-runners', 'aks-runners'), ('arc-runners', 'aks-runners-flutter'), ('arc-runners', 'korvid-runners')]`, and `arc-java-build` is absent. The snapshot records only `metadata.namespace`, `metadata.name`, and `spec`, and a scale-set `spec` carries the secret *reference* `gha-token`, never a secret value.
 
-- [ ] **Step 9: Commit the platform bootstrap**
+- [ ] **Step 11: Commit the platform bootstrap**
 
 Run:
 
@@ -958,29 +1547,33 @@ Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
 
 ---
 
-### Task 3: Create the Azure Container Registry and grant AcrPull
+### Task 3: Verify the existing Azure Container Registry and the AcrPull attachment
 
 **Files:**
-- Create: `scripts/create-acr.sh`
+- Create: `scripts/verify-acr.sh`
 
 **Interfaces:**
-- Consumes: `scripts/lib/common.sh`.
-- Produces: registry `acrafjavaf752aff6` (Basic, admin disabled) in `rg-korvid-contract-test`, and an `AcrPull` role assignment for the AKS kubelet managed identity scoped to that registry only.
+- Consumes: `scripts/lib/common.sh`, the pre-existing registry `acrpensionguard` in `rg-pension-guard`.
+- Produces: an executable, idempotent verification that `acrpensionguard` exists with the expected login server and a disabled admin user, and that the AKS kubelet managed identity holds `AcrPull` scoped to that registry and nothing wider. **This task creates no Azure resource.** The registry is shared with other workloads in `rg-pension-guard`, so the script only reads it; the single mutation it can perform is an `AcrPull` role assignment scoped to the registry resource id, and only when that assignment is absent.
 
-- [ ] **Step 1: Confirm the registry does not exist yet**
+- [ ] **Step 1: Confirm the registry already exists and is already attached**
 
 Run:
 
 ```bash
-az account set --subscription f752aff6-b20c-4973-b32b-0a60ba2c6764
-az acr list --resource-group rg-korvid-contract-test --query "[].name" -o tsv
+az account set --subscription 95933ae5-0201-4a21-a1fc-8051a7437982
+az acr list --resource-group rg-pension-guard --query "[].{name:name,loginServer:loginServer,sku:sku.name,admin:adminUserEnabled}" -o json
+kubelet_object_id=$(az aks show --name aks-shared-runners --resource-group rg-pension-guard --query identityProfile.kubeletidentity.objectId -o tsv)
+az role assignment list --assignee "$kubelet_object_id" --all --query "[].{role:roleDefinitionName,scope:scope}" -o json
 ```
 
-Expected: no output, confirming the observed state that no registry exists.
+Expected: exactly one registry, `acrpensionguard`, login server `acrpensionguard.azurecr.io`, SKU `Basic`, `admin` `false`; the kubelet object id is `240fc4c5-da9d-4051-be2c-dcb4241b0f36`; and its only role assignment is `AcrPull` scoped to `/subscriptions/95933ae5-0201-4a21-a1fc-8051a7437982/resourceGroups/rg-pension-guard/providers/Microsoft.ContainerRegistry/registries/acrpensionguard`.
 
-- [ ] **Step 2: Create the idempotent registry and role assignment script**
+If the registry is missing, stop. This plan reuses a registry and never creates one; creating a registry is a separate, explicitly approved decision.
 
-Create `scripts/create-acr.sh`:
+- [ ] **Step 2: Create the read-only registry verification script**
+
+Create `scripts/verify-acr.sh`:
 
 ```sh
 #!/bin/sh
@@ -990,23 +1583,21 @@ set -eu
 
 require_azure_subscription
 
-if az acr show --name "$ACR_NAME" --resource-group "$AZURE_RESOURCE_GROUP" >/dev/null 2>&1; then
-  info "registry $ACR_NAME already exists"
-else
-  info "creating registry $ACR_NAME"
-  az acr create \
-    --name "$ACR_NAME" \
-    --resource-group "$AZURE_RESOURCE_GROUP" \
-    --location "$AZURE_LOCATION" \
-    --sku Basic \
-    --admin-enabled false \
-    --output none
+if ! az acr show --name "$ACR_NAME" --resource-group "$AZURE_RESOURCE_GROUP" >/dev/null 2>&1; then
+  fail "registry $ACR_NAME does not exist in $AZURE_RESOURCE_GROUP; this plan reuses an existing registry and never creates one"
+fi
+info "registry $ACR_NAME exists in $AZURE_RESOURCE_GROUP"
+
+login_server=$(az acr show --name "$ACR_NAME" --resource-group "$AZURE_RESOURCE_GROUP" --query loginServer -o tsv)
+if [ "$login_server" != "$ACR_LOGIN_SERVER" ]; then
+  fail "registry $ACR_NAME reports login server $login_server but the environment declares $ACR_LOGIN_SERVER"
 fi
 
 admin_enabled=$(az acr show --name "$ACR_NAME" --resource-group "$AZURE_RESOURCE_GROUP" --query adminUserEnabled -o tsv)
 if [ "$admin_enabled" != "false" ]; then
-  fail "registry $ACR_NAME must keep the admin user disabled but reported $admin_enabled"
+  fail "registry $ACR_NAME must keep the admin user disabled but reported $admin_enabled; this script never reconfigures a shared registry, so fix it out of band and re-run"
 fi
+info "registry $ACR_NAME keeps the admin user disabled"
 
 registry_id=$(az acr show --name "$ACR_NAME" --resource-group "$AZURE_RESOURCE_GROUP" --query id -o tsv)
 kubelet_object_id=$(
@@ -1029,9 +1620,9 @@ existing_assignment=$(
 )
 
 if [ -n "$existing_assignment" ]; then
-  info "AcrPull is already granted to the kubelet identity"
+  info "AcrPull is already granted to the kubelet identity of $AKS_CLUSTER_NAME"
 else
-  info "granting AcrPull to the kubelet identity"
+  info "granting AcrPull to the kubelet identity of $AKS_CLUSTER_NAME"
   az role assignment create \
     --assignee-object-id "$kubelet_object_id" \
     --assignee-principal-type ServicePrincipal \
@@ -1040,27 +1631,48 @@ else
     --output none
 fi
 
-info "registry login server $(az acr show --name "$ACR_NAME" --resource-group "$AZURE_RESOURCE_GROUP" --query loginServer -o tsv)"
+if az acr repository show --name "$ACR_NAME" --repository "$IMAGE_REPOSITORY" >/dev/null 2>&1; then
+  info "image repository $IMAGE_REPOSITORY already exists in $ACR_NAME"
+else
+  info "image repository $IMAGE_REPOSITORY does not exist yet; scripts/build-java-runner.sh creates it"
+fi
+
+info "registry login server $login_server"
 ```
 
-- [ ] **Step 3: Verify the script is classified as Azure-scoped**
+The script has no `az acr create`, no `az acr update`, and no SKU, network, or policy change. Its only
+possible mutation is the `AcrPull` assignment, which carries `--scope "$registry_id"`.
+
+- [ ] **Step 3: Verify the script is classified as Azure-scoped and creates nothing**
 
 Run:
 
 ```bash
-chmod +x scripts/create-acr.sh
+chmod +x scripts/verify-acr.sh
 sh scripts/check-script-safety.sh
+sh scripts/test-script-safety-gate.sh
+grep -c "az acr create" scripts/verify-acr.sh || true
 ```
 
-Expected: exit 1 only because scripts from Tasks 4 through 7 are still missing. No line mentions `scripts/create-acr.sh`, which proves every mutating `az` command in it carries `--resource-group "$AZURE_RESOURCE_GROUP"` or `--scope "$registry_id"`.
+Expected: the gate exits 1 only because scripts from Tasks 4 through 7 are still missing, and no line mentions `scripts/verify-acr.sh`, which proves every mutating `az` command in it carries `--resource-group "$AZURE_RESOURCE_GROUP"` or `--scope "$registry_id"`; the gate test still prints nine `PASS` lines; the `grep -c` prints `0`.
 
-- [ ] **Step 4: Commit the registry provisioning script**
+- [ ] **Step 4: Run the verification against the live registry**
 
 Run:
 
 ```bash
-git add scripts/create-acr.sh
-git commit -m "feat: add scoped Azure Container Registry provisioning
+sh scripts/verify-acr.sh
+```
+
+Expected: `INFO registry acrpensionguard exists in rg-pension-guard`, `INFO registry acrpensionguard keeps the admin user disabled`, `INFO AcrPull is already granted to the kubelet identity of aks-shared-runners`, a line about `gha-runners/agent-framework-java`, and `INFO registry login server acrpensionguard.azurecr.io`. Because the assignment already exists the script performs no mutation at all; re-running it is a no-op.
+
+- [ ] **Step 5: Commit the registry verification script**
+
+Run:
+
+```bash
+git add scripts/verify-acr.sh
+git commit -m "feat: verify the reused Azure Container Registry and its AcrPull grant
 
 Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
 ```
@@ -1277,7 +1889,7 @@ metadata:
   name: arc-java-build-egress
   namespace: arc-runners-java
 spec:
-  description: Allows the java-build egress profile to reach GitHub, Gradle, Maven Central, and acrafjavaf752aff6.
+  description: Allows the java-build egress profile to reach GitHub, Gradle, Maven Central, and acrpensionguard.
   endpointSelector:
     matchLabels:
       agentframework.io/egress-profile: java-build
@@ -1295,7 +1907,7 @@ spec:
         - matchName: plugins-artifacts.gradle.org
         - matchName: services.gradle.org
         - matchName: downloads.gradle.org
-        - matchName: acrafjavaf752aff6.azurecr.io
+        - matchName: acrpensionguard.azurecr.io
         - matchPattern: "*.blob.core.windows.net"
       toPorts:
         - ports:
@@ -1644,7 +2256,7 @@ kubectl apply --namespace "$ARC_NAMESPACE" -f "$repository_root/arc/arc-java-bui
 kubectl apply --namespace "$ARC_NAMESPACE" -f "$repository_root/arc/arc-java-build/network-policy.yaml"
 
 if ! kubectl get secret "$GITHUB_CONFIG_SECRET" --namespace "$ARC_NAMESPACE" >/dev/null 2>&1; then
-  fail "secret $GITHUB_CONFIG_SECRET is missing in namespace $ARC_NAMESPACE; a cluster operator must create it out of band before deployment"
+  fail "secret $GITHUB_CONFIG_SECRET is missing in namespace $ARC_NAMESPACE; a cluster operator must run scripts/copy-github-config-secret.sh, or create it out of band, before deployment"
 fi
 
 secret_keys=$(
@@ -1996,7 +2608,7 @@ log_agent_ready=$(
 if [ "${log_agent_ready:-0}" -gt 0 ]; then
   pass "cluster log agent is ready on $log_agent_ready node(s), so listener and ephemeral runner logs are exported before pod deletion"
 else
-  report "no ready ama-logs daemonset in kube-system; enable Container Insights on aks-korvid-contract-test so runner logs survive pod deletion"
+  report "no ready ama-logs daemonset in kube-system; enable Container Insights on aks-shared-runners so runner logs survive pod deletion"
 fi
 
 sh "$repository_root/scripts/snapshot-existing-runners.sh" "$after_file"
@@ -2064,13 +2676,14 @@ chmod +x scripts/deploy-arc-java-build.sh scripts/verify-arc-java-build.sh scrip
 sh scripts/check-script-safety.sh
 ```
 
-Expected: `Script safety check passed for 15 scripts.` and exit 0. This is the first green run of the gate and proves:
+Expected: `Environment contract and secret sanitizer contract hold.`, `Script safety check passed for 18 scripts.`, and exit 0. Also re-run `sh scripts/test-script-safety-gate.sh` and expect nine `PASS` lines. This is the first green run of the gate and proves:
 
 - `scripts/snapshot-existing-runners.sh` and `scripts/verify-arc-java-build.sh` contain no mutating command;
 - `scripts/check-helm-template.sh` only ever runs `kubectl apply --dry-run=server`;
-- `scripts/preflight-github-authorization.sh`, `scripts/deploy-arc-java-build.sh`, and `scripts/rollback-arc-java-build.sh` scope every mutation to `--namespace "$ARC_NAMESPACE"` and release `"$ARC_RELEASE"`;
-- `scripts/create-acr.sh`, `scripts/build-java-runner.sh`, and `scripts/verify-java-runner-image.sh` scope every Azure mutation to `--resource-group "$AZURE_RESOURCE_GROUP"`, `--registry "$ACR_NAME"`, or `--scope "$registry_id"`;
-- no script decodes, inlines, or projects a secret value.
+- `scripts/preflight-github-authorization.sh`, `scripts/deploy-arc-java-build.sh`, `scripts/rollback-arc-java-build.sh`, and `scripts/copy-github-config-secret.sh` scope every mutation to `--namespace "$ARC_NAMESPACE"` and release `"$ARC_RELEASE"`;
+- `scripts/verify-acr.sh`, `scripts/build-java-runner.sh`, and `scripts/verify-java-runner-image.sh` scope every Azure mutation to `--resource-group "$AZURE_RESOURCE_GROUP"`, `--registry "$ACR_NAME"`, or `--scope "$registry_id"`, and none of them contains `az acr create`;
+- no script names `aks-runners`, `aks-runners-flutter`, or `korvid-runners` on a mutating command;
+- no script decodes or inlines a secret value, and the only secret projection is the copy pipeline that ends in a namespace-scoped `kubectl apply`.
 
 - [ ] **Step 6: Commit the deployment scripts**
 
@@ -2094,7 +2707,7 @@ Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
 
 **Interfaces:**
 - Consumes: every script from Tasks 1 through 7.
-- Produces: registry `acrafjavaf752aff6` with a verified image; the committed runner image digest in `arc/arc-java-build/values.yaml`; the running `arc-java-build` scale set in `arc-runners-java`.
+- Produces: a verified image in the existing registry `acrpensionguard` under repository `gha-runners/agent-framework-java`; the committed runner image digest in `arc/arc-java-build/values.yaml`; the running `arc-java-build` scale set in `arc-runners-java`. No pre-existing scale set, namespace, or registry property changes.
 
 - [ ] **Step 1: Confirm the environment before any mutation**
 
@@ -2110,18 +2723,18 @@ sh scripts/check-script-safety.sh
 sh scripts/snapshot-existing-runners.sh
 ```
 
-Expected: subscription `f752aff6-b20c-4973-b32b-0a60ba2c6764`; context `aks-korvid-contract-test`; at least one node; a non-zero Cilium ready count; the Helm table lists the existing ARC releases and no `arc-java-build`; the safety gate passes; the baseline snapshot is unchanged.
+Expected: subscription `95933ae5-0201-4a21-a1fc-8051a7437982`; context `evalollama`; at least one node; a non-zero Cilium ready count; the Helm table lists `arc` in `arc-systems` plus `aks-runners`, `aks-runners-flutter`, and `korvid-runners` in `arc-runners`, and no `arc-java-build`; the safety gate passes; the baseline snapshot is unchanged and still holds exactly those three scale sets.
 
-- [ ] **Step 2: Create the registry and grant AcrPull**
+- [ ] **Step 2: Verify the reused registry and its AcrPull grant**
 
 Run:
 
 ```bash
-sh scripts/create-acr.sh
-az acr show --name acrafjavaf752aff6 --resource-group rg-korvid-contract-test --query "{sku:sku.name,admin:adminUserEnabled,login:loginServer}" -o json
+sh scripts/verify-acr.sh
+az acr show --name acrpensionguard --resource-group rg-pension-guard --query "{sku:sku.name,admin:adminUserEnabled,login:loginServer}" -o json
 ```
 
-Expected: the script reports registry creation and the AcrPull grant; the query prints `"sku": "Basic"`, `"admin": false`, and `"login": "acrafjavaf752aff6.azurecr.io"`.
+Expected: the script reports that the registry exists, that the admin user is disabled, and that `AcrPull` is *already* granted, so it mutates nothing; the query prints `"sku": "Basic"`, `"admin": false`, and `"login": "acrpensionguard.azurecr.io"`.
 
 - [ ] **Step 3: Build the runner image in ACR**
 
@@ -2155,7 +2768,7 @@ git diff arc/arc-java-build/values.yaml
 sh scripts/check-helm-template.sh
 ```
 
-Expected: `set the runner image to acrafjavaf752aff6.azurecr.io/gha-runners/agent-framework-java@sha256:...`; the diff adds exactly one `image:` line under `- name: runner`; the template check prints every `PASS` line and `Helm template and manifest dry-run check passed.`
+Expected: `set the runner image to acrpensionguard.azurecr.io/gha-runners/agent-framework-java@sha256:...`; the diff adds exactly one `image:` line under `- name: runner`; the template check prints every `PASS` line and `Helm template and manifest dry-run check passed.`
 
 - [ ] **Step 6: Run the blocking authorization preflight**
 
@@ -2168,13 +2781,30 @@ cat build/preflight-github-authorization.ok
 
 Expected on success: `INFO the credential is authorized for open-play-ground/agent-framework-java` and a marker file containing `kind=pat repository=open-play-ground/agent-framework-java status=200`.
 
+The first run is expected to stop with `BLOCKED secret gha-token is missing in namespace arc-runners-java`, because the preflight created the namespace in this same run and the credential lives in `arc-runners`. That is the designed sequence, not a failure.
+
 If the run stops with `BLOCKED`, stop here and resolve the named condition. The three most likely blocking conditions and their resolutions are:
 
 - `target repository ... is not visible` — create `https://github.com/open-play-ground/agent-framework-java` and grant the operator access.
-- `secret gha-token is missing in namespace arc-runners-java` — ask a cluster operator to create the pre-defined secret in the new namespace with a credential authorized for the target repository.
+- `secret gha-token is missing in namespace arc-runners-java` — a Kubernetes Secret is namespace-scoped, so ask a cluster operator to run `sh scripts/copy-github-config-secret.sh`, which copies `gha-token` from `arc-runners` into `arc-runners-java` without rendering it, or to create an equivalent secret out of band.
 - `the credential is not authorized ...` — grant the existing credential access to the target repository or provision a new one.
 
 Do not proceed to Step 7 until the preflight exits zero. There is no alternative path.
+
+- [ ] **Step 6b: Copy the GitHub credential into the new namespace**
+
+Run this only if Step 6 blocked on the missing secret:
+
+```bash
+kubectl get secret gha-token --namespace arc-runners -o name
+sh scripts/copy-github-config-secret.sh
+sh scripts/preflight-github-authorization.sh
+cat build/preflight-github-authorization.ok
+```
+
+Expected: the source secret exists; the copy prints `INFO copying gha-token from arc-runners to arc-runners-java without rendering any value` and then the *key names* only; the second preflight run reaches the authorization probe and writes the marker file. No secret value appears in any output, and the copy script never touches `arc-runners` with a mutating verb.
+
+If the probe reports a status other than 200, the credential is not authorized for `open-play-ground/agent-framework-java`. Note that the existing scale sets prove `gha-token` only against `open-play-ground/grown-up` and `hellices/korvid`; authorization for the Java repository is exactly what this probe establishes, and there is no fallback.
 
 - [ ] **Step 7: Deploy the new scale set**
 
@@ -2214,7 +2844,7 @@ Add this section to `README.md` immediately after `## Bring-up order`:
 ````markdown
 ## Current deployment
 
-- Registry: `acrafjavaf752aff6.azurecr.io`
+- Registry: `acrpensionguard.azurecr.io` (pre-existing, reused)
 - Image repository: `gha-runners/agent-framework-java`
 - Deployed digest: the `image:` value in `arc/arc-java-build/values.yaml`
 - Scale set: `arc-java-build` in `arc-runners-java`, `minRunners: 0`, `maxRunners: 5`
@@ -2430,8 +3060,15 @@ Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
   summary without failing, and the hard block lives in the image tests: `runner-images/java/verify-image.sh`
   during the ACR build and `runner-smoke.yml` on a live runner.
 - **Cluster log agent is not ready:** `scripts/verify-arc-java-build.sh` reports the missing `ama-logs`
-  daemonset. Enable Container Insights on `aks-korvid-contract-test` so listener and ephemeral runner
+  daemonset. Enable Container Insights on `aks-shared-runners` so listener and ephemeral runner
   logs are exported before pods are deleted, then re-run the verification.
+- **The registry is missing, renamed, or has the admin user enabled:** `scripts/verify-acr.sh` exits
+  `BLOCKED` and changes nothing. `acrpensionguard` is shared with other workloads in
+  `rg-pension-guard`; no script in this plan creates a registry or edits one, so the fix is an
+  out-of-band operator action followed by a re-run.
+- **`gha-token` is missing in `arc-runners-java`:** the preflight blocks. An operator runs
+  `sh scripts/copy-github-config-secret.sh`, which copies the secret from `arc-runners` without
+  rendering it, and then re-runs the preflight. There is no path that creates a credential.
 
 ## Plan Verification Checklist
 
@@ -2439,19 +3076,29 @@ Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
   are implemented by Tasks 1 through 9; section 11's platform half is covered by
   `runner-images/java/check-manifest.sh`, `runner-images/java/verify-image.sh`,
   `scripts/check-helm-template.sh`, and `scripts/verify-arc-java-build.sh`.
-- Every observed environment value is used verbatim: subscription, resource group, cluster, location,
-  chart version, registry name, namespace, scale-set name, runner bounds, base image digest, Temurin
-  URLs and checksums, and the tool cache layout.
+- Every observed environment value is used verbatim: kubectl context `evalollama`, subscription
+  `95933ae5-0201-4a21-a1fc-8051a7437982`, resource group `rg-pension-guard`, cluster
+  `aks-shared-runners`, location `koreacentral`, chart version `0.14.2`, the reused registry
+  `acrpensionguard`, namespace, scale-set name, runner bounds, base image digest, Temurin URLs and
+  checksums, and the tool cache layout. `scripts/check-script-safety.sh` asserts the environment
+  contract mechanically and rejects the decommissioned identifiers.
+- No task creates an Azure Container Registry. Task 3 verifies the existing `acrpensionguard` and
+  re-checks the `AcrPull` attachment idempotently.
 - No step invokes a local Docker daemon; all image work runs through `az acr build` and `az acr run`.
 - The new scale set is non-privileged, drops all capabilities, uses a dedicated service account, never
   sets `containerMode`, and references the image only by digest.
-- Existing scale sets are protected by a committed baseline and a before/after diff in deploy,
-  rollback, and verify.
+- Existing scale sets are protected by a committed baseline holding `aks-runners`,
+  `aks-runners-flutter`, and `korvid-runners`, by a before/after diff in deploy, rollback, and
+  verify, and by a safety-gate rule that rejects any mutating command naming one of them.
 - Listener and ephemeral runner log export is verified by the cluster log agent check in
   `scripts/verify-arc-java-build.sh`.
-- GitHub repository and credential authorization is a blocking preflight with seven explicit block
+- GitHub repository and credential authorization is a blocking preflight with eight explicit block
   conditions and no fallback.
-- No script creates, reads, decodes, prints, or commits a secret value, and
-  `scripts/check-script-safety.sh` proves it.
+- No script creates, decodes, prints, or commits a secret value.
+  `scripts/copy-github-config-secret.sh` is the only script that reads one, and only inside a
+  pipeline that ends in `kubectl apply --namespace "$ARC_NAMESPACE" -f -`.
+  `scripts/check-script-safety.sh` proves the shape, `scripts/test-script-safety-gate.sh` proves the
+  gate rejects every other shape, and `scripts/test-secret-sanitizer.sh` proves the copy preserves
+  the data and strips the cluster metadata.
 - Application-repository changes occur only in Task 9 and only after platform verification passes.
 - No step contains TBD, TODO, placeholder text, an undefined variable, or an unnamed file.

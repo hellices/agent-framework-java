@@ -2,6 +2,7 @@
 
 - 상태: 승인
 - 작성일: 2026-08-10
+- 개정: 2026-08-11 — 5.3 registry 결정과 신규 5.4 대상 환경을 실측값으로 확정
 - 대체 범위: 기존 엔지니어링 하네스 설계의 Maven build와 범용 `aks-runners` 사용 결정
 - 유지 범위: 저장소/로컬/플랫폼 소유권 분리, MAF conformance, agent DAG와 3층 회귀 전략
 
@@ -175,16 +176,46 @@ image build는 JDK archive checksum과 base image digest를 검증한다. `verif
 
 ### 5.3 registry
 
-기존 Azure Container Registry가 있으면 dedicated repository
-`gha-runners/agent-framework-java`를 사용한다. 없으면 platform 작업에서 새 registry
-생성 여부를 별도 결정한다.
+**결정(2026-08-11 확정):** 기존 Azure Container Registry `acrpensionguard`를 재사용하고
+dedicated repository `gha-runners/agent-framework-java`만 새로 만든다. **새 registry를
+만들지 않는다.**
+
+`acrpensionguard`는 `rg-pension-guard`의 공용 자산이므로 이 작업은 registry를 생성하지도,
+SKU·admin user·network 등 어떤 property도 변경하지 않는다. AKS kubelet managed identity에
+대한 `AcrPull` role assignment는 registry scope로 이미 존재하므로 platform 작업은 이를
+가정하지 않고 idempotent하게 재확인만 한다.
 
 tag는 편의용이고 Helm values는 immutable digest를 사용한다.
 
 ```text
-<registry>/gha-runners/agent-framework-java:<date>-<source-sha>
-<registry>/gha-runners/agent-framework-java@sha256:<digest>
+acrpensionguard.azurecr.io/gha-runners/agent-framework-java:<date>-<source-sha>
+acrpensionguard.azurecr.io/gha-runners/agent-framework-java@sha256:<digest>
 ```
+
+### 5.4 대상 환경
+
+다음 값은 2026-08-11에 실제 cluster와 subscription에서 확인한 authoritative 값이다.
+이전 설계 논의에서 등장한 `rg-korvid-contract-test` / `aks-korvid-contract-test` /
+신규 registry 안은 폐기한다.
+
+| 항목 | 값 | 소유 |
+| --- | --- | --- |
+| kubectl context | `evalollama` | 기존 |
+| Azure subscription | `95933ae5-0201-4a21-a1fc-8051a7437982` (`ME-MngEnvMCAP310512-inhwanhwang-3`) | 기존 |
+| Resource group / location | `rg-pension-guard` / `koreacentral` | 기존 |
+| AKS cluster | `aks-shared-runners` (Kubernetes 1.35, Cilium dataplane) | 기존 |
+| Container registry | `acrpensionguard` / `acrpensionguard.azurecr.io` (Basic, admin disabled) | 기존, 재사용 |
+| Image repository | `gha-runners/agent-framework-java` | 신규 |
+| ARC chart | `gha-runner-scale-set` `0.14.2` | 기존 |
+| 기존 scale set | `arc-runners`의 `aks-runners`, `aks-runners-flutter`, `korvid-runners` | 기존, 변경 금지 |
+| 신규 scale set | `arc-runners-java`의 `arc-java-build` | 신규 |
+| GitHub credential | secret `gha-token` | 기존, 복사 |
+
+기존 `aks-runners`와 `aks-runners-flutter`는 `https://github.com/open-play-ground/grown-up`,
+`korvid-runners`는 `https://github.com/hellices/korvid`를 대상으로 하며 셋 다 `arc-runners`
+namespace의 `gha-token`을 참조한다. 신규 scale set은
+`https://github.com/open-play-ground/agent-framework-java`를 대상으로 하고 같은 이름의
+secret을 자기 namespace에서 참조한다.
 
 ## 6. ARC scale set
 
@@ -200,8 +231,15 @@ tag는 편의용이고 Helm values는 immutable digest를 사용한다.
 - `allowPrivilegeEscalation: false`
 - 모든 Linux capability drop
 - dedicated service account
-- GitHub App secret reference만 사용
+- GitHub credential은 secret reference만 사용
 - Docker-in-Docker와 Kubernetes container mode 사용 안 함
+
+Kubernetes Secret은 namespace-scoped이므로 `arc-runners`의 `gha-token`을
+`arc-runners-java`에서 그대로 참조할 수 없다. cluster operator가
+`scripts/copy-github-config-secret.sh`로 복사하며, 이 script는 secret을 JSON으로 읽되
+`kubectl apply --namespace "$ARC_NAMESPACE" -f -`로 끝나는 단일 pipeline 안에서만 다룬다.
+문서 전체는 terminal, log, file 어디에도 출력되지 않고 key 이름만 표시된다. 값을 만들거나
+decode하거나 commit하지 않는다.
 
 NetworkPolicy는 기본 deny 후 DNS, GitHub Actions endpoints, GitHub API, Maven Central,
 Gradle Plugin Portal, Gradle distribution service와 승인된 artifact registry HTTPS만
@@ -286,6 +324,10 @@ JSON Schema 2020-12 validator로 example 전체를 실제 schema에 대해 검�
 - fork path 실패: trusted runner로 자동 재실행하지 않는다.
 - quality 실패: compatibility test 성공으로 덮지 않는다.
 - ARC credential/registry 정보 부재: app build를 완료하고 platform deploy만 명시적으로 blocked 처리한다.
+- registry 부재·이름 변경·admin user 활성화: `verify-acr.sh`가 BLOCKED로 중단하고 아무것도
+  바꾸지 않는다. 공용 registry이므로 수정은 out-of-band operator 작업이다.
+- `arc-runners-java`에 `gha-token` 부재: preflight가 차단하고 operator가 복사 script를 실행한
+  뒤 재실행한다. credential을 생성하는 경로는 없다.
 
 ## 11. 회귀
 
@@ -310,7 +352,7 @@ JSON Schema 2020-12 validator로 example 전체를 실제 schema에 대해 검�
 1. Maven branch를 merge 대상에서 제외하고 Gradle 설계·계획을 확정한다.
 2. 앱 저장소에 Gradle Wrapper, Kotlin DSL, build-logic과 policy test를 만든다.
 3. sibling platform 저장소에 Java runner image와 검증을 만든다.
-4. ACR과 현재 ARC authentication/namespace 정책을 확인한다.
+4. 기존 ACR `acrpensionguard`와 현재 ARC authentication/namespace 정책을 확인한다. 새 registry는 만들지 않는다.
 5. image를 publish하고 `arc-java-build`를 별도 release로 배포한다.
 6. smoke workflow 후 앱 CI label을 `arc-java-build`로 전환한다.
 7. fork/trusted result fan-in과 branch protection을 검증한다.
@@ -320,7 +362,7 @@ JSON Schema 2020-12 validator로 example 전체를 실제 schema에 대해 검�
 1. `./gradlew check`가 JDK 17에서 통과한다.
 2. Java 17·21·25 compatibility test가 동일 source baseline을 검증한다.
 3. `arc-java-build` runner가 image download 없이 세 JDK를 선택한다.
-4. runner pod는 non-privileged이며 기존 scale set을 변경하지 않는다.
+4. runner pod는 non-privileged이며 기존 세 scale set(`aks-runners`, `aks-runners-flutter`, `korvid-runners`)을 변경하지 않는다.
 5. fork PR은 GitHub-hosted 검증 없이 green이 되지 않는다.
 6. 모든 repository policy가 Gradle `check`에 포함된다.
 7. runner image와 ARC configuration은 앱 저장소 밖에서 재현 가능하다.
