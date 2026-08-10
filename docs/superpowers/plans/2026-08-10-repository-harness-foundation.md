@@ -233,6 +233,7 @@ target/
 
 # Local worktrees
 .worktrees/
+.superpowers/
 
 # IDE and operating system
 .idea/
