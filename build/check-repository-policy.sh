@@ -52,6 +52,20 @@ require_text AGENTS.md "## Standard workflow"
 require_text AGENTS.md "## Verification contract"
 require_text AGENTS.md "## Prohibited changes"
 
+for required_file in \
+  pom.xml \
+  mvnw \
+  mvnw.cmd \
+  .mvn/wrapper/maven-wrapper.jar \
+  .mvn/wrapper/maven-wrapper.properties \
+  .mvn/maven.config
+do
+  require_file "$required_file"
+done
+
+require_text .mvn/wrapper/maven-wrapper.properties "apache-maven-3.9.16"
+require_text pom.xml "<maven.compiler.release>17</maven.compiler.release>"
+
 if [ "$failures" -ne 0 ]; then
   exit 1
 fi
