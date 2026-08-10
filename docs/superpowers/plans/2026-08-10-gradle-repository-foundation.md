@@ -3138,3 +3138,54 @@ After this plan is implemented and reviewed, execute these independent plans:
 - No task creates product modules, provider adapters, Azure resources, Kubernetes resources, or
   release automation.
 - No step contains TBD, TODO, placeholder text, an undefined type, or an unnamed file.
+
+---
+
+## Task 3 Blocker Fix Report — 2026-08-11
+
+### Problem
+
+`**/build/` in `.gitignore` matched any path segment named `build`, including the Java package path
+`.../src/main/java/com/microsoft/agentframework/build/harness/` and its test counterpart.
+Both source files specified in Task 3 were present on disk but invisible to git (ignored), leaving
+the `:build-tools:harness-policy` project with no tracked Java sources.
+
+### Fix
+
+Replaced the broad `**/build/` pattern with three output-specific patterns anchored to actual
+Gradle build output directories:
+
+```diff
+-**/build/
++build-logic/build/
++build-tools/*/build/
+```
+
+`/build/` (root) was already present and is retained.
+
+### Verification
+
+```
+git check-ignore build-tools/harness-policy/src/main/java/.../RepositoryPaths.java
+→ (no output — no longer ignored)
+
+git check-ignore build-tools/harness-policy/src/test/java/.../RepositoryGovernancePolicyTest.java
+→ (no output — no longer ignored)
+
+git check-ignore build-tools/harness-policy/build/classes/...
+→ .gitignore:4:build-tools/*/build/  (still ignored — correct)
+```
+
+### Files Added
+
+- `build-tools/harness-policy/src/main/java/com/microsoft/agentframework/build/harness/RepositoryPaths.java`
+- `build-tools/harness-policy/src/test/java/com/microsoft/agentframework/build/harness/RepositoryGovernancePolicyTest.java`
+
+### Test Results
+
+```
+./gradlew :build-tools:harness-policy:policyCheck  → BUILD SUCCESSFUL
+./gradlew :build-tools:harness-policy:quality       → BUILD SUCCESSFUL
+```
+
+All 23 actionable tasks passed (checkstyle, PMD, SpotBugs, JaCoCo, Spotless, policy check).

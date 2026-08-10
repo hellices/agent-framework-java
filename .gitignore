@@ -1,6 +1,7 @@
 .worktrees/
 /build/
-**/build/
+build-logic/build/
+build-tools/*/build/
 .gradle/
 .kotlin/
 out/
