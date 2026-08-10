@@ -2,22 +2,16 @@ package com.microsoft.agentframework.build.harness;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
-import static org.junit.jupiter.params.provider.Arguments.arguments;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -34,37 +28,59 @@ class WorkflowPolicyTest {
 
   private static final String HOSTED_LABEL = "ubuntu-latest";
 
-  private static final String RESULT_JOB = "verify-result";
-
-  private static final String FORK_JOB = "fork-verify";
-
-  private static final String TRUSTED_QUALITY_JOB = "trusted-quality";
-
-  private static final String TRUSTED_COMPATIBILITY_JOB = "trusted-compatibility";
+  private static final String RESULT_JOB = WorkflowPolicy.RESULT_JOB;
 
   private static final String FORK_PATH = "fork";
 
   private static final String TRUSTED_PATH = "trusted";
 
-  private static final String NEEDS_JSON_VARIABLE = "NEEDS_JSON";
+  private static final String NEEDS_JSON_VARIABLE = WorkflowPolicy.NEEDS_JSON_VARIABLE;
 
-  private static final String NEEDS_JSON_EXPRESSION = "${{ toJSON(needs) }}";
+  private static final String NEEDS_JSON_EXPRESSION = WorkflowPolicy.NEEDS_JSON_EXPRESSION;
 
-  private static final String VERIFICATION_PATHS_VARIABLE = "VERIFICATION_PATHS";
+  private static final String VERIFICATION_PATHS_VARIABLE =
+      WorkflowPolicy.VERIFICATION_PATHS_VARIABLE;
 
   private static final String CI_WORKFLOW = ".github/workflows/ci.yml";
 
   private static final String RUNNER_CONTRACT = "docs/operations/github-actions-runner-contract.md";
 
-  private static final String POSIX_SHELL = "sh";
-
   static Stream<Path> workflows() throws IOException {
     return WorkflowDocuments.files().stream();
+  }
+
+  /**
+   * Every workflow a pull request can start, not only {@code ci.yml}. The result gate rules below
+   * are parameterized over this source, because a second pull-request workflow with a gate that
+   * classifies nothing is a merge-blocking check that reports green without verifying anything.
+   */
+  static Stream<Path> pullRequestWorkflows() throws IOException {
+    return pullRequestWorkflowFiles().stream();
+  }
+
+  private static List<Path> pullRequestWorkflowFiles() throws IOException {
+    List<Path> matching = new ArrayList<>();
+    for (Path workflow : WorkflowDocuments.files()) {
+      if (WorkflowPolicy.isPullRequestWorkflow(WorkflowDocuments.read(workflow))) {
+        matching.add(workflow);
+      }
+    }
+    return matching;
+  }
+
+  private static String workflowName(Path workflow) {
+    Path name = workflow.getFileName();
+    return name == null ? workflow.toString() : name.toString();
   }
 
   @Test
   void repositoryDefinesAtLeastOneWorkflow() throws IOException {
     assertThat(WorkflowDocuments.files()).isNotEmpty();
+  }
+
+  @Test
+  void repositoryDefinesAtLeastOnePullRequestWorkflow() throws IOException {
+    assertThat(pullRequestWorkflowFiles()).isNotEmpty();
   }
 
   @ParameterizedTest(name = "{0} never uses pull_request_target")
@@ -109,6 +125,53 @@ class WorkflowPolicyTest {
 
     assertThat(WorkflowDocuments.stepActionReferences(document)).isNotEmpty();
     assertThat(WorkflowPolicy.actionPinningViolations(document)).isEmpty();
+  }
+
+  /**
+   * Pinning stops at the workflow file: a {@code ./} reference is accepted on sight. This walks
+   * through every local composite action a workflow can reach and applies the same rules there, so
+   * a local action cannot be the place where {@code attacker/action@main} enters, and a {@code ./}
+   * reference that resolves to nothing is rejected instead of silently trusted.
+   */
+  @ParameterizedTest(name = "{0} resolves and pins every action it can reach")
+  @MethodSource("workflows")
+  void workflowResolvesAndPinsEveryActionItCanReach(Path workflow) throws IOException {
+    JsonNode document = WorkflowDocuments.read(workflow);
+
+    assertThat(
+            WorkflowPolicy.actionGraphViolations(document, WorkflowDocuments.repositoryActions()))
+        .isEmpty();
+  }
+
+  /**
+   * Scans {@code .github/actions} recursively so a composite action is held to the pinning and
+   * resolution rules even before a workflow references it. The scan is currently empty; the rules
+   * it applies are pinned by {@code WorkflowPolicyBypassProbeTest}.
+   */
+  @Test
+  void everyLocalCompositeActionResolvesAndPinsItsOwnActions() throws IOException {
+    WorkflowDocuments.LocalActions actions = WorkflowDocuments.repositoryActions();
+    List<String> violations = new ArrayList<>();
+    for (Path definition : WorkflowDocuments.actionFiles()) {
+      String reference = WorkflowDocuments.actionReference(definition);
+      violations.addAll(
+          WorkflowPolicy.compositeActionViolations(
+              reference, WorkflowDocuments.read(definition), actions));
+    }
+
+    assertThat(violations).isEmpty();
+  }
+
+  /** Every action definition the scan finds must be reachable through its own {@code ./} path. */
+  @Test
+  void everyLocalCompositeActionIsAddressableByItsReference() throws IOException {
+    WorkflowDocuments.LocalActions actions = WorkflowDocuments.repositoryActions();
+    for (Path definition : WorkflowDocuments.actionFiles()) {
+      String reference = WorkflowDocuments.actionReference(definition);
+
+      assertThat(WorkflowDocuments.staysWithinRepository(reference)).isTrue();
+      assertThat(actions.read(reference).isMissingNode()).isFalse();
+    }
   }
 
   @ParameterizedTest(name = "{0} never delegates a job to a reusable workflow")
@@ -171,10 +234,9 @@ class WorkflowPolicyTest {
   }
 
   @ParameterizedTest(name = "{0} isolates fork verification on hosted runners")
-  @MethodSource("workflows")
+  @MethodSource("pullRequestWorkflows")
   void forkVerificationRunsOnHostedRunnersOnly(Path workflow) throws IOException {
     JsonNode document = WorkflowDocuments.read(workflow);
-    assumeTrue(WorkflowDocuments.triggerNames(document).contains("pull_request"));
 
     List<String> forkJobs = new ArrayList<>();
     for (String jobName : WorkflowDocuments.jobNames(document)) {
@@ -189,10 +251,9 @@ class WorkflowPolicyTest {
   }
 
   @ParameterizedTest(name = "{0} keeps the trusted and fork paths mutually exclusive")
-  @MethodSource("workflows")
+  @MethodSource("pullRequestWorkflows")
   void trustedAndForkConditionsAreMutuallyExclusive(Path workflow) throws IOException {
     JsonNode document = WorkflowDocuments.read(workflow);
-    assumeTrue(WorkflowDocuments.triggerNames(document).contains("pull_request"));
 
     for (String jobName : WorkflowDocuments.jobNames(document)) {
       JsonNode job = WorkflowDocuments.job(document, jobName);
@@ -242,6 +303,15 @@ class WorkflowPolicyTest {
 
     assertThat(contract).contains(NEEDS_JSON_VARIABLE).contains(VERIFICATION_PATHS_VARIABLE);
     assertThat(contract).contains("belongs to no path");
+    assertThat(contract).contains("every workflow a pull request can start");
+  }
+
+  @Test
+  void runnerContractDocumentsTheLocalCompositeActionRules() throws IOException {
+    String contract = readRunnerContract();
+
+    assertThat(contract).contains("## Local composite actions");
+    assertThat(contract).contains(".github/actions");
   }
 
   private static String readRunnerContract() throws IOException {
@@ -250,10 +320,9 @@ class WorkflowPolicyTest {
   }
 
   @ParameterizedTest(name = "{0} fans in to the required result job")
-  @MethodSource("workflows")
+  @MethodSource("pullRequestWorkflows")
   void pullRequestWorkflowFansInToTheRequiredResultJob(Path workflow) throws IOException {
     JsonNode document = WorkflowDocuments.read(workflow);
-    assumeTrue(WorkflowDocuments.triggerNames(document).contains("pull_request"));
 
     List<String> jobNames = new ArrayList<>(WorkflowDocuments.jobNames(document));
     assertThat(jobNames).contains(RESULT_JOB);
@@ -281,162 +350,90 @@ class WorkflowPolicyTest {
 
   /**
    * The gate must read the whole {@code needs} context, never one hand-written variable per job, so
-   * a verification job added later cannot stay unexamined.
+   * a verification job added later cannot stay unexamined. This holds for every workflow a pull
+   * request can start, because each of them fans in to a merge-blocking {@code verify-result}.
    */
-  @Test
-  void resultGateConsumesTheWholeNeedsContext() throws IOException {
-    Map<String, String> environment = WorkflowDocuments.stepEnvironment(resultGateStep());
+  @ParameterizedTest(name = "{0} consumes the whole needs context")
+  @MethodSource("pullRequestWorkflows")
+  void resultGateConsumesTheWholeNeedsContext(Path workflow) throws IOException {
+    JsonNode document = WorkflowDocuments.read(workflow);
+    JsonNode step = WorkflowDocuments.firstRunStep(document, RESULT_JOB);
+    assertThat(step.isObject()).isTrue();
 
+    Map<String, String> environment = WorkflowDocuments.stepEnvironment(step);
     assertThat(environment).containsEntry(NEEDS_JSON_VARIABLE, NEEDS_JSON_EXPRESSION);
     assertThat(environment).containsKey(VERIFICATION_PATHS_VARIABLE);
 
-    String script = resultGateScript();
+    String script = WorkflowDocuments.runScript(document, RESULT_JOB);
+    assertThat(script).isNotBlank();
     assertThat(script).contains(NEEDS_JSON_VARIABLE).contains(VERIFICATION_PATHS_VARIABLE);
     assertThat(environment.values()).noneMatch(value -> value.contains(".result"));
   }
 
-  @Test
-  void resultGateAssignsEveryNeededJobToExactlyOneVerificationPath() throws IOException {
-    JsonNode document = WorkflowDocuments.read(RepositoryPaths.root().resolve(CI_WORKFLOW));
+  @ParameterizedTest(name = "{0} classifies every needed job into exactly one path")
+  @MethodSource("pullRequestWorkflows")
+  void resultGateAssignsEveryNeededJobToExactlyOneVerificationPath(Path workflow)
+      throws IOException {
+    JsonNode document = WorkflowDocuments.read(workflow);
 
     assertThat(WorkflowPolicy.verificationPathViolations(document, RESULT_JOB)).isEmpty();
+    assertThat(WorkflowPolicy.verificationPaths(document, RESULT_JOB)).isNotEmpty();
+  }
+
+  @Test
+  void continuousIntegrationDeclaresExactlyTheForkAndTrustedPaths() throws IOException {
+    JsonNode document = WorkflowDocuments.read(RepositoryPaths.root().resolve(CI_WORKFLOW));
+
     assertThat(WorkflowPolicy.verificationPaths(document, RESULT_JOB))
         .containsOnlyKeys(FORK_PATH, TRUSTED_PATH);
   }
 
-  static Stream<Arguments> resultGateCases() {
-    return Stream.of(
-        arguments("skipped", "success", "success", 0),
-        arguments("success", "skipped", "skipped", 0),
-        arguments("skipped", "failure", "success", 1),
-        arguments("skipped", "success", "failure", 1),
-        arguments("skipped", "success", "cancelled", 1),
-        arguments("skipped", "success", "skipped", 1),
-        arguments("skipped", "skipped", "skipped", 1),
-        arguments("failure", "skipped", "skipped", 1),
-        arguments("cancelled", "skipped", "skipped", 1),
-        arguments("success", "success", "success", 1),
-        arguments("failure", "failure", "failure", 1));
+  /**
+   * Every needs context each pull-request gate must judge, derived from that workflow's own
+   * verification paths rather than from a table hand-written for {@code ci.yml}. A second workflow
+   * therefore arrives with its own truth table instead of inheriting the first one's coverage.
+   */
+  static Stream<Arguments> resultGateScenarios() throws IOException {
+    List<Arguments> scenarios = new ArrayList<>();
+    for (Path workflow : pullRequestWorkflowFiles()) {
+      scenarios.addAll(
+          ResultGate.of(workflowName(workflow), WorkflowDocuments.read(workflow)).truthTable());
+    }
+    return scenarios.stream();
   }
 
   /**
-   * Executes the real {@code verify-result} script against the full result truth table. Replacing
-   * the script with an unconditional {@code exit 0} fails every case that must exit non-zero.
+   * Executes each workflow's real {@code verify-result} script against its full truth table.
+   * Replacing any of those scripts with an unconditional {@code exit 0} fails every case that must
+   * exit non-zero.
    */
-  @ParameterizedTest(name = "fork={0} quality={1} compatibility={2} exits with {3}")
-  @MethodSource("resultGateCases")
+  @ParameterizedTest(name = "{0}: {1} exits with {4}")
+  @MethodSource("resultGateScenarios")
   void resultGateAcceptsOnlyOneCompleteVerificationPath(
-      String fork, String quality, String compatibility, int expectedExitCode)
+      String workflow,
+      String scenario,
+      ResultGate gate,
+      Map<String, String> results,
+      int expectedExitCode)
       throws IOException, InterruptedException {
-    assumeTrue(isPosixShellAvailable());
+    assumeTrue(ResultGate.isPosixShellAvailable());
 
-    assertThat(runResultGate(needsResults(fork, quality, compatibility)))
-        .isEqualTo(expectedExitCode);
+    assertThat(gate.run(results)).isEqualTo(expectedExitCode);
   }
 
-  static Stream<String> addedVerificationJobResults() {
-    return Stream.of("success", "skipped", "failure", "cancelled");
+  /** The generated truth table must actually accept something, or it proves nothing. */
+  @ParameterizedTest(name = "{0} has a completable verification path")
+  @MethodSource("pullRequestWorkflows")
+  void resultGateTruthTableCoversAnAcceptingAndARejectingCase(Path workflow) throws IOException {
+    List<Arguments> table =
+        ResultGate.of(workflowName(workflow), WorkflowDocuments.read(workflow)).truthTable();
+
+    assertThat(table).anyMatch(scenario -> exitCodeOf(scenario) == 0);
+    assertThat(table).anyMatch(scenario -> exitCodeOf(scenario) != 0);
   }
 
-  /**
-   * Regression for the false-green hole: a verification job that is wired into {@code needs} but
-   * into no verification path fails the gate, whatever it reported, so adding a job without
-   * classifying it can never be reported as a completed verification.
-   */
-  @ParameterizedTest(name = "an added verification job reporting {0} cannot report green")
-  @MethodSource("addedVerificationJobResults")
-  void resultGateRejectsAJobThatBelongsToNoVerificationPath(String addedResult)
-      throws IOException, InterruptedException {
-    assumeTrue(isPosixShellAvailable());
-
-    Map<String, String> results = needsResults("skipped", "success", "success");
-    results.put("added-verify", addedResult);
-
-    assertThat(runResultGate(results)).isEqualTo(1);
-  }
-
-  @Test
-  void resultGateRejectsAVerificationJobThatDisappearedFromNeeds()
-      throws IOException, InterruptedException {
-    assumeTrue(isPosixShellAvailable());
-
-    Map<String, String> results = needsResults("skipped", "success", "success");
-    results.remove(TRUSTED_COMPATIBILITY_JOB);
-
-    assertThat(runResultGate(results)).isEqualTo(1);
-  }
-
-  @Test
-  void resultGateRejectsAnEmptyNeedsContext() throws IOException, InterruptedException {
-    assumeTrue(isPosixShellAvailable());
-
-    assertThat(runResultGate(new LinkedHashMap<>())).isEqualTo(1);
-    assertThat(runResultGate(null)).isEqualTo(1);
-  }
-
-  private static boolean isPosixShellAvailable() {
-    return !System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("win");
-  }
-
-  private static Map<String, String> needsResults(
-      String fork, String quality, String compatibility) {
-    Map<String, String> results = new LinkedHashMap<>();
-    results.put(FORK_JOB, fork);
-    results.put(TRUSTED_QUALITY_JOB, quality);
-    results.put(TRUSTED_COMPATIBILITY_JOB, compatibility);
-    return results;
-  }
-
-  /** Renders the {@code needs} context exactly as {@code toJSON(needs)} does. */
-  private static String renderNeedsJson(Map<String, String> results) {
-    StringBuilder json = new StringBuilder("{");
-    for (Map.Entry<String, String> entry : results.entrySet()) {
-      if (json.length() > 1) {
-        json.append(',');
-      }
-      json.append("\n  \"")
-          .append(entry.getKey())
-          .append("\": {\n    \"result\": \"")
-          .append(entry.getValue())
-          .append("\",\n    \"outputs\": {}\n  }");
-    }
-    return json.append("\n}").toString();
-  }
-
-  private static JsonNode resultGateStep() throws IOException {
-    JsonNode document = WorkflowDocuments.read(RepositoryPaths.root().resolve(CI_WORKFLOW));
-    JsonNode step = WorkflowDocuments.firstRunStep(document, RESULT_JOB);
-
-    assertThat(step.isObject()).isTrue();
-    return step;
-  }
-
-  private static String resultGateScript() throws IOException {
-    Path workflow = RepositoryPaths.root().resolve(CI_WORKFLOW);
-    String script = WorkflowDocuments.runScript(WorkflowDocuments.read(workflow), RESULT_JOB);
-
-    assertThat(script).isNotBlank();
-    return script;
-  }
-
-  private static int runResultGate(Map<String, String> results)
-      throws IOException, InterruptedException {
-    ProcessBuilder builder = new ProcessBuilder(POSIX_SHELL, "-s");
-    builder.redirectErrorStream(true);
-    Map<String, String> environment = builder.environment();
-    environment.put(NEEDS_JSON_VARIABLE, results == null ? "" : renderNeedsJson(results));
-    environment.put(
-        VERIFICATION_PATHS_VARIABLE,
-        WorkflowDocuments.stepEnvironment(resultGateStep()).get(VERIFICATION_PATHS_VARIABLE));
-
-    Process gate = builder.start();
-    try (OutputStream commands = gate.getOutputStream()) {
-      commands.write(resultGateScript().getBytes(StandardCharsets.UTF_8));
-    }
-    try (InputStream output = gate.getInputStream()) {
-      output.readAllBytes();
-    }
-    assertThat(gate.waitFor(60, TimeUnit.SECONDS)).isTrue();
-    return gate.exitValue();
+  private static int exitCodeOf(Arguments scenario) {
+    Object[] values = scenario.get();
+    return (Integer) values[values.length - 1];
   }
 }

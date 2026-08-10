@@ -88,6 +88,36 @@ with a trust decision for that event, not merely with a workflow edit.
 `WorkflowPolicyBypassProbeTest.workflowRunTrustedJobIsCaughtOnlyByTheTriggerAllowList` pins the
 bypass: it asserts that the condition rules accept such a job and that the allow list rejects it.
 
+## Local composite actions
+
+A step may use a local composite action through a `./` path. That path is not a weaker form of
+pinning, it is an unreviewed indirection: the pinning rule accepts any `./` reference on sight, so
+without a further rule a local action is free to pull `attacker/action@main`, and a `./` reference
+that resolves to nothing is a step whose behaviour no rule in this repository has ever read.
+
+Every action definition under `.github/actions` is therefore scanned recursively, at any depth, in
+both `action.yml` and `action.yaml` form, and the action graph reachable from every workflow step is
+walked through local composite actions. At every depth:
+
+- a referenced local action must exist, as `action.yml` or `action.yaml` in the directory the
+  reference names;
+- a local reference must stay inside this repository, so `./../…` is rejected before it is resolved;
+- a local action must declare `runs.using: composite`. Any other form — `docker` above all, which
+  pulls an image this repository never reviewed, but equally a Node action or a form this policy
+  does not know — declares no `steps`, so the walk would resolve it, find no edge, and report it
+  clean. Rejecting the form is what keeps the walk fail-closed;
+- every external `uses:` a composite action declares must be pinned to a full 40-character commit
+  SHA, exactly as in a workflow file;
+- a definition that no workflow references yet is held to the same rules, so an unpinned action
+  cannot be committed now and wired up in a later change.
+
+Cycles terminate rather than hang the scan. The repository currently ships no local composite
+action; the rules are pinned by `WorkflowPolicyBypassProbeTest`, which drives them with synthetic
+definitions carrying `attacker/action@main`, a nonexistent `./` path, an escaping `./../` path, a
+two-composite-deep nesting, and every non-composite `runs.using` form, and which runs the real
+recursive scan and the real resolver against a fixture tree so the discovery, the `action.yml` over
+`action.yaml` resolution order, and the root containment check are executed rather than assumed.
+
 ## Trust boundary
 
 Fork pull requests never reach `arc-java-build`. The trusted and fork jobs use mutually exclusive
@@ -102,6 +132,13 @@ not in `needs`, and unless exactly one path completed. A verification job added 
 classified into a path therefore fails the gate instead of passing unexamined: the gate can never go
 green over a job it does not know about.
 
+These rules bind **every workflow a pull request can start**, not the first one that was written.
+Every such workflow fans in to a `verify-result` that is a merge-blocking check, so a second
+pull-request workflow whose gate classifies nothing — or whose script is replaced by `exit 0` — is a
+required check that verifies nothing. The gate tests are therefore parameterized over every
+pull-request workflow, and each workflow's truth table is derived from its own `needs` list and its
+own `VERIFICATION_PATHS` map rather than from a table hand-written for `ci.yml`.
+
 Never combine `pull_request_target`, checkout of pull-request head code, and execution of repository
 scripts. Docker or Testcontainers work requires a separately reviewed scale set, namespace, runner
 group, and network policy; this repository does not create one.
@@ -111,10 +148,11 @@ group, and network policy; this repository does not create one.
 Every clause above that this repository can enforce is a test, not prose. `./gradlew check` runs
 `WorkflowPolicyTest` and `WorkflowPolicyBypassProbeTest`, which parse every workflow as YAML and
 enforce the trigger allow list, the runner allow list in all `runs-on` forms, the ban on job-level
-`uses:`, full commit-SHA pinning, `read`/`none` permissions, `persist-credentials: false`,
-pull-request-only cancellation, mutually exclusive trusted and fork conditions, the requirement that
-`verify-result` consume the whole `needs` context and classify every needed job into exactly one
-verification path, and the `verify-result` truth table, which is executed as a real shell process
-against a synthesized `needs` context rather than pattern matched. Conditions are compared after
-whitespace and `${{ }}` normalization only, so reformatting a condition is allowed and weakening one
-is not.
+`uses:`, full commit-SHA pinning, the recursive local composite action rules above, `read`/`none`
+permissions, `persist-credentials: false`, pull-request-only cancellation, mutually exclusive
+trusted and fork conditions, the requirement that the `verify-result` job of every pull-request
+workflow consume the whole `needs` context and classify every needed job into exactly one
+verification path, and each of those workflows' derived `verify-result` truth table, which is
+executed as a real shell process against a synthesized `needs` context rather than pattern matched.
+Conditions are compared after whitespace and `${{ }}` normalization only, so reformatting a
+condition is allowed and weakening one is not.

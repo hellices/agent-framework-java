@@ -34,9 +34,11 @@
 - The trigger allow list is part of the trust boundary, not housekeeping: the trusted condition only asks whether the event is a pull request, so every other event — `workflow_run` above all, which a fork pull request can indirectly start — is trusted by construction and would reach `arc-java-build` while carrying the verbatim trusted condition. Widening the list is a reviewed trust decision.
 - `runs-on` is parsed in every documented form (string, sequence, and the `group`/`labels` object). A runner group is checked as `group:<name>`, and any present but unrecognized `runs-on` fails closed.
 - Job-level `uses:` is prohibited, because a reusable workflow carries its own `runs-on` and would move a job off the reviewed runner allow list. Step-level `./` local composite actions stay allowed.
+- A `./` local composite action is an indirection, not a weaker pin. Every `action.yml` and `action.yaml` under `.github/actions` is scanned recursively at any depth, and the action graph reachable from every workflow step is walked through local composite actions: a referenced local action must exist, a local reference must stay inside the repository, a local action must declare `runs.using: composite` because any other form declares no `steps` and would be resolved to zero edges and reported clean, and every external `uses:` a composite declares must itself be pinned to a full 40-character commit SHA. Cycles terminate instead of hanging the scan.
 - Only pull-request runs may be cancelled by concurrency. `main` pushes must never be cancelled.
 - Fork pull requests run the GitHub-hosted minimum verification; trusted jobs run on `arc-java-build`. The two paths are mutually exclusive and fan into one required `verify-result` job so a skipped job can never look green.
 - `verify-result` is generic over `needs`: it reads the whole context as `NEEDS_JSON` (`${{ toJSON(needs) }}`) and evaluates it against a declarative `VERIFICATION_PATHS` map of `name=job[,job]` lines. It fails when any job reports anything but `success` or `skipped`, when a path is neither wholly successful nor wholly skipped, when a needed job belongs to no path, when a path names a job that is not needed, and unless exactly one path completed. A verification job added later but left unclassified fails the gate instead of passing unexamined, so the gate can never go green over a job it does not know about.
+- The gate rules bind every workflow a pull request can start, not the first one written. The semantic, static, and executable truth-table checks are parameterized over every pull-request workflow, and each workflow's truth table is derived from its own `needs` list and its own `VERIFICATION_PATHS` map, so a second workflow cannot inherit the first one's coverage and report green while verifying nothing.
 - Trusted and fork job conditions are compared after stripping an optional `${{ }}` wrapper and collapsing whitespace runs. Reformatting a condition is allowed; changing an operator, an operand, or their order is not.
 - This plan's branch is not merged into `main` until the `arc-java-build` scale set from `2026-08-10-java-arc-platform.md` is deployed and one trusted `ci.yml` run has completed on it. The trusted jobs are never softened to `ubuntu-latest` to make the branch mergeable earlier. `docs/operations/github-actions-runner-contract.md` states the merge gate and `WorkflowPolicyTest` keeps it from being deleted silently.
 - No secret, credential, token, kubeconfig, Helm value, or personal agent setting is committed.
@@ -2320,6 +2322,7 @@ Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
 **Files:**
 - Create: `build-tools/harness-policy/src/test/java/com/microsoft/agentframework/build/harness/WorkflowDocuments.java`
 - Create: `build-tools/harness-policy/src/test/java/com/microsoft/agentframework/build/harness/WorkflowPolicy.java`
+- Create: `build-tools/harness-policy/src/test/java/com/microsoft/agentframework/build/harness/ResultGate.java`
 - Create: `build-tools/harness-policy/src/test/java/com/microsoft/agentframework/build/harness/WorkflowPolicyTest.java`
 - Create: `build-tools/harness-policy/src/test/java/com/microsoft/agentframework/build/harness/WorkflowPolicyBypassProbeTest.java`
 - Create: `.github/workflows/ci.yml`
@@ -2327,7 +2330,7 @@ Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
 
 **Interfaces:**
 - Consumes: `RepositoryPaths.root()`, `libs.jackson.dataformat.yaml`, the root tasks `policyCheck`, `quality`, `testJava17`, `testJava21`, `testJava25`.
-- Produces: `WorkflowDocuments` helpers (`files`, `read`, `parse`, `triggerNames`, `jobNames`, `jobs`, `job`, `jobUses`, `steps`, `declaresRunsOn`, `declaresRecognizedRunsOn`, `runnerLabels`, `runnerSelectors`, `stepActionReferences`, `runScript`, `firstRunStep`, `stepEnvironment`, `jobNeeds`, `permissionValues`); the fail-closed `WorkflowPolicy` rules (`triggerViolations`, `runnerViolations`, `jobLevelUsesViolations`, `actionPinningViolations`, `verificationPaths`, `verificationPathViolations`); a workflow policy regression that parses every workflow file; bypass probes that keep the rules rejecting the `runs-on` object form, unrecognized `runs-on` forms, job-level reusable workflow `uses`, triggers outside the allow list (including a `workflow_run` job that carries the verbatim trusted condition), and result-gate wiring that leaves a needed job unclassified; an executable truth-table regression over the real `verify-result` script; and a CI graph whose trusted jobs run on `arc-java-build`, whose fork job runs on `ubuntu-latest`, and which fans in to the required `verify-result` job.
+- Produces: `WorkflowDocuments` helpers (`files`, `read`, `parse`, `triggerNames`, `jobNames`, `jobs`, `job`, `jobUses`, `steps`, `declaresRunsOn`, `declaresRecognizedRunsOn`, `runnerLabels`, `runnerSelectors`, `stepActionReferences`, `runScript`, `firstRunStep`, `stepEnvironment`, `jobNeeds`, `permissionValues`) plus the local action helpers (`actionFiles`, `actionReference`, `actionStepReferences`, `isLocalReference`, `staysWithinRepository`, `repositoryActions`, and the `LocalActions` resolver probes can implement); the fail-closed `WorkflowPolicy` rules (`triggerViolations`, `runnerViolations`, `jobLevelUsesViolations`, `actionPinningViolations`, `actionGraphViolations`, `compositeActionViolations`, `verificationPaths`, `verificationPathViolations`, `isPullRequestWorkflow`); the `ResultGate` harness that reads any workflow's real gate script, derives its truth table from that workflow's own `needs` and `VERIFICATION_PATHS`, and executes it as a shell process; a workflow policy regression that parses every workflow file and parameterizes every gate rule over every pull-request workflow; bypass probes that keep the rules rejecting the `runs-on` object form, unrecognized `runs-on` forms, job-level reusable workflow `uses`, triggers outside the allow list (including a `workflow_run` job that carries the verbatim trusted condition), result-gate wiring that leaves a needed job unclassified, a second pull-request workflow whose gate always exits zero, and local composite actions that pull `attacker/action@main`, point at a nonexistent `./` path, or escape the repository; and a CI graph whose trusted jobs run on `arc-java-build`, whose fork job runs on `ubuntu-latest`, and which fans in to the required `verify-result` job.
 
 - [ ] **Step 1: Write the failing workflow policy helper and test**
 
@@ -2338,6 +2341,7 @@ package com.microsoft.agentframework.build.harness;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.MissingNode;
 import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -2345,17 +2349,35 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
 final class WorkflowDocuments {
 
   private static final ObjectMapper YAML_MAPPER = new ObjectMapper(new YAMLFactory());
 
+  private static final JsonNode MISSING = MissingNode.getInstance();
+
   private static final String GROUP_SELECTOR_PREFIX = "group:";
 
   private static final Set<String> RUNS_ON_OBJECT_KEYS = Set.of("group", "labels");
+
+  /** The prefix that marks an action reference as local to this repository. */
+  static final String LOCAL_REFERENCE_PREFIX = "./";
+
+  /** The only {@code runs.using} form a local action may declare. */
+  static final String COMPOSITE_USING = "composite";
+
+  private static final String LOCAL_ACTIONS_DIRECTORY = ".github/actions";
+
+  /** The file names GitHub accepts for an action definition, in the order it resolves them. */
+  private static final List<String> ACTION_DEFINITION_NAMES = List.of("action.yml", "action.yaml");
+
+  private static final Pattern PATH_SEPARATOR = Pattern.compile("[/\\\\]");
 
   private WorkflowDocuments() {}
 
@@ -2368,6 +2390,139 @@ final class WorkflowDocuments {
           .sorted(Comparator.comparing(WorkflowDocuments::fileNameOf))
           .toList();
     }
+  }
+
+  /**
+   * Returns every local composite action definition under {@code .github/actions}, at any depth.
+   * The walk is recursive because an action may be nested in subdirectories, and an unscanned
+   * definition is an unreviewed {@code uses} that no workflow rule would ever read.
+   */
+  static List<Path> actionFiles() throws IOException {
+    return actionFiles(RepositoryPaths.root());
+  }
+
+  /** The same scan against an arbitrary root, so the discovery itself can be regression tested. */
+  static List<Path> actionFiles(Path root) throws IOException {
+    Path directory = root.resolve(LOCAL_ACTIONS_DIRECTORY);
+    if (!Files.isDirectory(directory)) {
+      return List.of();
+    }
+    try (Stream<Path> entries = Files.walk(directory)) {
+      return entries
+          .filter(Files::isRegularFile)
+          .filter(path -> ACTION_DEFINITION_NAMES.contains(fileNameOf(path)))
+          .sorted(Comparator.comparing(Path::toString))
+          .toList();
+    }
+  }
+
+  /** Renders an action definition file as the {@code ./} reference a workflow step would use. */
+  static String actionReference(Path definition) {
+    return actionReference(RepositoryPaths.root(), definition);
+  }
+
+  static String actionReference(Path root, Path definition) {
+    Path directory = definition.getParent();
+    if (directory == null) {
+      return LOCAL_REFERENCE_PREFIX;
+    }
+    return LOCAL_REFERENCE_PREFIX
+        + root.normalize().relativize(directory.normalize()).toString().replace('\\', '/');
+  }
+
+  static boolean isLocalReference(String reference) {
+    return reference.startsWith(LOCAL_REFERENCE_PREFIX);
+  }
+
+  /**
+   * Reports whether a {@code ./} reference names a path inside the repository once {@code .} and
+   * {@code ..} segments are resolved. The check is textual so that it holds for synthetic probe
+   * documents as well as for the working tree, and it rejects the repository root itself, which is
+   * not an action.
+   */
+  static boolean staysWithinRepository(String reference) {
+    int depth = 0;
+    for (String segment : PATH_SEPARATOR.split(reference)) {
+      if (segment.isEmpty() || ".".equals(segment)) {
+        continue;
+      }
+      if ("..".equals(segment)) {
+        depth--;
+        if (depth < 0) {
+          return false;
+        }
+      } else {
+        depth++;
+      }
+    }
+    return depth > 0;
+  }
+
+  /**
+   * Resolves a {@code ./} local action reference to its parsed definition. The repository
+   * implementation reads the working tree; bypass probes supply synthetic definitions so the same
+   * rules are exercised against documents that are not committed.
+   */
+  @FunctionalInterface
+  interface LocalActions {
+
+    /** Returns the parsed definition, or a missing node when the reference resolves to none. */
+    JsonNode read(String reference) throws IOException;
+  }
+
+  /** Resolves local action references against the checked-out repository. */
+  static LocalActions repositoryActions() {
+    return localActions(RepositoryPaths.root());
+  }
+
+  /** The same resolver against an arbitrary root, so its containment check can be probed. */
+  static LocalActions localActions(Path root) {
+    Path base = root.normalize();
+    return reference -> {
+      if (!isLocalReference(reference)) {
+        return MISSING;
+      }
+      Path directory =
+          base.resolve(reference.substring(LOCAL_REFERENCE_PREFIX.length())).normalize();
+      if (!directory.startsWith(base) || directory.equals(base)) {
+        return MISSING;
+      }
+      for (String name : ACTION_DEFINITION_NAMES) {
+        Path definition = directory.resolve(name);
+        if (Files.isRegularFile(definition)) {
+          return read(definition);
+        }
+      }
+      return MISSING;
+    };
+  }
+
+  /**
+   * Returns the {@code runs.using} an action declares, or an empty string when it declares none, so
+   * an action form this policy cannot walk is rejected instead of resolved to zero references.
+   */
+  static String actionUsing(JsonNode action) {
+    JsonNode using = action.path("runs").path("using");
+    return using.isTextual() ? using.textValue() : "";
+  }
+
+  static boolean isCompositeAction(JsonNode action) {
+    return COMPOSITE_USING.equals(actionUsing(action));
+  }
+
+  /**
+   * Returns every {@code uses} declared by the composite steps of an action definition, so the
+   * pinning rules reach the actions an action itself runs.
+   */
+  static List<String> actionStepReferences(JsonNode action) {
+    List<String> references = new ArrayList<>();
+    for (JsonNode step : action.path("runs").path("steps")) {
+      JsonNode uses = step.path("uses");
+      if (uses.isTextual()) {
+        references.add(uses.textValue());
+      }
+    }
+    return references;
   }
 
   static JsonNode read(Path workflow) throws IOException {
@@ -2603,8 +2758,12 @@ Create `build-tools/harness-policy/src/test/java/com/microsoft/agentframework/bu
 package com.microsoft.agentframework.build.harness;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import java.io.IOException;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Deque;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -2626,6 +2785,15 @@ final class WorkflowPolicy {
    * that set of events reviewed.
    */
   static final Set<String> ALLOWED_TRIGGERS = Set.of("pull_request", "push", "workflow_dispatch");
+
+  static final String TRUSTED_RUNNER_SELECTOR = "arc-java-build";
+
+  /**
+   * The fan-in job every pull-request workflow must end in. It is a policy constant, not a detail
+   * of one workflow, because every rule that keeps a verification path honest is applied to the
+   * gate of every pull-request workflow.
+   */
+  static final String RESULT_JOB = "verify-result";
 
   /** The whole {@code needs} context, which the result gate must consume instead of one job. */
   static final String NEEDS_JSON_VARIABLE = "NEEDS_JSON";
@@ -2650,6 +2818,21 @@ final class WorkflowPolicy {
 
   private static final Pattern PINNED_EXTERNAL_REFERENCE =
       Pattern.compile("^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+(?:/[A-Za-z0-9._/-]+)?@[0-9a-f]{40}$");
+
+  private static final String UNPINNED_MESSAGE =
+      " is neither a ./ local action nor pinned to a commit SHA";
+
+  private static final String ESCAPING_MESSAGE = " resolves outside the repository";
+
+  private static final String UNRESOLVED_MESSAGE = " resolves to no local action definition";
+
+  private static final String COMPOSITE_MESSAGE = " instead of composite";
+
+  /** The origin recorded for a reference a workflow declares directly. */
+  private static final String WORKFLOW_ORIGIN = "the workflow";
+
+  private static final Pattern EXPRESSION_WRAPPER =
+      Pattern.compile("^\\$\\{\\{(?<body>.*)}}$", Pattern.DOTALL);
 
   private static final Pattern WHITESPACE_RUN = Pattern.compile("\\s+");
 
@@ -2753,7 +2936,6 @@ final class WorkflowPolicy {
     return violations;
   }
 
-
   /**
    * Every job must declare a {@code runs-on} this policy can parse, and every selector it resolves
    * to must be allow listed. A missing, unparsed, or unknown selector is a violation so that no job
@@ -2800,13 +2982,390 @@ final class WorkflowPolicy {
   static List<String> actionPinningViolations(JsonNode workflow) {
     List<String> violations = new ArrayList<>();
     for (String reference : WorkflowDocuments.stepActionReferences(workflow)) {
-      boolean local = reference.startsWith("./");
-      boolean pinned = PINNED_EXTERNAL_REFERENCE.matcher(reference).matches();
-      if (!local && !pinned) {
-        violations.add(reference + " is neither a ./ local action nor pinned to a commit SHA");
+      if (!isLocalOrPinned(reference)) {
+        violations.add(reference + UNPINNED_MESSAGE);
       }
     }
     return violations;
+  }
+
+  private static boolean isLocalOrPinned(String reference) {
+    return WorkflowDocuments.isLocalReference(reference)
+        || PINNED_EXTERNAL_REFERENCE.matcher(reference).matches();
+  }
+
+  /**
+   * Walks every action a workflow can reach, through local composite actions, and applies the same
+   * rules at every depth. {@link #actionPinningViolations(JsonNode)} accepts any {@code ./}
+   * reference on sight, so without this walk a local composite action is an unreviewed hole: its
+   * own steps may pull {@code attacker/action@main}, and a {@code ./} reference that resolves to
+   * nothing is a step whose behaviour no rule in this repository has ever read.
+   */
+  static List<String> actionGraphViolations(
+      JsonNode workflow, WorkflowDocuments.LocalActions actions) throws IOException {
+    return actionGraphViolations(
+        WorkflowDocuments.stepActionReferences(workflow), WORKFLOW_ORIGIN, actions);
+  }
+
+  /**
+   * Applies the same walk to a local composite action definition found by scanning {@code
+   * .github/actions}, so a definition that no workflow references yet is still held to the pinning
+   * and resolution rules before somebody wires it up.
+   */
+  static List<String> compositeActionViolations(
+      String reference, JsonNode action, WorkflowDocuments.LocalActions actions)
+      throws IOException {
+    List<String> violations = new ArrayList<>();
+    String form = compositeFormViolation(reference, action);
+    if (form != null) {
+      violations.add(form);
+    }
+    violations.addAll(
+        actionGraphViolations(
+            WorkflowDocuments.actionStepReferences(action), reference, actions, Set.of(reference)));
+    return violations;
+  }
+
+  /**
+   * A local action must be a composite action. Any other {@code runs.using} — {@code docker} above
+   * all, which pulls an image this repository never reviewed, but equally a Node action or a form
+   * this policy does not know — declares no {@code steps}, so the walk would resolve it, find no
+   * edge, and report it clean. Rejecting the form is what keeps that fail-closed.
+   */
+  private static String compositeFormViolation(String subject, JsonNode action) {
+    if (WorkflowDocuments.isCompositeAction(action)) {
+      return null;
+    }
+    String using = WorkflowDocuments.actionUsing(action);
+    return subject
+        + " declares runs.using "
+        + (using.isEmpty() ? "nothing" : "'" + using + "'")
+        + COMPOSITE_MESSAGE;
+  }
+
+  private static List<String> actionGraphViolations(
+      List<String> roots, String origin, WorkflowDocuments.LocalActions actions)
+      throws IOException {
+    return actionGraphViolations(roots, origin, actions, Set.of());
+  }
+
+  private static List<String> actionGraphViolations(
+      List<String> roots,
+      String origin,
+      WorkflowDocuments.LocalActions actions,
+      Set<String> alreadyVisited)
+      throws IOException {
+    List<String> violations = new ArrayList<>();
+    Set<String> visited = new LinkedHashSet<>(alreadyVisited);
+    Deque<ActionEdge> pending = new ArrayDeque<>();
+    for (String root : roots) {
+      pending.addLast(new ActionEdge(origin, root));
+    }
+    while (!pending.isEmpty()) {
+      ActionEdge edge = pending.removeFirst();
+      String reference = edge.reference();
+      if (!visited.add(reference)) {
+        continue;
+      }
+      if (!WorkflowDocuments.isLocalReference(reference)) {
+        if (!PINNED_EXTERNAL_REFERENCE.matcher(reference).matches()) {
+          violations.add(edge.describe() + UNPINNED_MESSAGE);
+        }
+        continue;
+      }
+      if (!WorkflowDocuments.staysWithinRepository(reference)) {
+        violations.add(edge.describe() + ESCAPING_MESSAGE);
+        continue;
+      }
+      JsonNode definition = actions.read(reference);
+      if (definition == null || definition.isMissingNode() || definition.isNull()) {
+        violations.add(edge.describe() + UNRESOLVED_MESSAGE);
+        continue;
+      }
+      String form = compositeFormViolation(edge.describe(), definition);
+      if (form != null) {
+        violations.add(form);
+        continue;
+      }
+      for (String nested : WorkflowDocuments.actionStepReferences(definition)) {
+        pending.addLast(new ActionEdge(reference, nested));
+      }
+    }
+    return violations;
+  }
+
+  /** One {@code uses} edge: the action, and the workflow or action that declares it. */
+  private record ActionEdge(String source, String reference) {
+
+    String describe() {
+      return reference + " used by " + source;
+    }
+  }
+
+  /**
+   * Normalizes a job condition so that only its meaning is compared. YAML line folding,
+   * indentation, and the optional {@code ${{ }}} wrapper are formatting that GitHub Actions treats
+   * identically, so they are erased. Nothing else is rewritten: operators, operands, and their
+   * order survive, so a weakened condition never normalizes to an accepted one.
+   */
+  static String normalizedCondition(JsonNode job) {
+    JsonNode condition = job.path("if");
+    if (!condition.isTextual()) {
+      return "";
+    }
+    String text = condition.textValue().trim();
+    var wrapper = EXPRESSION_WRAPPER.matcher(text);
+    if (wrapper.matches()) {
+      text = wrapper.group("body").trim();
+    }
+    return WHITESPACE_RUN.matcher(text).replaceAll(" ").trim();
+  }
+
+  static boolean hasCondition(JsonNode job, String expectedCondition) {
+    return normalizedCondition(job)
+        .equals(WHITESPACE_RUN.matcher(expectedCondition).replaceAll(" "));
+  }
+
+  static boolean isTrustedCondition(JsonNode job) {
+    return hasCondition(job, TRUSTED_CONDITION);
+  }
+
+  static boolean isForkCondition(JsonNode job) {
+    return hasCondition(job, FORK_CONDITION);
+  }
+
+  /**
+   * Reports whether a workflow can be started by a pull request, which is what makes its result
+   * gate part of the merge decision and therefore subject to every gate rule.
+   */
+  static boolean isPullRequestWorkflow(JsonNode workflow) {
+    return WorkflowDocuments.triggerNames(workflow).contains("pull_request");
+  }
+
+  /**
+   * Every job that selects the trusted runner must carry exactly the trusted condition, so fork
+   * pull-request code can never execute on {@code arc-java-build}.
+   */
+  static List<String> trustedRunnerConditionViolations(JsonNode workflow) {
+    List<String> violations = new ArrayList<>();
+    for (String jobName : WorkflowDocuments.jobNames(workflow)) {
+      JsonNode job = WorkflowDocuments.job(workflow, jobName);
+      if (!WorkflowDocuments.runnerSelectors(job).contains(TRUSTED_RUNNER_SELECTOR)) {
+        continue;
+      }
+      if (!isTrustedCondition(job)) {
+        violations.add(
+            jobName
+                + " runs on "
+                + TRUSTED_RUNNER_SELECTOR
+                + " under the condition \""
+                + normalizedCondition(job)
+                + "\" instead of the trusted condition");
+      }
+    }
+    return violations;
+  }
+}
+```
+
+Create `build-tools/harness-policy/src/test/java/com/microsoft/agentframework/build/harness/ResultGate.java`:
+
+```java
+package com.microsoft.agentframework.build.harness;
+
+import static org.junit.jupiter.params.provider.Arguments.arguments;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.TimeUnit;
+import org.junit.jupiter.params.provider.Arguments;
+
+/**
+ * The executable view of one workflow's {@code verify-result} job: its real shell script, its
+ * declared verification paths, and the truth table those paths imply.
+ *
+ * <p>Nothing here is specific to {@code ci.yml}. The gate script is read from whichever workflow is
+ * handed in and the truth table is derived from that workflow's own {@code needs} list and {@code
+ * VERIFICATION_PATHS} map, so a second pull-request workflow is held to exactly the same standard
+ * as the first instead of being trusted because only one workflow was ever executed.
+ */
+final class ResultGate {
+
+  private static final String POSIX_SHELL = "sh";
+
+  /** The results that must never let a verification path be reported as completed. */
+  private static final List<String> BROKEN_RESULTS = List.of("failure", "cancelled", "skipped");
+
+  /** Every result an unclassified job could report; none of them may reach a green gate. */
+  private static final List<String> ANY_RESULT =
+      List.of("success", "skipped", "failure", "cancelled");
+
+  private static final String UNCLASSIFIED_JOB = "added-verify";
+
+  private final String label;
+
+  private final String script;
+
+  private final String verificationPaths;
+
+  private final Map<String, List<String>> paths = new LinkedHashMap<>();
+
+  private final List<String> needs = new ArrayList<>();
+
+  private ResultGate(String label, JsonNode workflow, String resultJobName) {
+    this.label = label;
+    this.script = WorkflowDocuments.runScript(workflow, resultJobName);
+    this.verificationPaths =
+        WorkflowDocuments.stepEnvironment(WorkflowDocuments.firstRunStep(workflow, resultJobName))
+            .getOrDefault(WorkflowPolicy.VERIFICATION_PATHS_VARIABLE, "");
+    this.paths.putAll(WorkflowPolicy.verificationPaths(workflow, resultJobName));
+    this.needs.addAll(WorkflowDocuments.jobNeeds(WorkflowDocuments.job(workflow, resultJobName)));
+  }
+
+  static ResultGate of(String label, JsonNode workflow) {
+    return new ResultGate(label, workflow, WorkflowPolicy.RESULT_JOB);
+  }
+
+  /** Replaces the gate script while keeping the wiring, so a tampered gate can be probed. */
+  static ResultGate withScript(ResultGate original, String replacementScript) {
+    return new ResultGate(original, replacementScript);
+  }
+
+  private ResultGate(ResultGate original, String replacementScript) {
+    this.label = original.label;
+    this.script = replacementScript;
+    this.verificationPaths = original.verificationPaths;
+    this.paths.putAll(original.paths);
+    this.needs.addAll(original.needs);
+  }
+
+  @Override
+  public String toString() {
+    return label;
+  }
+
+  Set<String> pathNames() {
+    return new LinkedHashSet<>(paths.keySet());
+  }
+
+  List<String> neededJobs() {
+    return List.copyOf(needs);
+  }
+
+  static boolean isPosixShellAvailable() {
+    return !System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("win");
+  }
+
+  /**
+   * Derives every needs context this gate must judge and the exit code it must produce, from the
+   * workflow's own verification paths. Exactly one complete path exits zero; anything else — a
+   * broken job, a half-skipped path, two complete paths, an unclassified job, a job that vanished
+   * from {@code needs}, or an empty context — must exit non-zero.
+   */
+  List<Arguments> truthTable() {
+    List<Arguments> table = new ArrayList<>();
+    for (String path : paths.keySet()) {
+      table.add(scenario("only the " + path + " path completes", completing(path), 0));
+    }
+    table.add(scenario("no path ran at all", uniform("skipped"), 1));
+    table.add(scenario("every job failed", uniform("failure"), 1));
+    if (paths.size() > 1) {
+      table.add(scenario("every path completed", uniform("success"), 1));
+    }
+    for (Map.Entry<String, List<String>> path : paths.entrySet()) {
+      for (String job : path.getValue()) {
+        for (String broken : BROKEN_RESULTS) {
+          Map<String, String> results = completing(path.getKey());
+          results.put(job, broken);
+          table.add(
+              scenario("the " + path.getKey() + " path with " + job + " " + broken, results, 1));
+        }
+      }
+    }
+    String firstPath = paths.isEmpty() ? "" : paths.keySet().iterator().next();
+    for (String added : ANY_RESULT) {
+      Map<String, String> results = completing(firstPath);
+      results.put(UNCLASSIFIED_JOB, added);
+      table.add(scenario("an unclassified job reporting " + added, results, 1));
+    }
+    for (String job : needs) {
+      Map<String, String> results = completing(firstPath);
+      results.remove(job);
+      table.add(scenario(job + " disappeared from needs", results, 1));
+    }
+    table.add(scenario("an empty needs context", new LinkedHashMap<>(), 1));
+    table.add(scenario("an unset needs context", null, 1));
+    return table;
+  }
+
+  private Arguments scenario(String name, Map<String, String> results, int expectedExitCode) {
+    return arguments(label, name, this, results, expectedExitCode);
+  }
+
+  /** Every needed job skipped, except the jobs of {@code pathName}, which all succeeded. */
+  private Map<String, String> completing(String pathName) {
+    Map<String, String> results = uniform("skipped");
+    for (String job : paths.getOrDefault(pathName, List.of())) {
+      results.put(job, "success");
+    }
+    return results;
+  }
+
+  private Map<String, String> uniform(String result) {
+    Map<String, String> results = new LinkedHashMap<>();
+    for (String job : needs) {
+      results.put(job, result);
+    }
+    return results;
+  }
+
+  /** Renders a needs context exactly as {@code toJSON(needs)} does. */
+  static String renderNeedsJson(Map<String, String> results) {
+    StringBuilder json = new StringBuilder("{");
+    for (Map.Entry<String, String> entry : results.entrySet()) {
+      if (json.length() > 1) {
+        json.append(',');
+      }
+      json.append("\n  \"")
+          .append(entry.getKey())
+          .append("\": {\n    \"result\": \"")
+          .append(entry.getValue())
+          .append("\",\n    \"outputs\": {}\n  }");
+    }
+    return json.append("\n}").toString();
+  }
+
+  /** Executes the real gate script as a shell process against a synthesized needs context. */
+  int run(Map<String, String> results) throws IOException, InterruptedException {
+    ProcessBuilder builder = new ProcessBuilder(POSIX_SHELL, "-s");
+    builder.redirectErrorStream(true);
+    Map<String, String> environment = builder.environment();
+    environment.put(
+        WorkflowPolicy.NEEDS_JSON_VARIABLE, results == null ? "" : renderNeedsJson(results));
+    environment.put(WorkflowPolicy.VERIFICATION_PATHS_VARIABLE, verificationPaths);
+
+    Process gate = builder.start();
+    try (OutputStream commands = gate.getOutputStream()) {
+      commands.write(script.getBytes(StandardCharsets.UTF_8));
+    }
+    try (InputStream output = gate.getInputStream()) {
+      output.readAllBytes();
+    }
+    if (!gate.waitFor(60, TimeUnit.SECONDS)) {
+      gate.destroyForcibly();
+      throw new IllegalStateException(label + " result gate did not terminate");
+    }
+    return gate.exitValue();
   }
 }
 ```
@@ -2818,21 +3377,16 @@ package com.microsoft.agentframework.build.harness;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
-import static org.junit.jupiter.params.provider.Arguments.arguments;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -2843,49 +3397,65 @@ class WorkflowPolicyTest {
 
   private static final Set<String> ALLOWED_PERMISSION_VALUES = Set.of("read", "none");
 
-  private static final String TRUSTED_CONDITION =
-      "github.event_name != 'pull_request' "
-          + "|| github.event.pull_request.head.repo.full_name == github.repository";
-
-  private static final String FORK_CONDITION =
-      "github.event_name == 'pull_request' "
-          + "&& github.event.pull_request.head.repo.full_name != github.repository";
-
   private static final String CANCEL_EXPRESSION = "${{ github.event_name == 'pull_request' }}";
 
   private static final String TRUSTED_LABEL = "arc-java-build";
 
   private static final String HOSTED_LABEL = "ubuntu-latest";
 
-  private static final String RESULT_JOB = "verify-result";
-
-  private static final String FORK_JOB = "fork-verify";
-
-  private static final String TRUSTED_QUALITY_JOB = "trusted-quality";
-
-  private static final String TRUSTED_COMPATIBILITY_JOB = "trusted-compatibility";
+  private static final String RESULT_JOB = WorkflowPolicy.RESULT_JOB;
 
   private static final String FORK_PATH = "fork";
 
   private static final String TRUSTED_PATH = "trusted";
 
-  private static final String NEEDS_JSON_VARIABLE = "NEEDS_JSON";
+  private static final String NEEDS_JSON_VARIABLE = WorkflowPolicy.NEEDS_JSON_VARIABLE;
 
-  private static final String NEEDS_JSON_EXPRESSION = "${{ toJSON(needs) }}";
+  private static final String NEEDS_JSON_EXPRESSION = WorkflowPolicy.NEEDS_JSON_EXPRESSION;
 
-  private static final String VERIFICATION_PATHS_VARIABLE = "VERIFICATION_PATHS";
+  private static final String VERIFICATION_PATHS_VARIABLE =
+      WorkflowPolicy.VERIFICATION_PATHS_VARIABLE;
 
   private static final String CI_WORKFLOW = ".github/workflows/ci.yml";
 
-  private static final String POSIX_SHELL = "sh";
+  private static final String RUNNER_CONTRACT = "docs/operations/github-actions-runner-contract.md";
 
   static Stream<Path> workflows() throws IOException {
     return WorkflowDocuments.files().stream();
   }
 
+  /**
+   * Every workflow a pull request can start, not only {@code ci.yml}. The result gate rules below
+   * are parameterized over this source, because a second pull-request workflow with a gate that
+   * classifies nothing is a merge-blocking check that reports green without verifying anything.
+   */
+  static Stream<Path> pullRequestWorkflows() throws IOException {
+    return pullRequestWorkflowFiles().stream();
+  }
+
+  private static List<Path> pullRequestWorkflowFiles() throws IOException {
+    List<Path> matching = new ArrayList<>();
+    for (Path workflow : WorkflowDocuments.files()) {
+      if (WorkflowPolicy.isPullRequestWorkflow(WorkflowDocuments.read(workflow))) {
+        matching.add(workflow);
+      }
+    }
+    return matching;
+  }
+
+  private static String workflowName(Path workflow) {
+    Path name = workflow.getFileName();
+    return name == null ? workflow.toString() : name.toString();
+  }
+
   @Test
   void repositoryDefinesAtLeastOneWorkflow() throws IOException {
     assertThat(WorkflowDocuments.files()).isNotEmpty();
+  }
+
+  @Test
+  void repositoryDefinesAtLeastOnePullRequestWorkflow() throws IOException {
+    assertThat(pullRequestWorkflowFiles()).isNotEmpty();
   }
 
   @ParameterizedTest(name = "{0} never uses pull_request_target")
@@ -2930,6 +3500,53 @@ class WorkflowPolicyTest {
 
     assertThat(WorkflowDocuments.stepActionReferences(document)).isNotEmpty();
     assertThat(WorkflowPolicy.actionPinningViolations(document)).isEmpty();
+  }
+
+  /**
+   * Pinning stops at the workflow file: a {@code ./} reference is accepted on sight. This walks
+   * through every local composite action a workflow can reach and applies the same rules there, so
+   * a local action cannot be the place where {@code attacker/action@main} enters, and a {@code ./}
+   * reference that resolves to nothing is rejected instead of silently trusted.
+   */
+  @ParameterizedTest(name = "{0} resolves and pins every action it can reach")
+  @MethodSource("workflows")
+  void workflowResolvesAndPinsEveryActionItCanReach(Path workflow) throws IOException {
+    JsonNode document = WorkflowDocuments.read(workflow);
+
+    assertThat(
+            WorkflowPolicy.actionGraphViolations(document, WorkflowDocuments.repositoryActions()))
+        .isEmpty();
+  }
+
+  /**
+   * Scans {@code .github/actions} recursively so a composite action is held to the pinning and
+   * resolution rules even before a workflow references it. The scan is currently empty; the rules
+   * it applies are pinned by {@code WorkflowPolicyBypassProbeTest}.
+   */
+  @Test
+  void everyLocalCompositeActionResolvesAndPinsItsOwnActions() throws IOException {
+    WorkflowDocuments.LocalActions actions = WorkflowDocuments.repositoryActions();
+    List<String> violations = new ArrayList<>();
+    for (Path definition : WorkflowDocuments.actionFiles()) {
+      String reference = WorkflowDocuments.actionReference(definition);
+      violations.addAll(
+          WorkflowPolicy.compositeActionViolations(
+              reference, WorkflowDocuments.read(definition), actions));
+    }
+
+    assertThat(violations).isEmpty();
+  }
+
+  /** Every action definition the scan finds must be reachable through its own {@code ./} path. */
+  @Test
+  void everyLocalCompositeActionIsAddressableByItsReference() throws IOException {
+    WorkflowDocuments.LocalActions actions = WorkflowDocuments.repositoryActions();
+    for (Path definition : WorkflowDocuments.actionFiles()) {
+      String reference = WorkflowDocuments.actionReference(definition);
+
+      assertThat(WorkflowDocuments.staysWithinRepository(reference)).isTrue();
+      assertThat(actions.read(reference).isMissingNode()).isFalse();
+    }
   }
 
   @ParameterizedTest(name = "{0} never delegates a job to a reusable workflow")
@@ -2987,42 +3604,100 @@ class WorkflowPolicyTest {
   @ParameterizedTest(name = "{0} gates every trusted runner job")
   @MethodSource("workflows")
   void trustedJobsRequireTheSameRepositoryCondition(Path workflow) throws IOException {
-    JsonNode document = WorkflowDocuments.read(workflow);
-    List<String> jobNames = WorkflowDocuments.jobNames(document);
-
-    for (String jobName : jobNames) {
-      JsonNode job = document.path("jobs").path(jobName);
-      if (WorkflowDocuments.runnerLabels(job).contains(TRUSTED_LABEL)) {
-        assertThat(job.path("if").textValue())
-            .as("%s must only run trusted code", jobName)
-            .isEqualTo(TRUSTED_CONDITION);
-      }
-    }
+    assertThat(WorkflowPolicy.trustedRunnerConditionViolations(WorkflowDocuments.read(workflow)))
+        .isEmpty();
   }
 
   @ParameterizedTest(name = "{0} isolates fork verification on hosted runners")
-  @MethodSource("workflows")
+  @MethodSource("pullRequestWorkflows")
   void forkVerificationRunsOnHostedRunnersOnly(Path workflow) throws IOException {
     JsonNode document = WorkflowDocuments.read(workflow);
-    assumeTrue(WorkflowDocuments.triggerNames(document).contains("pull_request"));
 
     List<String> forkJobs = new ArrayList<>();
     for (String jobName : WorkflowDocuments.jobNames(document)) {
-      JsonNode job = document.path("jobs").path(jobName);
-      if (FORK_CONDITION.equals(job.path("if").textValue())) {
+      JsonNode job = WorkflowDocuments.job(document, jobName);
+      if (WorkflowPolicy.isForkCondition(job)) {
         forkJobs.add(jobName);
-        assertThat(WorkflowDocuments.runnerLabels(job)).containsExactly(HOSTED_LABEL);
+        assertThat(WorkflowDocuments.runnerSelectors(job)).containsExactly(HOSTED_LABEL);
       }
     }
 
     assertThat(forkJobs).isNotEmpty();
   }
 
+  @ParameterizedTest(name = "{0} keeps the trusted and fork paths mutually exclusive")
+  @MethodSource("pullRequestWorkflows")
+  void trustedAndForkConditionsAreMutuallyExclusive(Path workflow) throws IOException {
+    JsonNode document = WorkflowDocuments.read(workflow);
+
+    for (String jobName : WorkflowDocuments.jobNames(document)) {
+      JsonNode job = WorkflowDocuments.job(document, jobName);
+      assertThat(WorkflowPolicy.isTrustedCondition(job) && WorkflowPolicy.isForkCondition(job))
+          .as("%s cannot belong to both verification paths", jobName)
+          .isFalse();
+      if (WorkflowDocuments.runnerSelectors(job).contains(TRUSTED_LABEL)) {
+        assertThat(WorkflowPolicy.isForkCondition(job))
+            .as("%s must never run under the fork condition", jobName)
+            .isFalse();
+      }
+    }
+  }
+
+  @Test
+  void runnerContractDocumentsTheDeployedRunnerLabels() throws IOException {
+    String contract = readRunnerContract();
+
+    for (String selector : WorkflowPolicy.ALLOWED_RUNNER_SELECTORS) {
+      assertThat(contract).contains(selector);
+    }
+  }
+
+  @Test
+  void runnerContractBlocksMergingBeforeTheTrustedScaleSetExists() throws IOException {
+    String contract = readRunnerContract();
+
+    assertThat(contract).contains("## Merge gate: do not merge before `arc-java-build` exists");
+    assertThat(contract).contains("agent-framework-java-platform");
+    assertThat(contract).contains("verify-result");
+  }
+
+  @Test
+  void runnerContractDocumentsTheTriggerAllowList() throws IOException {
+    String contract = readRunnerContract();
+
+    assertThat(contract).contains("## Trigger allow list");
+    for (String trigger : WorkflowPolicy.ALLOWED_TRIGGERS) {
+      assertThat(contract).contains("`" + trigger + "`");
+    }
+    assertThat(contract).contains("workflow_run");
+  }
+
+  @Test
+  void runnerContractDocumentsTheGenericResultGate() throws IOException {
+    String contract = readRunnerContract();
+
+    assertThat(contract).contains(NEEDS_JSON_VARIABLE).contains(VERIFICATION_PATHS_VARIABLE);
+    assertThat(contract).contains("belongs to no path");
+    assertThat(contract).contains("every workflow a pull request can start");
+  }
+
+  @Test
+  void runnerContractDocumentsTheLocalCompositeActionRules() throws IOException {
+    String contract = readRunnerContract();
+
+    assertThat(contract).contains("## Local composite actions");
+    assertThat(contract).contains(".github/actions");
+  }
+
+  private static String readRunnerContract() throws IOException {
+    return Files.readString(
+        RepositoryPaths.root().resolve(RUNNER_CONTRACT), StandardCharsets.UTF_8);
+  }
+
   @ParameterizedTest(name = "{0} fans in to the required result job")
-  @MethodSource("workflows")
+  @MethodSource("pullRequestWorkflows")
   void pullRequestWorkflowFansInToTheRequiredResultJob(Path workflow) throws IOException {
     JsonNode document = WorkflowDocuments.read(workflow);
-    assumeTrue(WorkflowDocuments.triggerNames(document).contains("pull_request"));
 
     List<String> jobNames = new ArrayList<>(WorkflowDocuments.jobNames(document));
     assertThat(jobNames).contains(RESULT_JOB);
@@ -3050,163 +3725,91 @@ class WorkflowPolicyTest {
 
   /**
    * The gate must read the whole {@code needs} context, never one hand-written variable per job, so
-   * a verification job added later cannot stay unexamined.
+   * a verification job added later cannot stay unexamined. This holds for every workflow a pull
+   * request can start, because each of them fans in to a merge-blocking {@code verify-result}.
    */
-  @Test
-  void resultGateConsumesTheWholeNeedsContext() throws IOException {
-    Map<String, String> environment = WorkflowDocuments.stepEnvironment(resultGateStep());
+  @ParameterizedTest(name = "{0} consumes the whole needs context")
+  @MethodSource("pullRequestWorkflows")
+  void resultGateConsumesTheWholeNeedsContext(Path workflow) throws IOException {
+    JsonNode document = WorkflowDocuments.read(workflow);
+    JsonNode step = WorkflowDocuments.firstRunStep(document, RESULT_JOB);
+    assertThat(step.isObject()).isTrue();
 
+    Map<String, String> environment = WorkflowDocuments.stepEnvironment(step);
     assertThat(environment).containsEntry(NEEDS_JSON_VARIABLE, NEEDS_JSON_EXPRESSION);
     assertThat(environment).containsKey(VERIFICATION_PATHS_VARIABLE);
 
-    String script = resultGateScript();
+    String script = WorkflowDocuments.runScript(document, RESULT_JOB);
+    assertThat(script).isNotBlank();
     assertThat(script).contains(NEEDS_JSON_VARIABLE).contains(VERIFICATION_PATHS_VARIABLE);
     assertThat(environment.values()).noneMatch(value -> value.contains(".result"));
   }
 
-  @Test
-  void resultGateAssignsEveryNeededJobToExactlyOneVerificationPath() throws IOException {
-    JsonNode document = WorkflowDocuments.read(RepositoryPaths.root().resolve(CI_WORKFLOW));
+  @ParameterizedTest(name = "{0} classifies every needed job into exactly one path")
+  @MethodSource("pullRequestWorkflows")
+  void resultGateAssignsEveryNeededJobToExactlyOneVerificationPath(Path workflow)
+      throws IOException {
+    JsonNode document = WorkflowDocuments.read(workflow);
 
     assertThat(WorkflowPolicy.verificationPathViolations(document, RESULT_JOB)).isEmpty();
+    assertThat(WorkflowPolicy.verificationPaths(document, RESULT_JOB)).isNotEmpty();
+  }
+
+  @Test
+  void continuousIntegrationDeclaresExactlyTheForkAndTrustedPaths() throws IOException {
+    JsonNode document = WorkflowDocuments.read(RepositoryPaths.root().resolve(CI_WORKFLOW));
+
     assertThat(WorkflowPolicy.verificationPaths(document, RESULT_JOB))
         .containsOnlyKeys(FORK_PATH, TRUSTED_PATH);
   }
 
-  static Stream<Arguments> resultGateCases() {
-    return Stream.of(
-        arguments("skipped", "success", "success", 0),
-        arguments("success", "skipped", "skipped", 0),
-        arguments("skipped", "failure", "success", 1),
-        arguments("skipped", "success", "failure", 1),
-        arguments("skipped", "success", "cancelled", 1),
-        arguments("skipped", "success", "skipped", 1),
-        arguments("skipped", "skipped", "skipped", 1),
-        arguments("failure", "skipped", "skipped", 1),
-        arguments("cancelled", "skipped", "skipped", 1),
-        arguments("success", "success", "success", 1),
-        arguments("failure", "failure", "failure", 1));
+  /**
+   * Every needs context each pull-request gate must judge, derived from that workflow's own
+   * verification paths rather than from a table hand-written for {@code ci.yml}. A second workflow
+   * therefore arrives with its own truth table instead of inheriting the first one's coverage.
+   */
+  static Stream<Arguments> resultGateScenarios() throws IOException {
+    List<Arguments> scenarios = new ArrayList<>();
+    for (Path workflow : pullRequestWorkflowFiles()) {
+      scenarios.addAll(
+          ResultGate.of(workflowName(workflow), WorkflowDocuments.read(workflow)).truthTable());
+    }
+    return scenarios.stream();
   }
 
   /**
-   * Executes the real {@code verify-result} script against the full result truth table. Replacing
-   * the script with an unconditional {@code exit 0} fails every case that must exit non-zero.
+   * Executes each workflow's real {@code verify-result} script against its full truth table.
+   * Replacing any of those scripts with an unconditional {@code exit 0} fails every case that must
+   * exit non-zero.
    */
-  @ParameterizedTest(name = "fork={0} quality={1} compatibility={2} exits with {3}")
-  @MethodSource("resultGateCases")
+  @ParameterizedTest(name = "{0}: {1} exits with {4}")
+  @MethodSource("resultGateScenarios")
   void resultGateAcceptsOnlyOneCompleteVerificationPath(
-      String fork, String quality, String compatibility, int expectedExitCode)
+      String workflow,
+      String scenario,
+      ResultGate gate,
+      Map<String, String> results,
+      int expectedExitCode)
       throws IOException, InterruptedException {
-    assumeTrue(isPosixShellAvailable());
+    assumeTrue(ResultGate.isPosixShellAvailable());
 
-    assertThat(runResultGate(needsResults(fork, quality, compatibility)))
-        .isEqualTo(expectedExitCode);
+    assertThat(gate.run(results)).isEqualTo(expectedExitCode);
   }
 
-  static Stream<String> addedVerificationJobResults() {
-    return Stream.of("success", "skipped", "failure", "cancelled");
+  /** The generated truth table must actually accept something, or it proves nothing. */
+  @ParameterizedTest(name = "{0} has a completable verification path")
+  @MethodSource("pullRequestWorkflows")
+  void resultGateTruthTableCoversAnAcceptingAndARejectingCase(Path workflow) throws IOException {
+    List<Arguments> table =
+        ResultGate.of(workflowName(workflow), WorkflowDocuments.read(workflow)).truthTable();
+
+    assertThat(table).anyMatch(scenario -> exitCodeOf(scenario) == 0);
+    assertThat(table).anyMatch(scenario -> exitCodeOf(scenario) != 0);
   }
 
-  /**
-   * Regression for the false-green hole: a verification job that is wired into {@code needs} but
-   * into no verification path fails the gate, whatever it reported, so adding a job without
-   * classifying it can never be reported as a completed verification.
-   */
-  @ParameterizedTest(name = "an added verification job reporting {0} cannot report green")
-  @MethodSource("addedVerificationJobResults")
-  void resultGateRejectsAJobThatBelongsToNoVerificationPath(String addedResult)
-      throws IOException, InterruptedException {
-    assumeTrue(isPosixShellAvailable());
-
-    Map<String, String> results = needsResults("skipped", "success", "success");
-    results.put("added-verify", addedResult);
-
-    assertThat(runResultGate(results)).isEqualTo(1);
-  }
-
-  @Test
-  void resultGateRejectsAVerificationJobThatDisappearedFromNeeds()
-      throws IOException, InterruptedException {
-    assumeTrue(isPosixShellAvailable());
-
-    Map<String, String> results = needsResults("skipped", "success", "success");
-    results.remove(TRUSTED_COMPATIBILITY_JOB);
-
-    assertThat(runResultGate(results)).isEqualTo(1);
-  }
-
-  @Test
-  void resultGateRejectsAnEmptyNeedsContext() throws IOException, InterruptedException {
-    assumeTrue(isPosixShellAvailable());
-
-    assertThat(runResultGate(new LinkedHashMap<>())).isEqualTo(1);
-    assertThat(runResultGate(null)).isEqualTo(1);
-  }
-
-  private static boolean isPosixShellAvailable() {
-    return !System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("win");
-  }
-
-  private static Map<String, String> needsResults(
-      String fork, String quality, String compatibility) {
-    Map<String, String> results = new LinkedHashMap<>();
-    results.put(FORK_JOB, fork);
-    results.put(TRUSTED_QUALITY_JOB, quality);
-    results.put(TRUSTED_COMPATIBILITY_JOB, compatibility);
-    return results;
-  }
-
-  /** Renders the {@code needs} context exactly as {@code toJSON(needs)} does. */
-  private static String renderNeedsJson(Map<String, String> results) {
-    StringBuilder json = new StringBuilder("{");
-    for (Map.Entry<String, String> entry : results.entrySet()) {
-      if (json.length() > 1) {
-        json.append(',');
-      }
-      json.append("\n  \"")
-          .append(entry.getKey())
-          .append("\": {\n    \"result\": \"")
-          .append(entry.getValue())
-          .append("\",\n    \"outputs\": {}\n  }");
-    }
-    return json.append("\n}").toString();
-  }
-
-  private static JsonNode resultGateStep() throws IOException {
-    JsonNode document = WorkflowDocuments.read(RepositoryPaths.root().resolve(CI_WORKFLOW));
-    JsonNode step = WorkflowDocuments.firstRunStep(document, RESULT_JOB);
-
-    assertThat(step.isObject()).isTrue();
-    return step;
-  }
-
-  private static String resultGateScript() throws IOException {
-    Path workflow = RepositoryPaths.root().resolve(CI_WORKFLOW);
-    String script = WorkflowDocuments.runScript(WorkflowDocuments.read(workflow), RESULT_JOB);
-
-    assertThat(script).isNotBlank();
-    return script;
-  }
-
-  private static int runResultGate(Map<String, String> results)
-      throws IOException, InterruptedException {
-    ProcessBuilder builder = new ProcessBuilder(POSIX_SHELL, "-s");
-    builder.redirectErrorStream(true);
-    Map<String, String> environment = builder.environment();
-    environment.put(NEEDS_JSON_VARIABLE, results == null ? "" : renderNeedsJson(results));
-    environment.put(
-        VERIFICATION_PATHS_VARIABLE,
-        WorkflowDocuments.stepEnvironment(resultGateStep()).get(VERIFICATION_PATHS_VARIABLE));
-
-    Process gate = builder.start();
-    try (OutputStream commands = gate.getOutputStream()) {
-      commands.write(resultGateScript().getBytes(StandardCharsets.UTF_8));
-    }
-    try (InputStream output = gate.getInputStream()) {
-      output.readAllBytes();
-    }
-    assertThat(gate.waitFor(60, TimeUnit.SECONDS)).isTrue();
-    return gate.exitValue();
+  private static int exitCodeOf(Arguments scenario) {
+    Object[] values = scenario.get();
+    return (Integer) values[values.length - 1];
   }
 }
 ```
@@ -3217,12 +3820,23 @@ Create `build-tools/harness-policy/src/test/java/com/microsoft/agentframework/bu
 package com.microsoft.agentframework.build.harness;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.MissingNode;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
 /**
@@ -3328,6 +3942,10 @@ class WorkflowPolicyBypassProbeTest {
     assertThat(WorkflowPolicy.actionPinningViolations(baseline)).isEmpty();
     assertThat(WorkflowPolicy.jobLevelUsesViolations(baseline)).isEmpty();
     assertThat(WorkflowPolicy.runnerViolations(baseline)).isEmpty();
+    assertThat(
+            WorkflowPolicy.actionGraphViolations(
+                baseline, probeActions(Map.of(SETUP_HARNESS, compositeAction(PINNED_ACTION)))))
+        .isEmpty();
   }
 
   @Test
@@ -3346,6 +3964,758 @@ class WorkflowPolicyBypassProbeTest {
         .containsExactly(
             "attacker/action@main is neither a ./ local action nor pinned to a commit SHA");
   }
+
+  static Stream<String> weakenedTrustedConditions() {
+    return Stream.of(
+        "github.event_name != 'pull_request'",
+        "true",
+        "always()",
+        "github.event.pull_request.head.repo.full_name == github.repository",
+        "github.event_name != 'pull_request'"
+            + " || github.event.pull_request.head.repo.full_name != github.repository",
+        "github.event_name != 'pull_request'"
+            + " && github.event.pull_request.head.repo.full_name == github.repository");
+  }
+
+  /**
+   * Condition comparison ignores formatting only. A trusted job whose guard is rewritten into any
+   * weaker or different expression is still rejected.
+   */
+  @ParameterizedTest(name = "weakened trusted condition {index} is rejected")
+  @MethodSource("weakenedTrustedConditions")
+  void weakenedTrustedConditionIsRejected(String condition) throws IOException {
+    JsonNode probe = WorkflowDocuments.parse(trustedJob("if: >-\n        " + condition + "\n"));
+
+    assertThat(WorkflowPolicy.trustedRunnerConditionViolations(probe)).hasSize(1);
+    assertThat(WorkflowPolicy.isTrustedCondition(WorkflowDocuments.job(probe, "trusted")))
+        .isFalse();
+  }
+
+  @Test
+  void trustedJobWithoutAnyConditionIsRejected() throws IOException {
+    JsonNode probe = WorkflowDocuments.parse(trustedJob(""));
+
+    assertThat(WorkflowPolicy.trustedRunnerConditionViolations(probe)).hasSize(1);
+  }
+
+  static Stream<String> equivalentTrustedConditions() {
+    return Stream.of(
+        "if: "
+            + "github.event_name != 'pull_request' || "
+            + "github.event.pull_request.head.repo.full_name == github.repository\n",
+        "if: >-\n"
+            + "        github.event_name != 'pull_request'\n"
+            + "        || github.event.pull_request.head.repo.full_name == github.repository\n",
+        "if: \"${{ github.event_name != 'pull_request' || "
+            + "github.event.pull_request.head.repo.full_name == github.repository }}\"\n");
+  }
+
+  /** Reformatting the trusted condition is allowed: only its meaning is compared. */
+  @ParameterizedTest(name = "equivalent trusted condition {index} is accepted")
+  @MethodSource("equivalentTrustedConditions")
+  void reformattedTrustedConditionStaysAccepted(String condition) throws IOException {
+    JsonNode probe = WorkflowDocuments.parse(trustedJob(condition));
+
+    assertThat(WorkflowPolicy.trustedRunnerConditionViolations(probe)).isEmpty();
+    assertThat(WorkflowPolicy.isForkCondition(WorkflowDocuments.job(probe, "trusted"))).isFalse();
+  }
+
+  private static String trustedJob(String conditionEntry) {
+    String indentedCondition = conditionEntry.isEmpty() ? "" : "      " + conditionEntry;
+    return HEADER
+        + "    trusted:\n"
+        + indentedCondition
+        + "      runs-on: arc-java-build\n"
+        + "      steps:\n"
+        + "        - run: echo probe\n";
+  }
+
+  static Stream<String> forbiddenTriggers() {
+    return Stream.of(
+        "workflow_run",
+        "pull_request_target",
+        "issue_comment",
+        "repository_dispatch",
+        "workflow_call",
+        "schedule");
+  }
+
+  /**
+   * The trusted condition only asks whether the event is a pull request, so every other event is
+   * trusted by construction. A trigger outside the allow list therefore hands an attacker a trusted
+   * run, and the allow list is the rule that closes it.
+   */
+  @ParameterizedTest(name = "{0} is not an allowed trigger")
+  @MethodSource("forbiddenTriggers")
+  void triggerOutsideTheAllowListIsRejected(String trigger) throws IOException {
+    JsonNode probe = WorkflowDocuments.parse(triggeredTrustedWorkflow(trigger));
+
+    assertThat(WorkflowDocuments.triggerNames(probe)).containsExactly(trigger);
+    assertThat(WorkflowPolicy.triggerViolations(probe))
+        .containsExactly(trigger + " is not an allowed trigger");
+  }
+
+  /**
+   * Regression for the exact bypass: a {@code workflow_run} job carrying the verbatim trusted
+   * condition passes every condition rule, because {@code workflow_run} is not a pull request. Only
+   * the trigger allow list keeps it off {@code arc-java-build}.
+   */
+  @Test
+  void workflowRunTrustedJobIsCaughtOnlyByTheTriggerAllowList() throws IOException {
+    JsonNode probe = WorkflowDocuments.parse(triggeredTrustedWorkflow("workflow_run"));
+    JsonNode trusted = WorkflowDocuments.job(probe, "trusted");
+
+    assertThat(WorkflowDocuments.runnerSelectors(trusted)).containsExactly("arc-java-build");
+    assertThat(WorkflowPolicy.isTrustedCondition(trusted)).isTrue();
+    assertThat(WorkflowPolicy.trustedRunnerConditionViolations(probe)).isEmpty();
+    assertThat(WorkflowPolicy.runnerViolations(probe)).isEmpty();
+    assertThat(WorkflowPolicy.triggerViolations(probe))
+        .containsExactly("workflow_run is not an allowed trigger");
+  }
+
+  @ParameterizedTest(name = "{0} stays an allowed trigger")
+  @MethodSource("allowedTriggers")
+  void allowListedTriggerStaysAccepted(String trigger) throws IOException {
+    JsonNode probe = WorkflowDocuments.parse(triggeredTrustedWorkflow(trigger));
+
+    assertThat(WorkflowPolicy.triggerViolations(probe)).isEmpty();
+  }
+
+  static Stream<String> allowedTriggers() {
+    return WorkflowPolicy.ALLOWED_TRIGGERS.stream();
+  }
+
+  @Test
+  void workflowWithoutAnyTriggerIsRejected() throws IOException {
+    JsonNode probe =
+        WorkflowDocuments.parse(
+            """
+            name: Probe
+            permissions:
+              contents: read
+            jobs:
+              verify:
+                runs-on: ubuntu-latest
+                steps:
+                  - run: echo probe
+            """);
+
+    assertThat(WorkflowPolicy.triggerViolations(probe)).containsExactly("declares no trigger");
+  }
+
+  @Test
+  void triggerAllowListRejectsAnyEventOutsideTheThreeReviewedOnes() throws IOException {
+    JsonNode probe =
+        WorkflowDocuments.parse(
+            HEADER.replace("  pull_request:\n", "  pull_request:\n  workflow_run:\n")
+                + "    verify:\n      runs-on: ubuntu-latest\n      steps:\n"
+                + "        - run: echo probe\n");
+
+    assertThat(WorkflowPolicy.triggerViolations(probe))
+        .containsExactly("workflow_run is not an allowed trigger");
+  }
+
+  private static String triggeredTrustedWorkflow(String trigger) {
+    return "name: Probe\n"
+        + "on:\n"
+        + "  "
+        + trigger
+        + ":\n"
+        + "permissions:\n"
+        + "  contents: read\n"
+        + "concurrency:\n"
+        + "  group: probe\n"
+        + "  cancel-in-progress: ${{ github.event_name == 'pull_request' }}\n"
+        + "jobs:\n"
+        + "  trusted:\n"
+        + "    if: >-\n"
+        + "      "
+        + WorkflowPolicy.TRUSTED_CONDITION
+        + "\n"
+        + "    runs-on: arc-java-build\n"
+        + "    steps:\n"
+        + "      - run: echo probe\n";
+  }
+
+  private static final String GATE_HEADER =
+      HEADER
+          + "    fork-verify:\n"
+          + "      if: >-\n"
+          + "        "
+          + WorkflowPolicy.FORK_CONDITION
+          + "\n"
+          + "      runs-on: ubuntu-latest\n"
+          + "      steps:\n"
+          + "        - run: echo fork\n"
+          + "    trusted-verify:\n"
+          + "      if: >-\n"
+          + "        "
+          + WorkflowPolicy.TRUSTED_CONDITION
+          + "\n"
+          + "      runs-on: arc-java-build\n"
+          + "      steps:\n"
+          + "        - run: echo trusted\n";
+
+  private static String gateWorkflow(String needs, String verificationPaths) {
+    return GATE_HEADER
+        + "    verify-result:\n"
+        + "      if: always()\n"
+        + "      needs:\n"
+        + needs
+        + "      runs-on: ubuntu-latest\n"
+        + "      steps:\n"
+        + "        - env:\n"
+        + "            NEEDS_JSON: ${{ toJSON(needs) }}\n"
+        + "            VERIFICATION_PATHS: |\n"
+        + verificationPaths
+        + "          run: echo gate\n";
+  }
+
+  private static final String BOTH_NEEDS = "        - fork-verify\n        - trusted-verify\n";
+
+  /** A verification job wired into {@code needs} but into no path is a false-green hole. */
+  @Test
+  void verificationJobOutsideEveryPathIsRejected() throws IOException {
+    JsonNode probe =
+        WorkflowDocuments.parse(gateWorkflow(BOTH_NEEDS, "              fork=fork-verify\n"));
+
+    assertThat(WorkflowPolicy.verificationPathViolations(probe, "verify-result"))
+        .containsExactly("trusted-verify belongs to no declared verification path");
+  }
+
+  @Test
+  void verificationPathClaimingAJobOutsideNeedsIsRejected() throws IOException {
+    JsonNode probe =
+        WorkflowDocuments.parse(
+            gateWorkflow(
+                "        - fork-verify\n",
+                "              fork=fork-verify\n              trusted=trusted-verify\n"));
+
+    assertThat(WorkflowPolicy.verificationPathViolations(probe, "verify-result"))
+        .containsExactly("path trusted declares trusted-verify, which verify-result does not need");
+  }
+
+  @Test
+  void verificationJobClaimedByTwoPathsIsRejected() throws IOException {
+    JsonNode probe =
+        WorkflowDocuments.parse(
+            gateWorkflow(
+                BOTH_NEEDS,
+                "              fork=fork-verify,trusted-verify\n"
+                    + "              trusted=trusted-verify\n"));
+
+    assertThat(WorkflowPolicy.verificationPathViolations(probe, "verify-result"))
+        .containsExactly("trusted-verify is declared by more than one verification path");
+  }
+
+  @Test
+  void gateThatReadsASingleJobResultInsteadOfTheNeedsContextIsRejected() throws IOException {
+    JsonNode probe =
+        WorkflowDocuments.parse(
+            GATE_HEADER
+                + "    verify-result:\n"
+                + "      if: always()\n"
+                + "      needs:\n"
+                + BOTH_NEEDS
+                + "      runs-on: ubuntu-latest\n"
+                + "      steps:\n"
+                + "        - env:\n"
+                + "            FORK_RESULT: ${{ needs.fork-verify.result }}\n"
+                + "          run: echo gate\n");
+
+    assertThat(WorkflowPolicy.verificationPathViolations(probe, "verify-result"))
+        .contains(
+            "verify-result does not read the whole needs context as NEEDS_JSON",
+            "verify-result declares no VERIFICATION_PATHS");
+  }
+
+  @Test
+  void wellFormedGateIsAccepted() throws IOException {
+    JsonNode probe =
+        WorkflowDocuments.parse(
+            gateWorkflow(
+                BOTH_NEEDS,
+                "              fork=fork-verify\n              trusted=trusted-verify\n"));
+
+    assertThat(WorkflowPolicy.verificationPathViolations(probe, "verify-result")).isEmpty();
+    assertThat(WorkflowPolicy.verificationPaths(probe, "verify-result"))
+        .containsExactly(
+            java.util.Map.entry("fork", List.of("fork-verify")),
+            java.util.Map.entry("trusted", List.of("trusted-verify")));
+  }
+
+  private static final String SETUP_HARNESS = "./.github/actions/setup-harness";
+
+  private static final String NESTED_TOOLCHAIN = "./.github/actions/nested/toolchain";
+
+  private static final String MISSING_ACTION = "./.github/actions/missing";
+
+  private static final String ESCAPING_ACTION = "./../attacker-actions/setup";
+
+  private static final String PINNED_ACTION =
+      "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1";
+
+  private static final String UNPINNED_ACTION = "attacker/action@main";
+
+  /** Resolves {@code ./} references from synthetic definitions instead of the working tree. */
+  private static WorkflowDocuments.LocalActions probeActions(Map<String, String> definitions) {
+    return reference -> {
+      String definition = definitions.get(reference);
+      return definition == null ? MissingNode.getInstance() : WorkflowDocuments.parse(definition);
+    };
+  }
+
+  /** A composite action definition whose steps use every reference handed in. */
+  private static String compositeAction(String... references) {
+    StringBuilder action = new StringBuilder("name: Probe action\nruns:\n  using: composite\n");
+    action.append("  steps:\n");
+    for (String reference : references) {
+      action.append("    - uses: ").append(reference).append('\n');
+    }
+    action.append("    - run: echo composite\n      shell: bash\n");
+    return action.toString();
+  }
+
+  private static String workflowUsing(String reference) {
+    return HEADER
+        + "    verify:\n"
+        + "      runs-on: ubuntu-latest\n"
+        + "      steps:\n"
+        + "        - uses: "
+        + reference
+        + "\n        - run: echo probe\n";
+  }
+
+  /**
+   * The exact hole: a {@code ./} reference is accepted on sight by the pinning rule, so a local
+   * composite action was free to pull an unpinned external action and to point at a path that does
+   * not exist. The graph walk reaches both.
+   */
+  @Test
+  void localCompositeActionPullingAnUnpinnedActionIsRejected() throws IOException {
+    JsonNode probe = WorkflowDocuments.parse(workflowUsing(SETUP_HARNESS));
+    WorkflowDocuments.LocalActions actions =
+        probeActions(Map.of(SETUP_HARNESS, compositeAction(UNPINNED_ACTION, MISSING_ACTION)));
+
+    assertThat(WorkflowPolicy.actionPinningViolations(probe)).isEmpty();
+    assertThat(WorkflowPolicy.actionGraphViolations(probe, actions))
+        .containsExactlyInAnyOrder(
+            UNPINNED_ACTION
+                + " used by "
+                + SETUP_HARNESS
+                + " is neither a ./ local action nor pinned to a commit SHA",
+            MISSING_ACTION
+                + " used by "
+                + SETUP_HARNESS
+                + " resolves to no local action definition");
+  }
+
+  @Test
+  void workflowReferencingANonexistentLocalActionIsRejected() throws IOException {
+    JsonNode probe = WorkflowDocuments.parse(workflowUsing(MISSING_ACTION));
+
+    assertThat(WorkflowPolicy.actionPinningViolations(probe)).isEmpty();
+    assertThat(WorkflowPolicy.actionGraphViolations(probe, probeActions(Map.of())))
+        .containsExactly(
+            MISSING_ACTION + " used by the workflow resolves to no local action definition");
+  }
+
+  /** Recursion, not one hop: an unpinned action two composites deep is still reached. */
+  @Test
+  void unpinnedActionNestedTwoCompositesDeepIsRejected() throws IOException {
+    JsonNode probe = WorkflowDocuments.parse(workflowUsing(SETUP_HARNESS));
+    Map<String, String> definitions = new LinkedHashMap<>();
+    definitions.put(SETUP_HARNESS, compositeAction(PINNED_ACTION, NESTED_TOOLCHAIN));
+    definitions.put(NESTED_TOOLCHAIN, compositeAction(UNPINNED_ACTION));
+
+    assertThat(WorkflowPolicy.actionGraphViolations(probe, probeActions(definitions)))
+        .containsExactly(
+            UNPINNED_ACTION
+                + " used by "
+                + NESTED_TOOLCHAIN
+                + " is neither a ./ local action nor pinned to a commit SHA");
+  }
+
+  static Stream<String> escapingLocalReferences() {
+    return Stream.of(ESCAPING_ACTION, "./../../etc/actions", "./");
+  }
+
+  /** A nested local reference must stay inside this repository. */
+  @ParameterizedTest(name = "the local reference {0} is rejected")
+  @MethodSource("escapingLocalReferences")
+  void localReferenceThatLeavesTheRepositoryIsRejected(String reference) throws IOException {
+    JsonNode probe = WorkflowDocuments.parse(workflowUsing(SETUP_HARNESS));
+    WorkflowDocuments.LocalActions actions =
+        probeActions(Map.of(SETUP_HARNESS, compositeAction(reference)));
+
+    assertThat(WorkflowDocuments.staysWithinRepository(reference)).isFalse();
+    assertThat(WorkflowPolicy.actionGraphViolations(probe, actions))
+        .containsExactly(
+            reference + " used by " + SETUP_HARNESS + " resolves outside the repository");
+  }
+
+  @Test
+  void wellFormedCompositeActionGraphIsAccepted() throws IOException {
+    JsonNode probe = WorkflowDocuments.parse(workflowUsing(SETUP_HARNESS));
+    Map<String, String> definitions = new LinkedHashMap<>();
+    definitions.put(SETUP_HARNESS, compositeAction(PINNED_ACTION, NESTED_TOOLCHAIN));
+    definitions.put(NESTED_TOOLCHAIN, compositeAction(PINNED_ACTION));
+
+    assertThat(WorkflowPolicy.actionGraphViolations(probe, probeActions(definitions))).isEmpty();
+  }
+
+  /** A cyclic local reference must terminate rather than hang the scan. */
+  @Test
+  void cyclicLocalCompositeActionsTerminate() throws IOException {
+    JsonNode probe = WorkflowDocuments.parse(workflowUsing(SETUP_HARNESS));
+    Map<String, String> definitions = new LinkedHashMap<>();
+    definitions.put(SETUP_HARNESS, compositeAction(NESTED_TOOLCHAIN));
+    definitions.put(NESTED_TOOLCHAIN, compositeAction(SETUP_HARNESS));
+
+    assertThat(WorkflowPolicy.actionGraphViolations(probe, probeActions(definitions))).isEmpty();
+  }
+
+  /**
+   * The {@code .github/actions} scan holds a definition to the rules before any workflow wires it
+   * up, so an unpinned action cannot be committed now and referenced in a later change.
+   */
+  @Test
+  void compositeActionScanRejectsADefinitionNoWorkflowReferencesYet() throws IOException {
+    JsonNode orphan = WorkflowDocuments.parse(compositeAction(UNPINNED_ACTION, MISSING_ACTION));
+
+    assertThat(
+            WorkflowPolicy.compositeActionViolations(SETUP_HARNESS, orphan, probeActions(Map.of())))
+        .containsExactlyInAnyOrder(
+            UNPINNED_ACTION
+                + " used by "
+                + SETUP_HARNESS
+                + " is neither a ./ local action nor pinned to a commit SHA",
+            MISSING_ACTION
+                + " used by "
+                + SETUP_HARNESS
+                + " resolves to no local action definition");
+  }
+
+  @Test
+  void compositeActionScanAcceptsAPinnedDefinition() throws IOException {
+    JsonNode definition = WorkflowDocuments.parse(compositeAction(PINNED_ACTION));
+
+    assertThat(
+            WorkflowPolicy.compositeActionViolations(
+                SETUP_HARNESS, definition, probeActions(Map.of())))
+        .isEmpty();
+  }
+
+  private static final String ALPHA_JOB = "alpha-verify";
+
+  private static final String BETA_JOB = "beta-verify";
+
+  /**
+   * A second workflow a pull request can start, with its own job and path names. Its result gate is
+   * a merge-blocking check exactly like the first workflow's, so every gate rule must apply to it.
+   */
+  private static String secondPullRequestWorkflow(String gateScript) {
+    return "name: Second\n"
+        + "on:\n"
+        + "  pull_request:\n"
+        + "permissions:\n"
+        + "  contents: read\n"
+        + "concurrency:\n"
+        + "  group: second\n"
+        + "  cancel-in-progress: ${{ github.event_name == 'pull_request' }}\n"
+        + "jobs:\n"
+        + "  "
+        + ALPHA_JOB
+        + ":\n"
+        + "    if: >-\n      "
+        + WorkflowPolicy.FORK_CONDITION
+        + "\n"
+        + "    runs-on: ubuntu-latest\n"
+        + "    steps:\n"
+        + "      - run: echo alpha\n"
+        + "  "
+        + BETA_JOB
+        + ":\n"
+        + "    if: >-\n      "
+        + WorkflowPolicy.TRUSTED_CONDITION
+        + "\n"
+        + "    runs-on: arc-java-build\n"
+        + "    steps:\n"
+        + "      - run: echo beta\n"
+        + "  "
+        + WorkflowPolicy.RESULT_JOB
+        + ":\n"
+        + "    if: always()\n"
+        + "    needs:\n      - "
+        + ALPHA_JOB
+        + "\n      - "
+        + BETA_JOB
+        + "\n"
+        + "    runs-on: ubuntu-latest\n"
+        + "    steps:\n"
+        + "      - env:\n"
+        + "          NEEDS_JSON: ${{ toJSON(needs) }}\n"
+        + "          VERIFICATION_PATHS: |\n"
+        + "            alpha="
+        + ALPHA_JOB
+        + "\n            beta="
+        + BETA_JOB
+        + "\n"
+        + "        run: |\n"
+        + indent(gateScript, "          ");
+  }
+
+  private static String indent(String script, String prefix) {
+    StringBuilder indented = new StringBuilder();
+    for (String line : script.split("\n", -1)) {
+      indented.append(line.isEmpty() ? "" : prefix + line).append('\n');
+    }
+    return indented.toString();
+  }
+
+  /** The repository's one gate implementation, read from the workflow that already carries it. */
+  private static String repositoryGateScript() throws IOException {
+    String workflow =
+        Files.readString(
+            RepositoryPaths.root().resolve(".github/workflows/ci.yml"), StandardCharsets.UTF_8);
+    return WorkflowDocuments.runScript(
+        WorkflowDocuments.parse(workflow), WorkflowPolicy.RESULT_JOB);
+  }
+
+  private static ResultGate secondGate(String gateScript) throws IOException {
+    return ResultGate.of(
+        "second.yml", WorkflowDocuments.parse(secondPullRequestWorkflow(gateScript)));
+  }
+
+  /** The truth table is derived from the second workflow's own paths, not from {@code ci.yml}. */
+  @Test
+  void secondPullRequestWorkflowGetsItsOwnTruthTable() throws IOException {
+    ResultGate gate = secondGate(repositoryGateScript());
+
+    assertThat(gate.pathNames()).containsExactly("alpha", "beta");
+    assertThat(gate.neededJobs()).containsExactly(ALPHA_JOB, BETA_JOB);
+    assertThat(gate.truthTable()).isNotEmpty();
+  }
+
+  @Test
+  void secondPullRequestWorkflowWithAHonestGateSatisfiesItsTruthTable()
+      throws IOException, InterruptedException {
+    assumeTrue(ResultGate.isPosixShellAvailable());
+
+    ResultGate gate = secondGate(repositoryGateScript());
+    List<String> mismatches = new ArrayList<>();
+    for (Arguments scenario : gate.truthTable()) {
+      if (gate.run(resultsOf(scenario)) != expectedExitCodeOf(scenario)) {
+        mismatches.add(nameOf(scenario));
+      }
+    }
+
+    assertThat(mismatches).isEmpty();
+  }
+
+  /**
+   * The false-green regression for a second workflow: a gate that unconditionally exits zero is a
+   * required check that verifies nothing. Every rejecting case of the second workflow's own truth
+   * table must catch it, which is what parameterizing the gate tests over every pull-request
+   * workflow buys. Scanning only {@code ci.yml} would have reported this workflow as green.
+   */
+  @Test
+  void secondPullRequestWorkflowWhoseGateAlwaysExitsZeroIsCaught()
+      throws IOException, InterruptedException {
+    assumeTrue(ResultGate.isPosixShellAvailable());
+
+    ResultGate falseGreen = secondGate("exit 0\n");
+    List<String> rejecting = new ArrayList<>();
+    List<String> caught = new ArrayList<>();
+    for (Arguments scenario : falseGreen.truthTable()) {
+      if (expectedExitCodeOf(scenario) == 0) {
+        continue;
+      }
+      rejecting.add(nameOf(scenario));
+      if (falseGreen.run(resultsOf(scenario)) != expectedExitCodeOf(scenario)) {
+        caught.add(nameOf(scenario));
+      }
+    }
+
+    assertThat(rejecting).isNotEmpty();
+    assertThat(caught).containsExactlyElementsOf(rejecting);
+  }
+
+  /** The static gate rules apply to a second workflow too, not only to the scanned first one. */
+  @Test
+  void secondPullRequestWorkflowThatClassifiesNoJobIsRejected() throws IOException {
+    JsonNode probe =
+        WorkflowDocuments.parse(
+            secondPullRequestWorkflow(repositoryGateScript())
+                .replace("            alpha=" + ALPHA_JOB + "\n", ""));
+
+    assertThat(WorkflowPolicy.isPullRequestWorkflow(probe)).isTrue();
+    assertThat(WorkflowPolicy.verificationPathViolations(probe, WorkflowPolicy.RESULT_JOB))
+        .containsExactly(ALPHA_JOB + " belongs to no declared verification path");
+  }
+
+  @SuppressWarnings("unchecked")
+  private static Map<String, String> resultsOf(Arguments scenario) {
+    return (Map<String, String>) scenario.get()[3];
+  }
+
+  private static int expectedExitCodeOf(Arguments scenario) {
+    return (Integer) scenario.get()[4];
+  }
+
+  private static String nameOf(Arguments scenario) {
+    return (String) scenario.get()[1];
+  }
+
+  static Stream<String> nonCompositeActionForms() {
+    return Stream.of(
+        "name: Probe action\nruns:\n  using: docker\n  image: docker://attacker/image:latest\n",
+        "name: Probe action\nruns:\n  using: node20\n  main: attacker.js\n",
+        "name: Probe action\nruns:\n  using: unknown-runtime\n",
+        "name: Probe action\nruns:\n  steps:\n    - run: echo probe\n      shell: bash\n",
+        "name: Probe action\n");
+  }
+
+  /**
+   * A local action that is not a composite action declares no {@code steps}, so the graph walk
+   * would resolve it, find no edge, and report it clean — while a {@code docker} action pulls a
+   * mutable image this repository never reviewed. The form itself is therefore rejected.
+   */
+  @ParameterizedTest(name = "non-composite local action form {index} is rejected")
+  @MethodSource("nonCompositeActionForms")
+  void nonCompositeLocalActionIsRejected(String definition) throws IOException {
+    JsonNode probe = WorkflowDocuments.parse(workflowUsing(SETUP_HARNESS));
+    WorkflowDocuments.LocalActions actions = probeActions(Map.of(SETUP_HARNESS, definition));
+
+    assertThat(WorkflowPolicy.actionPinningViolations(probe)).isEmpty();
+    assertThat(WorkflowPolicy.actionGraphViolations(probe, actions))
+        .singleElement()
+        .asString()
+        .startsWith(SETUP_HARNESS + " used by the workflow declares runs.using ")
+        .endsWith(" instead of composite");
+  }
+
+  @Test
+  void dockerLocalActionCannotSmuggleAMutableImage() throws IOException {
+    JsonNode probe = WorkflowDocuments.parse(workflowUsing(SETUP_HARNESS));
+    WorkflowDocuments.LocalActions actions =
+        probeActions(
+            Map.of(
+                SETUP_HARNESS,
+                "name: Probe action\nruns:\n  using: docker\n"
+                    + "  image: docker://attacker/image:latest\n"));
+
+    assertThat(WorkflowPolicy.actionGraphViolations(probe, actions))
+        .containsExactly(
+            SETUP_HARNESS
+                + " used by the workflow declares runs.using 'docker' instead of composite");
+  }
+
+  @Test
+  void compositeActionScanRejectsANonCompositeDefinition() throws IOException {
+    JsonNode definition =
+        WorkflowDocuments.parse(
+            "name: Probe action\nruns:\n  using: docker\n  image: Dockerfile\n");
+
+    assertThat(
+            WorkflowPolicy.compositeActionViolations(
+                SETUP_HARNESS, definition, probeActions(Map.of())))
+        .containsExactly(SETUP_HARNESS + " declares runs.using 'docker' instead of composite");
+  }
+
+  /**
+   * The rules above are driven with synthetic definitions, so nothing in them exercises the
+   * discovery and resolution that decide whether a committed local action is scanned at all. These
+   * probes run the real recursive scan and the real resolver against a fixture tree: a wrong
+   * directory constant, a broken relativize, or an inverted containment check would otherwise ship
+   * green.
+   */
+  @Test
+  void repositoryScanFindsEveryActionDefinitionAtEveryDepth(@TempDir Path root) throws IOException {
+    Path shallow = writeAction(root, ".github/actions/setup-harness/action.yml", PINNED_ACTION);
+    Path deep =
+        writeAction(root, ".github/actions/nested/deep/toolchain/action.yaml", UNPINNED_ACTION);
+    Files.createDirectories(root.resolve(".github/actions/not-an-action"));
+    Files.writeString(root.resolve(".github/actions/not-an-action/README.md"), "ignored");
+
+    List<Path> found = WorkflowDocuments.actionFiles(root);
+
+    assertThat(found).containsExactlyInAnyOrder(shallow, deep);
+    assertThat(found)
+        .map(definition -> WorkflowDocuments.actionReference(root, definition))
+        .containsExactlyInAnyOrder(
+            "./.github/actions/setup-harness", "./.github/actions/nested/deep/toolchain");
+  }
+
+  @Test
+  void repositoryScanReturnsNothingWhenTheDirectoryIsAbsent(@TempDir Path root) throws IOException {
+    assertThat(WorkflowDocuments.actionFiles(root)).isEmpty();
+  }
+
+  @Test
+  void repositoryResolverReadsResolvesAndContainsLocalReferences(@TempDir Path root)
+      throws IOException {
+    writeAction(root, ".github/actions/setup-harness/action.yml", PINNED_ACTION);
+    Files.writeString(
+        root.resolve(".github/actions/setup-harness/action.yaml"),
+        compositeAction(UNPINNED_ACTION));
+    WorkflowDocuments.LocalActions actions = WorkflowDocuments.localActions(root);
+
+    assertThat(WorkflowDocuments.actionStepReferences(actions.read(SETUP_HARNESS)))
+        .as("action.yml must win over action.yaml, as GitHub resolves it")
+        .containsExactly(PINNED_ACTION);
+    assertThat(actions.read(MISSING_ACTION).isMissingNode()).isTrue();
+    assertThat(actions.read("./").isMissingNode()).isTrue();
+    assertThat(actions.read(ESCAPING_ACTION).isMissingNode()).isTrue();
+    assertThat(actions.read(UNPINNED_ACTION).isMissingNode()).isTrue();
+  }
+
+  /** The containment check must hold even when the escaping path really exists on disk. */
+  @Test
+  void repositoryResolverRefusesToLeaveItsRoot(@TempDir Path enclosing) throws IOException {
+    Path root = enclosing.resolve("repository");
+    writeAction(enclosing, "attacker-actions/setup/action.yml", UNPINNED_ACTION);
+    Files.createDirectories(root);
+
+    assertThat(Files.isRegularFile(enclosing.resolve("attacker-actions/setup/action.yml")))
+        .isTrue();
+    assertThat(WorkflowDocuments.localActions(root).read(ESCAPING_ACTION).isMissingNode()).isTrue();
+  }
+
+  @Test
+  void repositoryScanAndResolverRejectAnUnpinnedDefinitionOnDisk(@TempDir Path root)
+      throws IOException {
+    writeAction(root, ".github/actions/setup-harness/action.yml", NESTED_TOOLCHAIN);
+    writeAction(root, ".github/actions/nested/toolchain/action.yml", UNPINNED_ACTION);
+    WorkflowDocuments.LocalActions actions = WorkflowDocuments.localActions(root);
+
+    List<String> violations = new ArrayList<>();
+    for (Path definition : WorkflowDocuments.actionFiles(root)) {
+      violations.addAll(
+          WorkflowPolicy.compositeActionViolations(
+              WorkflowDocuments.actionReference(root, definition),
+              WorkflowDocuments.read(definition),
+              actions));
+    }
+
+    assertThat(violations)
+        .contains(
+            UNPINNED_ACTION
+                + " used by "
+                + NESTED_TOOLCHAIN
+                + " is neither a ./ local action nor pinned to a commit SHA");
+  }
+
+  private static Path writeAction(Path root, String relativePath, String... references)
+      throws IOException {
+    Path definition = root.resolve(relativePath);
+    Path directory = definition.getParent();
+    if (directory != null) {
+      Files.createDirectories(directory);
+    }
+    Files.writeString(definition, compositeAction(references));
+    return definition;
+  }
 }
 ```
 
@@ -3357,7 +4727,7 @@ Run:
 ./gradlew :build-tools:harness-policy:test --tests '*WorkflowPolicy*'
 ```
 
-Expected: FAIL. `repositoryDefinesAtLeastOneWorkflow` and every parameterized source fail with `NoSuchFileException` on `.github/workflows`, `dependencyUpdatesTrackGradleAndActions` fails on `.github/dependabot.yml`, and the `verify-result` truth-table cases fail because no gate script exists yet. The `WorkflowPolicyBypassProbeTest` probes already pass because they feed the rules synthetic documents.
+Expected: FAIL. `repositoryDefinesAtLeastOneWorkflow`, `repositoryDefinesAtLeastOnePullRequestWorkflow`, and every parameterized source fail with `NoSuchFileException` on `.github/workflows`, `dependencyUpdatesTrackGradleAndActions` fails on `.github/dependabot.yml`, and the derived `verify-result` truth-table cases fail because no gate script exists yet. The `WorkflowPolicyBypassProbeTest` probes that feed the rules synthetic documents already pass, except the ones that read the repository's own gate script.
 
 - [ ] **Step 3: Create the CI workflow**
 
@@ -3713,7 +5083,7 @@ Run:
 ./gradlew :build-tools:harness-policy:test --tests '*WorkflowPolicy*'
 ```
 
-Expected: `BUILD SUCCESSFUL`; the plain tests, every parameterized case for `ci.yml`, the eleven `verify-result` truth-table cases, the added-job and missing-job gate regressions, and every bypass probe pass.
+Expected: `BUILD SUCCESSFUL`; the plain tests, every parameterized case for every workflow and for every pull-request workflow, the twenty-three `verify-result` truth-table cases `ci.yml`'s own verification paths generate, the recursive local composite action scan, and every bypass probe pass.
 
 - [ ] **Step 6: Run the full check**
 
@@ -3851,6 +5221,36 @@ with a trust decision for that event, not merely with a workflow edit.
 `WorkflowPolicyBypassProbeTest.workflowRunTrustedJobIsCaughtOnlyByTheTriggerAllowList` pins the
 bypass: it asserts that the condition rules accept such a job and that the allow list rejects it.
 
+## Local composite actions
+
+A step may use a local composite action through a `./` path. That path is not a weaker form of
+pinning, it is an unreviewed indirection: the pinning rule accepts any `./` reference on sight, so
+without a further rule a local action is free to pull `attacker/action@main`, and a `./` reference
+that resolves to nothing is a step whose behaviour no rule in this repository has ever read.
+
+Every action definition under `.github/actions` is therefore scanned recursively, at any depth, in
+both `action.yml` and `action.yaml` form, and the action graph reachable from every workflow step is
+walked through local composite actions. At every depth:
+
+- a referenced local action must exist, as `action.yml` or `action.yaml` in the directory the
+  reference names;
+- a local reference must stay inside this repository, so `./../…` is rejected before it is resolved;
+- a local action must declare `runs.using: composite`. Any other form — `docker` above all, which
+  pulls an image this repository never reviewed, but equally a Node action or a form this policy
+  does not know — declares no `steps`, so the walk would resolve it, find no edge, and report it
+  clean. Rejecting the form is what keeps the walk fail-closed;
+- every external `uses:` a composite action declares must be pinned to a full 40-character commit
+  SHA, exactly as in a workflow file;
+- a definition that no workflow references yet is held to the same rules, so an unpinned action
+  cannot be committed now and wired up in a later change.
+
+Cycles terminate rather than hang the scan. The repository currently ships no local composite
+action; the rules are pinned by `WorkflowPolicyBypassProbeTest`, which drives them with synthetic
+definitions carrying `attacker/action@main`, a nonexistent `./` path, an escaping `./../` path, a
+two-composite-deep nesting, and every non-composite `runs.using` form, and which runs the real
+recursive scan and the real resolver against a fixture tree so the discovery, the `action.yml` over
+`action.yaml` resolution order, and the root containment check are executed rather than assumed.
+
 ## Trust boundary
 
 Fork pull requests never reach `arc-java-build`. The trusted and fork jobs use mutually exclusive
@@ -3865,6 +5265,13 @@ not in `needs`, and unless exactly one path completed. A verification job added 
 classified into a path therefore fails the gate instead of passing unexamined: the gate can never go
 green over a job it does not know about.
 
+These rules bind **every workflow a pull request can start**, not the first one that was written.
+Every such workflow fans in to a `verify-result` that is a merge-blocking check, so a second
+pull-request workflow whose gate classifies nothing — or whose script is replaced by `exit 0` — is a
+required check that verifies nothing. The gate tests are therefore parameterized over every
+pull-request workflow, and each workflow's truth table is derived from its own `needs` list and its
+own `VERIFICATION_PATHS` map rather than from a table hand-written for `ci.yml`.
+
 Never combine `pull_request_target`, checkout of pull-request head code, and execution of repository
 scripts. Docker or Testcontainers work requires a separately reviewed scale set, namespace, runner
 group, and network policy; this repository does not create one.
@@ -3874,13 +5281,14 @@ group, and network policy; this repository does not create one.
 Every clause above that this repository can enforce is a test, not prose. `./gradlew check` runs
 `WorkflowPolicyTest` and `WorkflowPolicyBypassProbeTest`, which parse every workflow as YAML and
 enforce the trigger allow list, the runner allow list in all `runs-on` forms, the ban on job-level
-`uses:`, full commit-SHA pinning, `read`/`none` permissions, `persist-credentials: false`,
-pull-request-only cancellation, mutually exclusive trusted and fork conditions, the requirement that
-`verify-result` consume the whole `needs` context and classify every needed job into exactly one
-verification path, and the `verify-result` truth table, which is executed as a real shell process
-against a synthesized `needs` context rather than pattern matched. Conditions are compared after
-whitespace and `${{ }}` normalization only, so reformatting a condition is allowed and weakening one
-is not.
+`uses:`, full commit-SHA pinning, the recursive local composite action rules above, `read`/`none`
+permissions, `persist-credentials: false`, pull-request-only cancellation, mutually exclusive
+trusted and fork conditions, the requirement that the `verify-result` job of every pull-request
+workflow consume the whole `needs` context and classify every needed job into exactly one
+verification path, and each of those workflows' derived `verify-result` truth table, which is
+executed as a real shell process against a synthesized `needs` context rather than pattern matched.
+Conditions are compared after whitespace and `${{ }}` normalization only, so reformatting a
+condition is allowed and weakening one is not.
 ````
 
 - [ ] **Step 2: Link the new entry points from the README**
@@ -3923,9 +5331,10 @@ Documentation that nothing verifies rots, so Task 7's prose is backed by tests:
   links `AGENTS.md`, `CONTRIBUTING.md`, `SECURITY.md`, and the runner contract, names
   `./gradlew check`, and never names `mvnw`.
 - `WorkflowPolicyTest.runnerContractDocumentsTheDeployedRunnerLabels` asserts the contract names
-  every selector in `WorkflowPolicy.ALLOWED_RUNNER_SELECTORS`, and
+  every selector in `WorkflowPolicy.ALLOWED_RUNNER_SELECTORS`,
   `runnerContractBlocksMergingBeforeTheTrustedScaleSetExists` asserts the merge gate section
-  survives.
+  survives, and `runnerContractDocumentsTheLocalCompositeActionRules` asserts the contract keeps its
+  `## Local composite actions` section.
 - `WorkflowPolicy` owns `TRUSTED_CONDITION`, `FORK_CONDITION`, `normalizedCondition`,
   `isTrustedCondition`, `isForkCondition`, and `trustedRunnerConditionViolations`. A condition is
   compared after stripping an optional `${{ }}` wrapper and collapsing whitespace runs, so YAML
@@ -3952,8 +5361,26 @@ Documentation that nothing verifies rots, so Task 7's prose is backed by tests:
   requires exactly one complete path. `WorkflowPolicy.verificationPaths` and
   `verificationPathViolations` enforce the same wiring statically, so a verification job added to
   `needs` without a path — the false-green hole in the previous hard-coded gate — fails both the
-  static policy and the executed gate. `resultGateRejectsAJobThatBelongsToNoVerificationPath`
-  proves it for `success`, `skipped`, `failure`, and `cancelled`.
+  static policy and the executed gate.
+- Those gate rules bind every workflow a pull request can start, not only `ci.yml`. `ResultGate`
+  reads whichever workflow it is handed, derives the truth table from that workflow's own `needs`
+  list and `VERIFICATION_PATHS` map, and executes that workflow's own script; `WorkflowPolicyTest`
+  parameterizes the semantic, static, and executable checks over `pullRequestWorkflows`. Scanning
+  only `ci.yml` would have let a second pull-request workflow become a required check that verifies
+  nothing: `WorkflowPolicyBypassProbeTest.secondPullRequestWorkflowWhoseGateAlwaysExitsZeroIsCaught`
+  asserts every rejecting case of a second workflow's own table catches an `exit 0` gate, and
+  `secondPullRequestWorkflowWithAHonestGateSatisfiesItsTruthTable` is the positive control.
+- A `./` local composite action was accepted on sight, so it was the one place an unpinned action
+  could still enter and a `./` path that resolves to nothing was silently trusted.
+  `WorkflowDocuments.actionFiles` scans `.github/actions` recursively for `action.yml` and
+  `action.yaml`, and `WorkflowPolicy.actionGraphViolations` and `compositeActionViolations` walk the
+  reachable action graph, requiring a referenced local action to exist, to stay inside the
+  repository, to declare `runs.using: composite`, and every external `uses:` at every depth to be
+  pinned to a full commit SHA. The probes drive the rules with `attacker/action@main`, a nonexistent
+  `./` path, an escaping `./../` path, a two-composite-deep nesting, a cycle, and every
+  non-composite `runs.using` form, and they run the real scan and the real resolver against a
+  `@TempDir` fixture tree so the discovery, the `action.yml` over `action.yaml` resolution order,
+  and the root containment check are executed rather than assumed.
 
 None of that is worth anything while the policy tasks skip themselves, so
 `build-tools/harness-policy/build.gradle.kts` declares the repository tree — everything under the
