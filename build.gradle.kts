@@ -28,3 +28,14 @@ aggregatedVerificationTasks.forEach { (taskName, taskDescription) ->
         dependsOn(aggregate)
     }
 }
+
+val buildLogicTest =
+    tasks.register("buildLogicTest") {
+        group = "verification"
+        description = "Runs Gradle TestKit regression for the included build-logic conventions."
+        dependsOn(gradle.includedBuild("build-logic").task(":test"))
+    }
+
+tasks.named("check") {
+    dependsOn(buildLogicTest)
+}
