@@ -8,12 +8,18 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.Iterator;
 import java.util.List;
+import java.util.Set;
 import java.util.stream.Stream;
 
 final class WorkflowDocuments {
 
   private static final ObjectMapper YAML_MAPPER = new ObjectMapper(new YAMLFactory());
+
+  private static final String GROUP_SELECTOR_PREFIX = "group:";
+
+  private static final Set<String> RUNS_ON_OBJECT_KEYS = Set.of("group", "labels");
 
   private WorkflowDocuments() {}
 
@@ -30,6 +36,10 @@ final class WorkflowDocuments {
 
   static JsonNode read(Path workflow) throws IOException {
     return YAML_MAPPER.readTree(workflow.toFile());
+  }
+
+  static JsonNode parse(String yaml) throws IOException {
+    return YAML_MAPPER.readTree(yaml);
   }
 
   static List<String> triggerNames(JsonNode workflow) {
@@ -57,30 +67,84 @@ final class WorkflowDocuments {
     return jobs;
   }
 
+  static JsonNode job(JsonNode workflow, String jobName) {
+    return workflow.path("jobs").path(jobName);
+  }
+
+  static JsonNode jobUses(JsonNode job) {
+    return job.path("uses");
+  }
+
   static List<JsonNode> steps(JsonNode job) {
     List<JsonNode> steps = new ArrayList<>();
     job.path("steps").forEach(steps::add);
     return steps;
   }
 
+  static boolean declaresRunsOn(JsonNode job) {
+    JsonNode runsOn = job.path("runs-on");
+    return !runsOn.isMissingNode() && !runsOn.isNull();
+  }
+
+  /**
+   * Reports whether {@code runs-on} uses a form this policy understands. Any other present form
+   * fails closed so that an unparsed selector can never slip past the runner allow list.
+   */
+  static boolean declaresRecognizedRunsOn(JsonNode job) {
+    JsonNode runsOn = job.path("runs-on");
+    if (!declaresRunsOn(job)) {
+      return false;
+    }
+    if (runsOn.isTextual()) {
+      return true;
+    }
+    if (runsOn.isArray()) {
+      return isTextualArray(runsOn);
+    }
+    if (runsOn.isObject()) {
+      return isRecognizedRunsOnObject(runsOn);
+    }
+    return false;
+  }
+
+  /**
+   * Returns every runner selector a job requests: plain labels, the labels of the {@code runs-on}
+   * object form, and the runner group rendered as {@code group:<name>} so a group can never be
+   * mistaken for an allowed label.
+   */
+  static List<String> runnerSelectors(JsonNode job) {
+    List<String> selectors = new ArrayList<>(runnerLabels(job));
+    JsonNode runsOn = job.path("runs-on");
+    if (runsOn.isObject() && runsOn.path("group").isTextual()) {
+      selectors.add(GROUP_SELECTOR_PREFIX + runsOn.path("group").textValue());
+    }
+    return selectors;
+  }
+
   static List<String> runnerLabels(JsonNode job) {
     JsonNode runsOn = job.path("runs-on");
     List<String> labels = new ArrayList<>();
+    if (!declaresRecognizedRunsOn(job)) {
+      return labels;
+    }
     if (runsOn.isTextual()) {
       labels.add(runsOn.textValue());
     } else if (runsOn.isArray()) {
       runsOn.forEach(label -> labels.add(label.textValue()));
+    } else if (runsOn.isObject()) {
+      JsonNode declared = runsOn.path("labels");
+      if (declared.isTextual()) {
+        labels.add(declared.textValue());
+      } else if (declared.isArray()) {
+        declared.forEach(label -> labels.add(label.textValue()));
+      }
     }
     return labels;
   }
 
-  static List<String> actionReferences(JsonNode workflow) {
+  static List<String> stepActionReferences(JsonNode workflow) {
     List<String> references = new ArrayList<>();
     for (JsonNode job : jobs(workflow)) {
-      JsonNode jobUses = job.path("uses");
-      if (jobUses.isTextual()) {
-        references.add(jobUses.textValue());
-      }
       for (JsonNode step : steps(job)) {
         JsonNode stepUses = step.path("uses");
         if (stepUses.isTextual()) {
@@ -89,6 +153,20 @@ final class WorkflowDocuments {
       }
     }
     return references;
+  }
+
+  /**
+   * Returns the shell script of the first {@code run} step in {@code jobName}, so a policy test can
+   * execute the real gate script instead of pattern matching its text.
+   */
+  static String runScript(JsonNode workflow, String jobName) {
+    for (JsonNode step : steps(job(workflow, jobName))) {
+      JsonNode run = step.path("run");
+      if (run.isTextual()) {
+        return run.textValue();
+      }
+    }
+    return "";
   }
 
   static List<String> permissionValues(JsonNode workflow) {
@@ -106,6 +184,36 @@ final class WorkflowDocuments {
     } else if (permissions.isTextual()) {
       values.add(permissions.textValue());
     }
+  }
+
+  private static boolean isTextualArray(JsonNode array) {
+    if (array.isEmpty()) {
+      return false;
+    }
+    for (JsonNode element : array) {
+      if (!element.isTextual()) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  private static boolean isRecognizedRunsOnObject(JsonNode runsOn) {
+    Iterator<String> keys = runsOn.fieldNames();
+    while (keys.hasNext()) {
+      if (!RUNS_ON_OBJECT_KEYS.contains(keys.next())) {
+        return false;
+      }
+    }
+    JsonNode labels = runsOn.path("labels");
+    JsonNode group = runsOn.path("group");
+    boolean labelsRecognized =
+        labels.isMissingNode()
+            || labels.isTextual()
+            || (labels.isArray() && isTextualArray(labels));
+    boolean groupRecognized = group.isMissingNode() || group.isTextual();
+    boolean anySelector = !labels.isMissingNode() || !group.isMissingNode();
+    return labelsRecognized && groupRecognized && anySelector;
   }
 
   private static boolean isYamlFile(Path path) {

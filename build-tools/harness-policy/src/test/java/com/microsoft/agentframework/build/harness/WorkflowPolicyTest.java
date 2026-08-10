@@ -2,28 +2,28 @@ package com.microsoft.agentframework.build.harness;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
+import static org.junit.jupiter.params.provider.Arguments.arguments;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
-import java.util.regex.Pattern;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
 class WorkflowPolicyTest {
-
-  private static final Pattern PINNED_EXTERNAL_REFERENCE =
-      Pattern.compile("^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+(?:/[A-Za-z0-9._/-]+)?@[0-9a-f]{40}$");
-
-  private static final Set<String> ALLOWED_RUNNER_LABELS =
-      Set.of("arc-java-build", "ubuntu-latest");
 
   private static final Set<String> ALLOWED_PERMISSION_VALUES = Set.of("read", "none");
 
@@ -42,6 +42,10 @@ class WorkflowPolicyTest {
   private static final String HOSTED_LABEL = "ubuntu-latest";
 
   private static final String RESULT_JOB = "verify-result";
+
+  private static final String CI_WORKFLOW = ".github/workflows/ci.yml";
+
+  private static final String POSIX_SHELL = "sh";
 
   static Stream<Path> workflows() throws IOException {
     return WorkflowDocuments.files().stream();
@@ -63,28 +67,29 @@ class WorkflowPolicyTest {
   @ParameterizedTest(name = "{0} pins every external reference")
   @MethodSource("workflows")
   void workflowPinsEveryExternalReference(Path workflow) throws IOException {
-    List<String> references = WorkflowDocuments.actionReferences(WorkflowDocuments.read(workflow));
+    JsonNode document = WorkflowDocuments.read(workflow);
 
-    assertThat(references).isNotEmpty();
-    for (String reference : references) {
-      boolean local = reference.startsWith("./");
-      boolean pinned = PINNED_EXTERNAL_REFERENCE.matcher(reference).matches();
-      assertThat(local || pinned)
-          .as("%s must be a ./ local action or pinned to a full commit SHA", reference)
-          .isTrue();
-    }
+    assertThat(WorkflowDocuments.stepActionReferences(document)).isNotEmpty();
+    assertThat(WorkflowPolicy.actionPinningViolations(document)).isEmpty();
+  }
+
+  @ParameterizedTest(name = "{0} never delegates a job to a reusable workflow")
+  @MethodSource("workflows")
+  void workflowNeverDelegatesJobsToReusableWorkflows(Path workflow) throws IOException {
+    assertThat(WorkflowPolicy.jobLevelUsesViolations(WorkflowDocuments.read(workflow))).isEmpty();
   }
 
   @ParameterizedTest(name = "{0} uses only allowed runner labels")
   @MethodSource("workflows")
   void workflowUsesOnlyAllowedRunnerLabels(Path workflow) throws IOException {
-    List<String> labels = new ArrayList<>();
-    for (JsonNode job : WorkflowDocuments.jobs(WorkflowDocuments.read(workflow))) {
-      labels.addAll(WorkflowDocuments.runnerLabels(job));
+    JsonNode document = WorkflowDocuments.read(workflow);
+    List<String> selectors = new ArrayList<>();
+    for (JsonNode job : WorkflowDocuments.jobs(document)) {
+      selectors.addAll(WorkflowDocuments.runnerSelectors(job));
     }
 
-    assertThat(labels).isNotEmpty();
-    assertThat(labels).isSubsetOf(ALLOWED_RUNNER_LABELS);
+    assertThat(selectors).isNotEmpty();
+    assertThat(WorkflowPolicy.runnerViolations(document)).isEmpty();
   }
 
   @ParameterizedTest(name = "{0} declares least-privilege permissions")
@@ -182,5 +187,72 @@ class WorkflowPolicyTest {
     assertThat(text).contains("package-ecosystem: \"gradle\"");
     assertThat(text).contains("directory: \"/build-logic\"");
     assertThat(text).contains("package-ecosystem: \"github-actions\"");
+  }
+
+  @Test
+  void resultGateReadsEveryVerificationJobResult() throws IOException {
+    String script = resultGateScript();
+
+    assertThat(script)
+        .contains("FORK_RESULT")
+        .contains("TRUSTED_QUALITY_RESULT")
+        .contains("TRUSTED_COMPATIBILITY_RESULT");
+  }
+
+  static Stream<Arguments> resultGateCases() {
+    return Stream.of(
+        arguments("skipped", "success", "success", 0),
+        arguments("success", "skipped", "skipped", 0),
+        arguments("skipped", "failure", "success", 1),
+        arguments("skipped", "success", "failure", 1),
+        arguments("skipped", "success", "cancelled", 1),
+        arguments("skipped", "success", "skipped", 1),
+        arguments("skipped", "skipped", "skipped", 1),
+        arguments("failure", "skipped", "skipped", 1),
+        arguments("cancelled", "skipped", "skipped", 1),
+        arguments("success", "success", "success", 1),
+        arguments("failure", "failure", "failure", 1));
+  }
+
+  /**
+   * Executes the real {@code verify-result} script against the full result truth table. Replacing
+   * the script with an unconditional {@code exit 0} fails every case that must exit non-zero.
+   */
+  @ParameterizedTest(name = "fork={0} quality={1} compatibility={2} exits with {3}")
+  @MethodSource("resultGateCases")
+  void resultGateAcceptsOnlyOneCompleteVerificationPath(
+      String fork, String quality, String compatibility, int expectedExitCode)
+      throws IOException, InterruptedException {
+    assumeTrue(!System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("win"));
+
+    assertThat(runResultGate(fork, quality, compatibility)).isEqualTo(expectedExitCode);
+  }
+
+  private static String resultGateScript() throws IOException {
+    Path workflow = RepositoryPaths.root().resolve(CI_WORKFLOW);
+    String script = WorkflowDocuments.runScript(WorkflowDocuments.read(workflow), RESULT_JOB);
+
+    assertThat(script).isNotBlank();
+    return script;
+  }
+
+  private static int runResultGate(String fork, String quality, String compatibility)
+      throws IOException, InterruptedException {
+    ProcessBuilder builder = new ProcessBuilder(POSIX_SHELL, "-s");
+    builder.redirectErrorStream(true);
+    Map<String, String> environment = builder.environment();
+    environment.put("FORK_RESULT", fork);
+    environment.put("TRUSTED_QUALITY_RESULT", quality);
+    environment.put("TRUSTED_COMPATIBILITY_RESULT", compatibility);
+
+    Process gate = builder.start();
+    try (OutputStream commands = gate.getOutputStream()) {
+      commands.write(resultGateScript().getBytes(StandardCharsets.UTF_8));
+    }
+    try (InputStream output = gate.getInputStream()) {
+      output.readAllBytes();
+    }
+    assertThat(gate.waitFor(60, TimeUnit.SECONDS)).isTrue();
+    return gate.exitValue();
   }
 }

@@ -26,9 +26,12 @@
 - External GitHub Actions and reusable workflows are referenced by full 40-character commit SHA. Local composite actions use a `./` path. Pinned action SHAs for this plan:
   - `actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1`
   - `actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961`
-  - `gradle/actions/setup-gradle@67621b124fd2e251c5e8a0e6e3b91318f2287669`
+  - `gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb`
   - `actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a`
+- Every pin is the dereferenced commit SHA that a tag points to, never the annotated tag object SHA, because a tag object SHA is not a checkout-able commit.
 - `pull_request_target` is prohibited. Allowed runner labels are exactly `arc-java-build` and `ubuntu-latest`. Allowed permission values are exactly `read` and `none`.
+- `runs-on` is parsed in every documented form (string, sequence, and the `group`/`labels` object). A runner group is checked as `group:<name>`, and any present but unrecognized `runs-on` fails closed.
+- Job-level `uses:` is prohibited, because a reusable workflow carries its own `runs-on` and would move a job off the reviewed runner allow list. Step-level `./` local composite actions stay allowed.
 - Only pull-request runs may be cancelled by concurrency. `main` pushes must never be cancelled.
 - Fork pull requests run the GitHub-hosted minimum verification; trusted jobs run on `arc-java-build`. The two paths are mutually exclusive and fan into one required `verify-result` job so a skipped job can never look green.
 - No secret, credential, token, kubeconfig, Helm value, or personal agent setting is committed.
@@ -2309,13 +2312,15 @@ Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
 
 **Files:**
 - Create: `build-tools/harness-policy/src/test/java/com/microsoft/agentframework/build/harness/WorkflowDocuments.java`
+- Create: `build-tools/harness-policy/src/test/java/com/microsoft/agentframework/build/harness/WorkflowPolicy.java`
 - Create: `build-tools/harness-policy/src/test/java/com/microsoft/agentframework/build/harness/WorkflowPolicyTest.java`
+- Create: `build-tools/harness-policy/src/test/java/com/microsoft/agentframework/build/harness/WorkflowPolicyBypassProbeTest.java`
 - Create: `.github/workflows/ci.yml`
 - Create: `.github/dependabot.yml`
 
 **Interfaces:**
 - Consumes: `RepositoryPaths.root()`, `libs.jackson.dataformat.yaml`, the root tasks `policyCheck`, `quality`, `testJava17`, `testJava21`, `testJava25`.
-- Produces: `WorkflowDocuments` helpers (`files`, `read`, `triggerNames`, `jobNames`, `jobs`, `steps`, `runnerLabels`, `actionReferences`, `permissionValues`); a workflow policy regression that parses every workflow file; a CI graph whose trusted jobs run on `arc-java-build`, whose fork job runs on `ubuntu-latest`, and which fans in to the required `verify-result` job.
+- Produces: `WorkflowDocuments` helpers (`files`, `read`, `parse`, `triggerNames`, `jobNames`, `jobs`, `job`, `jobUses`, `steps`, `declaresRunsOn`, `declaresRecognizedRunsOn`, `runnerLabels`, `runnerSelectors`, `stepActionReferences`, `runScript`, `permissionValues`); the fail-closed `WorkflowPolicy` rules (`runnerViolations`, `jobLevelUsesViolations`, `actionPinningViolations`); a workflow policy regression that parses every workflow file; bypass probes that keep the rules rejecting the `runs-on` object form, unrecognized `runs-on` forms, and job-level reusable workflow `uses`; an executable truth-table regression over the real `verify-result` script; and a CI graph whose trusted jobs run on `arc-java-build`, whose fork job runs on `ubuntu-latest`, and which fans in to the required `verify-result` job.
 
 - [ ] **Step 1: Write the failing workflow policy helper and test**
 
@@ -2332,12 +2337,18 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.Iterator;
 import java.util.List;
+import java.util.Set;
 import java.util.stream.Stream;
 
 final class WorkflowDocuments {
 
   private static final ObjectMapper YAML_MAPPER = new ObjectMapper(new YAMLFactory());
+
+  private static final String GROUP_SELECTOR_PREFIX = "group:";
+
+  private static final Set<String> RUNS_ON_OBJECT_KEYS = Set.of("group", "labels");
 
   private WorkflowDocuments() {}
 
@@ -2354,6 +2365,10 @@ final class WorkflowDocuments {
 
   static JsonNode read(Path workflow) throws IOException {
     return YAML_MAPPER.readTree(workflow.toFile());
+  }
+
+  static JsonNode parse(String yaml) throws IOException {
+    return YAML_MAPPER.readTree(yaml);
   }
 
   static List<String> triggerNames(JsonNode workflow) {
@@ -2381,30 +2396,84 @@ final class WorkflowDocuments {
     return jobs;
   }
 
+  static JsonNode job(JsonNode workflow, String jobName) {
+    return workflow.path("jobs").path(jobName);
+  }
+
+  static JsonNode jobUses(JsonNode job) {
+    return job.path("uses");
+  }
+
   static List<JsonNode> steps(JsonNode job) {
     List<JsonNode> steps = new ArrayList<>();
     job.path("steps").forEach(steps::add);
     return steps;
   }
 
+  static boolean declaresRunsOn(JsonNode job) {
+    JsonNode runsOn = job.path("runs-on");
+    return !runsOn.isMissingNode() && !runsOn.isNull();
+  }
+
+  /**
+   * Reports whether {@code runs-on} uses a form this policy understands. Any other present form
+   * fails closed so that an unparsed selector can never slip past the runner allow list.
+   */
+  static boolean declaresRecognizedRunsOn(JsonNode job) {
+    JsonNode runsOn = job.path("runs-on");
+    if (!declaresRunsOn(job)) {
+      return false;
+    }
+    if (runsOn.isTextual()) {
+      return true;
+    }
+    if (runsOn.isArray()) {
+      return isTextualArray(runsOn);
+    }
+    if (runsOn.isObject()) {
+      return isRecognizedRunsOnObject(runsOn);
+    }
+    return false;
+  }
+
+  /**
+   * Returns every runner selector a job requests: plain labels, the labels of the {@code runs-on}
+   * object form, and the runner group rendered as {@code group:<name>} so a group can never be
+   * mistaken for an allowed label.
+   */
+  static List<String> runnerSelectors(JsonNode job) {
+    List<String> selectors = new ArrayList<>(runnerLabels(job));
+    JsonNode runsOn = job.path("runs-on");
+    if (runsOn.isObject() && runsOn.path("group").isTextual()) {
+      selectors.add(GROUP_SELECTOR_PREFIX + runsOn.path("group").textValue());
+    }
+    return selectors;
+  }
+
   static List<String> runnerLabels(JsonNode job) {
     JsonNode runsOn = job.path("runs-on");
     List<String> labels = new ArrayList<>();
+    if (!declaresRecognizedRunsOn(job)) {
+      return labels;
+    }
     if (runsOn.isTextual()) {
       labels.add(runsOn.textValue());
     } else if (runsOn.isArray()) {
       runsOn.forEach(label -> labels.add(label.textValue()));
+    } else if (runsOn.isObject()) {
+      JsonNode declared = runsOn.path("labels");
+      if (declared.isTextual()) {
+        labels.add(declared.textValue());
+      } else if (declared.isArray()) {
+        declared.forEach(label -> labels.add(label.textValue()));
+      }
     }
     return labels;
   }
 
-  static List<String> actionReferences(JsonNode workflow) {
+  static List<String> stepActionReferences(JsonNode workflow) {
     List<String> references = new ArrayList<>();
     for (JsonNode job : jobs(workflow)) {
-      JsonNode jobUses = job.path("uses");
-      if (jobUses.isTextual()) {
-        references.add(jobUses.textValue());
-      }
       for (JsonNode step : steps(job)) {
         JsonNode stepUses = step.path("uses");
         if (stepUses.isTextual()) {
@@ -2413,6 +2482,20 @@ final class WorkflowDocuments {
       }
     }
     return references;
+  }
+
+  /**
+   * Returns the shell script of the first {@code run} step in {@code jobName}, so a policy test can
+   * execute the real gate script instead of pattern matching its text.
+   */
+  static String runScript(JsonNode workflow, String jobName) {
+    for (JsonNode step : steps(job(workflow, jobName))) {
+      JsonNode run = step.path("run");
+      if (run.isTextual()) {
+        return run.textValue();
+      }
+    }
+    return "";
   }
 
   static List<String> permissionValues(JsonNode workflow) {
@@ -2432,6 +2515,36 @@ final class WorkflowDocuments {
     }
   }
 
+  private static boolean isTextualArray(JsonNode array) {
+    if (array.isEmpty()) {
+      return false;
+    }
+    for (JsonNode element : array) {
+      if (!element.isTextual()) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  private static boolean isRecognizedRunsOnObject(JsonNode runsOn) {
+    Iterator<String> keys = runsOn.fieldNames();
+    while (keys.hasNext()) {
+      if (!RUNS_ON_OBJECT_KEYS.contains(keys.next())) {
+        return false;
+      }
+    }
+    JsonNode labels = runsOn.path("labels");
+    JsonNode group = runsOn.path("group");
+    boolean labelsRecognized =
+        labels.isMissingNode()
+            || labels.isTextual()
+            || (labels.isArray() && isTextualArray(labels));
+    boolean groupRecognized = group.isMissingNode() || group.isTextual();
+    boolean anySelector = !labels.isMissingNode() || !group.isMissingNode();
+    return labelsRecognized && groupRecognized && anySelector;
+  }
+
   private static boolean isYamlFile(Path path) {
     String name = fileNameOf(path);
     return name.endsWith(".yml") || name.endsWith(".yaml");
@@ -2444,6 +2557,87 @@ final class WorkflowDocuments {
 }
 ```
 
+Create `build-tools/harness-policy/src/test/java/com/microsoft/agentframework/build/harness/WorkflowPolicy.java`:
+
+```java
+package com.microsoft.agentframework.build.harness;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Set;
+import java.util.regex.Pattern;
+
+/**
+ * Fail-closed workflow rules shared by the scan of the real workflows and by the bypass probes that
+ * feed the rules synthetic documents.
+ */
+final class WorkflowPolicy {
+
+  static final Set<String> ALLOWED_RUNNER_SELECTORS = Set.of("arc-java-build", "ubuntu-latest");
+
+  private static final Pattern PINNED_EXTERNAL_REFERENCE =
+      Pattern.compile("^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+(?:/[A-Za-z0-9._/-]+)?@[0-9a-f]{40}$");
+
+  private WorkflowPolicy() {}
+
+  /**
+   * Every job must declare a {@code runs-on} this policy can parse, and every selector it resolves
+   * to must be allow listed. A missing, unparsed, or unknown selector is a violation so that no job
+   * can reach an unreviewed runner by using a form the parser does not understand.
+   */
+  static List<String> runnerViolations(JsonNode workflow) {
+    List<String> violations = new ArrayList<>();
+    for (String jobName : WorkflowDocuments.jobNames(workflow)) {
+      JsonNode job = WorkflowDocuments.job(workflow, jobName);
+      if (!WorkflowDocuments.declaresRunsOn(job)) {
+        violations.add(jobName + " declares no runs-on");
+        continue;
+      }
+      if (!WorkflowDocuments.declaresRecognizedRunsOn(job)) {
+        violations.add(jobName + " declares an unrecognized runs-on form");
+        continue;
+      }
+      for (String selector : WorkflowDocuments.runnerSelectors(job)) {
+        if (!ALLOWED_RUNNER_SELECTORS.contains(selector)) {
+          violations.add(jobName + " selects the forbidden runner " + selector);
+        }
+      }
+    }
+    return violations;
+  }
+
+  /**
+   * Job-level {@code uses} delegates the whole job to a reusable workflow that carries its own
+   * {@code runs-on}, which would move execution off the reviewed runner allow list. Step-level
+   * {@code uses} is untouched, so local composite actions stay available.
+   */
+  static List<String> jobLevelUsesViolations(JsonNode workflow) {
+    List<String> violations = new ArrayList<>();
+    for (String jobName : WorkflowDocuments.jobNames(workflow)) {
+      JsonNode uses = WorkflowDocuments.jobUses(WorkflowDocuments.job(workflow, jobName));
+      if (!uses.isMissingNode() && !uses.isNull()) {
+        violations.add(jobName + " delegates to the reusable workflow " + uses.asText());
+      }
+    }
+    return violations;
+  }
+
+  /** Step actions must be local {@code ./} composite actions or pinned to a full commit SHA. */
+  static List<String> actionPinningViolations(JsonNode workflow) {
+    List<String> violations = new ArrayList<>();
+    for (String reference : WorkflowDocuments.stepActionReferences(workflow)) {
+      boolean local = reference.startsWith("./");
+      boolean pinned = PINNED_EXTERNAL_REFERENCE.matcher(reference).matches();
+      if (!local && !pinned) {
+        violations.add(reference + " is neither a ./ local action nor pinned to a commit SHA");
+      }
+    }
+    return violations;
+  }
+}
+```
+
 Create `build-tools/harness-policy/src/test/java/com/microsoft/agentframework/build/harness/WorkflowPolicyTest.java`:
 
 ```java
@@ -2451,28 +2645,28 @@ package com.microsoft.agentframework.build.harness;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
+import static org.junit.jupiter.params.provider.Arguments.arguments;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
-import java.util.regex.Pattern;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
 class WorkflowPolicyTest {
-
-  private static final Pattern PINNED_EXTERNAL_REFERENCE =
-      Pattern.compile("^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+(?:/[A-Za-z0-9._/-]+)?@[0-9a-f]{40}$");
-
-  private static final Set<String> ALLOWED_RUNNER_LABELS =
-      Set.of("arc-java-build", "ubuntu-latest");
 
   private static final Set<String> ALLOWED_PERMISSION_VALUES = Set.of("read", "none");
 
@@ -2491,6 +2685,10 @@ class WorkflowPolicyTest {
   private static final String HOSTED_LABEL = "ubuntu-latest";
 
   private static final String RESULT_JOB = "verify-result";
+
+  private static final String CI_WORKFLOW = ".github/workflows/ci.yml";
+
+  private static final String POSIX_SHELL = "sh";
 
   static Stream<Path> workflows() throws IOException {
     return WorkflowDocuments.files().stream();
@@ -2512,28 +2710,29 @@ class WorkflowPolicyTest {
   @ParameterizedTest(name = "{0} pins every external reference")
   @MethodSource("workflows")
   void workflowPinsEveryExternalReference(Path workflow) throws IOException {
-    List<String> references = WorkflowDocuments.actionReferences(WorkflowDocuments.read(workflow));
+    JsonNode document = WorkflowDocuments.read(workflow);
 
-    assertThat(references).isNotEmpty();
-    for (String reference : references) {
-      boolean local = reference.startsWith("./");
-      boolean pinned = PINNED_EXTERNAL_REFERENCE.matcher(reference).matches();
-      assertThat(local || pinned)
-          .as("%s must be a ./ local action or pinned to a full commit SHA", reference)
-          .isTrue();
-    }
+    assertThat(WorkflowDocuments.stepActionReferences(document)).isNotEmpty();
+    assertThat(WorkflowPolicy.actionPinningViolations(document)).isEmpty();
+  }
+
+  @ParameterizedTest(name = "{0} never delegates a job to a reusable workflow")
+  @MethodSource("workflows")
+  void workflowNeverDelegatesJobsToReusableWorkflows(Path workflow) throws IOException {
+    assertThat(WorkflowPolicy.jobLevelUsesViolations(WorkflowDocuments.read(workflow))).isEmpty();
   }
 
   @ParameterizedTest(name = "{0} uses only allowed runner labels")
   @MethodSource("workflows")
   void workflowUsesOnlyAllowedRunnerLabels(Path workflow) throws IOException {
-    List<String> labels = new ArrayList<>();
-    for (JsonNode job : WorkflowDocuments.jobs(WorkflowDocuments.read(workflow))) {
-      labels.addAll(WorkflowDocuments.runnerLabels(job));
+    JsonNode document = WorkflowDocuments.read(workflow);
+    List<String> selectors = new ArrayList<>();
+    for (JsonNode job : WorkflowDocuments.jobs(document)) {
+      selectors.addAll(WorkflowDocuments.runnerSelectors(job));
     }
 
-    assertThat(labels).isNotEmpty();
-    assertThat(labels).isSubsetOf(ALLOWED_RUNNER_LABELS);
+    assertThat(selectors).isNotEmpty();
+    assertThat(WorkflowPolicy.runnerViolations(document)).isEmpty();
   }
 
   @ParameterizedTest(name = "{0} declares least-privilege permissions")
@@ -2632,6 +2831,211 @@ class WorkflowPolicyTest {
     assertThat(text).contains("directory: \"/build-logic\"");
     assertThat(text).contains("package-ecosystem: \"github-actions\"");
   }
+
+  @Test
+  void resultGateReadsEveryVerificationJobResult() throws IOException {
+    String script = resultGateScript();
+
+    assertThat(script)
+        .contains("FORK_RESULT")
+        .contains("TRUSTED_QUALITY_RESULT")
+        .contains("TRUSTED_COMPATIBILITY_RESULT");
+  }
+
+  static Stream<Arguments> resultGateCases() {
+    return Stream.of(
+        arguments("skipped", "success", "success", 0),
+        arguments("success", "skipped", "skipped", 0),
+        arguments("skipped", "failure", "success", 1),
+        arguments("skipped", "success", "failure", 1),
+        arguments("skipped", "success", "cancelled", 1),
+        arguments("skipped", "success", "skipped", 1),
+        arguments("skipped", "skipped", "skipped", 1),
+        arguments("failure", "skipped", "skipped", 1),
+        arguments("cancelled", "skipped", "skipped", 1),
+        arguments("success", "success", "success", 1),
+        arguments("failure", "failure", "failure", 1));
+  }
+
+  /**
+   * Executes the real {@code verify-result} script against the full result truth table. Replacing
+   * the script with an unconditional {@code exit 0} fails every case that must exit non-zero.
+   */
+  @ParameterizedTest(name = "fork={0} quality={1} compatibility={2} exits with {3}")
+  @MethodSource("resultGateCases")
+  void resultGateAcceptsOnlyOneCompleteVerificationPath(
+      String fork, String quality, String compatibility, int expectedExitCode)
+      throws IOException, InterruptedException {
+    assumeTrue(!System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("win"));
+
+    assertThat(runResultGate(fork, quality, compatibility)).isEqualTo(expectedExitCode);
+  }
+
+  private static String resultGateScript() throws IOException {
+    Path workflow = RepositoryPaths.root().resolve(CI_WORKFLOW);
+    String script = WorkflowDocuments.runScript(WorkflowDocuments.read(workflow), RESULT_JOB);
+
+    assertThat(script).isNotBlank();
+    return script;
+  }
+
+  private static int runResultGate(String fork, String quality, String compatibility)
+      throws IOException, InterruptedException {
+    ProcessBuilder builder = new ProcessBuilder(POSIX_SHELL, "-s");
+    builder.redirectErrorStream(true);
+    Map<String, String> environment = builder.environment();
+    environment.put("FORK_RESULT", fork);
+    environment.put("TRUSTED_QUALITY_RESULT", quality);
+    environment.put("TRUSTED_COMPATIBILITY_RESULT", compatibility);
+
+    Process gate = builder.start();
+    try (OutputStream commands = gate.getOutputStream()) {
+      commands.write(resultGateScript().getBytes(StandardCharsets.UTF_8));
+    }
+    try (InputStream output = gate.getInputStream()) {
+      output.readAllBytes();
+    }
+    assertThat(gate.waitFor(60, TimeUnit.SECONDS)).isTrue();
+    return gate.exitValue();
+  }
+}
+```
+
+Create `build-tools/harness-policy/src/test/java/com/microsoft/agentframework/build/harness/WorkflowPolicyBypassProbeTest.java`:
+
+```java
+package com.microsoft.agentframework.build.harness;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import java.io.IOException;
+import java.util.stream.Stream;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
+
+/**
+ * Probes the workflow policy with the documents an attacker would write. Each probe fails if the
+ * policy stops rejecting the bypass it covers.
+ */
+class WorkflowPolicyBypassProbeTest {
+
+  private static final String HEADER =
+      """
+      name: Probe
+      on:
+        pull_request:
+      permissions:
+        contents: read
+      concurrency:
+        group: probe
+        cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+      jobs:
+      """;
+
+  private static final String OBJECT_RUNS_ON_PROBE =
+      HEADER
+          + """
+            escape:
+              runs-on:
+                group: attacker-controlled
+                labels:
+                  - self-hosted
+              steps:
+                - run: echo probe
+          """;
+
+  private static final String LOCAL_REUSABLE_WORKFLOW_PROBE =
+      HEADER
+          + """
+            escape:
+              uses: ./.github/workflows/escape.yml
+          """;
+
+  private static final String LOCAL_COMPOSITE_ACTION_BASELINE =
+      HEADER
+          + """
+            verify:
+              runs-on: ubuntu-latest
+              steps:
+                - uses: ./.github/actions/setup-harness
+                - run: echo probe
+          """;
+
+  static Stream<String> unrecognizedRunsOnProbes() {
+    return Stream.of(
+        HEADER + "    escape:\n      runs-on: 7\n      steps:\n        - run: echo probe\n",
+        HEADER + "    escape:\n      runs-on: true\n      steps:\n        - run: echo probe\n",
+        HEADER + "    escape:\n      runs-on: {}\n      steps:\n        - run: echo probe\n",
+        HEADER + "    escape:\n      runs-on: []\n      steps:\n        - run: echo probe\n",
+        HEADER
+            + "    escape:\n      runs-on:\n        group: default\n        unknown: value\n"
+            + "      steps:\n        - run: echo probe\n",
+        HEADER + "    escape:\n      steps:\n        - run: echo probe\n");
+  }
+
+  @Test
+  void objectFormRunsOnCannotReachAnUnreviewedRunner() throws IOException {
+    JsonNode probe = WorkflowDocuments.parse(OBJECT_RUNS_ON_PROBE);
+
+    assertThat(WorkflowDocuments.runnerLabels(WorkflowDocuments.job(probe, "escape")))
+        .containsExactly("self-hosted");
+    assertThat(WorkflowDocuments.runnerSelectors(WorkflowDocuments.job(probe, "escape")))
+        .containsExactlyInAnyOrder("self-hosted", "group:attacker-controlled");
+    assertThat(WorkflowPolicy.runnerViolations(probe))
+        .contains(
+            "escape selects the forbidden runner self-hosted",
+            "escape selects the forbidden runner group:attacker-controlled");
+  }
+
+  @ParameterizedTest(name = "unrecognized runs-on probe {index} fails closed")
+  @MethodSource("unrecognizedRunsOnProbes")
+  void unrecognizedRunsOnFailsClosed(String probeDocument) throws IOException {
+    JsonNode probe = WorkflowDocuments.parse(probeDocument);
+
+    assertThat(WorkflowDocuments.runnerLabels(WorkflowDocuments.job(probe, "escape"))).isEmpty();
+    assertThat(WorkflowPolicy.runnerViolations(probe)).isNotEmpty();
+  }
+
+  @Test
+  void jobLevelLocalReusableWorkflowIsRejected() throws IOException {
+    JsonNode probe = WorkflowDocuments.parse(LOCAL_REUSABLE_WORKFLOW_PROBE);
+
+    assertThat(WorkflowPolicy.jobLevelUsesViolations(probe))
+        .containsExactly(
+            "escape delegates to the reusable workflow ./.github/workflows/escape.yml");
+    assertThat(WorkflowPolicy.runnerViolations(probe)).contains("escape declares no runs-on");
+    assertThat(WorkflowPolicy.actionPinningViolations(probe)).isEmpty();
+  }
+
+  @Test
+  void stepLevelLocalCompositeActionStaysAllowed() throws IOException {
+    JsonNode baseline = WorkflowDocuments.parse(LOCAL_COMPOSITE_ACTION_BASELINE);
+
+    assertThat(WorkflowDocuments.stepActionReferences(baseline))
+        .containsExactly("./.github/actions/setup-harness");
+    assertThat(WorkflowPolicy.actionPinningViolations(baseline)).isEmpty();
+    assertThat(WorkflowPolicy.jobLevelUsesViolations(baseline)).isEmpty();
+    assertThat(WorkflowPolicy.runnerViolations(baseline)).isEmpty();
+  }
+
+  @Test
+  void unpinnedStepActionIsRejected() throws IOException {
+    JsonNode probe =
+        WorkflowDocuments.parse(
+            HEADER
+                + """
+                  escape:
+                    runs-on: ubuntu-latest
+                    steps:
+                      - uses: attacker/action@main
+                """);
+
+    assertThat(WorkflowPolicy.actionPinningViolations(probe))
+        .containsExactly(
+            "attacker/action@main is neither a ./ local action nor pinned to a commit SHA");
+  }
 }
 ```
 
@@ -2640,10 +3044,10 @@ class WorkflowPolicyTest {
 Run:
 
 ```bash
-./gradlew :build-tools:harness-policy:test --tests '*WorkflowPolicyTest*'
+./gradlew :build-tools:harness-policy:test --tests '*WorkflowPolicy*'
 ```
 
-Expected: FAIL. `repositoryDefinesAtLeastOneWorkflow` and every parameterized source fail with `NoSuchFileException` on `.github/workflows`, and `dependencyUpdatesTrackGradleAndActions` fails on `.github/dependabot.yml`.
+Expected: FAIL. `repositoryDefinesAtLeastOneWorkflow` and every parameterized source fail with `NoSuchFileException` on `.github/workflows`, `dependencyUpdatesTrackGradleAndActions` fails on `.github/dependabot.yml`, and the `verify-result` truth-table cases fail because no gate script exists yet. The `WorkflowPolicyBypassProbeTest` probes already pass because they feed the rules synthetic documents.
 
 - [ ] **Step 3: Create the CI workflow**
 
@@ -2687,7 +3091,7 @@ jobs:
           java-version: '17'
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@67621b124fd2e251c5e8a0e6e3b91318f2287669 # v5.1.0
+        uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
         with:
           validate-wrappers: true
           cache-read-only: true
@@ -2745,7 +3149,7 @@ jobs:
           done
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@67621b124fd2e251c5e8a0e6e3b91318f2287669 # v5.1.0
+        uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
         with:
           validate-wrappers: true
 
@@ -2808,7 +3212,7 @@ jobs:
           done
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@67621b124fd2e251c5e8a0e6e3b91318f2287669 # v5.1.0
+        uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
         with:
           validate-wrappers: true
 
@@ -2928,10 +3332,10 @@ Run:
 
 ```bash
 ./gradlew spotlessApply
-./gradlew :build-tools:harness-policy:test --tests '*WorkflowPolicyTest*'
+./gradlew :build-tools:harness-policy:test --tests '*WorkflowPolicy*'
 ```
 
-Expected: `BUILD SUCCESSFUL`; both plain tests and all nine parameterized cases for `ci.yml` pass.
+Expected: `BUILD SUCCESSFUL`; the plain tests, every parameterized case for `ci.yml`, the eleven `verify-result` truth-table cases, and every bypass probe pass.
 
 - [ ] **Step 6: Run the full check**
 
