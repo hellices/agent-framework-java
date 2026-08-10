@@ -32,6 +32,7 @@ Microsoft Agent Framework의 실행 의미론을 Java에서 사용할 수 있도
 
 - [기초 설계와 로드맵](docs/superpowers/specs/2026-08-10-agent-framework-java-foundation-design.md)
 - [엔지니어링 하네스 설계](docs/superpowers/specs/2026-08-10-agent-framework-java-engineering-harness-design.md)
+- [Gradle Kotlin DSL 및 Java ARC Foundation 설계](docs/superpowers/specs/2026-08-10-gradle-kotlin-arc-foundation-design.md)
 
 현재 저장소는 설계 기준을 확정한 단계입니다. 파일·클래스·메서드 단위 구현 계획은 기초
 계약과 호환성 시나리오를 검토한 후 별도로 작성합니다.

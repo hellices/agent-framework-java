@@ -1,5 +1,9 @@
 # Repository Harness Foundation Implementation Plan
 
+> **상태: 대체됨.** 이 Maven 기반 계획은 실행 또는 merge하지 않는다.
+> [Gradle Kotlin DSL 및 Java ARC Foundation 설계](../specs/2026-08-10-gradle-kotlin-arc-foundation-design.md)의
+> 후속 Gradle 구현 계획을 사용한다.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Establish the repository-owned engineering harness: portable agent instructions, a Java 17 Maven quality baseline, versioned agent artifact contracts, policy regression tests, and a trusted PR CI workflow on the existing `aks-runners` ARC scale set.
