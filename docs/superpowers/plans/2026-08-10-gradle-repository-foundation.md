@@ -30,11 +30,13 @@
   - `gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb`
   - `actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a`
 - Every pin is the dereferenced commit SHA that a tag points to, never the annotated tag object SHA, because a tag object SHA is not a checkout-able commit.
-- `pull_request_target` is prohibited. Allowed runner labels are exactly `arc-java-build` and `ubuntu-latest`. Allowed permission values are exactly `read` and `none`.
+- `pull_request_target` is prohibited. Allowed triggers are exactly `pull_request`, `push`, and `workflow_dispatch`. Allowed runner labels are exactly `arc-java-build` and `ubuntu-latest`. Allowed permission values are exactly `read` and `none`.
+- The trigger allow list is part of the trust boundary, not housekeeping: the trusted condition only asks whether the event is a pull request, so every other event — `workflow_run` above all, which a fork pull request can indirectly start — is trusted by construction and would reach `arc-java-build` while carrying the verbatim trusted condition. Widening the list is a reviewed trust decision.
 - `runs-on` is parsed in every documented form (string, sequence, and the `group`/`labels` object). A runner group is checked as `group:<name>`, and any present but unrecognized `runs-on` fails closed.
 - Job-level `uses:` is prohibited, because a reusable workflow carries its own `runs-on` and would move a job off the reviewed runner allow list. Step-level `./` local composite actions stay allowed.
 - Only pull-request runs may be cancelled by concurrency. `main` pushes must never be cancelled.
 - Fork pull requests run the GitHub-hosted minimum verification; trusted jobs run on `arc-java-build`. The two paths are mutually exclusive and fan into one required `verify-result` job so a skipped job can never look green.
+- `verify-result` is generic over `needs`: it reads the whole context as `NEEDS_JSON` (`${{ toJSON(needs) }}`) and evaluates it against a declarative `VERIFICATION_PATHS` map of `name=job[,job]` lines. It fails when any job reports anything but `success` or `skipped`, when a path is neither wholly successful nor wholly skipped, when a needed job belongs to no path, when a path names a job that is not needed, and unless exactly one path completed. A verification job added later but left unclassified fails the gate instead of passing unexamined, so the gate can never go green over a job it does not know about.
 - Trusted and fork job conditions are compared after stripping an optional `${{ }}` wrapper and collapsing whitespace runs. Reformatting a condition is allowed; changing an operator, an operand, or their order is not.
 - This plan's branch is not merged into `main` until the `arc-java-build` scale set from `2026-08-10-java-arc-platform.md` is deployed and one trusted `ci.yml` run has completed on it. The trusted jobs are never softened to `ubuntu-latest` to make the branch mergeable earlier. `docs/operations/github-actions-runner-contract.md` states the merge gate and `WorkflowPolicyTest` keeps it from being deleted silently.
 - No secret, credential, token, kubeconfig, Helm value, or personal agent setting is committed.
@@ -2325,7 +2327,7 @@ Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
 
 **Interfaces:**
 - Consumes: `RepositoryPaths.root()`, `libs.jackson.dataformat.yaml`, the root tasks `policyCheck`, `quality`, `testJava17`, `testJava21`, `testJava25`.
-- Produces: `WorkflowDocuments` helpers (`files`, `read`, `parse`, `triggerNames`, `jobNames`, `jobs`, `job`, `jobUses`, `steps`, `declaresRunsOn`, `declaresRecognizedRunsOn`, `runnerLabels`, `runnerSelectors`, `stepActionReferences`, `runScript`, `permissionValues`); the fail-closed `WorkflowPolicy` rules (`runnerViolations`, `jobLevelUsesViolations`, `actionPinningViolations`); a workflow policy regression that parses every workflow file; bypass probes that keep the rules rejecting the `runs-on` object form, unrecognized `runs-on` forms, and job-level reusable workflow `uses`; an executable truth-table regression over the real `verify-result` script; and a CI graph whose trusted jobs run on `arc-java-build`, whose fork job runs on `ubuntu-latest`, and which fans in to the required `verify-result` job.
+- Produces: `WorkflowDocuments` helpers (`files`, `read`, `parse`, `triggerNames`, `jobNames`, `jobs`, `job`, `jobUses`, `steps`, `declaresRunsOn`, `declaresRecognizedRunsOn`, `runnerLabels`, `runnerSelectors`, `stepActionReferences`, `runScript`, `firstRunStep`, `stepEnvironment`, `jobNeeds`, `permissionValues`); the fail-closed `WorkflowPolicy` rules (`triggerViolations`, `runnerViolations`, `jobLevelUsesViolations`, `actionPinningViolations`, `verificationPaths`, `verificationPathViolations`); a workflow policy regression that parses every workflow file; bypass probes that keep the rules rejecting the `runs-on` object form, unrecognized `runs-on` forms, job-level reusable workflow `uses`, triggers outside the allow list (including a `workflow_run` job that carries the verbatim trusted condition), and result-gate wiring that leaves a needed job unclassified; an executable truth-table regression over the real `verify-result` script; and a CI graph whose trusted jobs run on `arc-java-build`, whose fork job runs on `ubuntu-latest`, and which fans in to the required `verify-result` job.
 
 - [ ] **Step 1: Write the failing workflow policy helper and test**
 
@@ -2415,6 +2417,45 @@ final class WorkflowDocuments {
     return steps;
   }
 
+  /** Returns the job identifiers a job depends on, in either the string or the sequence form. */
+  static List<String> jobNeeds(JsonNode job) {
+    JsonNode needs = job.path("needs");
+    List<String> names = new ArrayList<>();
+    if (needs.isTextual()) {
+      names.add(needs.textValue());
+    } else if (needs.isArray()) {
+      needs.forEach(need -> names.add(need.textValue()));
+    }
+    return names;
+  }
+
+  /** Returns the {@code env} map a step declares, so a policy can read what the script consumes. */
+  static Map<String, String> stepEnvironment(JsonNode step) {
+    Map<String, String> environment = new LinkedHashMap<>();
+    JsonNode declared = step.path("env");
+    if (!declared.isObject()) {
+      return environment;
+    }
+    Iterator<String> names = declared.fieldNames();
+    while (names.hasNext()) {
+      String name = names.next();
+      environment.put(name, declared.path(name).asText());
+    }
+    return environment;
+  }
+
+  /**
+   * Returns the first {@code run} step of {@code jobName}, or a missing node when there is none.
+   */
+  static JsonNode firstRunStep(JsonNode workflow, String jobName) {
+    for (JsonNode step : steps(job(workflow, jobName))) {
+      if (step.path("run").isTextual()) {
+        return step;
+      }
+    }
+    return MISSING;
+  }
+
   static boolean declaresRunsOn(JsonNode job) {
     JsonNode runsOn = job.path("runs-on");
     return !runsOn.isMissingNode() && !runsOn.isNull();
@@ -2494,13 +2535,7 @@ final class WorkflowDocuments {
    * execute the real gate script instead of pattern matching its text.
    */
   static String runScript(JsonNode workflow, String jobName) {
-    for (JsonNode step : steps(job(workflow, jobName))) {
-      JsonNode run = step.path("run");
-      if (run.isTextual()) {
-        return run.textValue();
-      }
-    }
-    return "";
+    return firstRunStep(workflow, jobName).path("run").asText("");
   }
 
   static List<String> permissionValues(JsonNode workflow) {
@@ -2569,7 +2604,9 @@ package com.microsoft.agentframework.build.harness;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.regex.Pattern;
 
@@ -2581,10 +2618,141 @@ final class WorkflowPolicy {
 
   static final Set<String> ALLOWED_RUNNER_SELECTORS = Set.of("arc-java-build", "ubuntu-latest");
 
+  /**
+   * The exact set of events allowed to start a workflow. The trusted condition asks only whether
+   * the event is a pull request, so every other event is trusted by construction: a {@code
+   * workflow_run}, {@code issue_comment}, or {@code repository_dispatch} job carrying the verbatim
+   * trusted condition would reach {@code arc-java-build}. Allow listing the triggers is what keeps
+   * that set of events reviewed.
+   */
+  static final Set<String> ALLOWED_TRIGGERS = Set.of("pull_request", "push", "workflow_dispatch");
+
+  /** The whole {@code needs} context, which the result gate must consume instead of one job. */
+  static final String NEEDS_JSON_VARIABLE = "NEEDS_JSON";
+
+  static final String NEEDS_JSON_EXPRESSION = "${{ toJSON(needs) }}";
+
+  /** The declarative {@code name=job[,job]} verification path map the result gate evaluates. */
+  static final String VERIFICATION_PATHS_VARIABLE = "VERIFICATION_PATHS";
+
+  /**
+   * The only condition under which a job may run on the trusted runner: never on a pull request
+   * that comes from a fork.
+   */
+  static final String TRUSTED_CONDITION =
+      "github.event_name != 'pull_request'"
+          + " || github.event.pull_request.head.repo.full_name == github.repository";
+
+  /** The exact negation of {@link #TRUSTED_CONDITION}, so the two paths cannot both run. */
+  static final String FORK_CONDITION =
+      "github.event_name == 'pull_request'"
+          + " && github.event.pull_request.head.repo.full_name != github.repository";
+
   private static final Pattern PINNED_EXTERNAL_REFERENCE =
       Pattern.compile("^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+(?:/[A-Za-z0-9._/-]+)?@[0-9a-f]{40}$");
 
+  private static final Pattern WHITESPACE_RUN = Pattern.compile("\\s+");
+
   private WorkflowPolicy() {}
+
+  /**
+   * Every workflow must declare at least one trigger, and every trigger it declares must be allow
+   * listed. An unknown event is rejected rather than inspected, so widening the trust boundary
+   * always requires editing this list.
+   */
+  static List<String> triggerViolations(JsonNode workflow) {
+    List<String> triggers = WorkflowDocuments.triggerNames(workflow);
+    if (triggers.isEmpty()) {
+      return List.of("declares no trigger");
+    }
+    List<String> violations = new ArrayList<>();
+    for (String trigger : triggers) {
+      if (trigger == null || !ALLOWED_TRIGGERS.contains(trigger)) {
+        violations.add(trigger + " is not an allowed trigger");
+      }
+    }
+    return violations;
+  }
+
+  /**
+   * Reads the {@code name=job[,job]} verification path map the result gate declares. Returns an
+   * empty map when the gate declares none, so a missing map is reported by {@link
+   * #verificationPathViolations(JsonNode, String)} rather than silently accepted.
+   */
+  static Map<String, List<String>> verificationPaths(JsonNode workflow, String resultJobName) {
+    Map<String, List<String>> paths = new LinkedHashMap<>();
+    String declared =
+        WorkflowDocuments.stepEnvironment(WorkflowDocuments.firstRunStep(workflow, resultJobName))
+            .getOrDefault(VERIFICATION_PATHS_VARIABLE, "");
+    for (String definition : WHITESPACE_RUN.split(declared.trim())) {
+      if (definition.isEmpty()) {
+        continue;
+      }
+      int separator = definition.indexOf('=');
+      String name = separator < 0 ? definition : definition.substring(0, separator);
+      List<String> jobs = new ArrayList<>();
+      if (separator >= 0) {
+        for (String job : definition.substring(separator + 1).split(",", -1)) {
+          if (!job.isEmpty()) {
+            jobs.add(job);
+          }
+        }
+      }
+      paths.put(name, jobs);
+    }
+    return paths;
+  }
+
+  /**
+   * The result gate must consume the whole {@code needs} context and must classify every job it
+   * needs into exactly one verification path. Without this, a verification job added to {@code
+   * needs} later is never examined by the gate, and the gate reports green while that job failed or
+   * never ran.
+   */
+  static List<String> verificationPathViolations(JsonNode workflow, String resultJobName) {
+    List<String> violations = new ArrayList<>();
+    JsonNode gateStep = WorkflowDocuments.firstRunStep(workflow, resultJobName);
+    Map<String, String> environment = WorkflowDocuments.stepEnvironment(gateStep);
+    if (!NEEDS_JSON_EXPRESSION.equals(environment.get(NEEDS_JSON_VARIABLE))) {
+      violations.add(
+          resultJobName + " does not read the whole needs context as " + NEEDS_JSON_VARIABLE);
+    }
+    if (environment.getOrDefault(VERIFICATION_PATHS_VARIABLE, "").isBlank()) {
+      violations.add(resultJobName + " declares no " + VERIFICATION_PATHS_VARIABLE);
+      return violations;
+    }
+
+    List<String> needs = WorkflowDocuments.jobNeeds(WorkflowDocuments.job(workflow, resultJobName));
+    Map<String, List<String>> paths = verificationPaths(workflow, resultJobName);
+    Map<String, String> owner = new LinkedHashMap<>();
+    for (Map.Entry<String, List<String>> path : paths.entrySet()) {
+      if (path.getValue().isEmpty()) {
+        violations.add("path " + path.getKey() + " declares no job");
+        continue;
+      }
+      for (String job : path.getValue()) {
+        if (!needs.contains(job)) {
+          violations.add(
+              "path "
+                  + path.getKey()
+                  + " declares "
+                  + job
+                  + ", which "
+                  + resultJobName
+                  + " does not need");
+        } else if (owner.put(job, path.getKey()) != null) {
+          violations.add(job + " is declared by more than one verification path");
+        }
+      }
+    }
+    for (String job : needs) {
+      if (!owner.containsKey(job)) {
+        violations.add(job + " belongs to no declared verification path");
+      }
+    }
+    return violations;
+  }
+
 
   /**
    * Every job must declare a {@code runs-on} this policy can parse, and every selector it resolves
@@ -2691,6 +2859,22 @@ class WorkflowPolicyTest {
 
   private static final String RESULT_JOB = "verify-result";
 
+  private static final String FORK_JOB = "fork-verify";
+
+  private static final String TRUSTED_QUALITY_JOB = "trusted-quality";
+
+  private static final String TRUSTED_COMPATIBILITY_JOB = "trusted-compatibility";
+
+  private static final String FORK_PATH = "fork";
+
+  private static final String TRUSTED_PATH = "trusted";
+
+  private static final String NEEDS_JSON_VARIABLE = "NEEDS_JSON";
+
+  private static final String NEEDS_JSON_EXPRESSION = "${{ toJSON(needs) }}";
+
+  private static final String VERIFICATION_PATHS_VARIABLE = "VERIFICATION_PATHS";
+
   private static final String CI_WORKFLOW = ".github/workflows/ci.yml";
 
   private static final String POSIX_SHELL = "sh";
@@ -2710,6 +2894,33 @@ class WorkflowPolicyTest {
     List<String> triggers = WorkflowDocuments.triggerNames(WorkflowDocuments.read(workflow));
 
     assertThat(triggers).doesNotContain("pull_request_target");
+  }
+
+  /**
+   * The trusted condition treats every event that is not a pull request as trusted, so the set of
+   * events that can start a workflow is itself part of the trust boundary and is allow listed.
+   */
+  @ParameterizedTest(name = "{0} declares only allow-listed triggers")
+  @MethodSource("workflows")
+  void workflowDeclaresOnlyAllowListedTriggers(Path workflow) throws IOException {
+    JsonNode document = WorkflowDocuments.read(workflow);
+
+    assertThat(WorkflowDocuments.triggerNames(document)).isNotEmpty();
+    assertThat(WorkflowPolicy.triggerViolations(document)).isEmpty();
+  }
+
+  @Test
+  void triggerAllowListIsExactlyThePullRequestPushAndDispatchEvents() {
+    assertThat(WorkflowPolicy.ALLOWED_TRIGGERS)
+        .containsExactlyInAnyOrder("pull_request", "push", "workflow_dispatch");
+  }
+
+  @Test
+  void continuousIntegrationDeclaresOnlyTheAllowListedTriggers() throws IOException {
+    JsonNode document = WorkflowDocuments.read(RepositoryPaths.root().resolve(CI_WORKFLOW));
+
+    assertThat(WorkflowDocuments.triggerNames(document))
+        .containsExactlyInAnyOrderElementsOf(WorkflowPolicy.ALLOWED_TRIGGERS);
   }
 
   @ParameterizedTest(name = "{0} pins every external reference")
@@ -2837,14 +3048,29 @@ class WorkflowPolicyTest {
     assertThat(text).contains("package-ecosystem: \"github-actions\"");
   }
 
+  /**
+   * The gate must read the whole {@code needs} context, never one hand-written variable per job, so
+   * a verification job added later cannot stay unexamined.
+   */
   @Test
-  void resultGateReadsEveryVerificationJobResult() throws IOException {
-    String script = resultGateScript();
+  void resultGateConsumesTheWholeNeedsContext() throws IOException {
+    Map<String, String> environment = WorkflowDocuments.stepEnvironment(resultGateStep());
 
-    assertThat(script)
-        .contains("FORK_RESULT")
-        .contains("TRUSTED_QUALITY_RESULT")
-        .contains("TRUSTED_COMPATIBILITY_RESULT");
+    assertThat(environment).containsEntry(NEEDS_JSON_VARIABLE, NEEDS_JSON_EXPRESSION);
+    assertThat(environment).containsKey(VERIFICATION_PATHS_VARIABLE);
+
+    String script = resultGateScript();
+    assertThat(script).contains(NEEDS_JSON_VARIABLE).contains(VERIFICATION_PATHS_VARIABLE);
+    assertThat(environment.values()).noneMatch(value -> value.contains(".result"));
+  }
+
+  @Test
+  void resultGateAssignsEveryNeededJobToExactlyOneVerificationPath() throws IOException {
+    JsonNode document = WorkflowDocuments.read(RepositoryPaths.root().resolve(CI_WORKFLOW));
+
+    assertThat(WorkflowPolicy.verificationPathViolations(document, RESULT_JOB)).isEmpty();
+    assertThat(WorkflowPolicy.verificationPaths(document, RESULT_JOB))
+        .containsOnlyKeys(FORK_PATH, TRUSTED_PATH);
   }
 
   static Stream<Arguments> resultGateCases() {
@@ -2871,9 +3097,87 @@ class WorkflowPolicyTest {
   void resultGateAcceptsOnlyOneCompleteVerificationPath(
       String fork, String quality, String compatibility, int expectedExitCode)
       throws IOException, InterruptedException {
-    assumeTrue(!System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("win"));
+    assumeTrue(isPosixShellAvailable());
 
-    assertThat(runResultGate(fork, quality, compatibility)).isEqualTo(expectedExitCode);
+    assertThat(runResultGate(needsResults(fork, quality, compatibility)))
+        .isEqualTo(expectedExitCode);
+  }
+
+  static Stream<String> addedVerificationJobResults() {
+    return Stream.of("success", "skipped", "failure", "cancelled");
+  }
+
+  /**
+   * Regression for the false-green hole: a verification job that is wired into {@code needs} but
+   * into no verification path fails the gate, whatever it reported, so adding a job without
+   * classifying it can never be reported as a completed verification.
+   */
+  @ParameterizedTest(name = "an added verification job reporting {0} cannot report green")
+  @MethodSource("addedVerificationJobResults")
+  void resultGateRejectsAJobThatBelongsToNoVerificationPath(String addedResult)
+      throws IOException, InterruptedException {
+    assumeTrue(isPosixShellAvailable());
+
+    Map<String, String> results = needsResults("skipped", "success", "success");
+    results.put("added-verify", addedResult);
+
+    assertThat(runResultGate(results)).isEqualTo(1);
+  }
+
+  @Test
+  void resultGateRejectsAVerificationJobThatDisappearedFromNeeds()
+      throws IOException, InterruptedException {
+    assumeTrue(isPosixShellAvailable());
+
+    Map<String, String> results = needsResults("skipped", "success", "success");
+    results.remove(TRUSTED_COMPATIBILITY_JOB);
+
+    assertThat(runResultGate(results)).isEqualTo(1);
+  }
+
+  @Test
+  void resultGateRejectsAnEmptyNeedsContext() throws IOException, InterruptedException {
+    assumeTrue(isPosixShellAvailable());
+
+    assertThat(runResultGate(new LinkedHashMap<>())).isEqualTo(1);
+    assertThat(runResultGate(null)).isEqualTo(1);
+  }
+
+  private static boolean isPosixShellAvailable() {
+    return !System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("win");
+  }
+
+  private static Map<String, String> needsResults(
+      String fork, String quality, String compatibility) {
+    Map<String, String> results = new LinkedHashMap<>();
+    results.put(FORK_JOB, fork);
+    results.put(TRUSTED_QUALITY_JOB, quality);
+    results.put(TRUSTED_COMPATIBILITY_JOB, compatibility);
+    return results;
+  }
+
+  /** Renders the {@code needs} context exactly as {@code toJSON(needs)} does. */
+  private static String renderNeedsJson(Map<String, String> results) {
+    StringBuilder json = new StringBuilder("{");
+    for (Map.Entry<String, String> entry : results.entrySet()) {
+      if (json.length() > 1) {
+        json.append(',');
+      }
+      json.append("\n  \"")
+          .append(entry.getKey())
+          .append("\": {\n    \"result\": \"")
+          .append(entry.getValue())
+          .append("\",\n    \"outputs\": {}\n  }");
+    }
+    return json.append("\n}").toString();
+  }
+
+  private static JsonNode resultGateStep() throws IOException {
+    JsonNode document = WorkflowDocuments.read(RepositoryPaths.root().resolve(CI_WORKFLOW));
+    JsonNode step = WorkflowDocuments.firstRunStep(document, RESULT_JOB);
+
+    assertThat(step.isObject()).isTrue();
+    return step;
   }
 
   private static String resultGateScript() throws IOException {
@@ -2884,14 +3188,15 @@ class WorkflowPolicyTest {
     return script;
   }
 
-  private static int runResultGate(String fork, String quality, String compatibility)
+  private static int runResultGate(Map<String, String> results)
       throws IOException, InterruptedException {
     ProcessBuilder builder = new ProcessBuilder(POSIX_SHELL, "-s");
     builder.redirectErrorStream(true);
     Map<String, String> environment = builder.environment();
-    environment.put("FORK_RESULT", fork);
-    environment.put("TRUSTED_QUALITY_RESULT", quality);
-    environment.put("TRUSTED_COMPATIBILITY_RESULT", compatibility);
+    environment.put(NEEDS_JSON_VARIABLE, results == null ? "" : renderNeedsJson(results));
+    environment.put(
+        VERIFICATION_PATHS_VARIABLE,
+        WorkflowDocuments.stepEnvironment(resultGateStep()).get(VERIFICATION_PATHS_VARIABLE));
 
     Process gate = builder.start();
     try (OutputStream commands = gate.getOutputStream()) {
@@ -3249,30 +3554,98 @@ jobs:
     permissions:
       contents: read
     steps:
-      - name: Require one complete verification path
+      - name: Require exactly one complete verification path
         env:
-          FORK_RESULT: ${{ needs.fork-verify.result }}
-          TRUSTED_QUALITY_RESULT: ${{ needs.trusted-quality.result }}
-          TRUSTED_COMPATIBILITY_RESULT: ${{ needs.trusted-compatibility.result }}
+          NEEDS_JSON: ${{ toJSON(needs) }}
+          VERIFICATION_PATHS: |
+            fork=fork-verify
+            trusted=trusted-quality,trusted-compatibility
         run: |
           set -eu
-          printf 'fork-verify=%s\n' "$FORK_RESULT"
-          printf 'trusted-quality=%s\n' "$TRUSTED_QUALITY_RESULT"
-          printf 'trusted-compatibility=%s\n' "$TRUSTED_COMPATIBILITY_RESULT"
-          if [ "$TRUSTED_QUALITY_RESULT" = "success" ] \
-            && [ "$TRUSTED_COMPATIBILITY_RESULT" = "success" ] \
-            && [ "$FORK_RESULT" = "skipped" ]; then
-            printf 'Trusted verification path completed.\n'
-            exit 0
+          results=$(printf '%s' "$NEEDS_JSON" | awk '
+            { document = document $0 }
+            END {
+              gsub(/[ \t\r\n]/, "", document)
+              gsub(/"outputs":[{][^{}]*[}]/, "", document)
+              gsub(/,[}]/, "}", document)
+              gsub(/[{],/, "{", document)
+              while (match(document, /"[A-Za-z0-9_.-]+":[{]"result":"[a-z]+"/)) {
+                entry = substr(document, RSTART, RLENGTH)
+                document = substr(document, RSTART + RLENGTH)
+                split(entry, field, "\"")
+                print field[2] "=" field[6]
+              }
+            }')
+          if [ -z "$results" ]; then
+            printf 'verify-result read no job result from the needs context.\n' >&2
+            exit 1
           fi
-          if [ "$FORK_RESULT" = "success" ] \
-            && [ "$TRUSTED_QUALITY_RESULT" = "skipped" ] \
-            && [ "$TRUSTED_COMPATIBILITY_RESULT" = "skipped" ]; then
-            printf 'Fork minimum verification path completed.\n'
-            exit 0
+          printf 'needs results:\n%s\n' "$results"
+          printf 'verification paths:\n%s\n' "$VERIFICATION_PATHS"
+
+          broken=0
+          declared=$(printf '%s' "$VERIFICATION_PATHS" | tr ' \n' '\n\n' \
+            | sed -e '/^$/d' -e 's/^[^=]*=//' | tr ',' '\n' | sed -e '/^$/d')
+
+          while IFS='=' read -r job result; do
+            [ -n "$job" ] || continue
+            case "$result" in
+              success | skipped) ;;
+              *)
+                printf '%s reported %s.\n' "$job" "$result" >&2
+                broken=1
+                ;;
+            esac
+            if ! printf '%s\n' "$declared" | grep -qx -- "$job"; then
+              printf '%s belongs to no declared verification path.\n' "$job" >&2
+              broken=1
+            fi
+          done <<RESULTS
+          $results
+          RESULTS
+
+          complete=''
+          for definition in $VERIFICATION_PATHS; do
+            path_name=${definition%%=*}
+            members=0
+            successes=0
+            skips=0
+            for job in $(printf '%s' "${definition#*=}" | tr ',' ' '); do
+              members=$((members + 1))
+              result=$(printf '%s\n' "$results" | awk -F= -v job="$job" '$1 == job { print $2 }')
+              case "$result" in
+                success) successes=$((successes + 1)) ;;
+                skipped) skips=$((skips + 1)) ;;
+                '')
+                  printf 'path %s declares %s, which is not in needs.\n' "$path_name" "$job" >&2
+                  broken=1
+                  ;;
+              esac
+            done
+            if [ "$members" -eq 0 ]; then
+              printf 'path %s declares no job.\n' "$path_name" >&2
+              broken=1
+            elif [ "$successes" -eq "$members" ]; then
+              complete="$complete $path_name"
+            elif [ "$skips" -ne "$members" ]; then
+              printf 'path %s neither completed nor was entirely skipped.\n' "$path_name" >&2
+              broken=1
+            fi
+          done
+
+          if [ "$broken" -ne 0 ]; then
+            printf 'Verification did not complete cleanly.\n' >&2
+            exit 1
           fi
-          printf 'No verification path completed successfully.\n' >&2
-          exit 1
+
+          count=$(printf '%s' "$complete" | wc -w | tr -d ' ')
+          if [ "$count" -ne 1 ]; then
+            printf 'Expected exactly one complete verification path, found %s:%s\n' \
+              "$count" "$complete" >&2
+            exit 1
+          fi
+
+          printf 'Verification path completed:%s\n' "$complete"
 ```
 
 - [ ] **Step 4: Create the dependency update policy**
@@ -3340,7 +3713,7 @@ Run:
 ./gradlew :build-tools:harness-policy:test --tests '*WorkflowPolicy*'
 ```
 
-Expected: `BUILD SUCCESSFUL`; the plain tests, every parameterized case for `ci.yml`, the eleven `verify-result` truth-table cases, and every bypass probe pass.
+Expected: `BUILD SUCCESSFUL`; the plain tests, every parameterized case for `ci.yml`, the eleven `verify-result` truth-table cases, the added-job and missing-job gate regressions, and every bypass probe pass.
 
 - [ ] **Step 6: Run the full check**
 
@@ -3369,6 +3742,7 @@ Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
 
 **Files:**
 - Create: `docs/operations/github-actions-runner-contract.md`
+- Modify: `.github/workflows/ci.yml`
 - Modify: `README.md`
 - Modify: `.github/CODEOWNERS`
 - Modify: `.gitignore`
@@ -3399,8 +3773,8 @@ Create `docs/operations/github-actions-runner-contract.md`:
 `agent-framework-java-platform`. Until the scale set is registered and accepting jobs:
 
 - every trusted job stays queued and eventually times out;
-- `verify-result` sees `trusted-quality=failure`/`cancelled` and fails, because a skipped or
-  timed-out trusted path is never reported as green;
+- `verify-result` sees `trusted-quality=failure`/`cancelled` and fails, because a path that is
+  neither wholly successful nor wholly skipped is never reported as green;
 - `main` pushes therefore fail, not silently pass.
 
 The workflow is intentionally not softened to `ubuntu-latest` to make the branch mergeable earlier.
@@ -3457,11 +3831,39 @@ in-image verifier that runs during the registry build, and the manual `runner-sm
 which fails when any toolchain is not served from
 `/opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/`.
 
+## Trigger allow list
+
+A workflow in this repository may declare only these events:
+
+- `pull_request`
+- `push`
+- `workflow_dispatch`
+
+The list is part of the trust boundary, not a convenience. The trusted condition asks a single
+question — is this event a pull request from a fork? — so **every event that is not a pull request is
+trusted by construction**. A job carrying the verbatim trusted condition under `workflow_run`,
+`issue_comment`, `repository_dispatch`, or `schedule` therefore runs on `arc-java-build`, and
+`workflow_run` in particular can be started by a workflow run that a fork pull request triggered.
+Nothing in the condition catches that; only the allow list does.
+
+Adding an event is a reviewed change to `WorkflowPolicy.ALLOWED_TRIGGERS`, and it must be paired
+with a trust decision for that event, not merely with a workflow edit.
+`WorkflowPolicyBypassProbeTest.workflowRunTrustedJobIsCaughtOnlyByTheTriggerAllowList` pins the
+bypass: it asserts that the condition rules accept such a job and that the allow list rejects it.
+
 ## Trust boundary
 
 Fork pull requests never reach `arc-java-build`. The trusted and fork jobs use mutually exclusive
-conditions, and the required `verify-result` job fails unless exactly one complete path succeeded, so
-a skipped job can never be reported as green.
+conditions, only allow-listed events can start a workflow, and the required `verify-result` job
+fails unless exactly one complete path succeeded, so a skipped job can never be reported as green.
+
+`verify-result` reads the whole `needs` context as `NEEDS_JSON` (`${{ toJSON(needs) }}`) and
+evaluates it against the declarative `VERIFICATION_PATHS` map, `name=job[,job]` per line. It fails
+when any job reports anything other than `success` or `skipped`, when a path is neither wholly
+successful nor wholly skipped, when a needed job belongs to no path, when a path names a job that is
+not in `needs`, and unless exactly one path completed. A verification job added to `needs` but not
+classified into a path therefore fails the gate instead of passing unexamined: the gate can never go
+green over a job it does not know about.
 
 Never combine `pull_request_target`, checkout of pull-request head code, and execution of repository
 scripts. Docker or Testcontainers work requires a separately reviewed scale set, namespace, runner
@@ -3471,11 +3873,14 @@ group, and network policy; this repository does not create one.
 
 Every clause above that this repository can enforce is a test, not prose. `./gradlew check` runs
 `WorkflowPolicyTest` and `WorkflowPolicyBypassProbeTest`, which parse every workflow as YAML and
-enforce the runner allow list in all `runs-on` forms, the ban on job-level `uses:`, full commit-SHA
-pinning, `read`/`none` permissions, `persist-credentials: false`, pull-request-only cancellation,
-mutually exclusive trusted and fork conditions, and the `verify-result` truth table. Conditions are
-compared after whitespace and `${{ }}` normalization only, so reformatting a condition is allowed and
-weakening one is not.
+enforce the trigger allow list, the runner allow list in all `runs-on` forms, the ban on job-level
+`uses:`, full commit-SHA pinning, `read`/`none` permissions, `persist-credentials: false`,
+pull-request-only cancellation, mutually exclusive trusted and fork conditions, the requirement that
+`verify-result` consume the whole `needs` context and classify every needed job into exactly one
+verification path, and the `verify-result` truth table, which is executed as a real shell process
+against a synthesized `needs` context rather than pattern matched. Conditions are compared after
+whitespace and `${{ }}` normalization only, so reformatting a condition is allowed and weakening one
+is not.
 ````
 
 - [ ] **Step 2: Link the new entry points from the README**
@@ -3530,6 +3935,25 @@ Documentation that nothing verifies rots, so Task 7's prose is backed by tests:
 - `WorkflowPolicyBypassProbeTest` adds `weakenedTrustedConditionIsRejected` (six weaker guards),
   `trustedJobWithoutAnyConditionIsRejected`, and `reformattedTrustedConditionStaysAccepted` (plain,
   folded, and `${{ }}`-wrapped forms).
+- `WorkflowPolicy.ALLOWED_TRIGGERS` and `triggerViolations` close the event half of the trust
+  boundary. The trusted condition only asks whether the event is a pull request, so a
+  `workflow_run`, `issue_comment`, `repository_dispatch`, `workflow_call`, or `schedule` job
+  carrying the verbatim trusted condition reaches `arc-java-build` and no condition rule objects.
+  `WorkflowPolicyBypassProbeTest.workflowRunTrustedJobIsCaughtOnlyByTheTriggerAllowList` asserts
+  exactly that: the condition rules accept the job, the allow list rejects it.
+  `triggerOutsideTheAllowListIsRejected` covers the other five events,
+  `allowListedTriggerStaysAccepted` covers the three allowed ones, and
+  `workflowWithoutAnyTriggerIsRejected` keeps the rule fail-closed.
+- `verify-result` no longer hand-lists one environment variable per job. It reads the whole context
+  as `NEEDS_JSON` (`${{ toJSON(needs) }}`) and evaluates it against `VERIFICATION_PATHS`, a
+  `name=job[,job]` map. The script parses the context with `awk`, fails on any result other than
+  `success` or `skipped`, fails on a path that is neither wholly successful nor wholly skipped,
+  fails on a needed job that belongs to no path, fails on a path job that is not needed, and
+  requires exactly one complete path. `WorkflowPolicy.verificationPaths` and
+  `verificationPathViolations` enforce the same wiring statically, so a verification job added to
+  `needs` without a path — the false-green hole in the previous hard-coded gate — fails both the
+  static policy and the executed gate. `resultGateRejectsAJobThatBelongsToNoVerificationPath`
+  proves it for `success`, `skipped`, `failure`, and `cancelled`.
 
 None of that is worth anything while the policy tasks skip themselves, so
 `build-tools/harness-policy/build.gradle.kts` declares the repository tree — everything under the

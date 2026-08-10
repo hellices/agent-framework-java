@@ -2,7 +2,9 @@ package com.microsoft.agentframework.build.harness;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.regex.Pattern;
 
@@ -14,7 +16,24 @@ final class WorkflowPolicy {
 
   static final Set<String> ALLOWED_RUNNER_SELECTORS = Set.of("arc-java-build", "ubuntu-latest");
 
+  /**
+   * The exact set of events allowed to start a workflow. The trusted condition asks only whether
+   * the event is a pull request, so every other event is trusted by construction: a {@code
+   * workflow_run}, {@code issue_comment}, or {@code repository_dispatch} job carrying the verbatim
+   * trusted condition would reach {@code arc-java-build}. Allow listing the triggers is what keeps
+   * that set of events reviewed.
+   */
+  static final Set<String> ALLOWED_TRIGGERS = Set.of("pull_request", "push", "workflow_dispatch");
+
   static final String TRUSTED_RUNNER_SELECTOR = "arc-java-build";
+
+  /** The whole {@code needs} context, which the result gate must consume instead of one job. */
+  static final String NEEDS_JSON_VARIABLE = "NEEDS_JSON";
+
+  static final String NEEDS_JSON_EXPRESSION = "${{ toJSON(needs) }}";
+
+  /** The declarative {@code name=job[,job]} verification path map the result gate evaluates. */
+  static final String VERIFICATION_PATHS_VARIABLE = "VERIFICATION_PATHS";
 
   /**
    * The only condition under which a job may run on the trusted runner: never on a pull request
@@ -38,6 +57,104 @@ final class WorkflowPolicy {
   private static final Pattern WHITESPACE_RUN = Pattern.compile("\\s+");
 
   private WorkflowPolicy() {}
+
+  /**
+   * Every workflow must declare at least one trigger, and every trigger it declares must be allow
+   * listed. An unknown event is rejected rather than inspected, so widening the trust boundary
+   * always requires editing this list.
+   */
+  static List<String> triggerViolations(JsonNode workflow) {
+    List<String> triggers = WorkflowDocuments.triggerNames(workflow);
+    if (triggers.isEmpty()) {
+      return List.of("declares no trigger");
+    }
+    List<String> violations = new ArrayList<>();
+    for (String trigger : triggers) {
+      if (trigger == null || !ALLOWED_TRIGGERS.contains(trigger)) {
+        violations.add(trigger + " is not an allowed trigger");
+      }
+    }
+    return violations;
+  }
+
+  /**
+   * Reads the {@code name=job[,job]} verification path map the result gate declares. Returns an
+   * empty map when the gate declares none, so a missing map is reported by {@link
+   * #verificationPathViolations(JsonNode, String)} rather than silently accepted.
+   */
+  static Map<String, List<String>> verificationPaths(JsonNode workflow, String resultJobName) {
+    Map<String, List<String>> paths = new LinkedHashMap<>();
+    String declared =
+        WorkflowDocuments.stepEnvironment(WorkflowDocuments.firstRunStep(workflow, resultJobName))
+            .getOrDefault(VERIFICATION_PATHS_VARIABLE, "");
+    for (String definition : WHITESPACE_RUN.split(declared.trim())) {
+      if (definition.isEmpty()) {
+        continue;
+      }
+      int separator = definition.indexOf('=');
+      String name = separator < 0 ? definition : definition.substring(0, separator);
+      List<String> jobs = new ArrayList<>();
+      if (separator >= 0) {
+        for (String job : definition.substring(separator + 1).split(",", -1)) {
+          if (!job.isEmpty()) {
+            jobs.add(job);
+          }
+        }
+      }
+      paths.put(name, jobs);
+    }
+    return paths;
+  }
+
+  /**
+   * The result gate must consume the whole {@code needs} context and must classify every job it
+   * needs into exactly one verification path. Without this, a verification job added to {@code
+   * needs} later is never examined by the gate, and the gate reports green while that job failed or
+   * never ran.
+   */
+  static List<String> verificationPathViolations(JsonNode workflow, String resultJobName) {
+    List<String> violations = new ArrayList<>();
+    JsonNode gateStep = WorkflowDocuments.firstRunStep(workflow, resultJobName);
+    Map<String, String> environment = WorkflowDocuments.stepEnvironment(gateStep);
+    if (!NEEDS_JSON_EXPRESSION.equals(environment.get(NEEDS_JSON_VARIABLE))) {
+      violations.add(
+          resultJobName + " does not read the whole needs context as " + NEEDS_JSON_VARIABLE);
+    }
+    if (environment.getOrDefault(VERIFICATION_PATHS_VARIABLE, "").isBlank()) {
+      violations.add(resultJobName + " declares no " + VERIFICATION_PATHS_VARIABLE);
+      return violations;
+    }
+
+    List<String> needs = WorkflowDocuments.jobNeeds(WorkflowDocuments.job(workflow, resultJobName));
+    Map<String, List<String>> paths = verificationPaths(workflow, resultJobName);
+    Map<String, String> owner = new LinkedHashMap<>();
+    for (Map.Entry<String, List<String>> path : paths.entrySet()) {
+      if (path.getValue().isEmpty()) {
+        violations.add("path " + path.getKey() + " declares no job");
+        continue;
+      }
+      for (String job : path.getValue()) {
+        if (!needs.contains(job)) {
+          violations.add(
+              "path "
+                  + path.getKey()
+                  + " declares "
+                  + job
+                  + ", which "
+                  + resultJobName
+                  + " does not need");
+        } else if (owner.put(job, path.getKey()) != null) {
+          violations.add(job + " is declared by more than one verification path");
+        }
+      }
+    }
+    for (String job : needs) {
+      if (!owner.containsKey(job)) {
+        violations.add(job + " belongs to no declared verification path");
+      }
+    }
+    return violations;
+  }
 
   /**
    * Every job must declare a {@code runs-on} this policy can parse, and every selector it resolves

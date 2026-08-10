@@ -2,6 +2,7 @@ package com.microsoft.agentframework.build.harness;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.MissingNode;
 import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -9,13 +10,17 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.stream.Stream;
 
 final class WorkflowDocuments {
 
   private static final ObjectMapper YAML_MAPPER = new ObjectMapper(new YAMLFactory());
+
+  private static final JsonNode MISSING = MissingNode.getInstance();
 
   private static final String GROUP_SELECTOR_PREFIX = "group:";
 
@@ -79,6 +84,45 @@ final class WorkflowDocuments {
     List<JsonNode> steps = new ArrayList<>();
     job.path("steps").forEach(steps::add);
     return steps;
+  }
+
+  /** Returns the job identifiers a job depends on, in either the string or the sequence form. */
+  static List<String> jobNeeds(JsonNode job) {
+    JsonNode needs = job.path("needs");
+    List<String> names = new ArrayList<>();
+    if (needs.isTextual()) {
+      names.add(needs.textValue());
+    } else if (needs.isArray()) {
+      needs.forEach(need -> names.add(need.textValue()));
+    }
+    return names;
+  }
+
+  /** Returns the {@code env} map a step declares, so a policy can read what the script consumes. */
+  static Map<String, String> stepEnvironment(JsonNode step) {
+    Map<String, String> environment = new LinkedHashMap<>();
+    JsonNode declared = step.path("env");
+    if (!declared.isObject()) {
+      return environment;
+    }
+    Iterator<String> names = declared.fieldNames();
+    while (names.hasNext()) {
+      String name = names.next();
+      environment.put(name, declared.path(name).asText());
+    }
+    return environment;
+  }
+
+  /**
+   * Returns the first {@code run} step of {@code jobName}, or a missing node when there is none.
+   */
+  static JsonNode firstRunStep(JsonNode workflow, String jobName) {
+    for (JsonNode step : steps(job(workflow, jobName))) {
+      if (step.path("run").isTextual()) {
+        return step;
+      }
+    }
+    return MISSING;
   }
 
   static boolean declaresRunsOn(JsonNode job) {
@@ -160,13 +204,7 @@ final class WorkflowDocuments {
    * execute the real gate script instead of pattern matching its text.
    */
   static String runScript(JsonNode workflow, String jobName) {
-    for (JsonNode step : steps(job(workflow, jobName))) {
-      JsonNode run = step.path("run");
-      if (run.isTextual()) {
-        return run.textValue();
-      }
-    }
-    return "";
+    return firstRunStep(workflow, jobName).path("run").asText("");
   }
 
   static List<String> permissionValues(JsonNode workflow) {

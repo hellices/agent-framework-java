@@ -188,27 +188,95 @@ jobs:
     permissions:
       contents: read
     steps:
-      - name: Require one complete verification path
+      - name: Require exactly one complete verification path
         env:
-          FORK_RESULT: ${{ needs.fork-verify.result }}
-          TRUSTED_QUALITY_RESULT: ${{ needs.trusted-quality.result }}
-          TRUSTED_COMPATIBILITY_RESULT: ${{ needs.trusted-compatibility.result }}
+          NEEDS_JSON: ${{ toJSON(needs) }}
+          VERIFICATION_PATHS: |
+            fork=fork-verify
+            trusted=trusted-quality,trusted-compatibility
         run: |
           set -eu
-          printf 'fork-verify=%s\n' "$FORK_RESULT"
-          printf 'trusted-quality=%s\n' "$TRUSTED_QUALITY_RESULT"
-          printf 'trusted-compatibility=%s\n' "$TRUSTED_COMPATIBILITY_RESULT"
-          if [ "$TRUSTED_QUALITY_RESULT" = "success" ] \
-            && [ "$TRUSTED_COMPATIBILITY_RESULT" = "success" ] \
-            && [ "$FORK_RESULT" = "skipped" ]; then
-            printf 'Trusted verification path completed.\n'
-            exit 0
+          results=$(printf '%s' "$NEEDS_JSON" | awk '
+            { document = document $0 }
+            END {
+              gsub(/[ \t\r\n]/, "", document)
+              gsub(/"outputs":[{][^{}]*[}]/, "", document)
+              gsub(/,[}]/, "}", document)
+              gsub(/[{],/, "{", document)
+              while (match(document, /"[A-Za-z0-9_.-]+":[{]"result":"[a-z]+"/)) {
+                entry = substr(document, RSTART, RLENGTH)
+                document = substr(document, RSTART + RLENGTH)
+                split(entry, field, "\"")
+                print field[2] "=" field[6]
+              }
+            }')
+          if [ -z "$results" ]; then
+            printf 'verify-result read no job result from the needs context.\n' >&2
+            exit 1
           fi
-          if [ "$FORK_RESULT" = "success" ] \
-            && [ "$TRUSTED_QUALITY_RESULT" = "skipped" ] \
-            && [ "$TRUSTED_COMPATIBILITY_RESULT" = "skipped" ]; then
-            printf 'Fork minimum verification path completed.\n'
-            exit 0
+          printf 'needs results:\n%s\n' "$results"
+          printf 'verification paths:\n%s\n' "$VERIFICATION_PATHS"
+
+          broken=0
+          declared=$(printf '%s' "$VERIFICATION_PATHS" | tr ' \n' '\n\n' \
+            | sed -e '/^$/d' -e 's/^[^=]*=//' | tr ',' '\n' | sed -e '/^$/d')
+
+          while IFS='=' read -r job result; do
+            [ -n "$job" ] || continue
+            case "$result" in
+              success | skipped) ;;
+              *)
+                printf '%s reported %s.\n' "$job" "$result" >&2
+                broken=1
+                ;;
+            esac
+            if ! printf '%s\n' "$declared" | grep -qx -- "$job"; then
+              printf '%s belongs to no declared verification path.\n' "$job" >&2
+              broken=1
+            fi
+          done <<RESULTS
+          $results
+          RESULTS
+
+          complete=''
+          for definition in $VERIFICATION_PATHS; do
+            path_name=${definition%%=*}
+            members=0
+            successes=0
+            skips=0
+            for job in $(printf '%s' "${definition#*=}" | tr ',' ' '); do
+              members=$((members + 1))
+              result=$(printf '%s\n' "$results" | awk -F= -v job="$job" '$1 == job { print $2 }')
+              case "$result" in
+                success) successes=$((successes + 1)) ;;
+                skipped) skips=$((skips + 1)) ;;
+                '')
+                  printf 'path %s declares %s, which is not in needs.\n' "$path_name" "$job" >&2
+                  broken=1
+                  ;;
+              esac
+            done
+            if [ "$members" -eq 0 ]; then
+              printf 'path %s declares no job.\n' "$path_name" >&2
+              broken=1
+            elif [ "$successes" -eq "$members" ]; then
+              complete="$complete $path_name"
+            elif [ "$skips" -ne "$members" ]; then
+              printf 'path %s neither completed nor was entirely skipped.\n' "$path_name" >&2
+              broken=1
+            fi
+          done
+
+          if [ "$broken" -ne 0 ]; then
+            printf 'Verification did not complete cleanly.\n' >&2
+            exit 1
           fi
-          printf 'No verification path completed successfully.\n' >&2
-          exit 1
+
+          count=$(printf '%s' "$complete" | wc -w | tr -d ' ')
+          if [ "$count" -ne 1 ]; then
+            printf 'Expected exactly one complete verification path, found %s:%s\n' \
+              "$count" "$complete" >&2
+            exit 1
+          fi
+
+          printf 'Verification path completed:%s\n' "$complete"

@@ -10,8 +10,8 @@
 `agent-framework-java-platform`. Until the scale set is registered and accepting jobs:
 
 - every trusted job stays queued and eventually times out;
-- `verify-result` sees `trusted-quality=failure`/`cancelled` and fails, because a skipped or
-  timed-out trusted path is never reported as green;
+- `verify-result` sees `trusted-quality=failure`/`cancelled` and fails, because a path that is
+  neither wholly successful nor wholly skipped is never reported as green;
 - `main` pushes therefore fail, not silently pass.
 
 The workflow is intentionally not softened to `ubuntu-latest` to make the branch mergeable earlier.
@@ -68,11 +68,39 @@ in-image verifier that runs during the registry build, and the manual `runner-sm
 which fails when any toolchain is not served from
 `/opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/`.
 
+## Trigger allow list
+
+A workflow in this repository may declare only these events:
+
+- `pull_request`
+- `push`
+- `workflow_dispatch`
+
+The list is part of the trust boundary, not a convenience. The trusted condition asks a single
+question — is this event a pull request from a fork? — so **every event that is not a pull request is
+trusted by construction**. A job carrying the verbatim trusted condition under `workflow_run`,
+`issue_comment`, `repository_dispatch`, or `schedule` therefore runs on `arc-java-build`, and
+`workflow_run` in particular can be started by a workflow run that a fork pull request triggered.
+Nothing in the condition catches that; only the allow list does.
+
+Adding an event is a reviewed change to `WorkflowPolicy.ALLOWED_TRIGGERS`, and it must be paired
+with a trust decision for that event, not merely with a workflow edit.
+`WorkflowPolicyBypassProbeTest.workflowRunTrustedJobIsCaughtOnlyByTheTriggerAllowList` pins the
+bypass: it asserts that the condition rules accept such a job and that the allow list rejects it.
+
 ## Trust boundary
 
 Fork pull requests never reach `arc-java-build`. The trusted and fork jobs use mutually exclusive
-conditions, and the required `verify-result` job fails unless exactly one complete path succeeded, so
-a skipped job can never be reported as green.
+conditions, only allow-listed events can start a workflow, and the required `verify-result` job
+fails unless exactly one complete path succeeded, so a skipped job can never be reported as green.
+
+`verify-result` reads the whole `needs` context as `NEEDS_JSON` (`${{ toJSON(needs) }}`) and
+evaluates it against the declarative `VERIFICATION_PATHS` map, `name=job[,job]` per line. It fails
+when any job reports anything other than `success` or `skipped`, when a path is neither wholly
+successful nor wholly skipped, when a needed job belongs to no path, when a path names a job that is
+not in `needs`, and unless exactly one path completed. A verification job added to `needs` but not
+classified into a path therefore fails the gate instead of passing unexamined: the gate can never go
+green over a job it does not know about.
 
 Never combine `pull_request_target`, checkout of pull-request head code, and execution of repository
 scripts. Docker or Testcontainers work requires a separately reviewed scale set, namespace, runner
@@ -82,8 +110,11 @@ group, and network policy; this repository does not create one.
 
 Every clause above that this repository can enforce is a test, not prose. `./gradlew check` runs
 `WorkflowPolicyTest` and `WorkflowPolicyBypassProbeTest`, which parse every workflow as YAML and
-enforce the runner allow list in all `runs-on` forms, the ban on job-level `uses:`, full commit-SHA
-pinning, `read`/`none` permissions, `persist-credentials: false`, pull-request-only cancellation,
-mutually exclusive trusted and fork conditions, and the `verify-result` truth table. Conditions are
-compared after whitespace and `${{ }}` normalization only, so reformatting a condition is allowed and
-weakening one is not.
+enforce the trigger allow list, the runner allow list in all `runs-on` forms, the ban on job-level
+`uses:`, full commit-SHA pinning, `read`/`none` permissions, `persist-credentials: false`,
+pull-request-only cancellation, mutually exclusive trusted and fork conditions, the requirement that
+`verify-result` consume the whole `needs` context and classify every needed job into exactly one
+verification path, and the `verify-result` truth table, which is executed as a real shell process
+against a synthesized `needs` context rather than pattern matched. Conditions are compared after
+whitespace and `${{ }}` normalization only, so reformatting a condition is allowed and weakening one
+is not.

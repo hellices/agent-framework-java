@@ -12,6 +12,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -35,6 +36,22 @@ class WorkflowPolicyTest {
 
   private static final String RESULT_JOB = "verify-result";
 
+  private static final String FORK_JOB = "fork-verify";
+
+  private static final String TRUSTED_QUALITY_JOB = "trusted-quality";
+
+  private static final String TRUSTED_COMPATIBILITY_JOB = "trusted-compatibility";
+
+  private static final String FORK_PATH = "fork";
+
+  private static final String TRUSTED_PATH = "trusted";
+
+  private static final String NEEDS_JSON_VARIABLE = "NEEDS_JSON";
+
+  private static final String NEEDS_JSON_EXPRESSION = "${{ toJSON(needs) }}";
+
+  private static final String VERIFICATION_PATHS_VARIABLE = "VERIFICATION_PATHS";
+
   private static final String CI_WORKFLOW = ".github/workflows/ci.yml";
 
   private static final String RUNNER_CONTRACT = "docs/operations/github-actions-runner-contract.md";
@@ -56,6 +73,33 @@ class WorkflowPolicyTest {
     List<String> triggers = WorkflowDocuments.triggerNames(WorkflowDocuments.read(workflow));
 
     assertThat(triggers).doesNotContain("pull_request_target");
+  }
+
+  /**
+   * The trusted condition treats every event that is not a pull request as trusted, so the set of
+   * events that can start a workflow is itself part of the trust boundary and is allow listed.
+   */
+  @ParameterizedTest(name = "{0} declares only allow-listed triggers")
+  @MethodSource("workflows")
+  void workflowDeclaresOnlyAllowListedTriggers(Path workflow) throws IOException {
+    JsonNode document = WorkflowDocuments.read(workflow);
+
+    assertThat(WorkflowDocuments.triggerNames(document)).isNotEmpty();
+    assertThat(WorkflowPolicy.triggerViolations(document)).isEmpty();
+  }
+
+  @Test
+  void triggerAllowListIsExactlyThePullRequestPushAndDispatchEvents() {
+    assertThat(WorkflowPolicy.ALLOWED_TRIGGERS)
+        .containsExactlyInAnyOrder("pull_request", "push", "workflow_dispatch");
+  }
+
+  @Test
+  void continuousIntegrationDeclaresOnlyTheAllowListedTriggers() throws IOException {
+    JsonNode document = WorkflowDocuments.read(RepositoryPaths.root().resolve(CI_WORKFLOW));
+
+    assertThat(WorkflowDocuments.triggerNames(document))
+        .containsExactlyInAnyOrderElementsOf(WorkflowPolicy.ALLOWED_TRIGGERS);
   }
 
   @ParameterizedTest(name = "{0} pins every external reference")
@@ -181,6 +225,25 @@ class WorkflowPolicyTest {
     assertThat(contract).contains("verify-result");
   }
 
+  @Test
+  void runnerContractDocumentsTheTriggerAllowList() throws IOException {
+    String contract = readRunnerContract();
+
+    assertThat(contract).contains("## Trigger allow list");
+    for (String trigger : WorkflowPolicy.ALLOWED_TRIGGERS) {
+      assertThat(contract).contains("`" + trigger + "`");
+    }
+    assertThat(contract).contains("workflow_run");
+  }
+
+  @Test
+  void runnerContractDocumentsTheGenericResultGate() throws IOException {
+    String contract = readRunnerContract();
+
+    assertThat(contract).contains(NEEDS_JSON_VARIABLE).contains(VERIFICATION_PATHS_VARIABLE);
+    assertThat(contract).contains("belongs to no path");
+  }
+
   private static String readRunnerContract() throws IOException {
     return Files.readString(
         RepositoryPaths.root().resolve(RUNNER_CONTRACT), StandardCharsets.UTF_8);
@@ -216,14 +279,29 @@ class WorkflowPolicyTest {
     assertThat(text).contains("package-ecosystem: \"github-actions\"");
   }
 
+  /**
+   * The gate must read the whole {@code needs} context, never one hand-written variable per job, so
+   * a verification job added later cannot stay unexamined.
+   */
   @Test
-  void resultGateReadsEveryVerificationJobResult() throws IOException {
-    String script = resultGateScript();
+  void resultGateConsumesTheWholeNeedsContext() throws IOException {
+    Map<String, String> environment = WorkflowDocuments.stepEnvironment(resultGateStep());
 
-    assertThat(script)
-        .contains("FORK_RESULT")
-        .contains("TRUSTED_QUALITY_RESULT")
-        .contains("TRUSTED_COMPATIBILITY_RESULT");
+    assertThat(environment).containsEntry(NEEDS_JSON_VARIABLE, NEEDS_JSON_EXPRESSION);
+    assertThat(environment).containsKey(VERIFICATION_PATHS_VARIABLE);
+
+    String script = resultGateScript();
+    assertThat(script).contains(NEEDS_JSON_VARIABLE).contains(VERIFICATION_PATHS_VARIABLE);
+    assertThat(environment.values()).noneMatch(value -> value.contains(".result"));
+  }
+
+  @Test
+  void resultGateAssignsEveryNeededJobToExactlyOneVerificationPath() throws IOException {
+    JsonNode document = WorkflowDocuments.read(RepositoryPaths.root().resolve(CI_WORKFLOW));
+
+    assertThat(WorkflowPolicy.verificationPathViolations(document, RESULT_JOB)).isEmpty();
+    assertThat(WorkflowPolicy.verificationPaths(document, RESULT_JOB))
+        .containsOnlyKeys(FORK_PATH, TRUSTED_PATH);
   }
 
   static Stream<Arguments> resultGateCases() {
@@ -250,9 +328,87 @@ class WorkflowPolicyTest {
   void resultGateAcceptsOnlyOneCompleteVerificationPath(
       String fork, String quality, String compatibility, int expectedExitCode)
       throws IOException, InterruptedException {
-    assumeTrue(!System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("win"));
+    assumeTrue(isPosixShellAvailable());
 
-    assertThat(runResultGate(fork, quality, compatibility)).isEqualTo(expectedExitCode);
+    assertThat(runResultGate(needsResults(fork, quality, compatibility)))
+        .isEqualTo(expectedExitCode);
+  }
+
+  static Stream<String> addedVerificationJobResults() {
+    return Stream.of("success", "skipped", "failure", "cancelled");
+  }
+
+  /**
+   * Regression for the false-green hole: a verification job that is wired into {@code needs} but
+   * into no verification path fails the gate, whatever it reported, so adding a job without
+   * classifying it can never be reported as a completed verification.
+   */
+  @ParameterizedTest(name = "an added verification job reporting {0} cannot report green")
+  @MethodSource("addedVerificationJobResults")
+  void resultGateRejectsAJobThatBelongsToNoVerificationPath(String addedResult)
+      throws IOException, InterruptedException {
+    assumeTrue(isPosixShellAvailable());
+
+    Map<String, String> results = needsResults("skipped", "success", "success");
+    results.put("added-verify", addedResult);
+
+    assertThat(runResultGate(results)).isEqualTo(1);
+  }
+
+  @Test
+  void resultGateRejectsAVerificationJobThatDisappearedFromNeeds()
+      throws IOException, InterruptedException {
+    assumeTrue(isPosixShellAvailable());
+
+    Map<String, String> results = needsResults("skipped", "success", "success");
+    results.remove(TRUSTED_COMPATIBILITY_JOB);
+
+    assertThat(runResultGate(results)).isEqualTo(1);
+  }
+
+  @Test
+  void resultGateRejectsAnEmptyNeedsContext() throws IOException, InterruptedException {
+    assumeTrue(isPosixShellAvailable());
+
+    assertThat(runResultGate(new LinkedHashMap<>())).isEqualTo(1);
+    assertThat(runResultGate(null)).isEqualTo(1);
+  }
+
+  private static boolean isPosixShellAvailable() {
+    return !System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("win");
+  }
+
+  private static Map<String, String> needsResults(
+      String fork, String quality, String compatibility) {
+    Map<String, String> results = new LinkedHashMap<>();
+    results.put(FORK_JOB, fork);
+    results.put(TRUSTED_QUALITY_JOB, quality);
+    results.put(TRUSTED_COMPATIBILITY_JOB, compatibility);
+    return results;
+  }
+
+  /** Renders the {@code needs} context exactly as {@code toJSON(needs)} does. */
+  private static String renderNeedsJson(Map<String, String> results) {
+    StringBuilder json = new StringBuilder("{");
+    for (Map.Entry<String, String> entry : results.entrySet()) {
+      if (json.length() > 1) {
+        json.append(',');
+      }
+      json.append("\n  \"")
+          .append(entry.getKey())
+          .append("\": {\n    \"result\": \"")
+          .append(entry.getValue())
+          .append("\",\n    \"outputs\": {}\n  }");
+    }
+    return json.append("\n}").toString();
+  }
+
+  private static JsonNode resultGateStep() throws IOException {
+    JsonNode document = WorkflowDocuments.read(RepositoryPaths.root().resolve(CI_WORKFLOW));
+    JsonNode step = WorkflowDocuments.firstRunStep(document, RESULT_JOB);
+
+    assertThat(step.isObject()).isTrue();
+    return step;
   }
 
   private static String resultGateScript() throws IOException {
@@ -263,14 +419,15 @@ class WorkflowPolicyTest {
     return script;
   }
 
-  private static int runResultGate(String fork, String quality, String compatibility)
+  private static int runResultGate(Map<String, String> results)
       throws IOException, InterruptedException {
     ProcessBuilder builder = new ProcessBuilder(POSIX_SHELL, "-s");
     builder.redirectErrorStream(true);
     Map<String, String> environment = builder.environment();
-    environment.put("FORK_RESULT", fork);
-    environment.put("TRUSTED_QUALITY_RESULT", quality);
-    environment.put("TRUSTED_COMPATIBILITY_RESULT", compatibility);
+    environment.put(NEEDS_JSON_VARIABLE, results == null ? "" : renderNeedsJson(results));
+    environment.put(
+        VERIFICATION_PATHS_VARIABLE,
+        WorkflowDocuments.stepEnvironment(resultGateStep()).get(VERIFICATION_PATHS_VARIABLE));
 
     Process gate = builder.start();
     try (OutputStream commands = gate.getOutputStream()) {
