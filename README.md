@@ -41,5 +41,6 @@ Microsoft Agent Framework의 실행 의미론을 Java에서 사용할 수 있도
 - [저장소 작업 지침](AGENTS.md)
 - [기여 가이드](CONTRIBUTING.md)
 - [보안 정책](SECURITY.md)
+- [GitHub Actions runner 계약](docs/operations/github-actions-runner-contract.md)
 
 모든 로컬·CI 검증은 저장소에 포함된 Maven Wrapper를 기준으로 합니다.
