@@ -11,6 +11,10 @@
   <description>Framework-neutral Java implementation of Microsoft Agent Framework semantics.</description>
   <url>https://github.com/hwang-inhwan/agent-framework-java</url>
 
+  <modules>
+    <module>build-tools/harness-policy</module>
+  </modules>
+
   <properties>
     <maven.compiler.release>17</maven.compiler.release>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
@@ -214,6 +218,11 @@
           <printFailingErrors>true</printFailingErrors>
         </configuration>
         <dependencies>
+          <dependency>
+            <groupId>net.sourceforge.pmd</groupId>
+            <artifactId>pmd-core</artifactId>
+            <version>${pmd.version}</version>
+          </dependency>
           <dependency>
             <groupId>net.sourceforge.pmd</groupId>
             <artifactId>pmd-java</artifactId>

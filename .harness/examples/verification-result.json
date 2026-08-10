@@ -1,0 +1,13 @@
+{
+  "schemaVersion": "1.0",
+  "checks": [
+    {
+      "name": "artifact contracts",
+      "command": "./mvnw -B -pl build-tools/harness-policy -Dtest=ArtifactContractTest test",
+      "exitCode": 0,
+      "status": "PASS",
+      "durationMs": 1200
+    }
+  ],
+  "overallStatus": "PASS"
+}

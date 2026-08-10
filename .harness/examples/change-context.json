@@ -1,0 +1,7 @@
+{
+  "schemaVersion": "1.0",
+  "repositoryRevision": "0123456789abcdef",
+  "relevantFiles": ["AGENTS.md", "docs/upstream/README.md"],
+  "affectedModules": ["build-tools/harness-policy"],
+  "evidence": ["AGENTS.md defines the verification contract."]
+}
