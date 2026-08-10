@@ -1,0 +1,7 @@
+{
+  "schemaVersion": "1.0",
+  "request": "Add a deterministic tool-loop regression test.",
+  "nonGoals": ["Change the public API", "Call a live model"],
+  "successCriteria": ["The new test fails before the fix and passes after it."],
+  "risk": "MEDIUM"
+}

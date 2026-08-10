@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-framework-java.dev/harness/test-plan.schema.json",
+  "title": "TestPlan",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "tests"],
+  "properties": {
+    "schemaVersion": { "const": "1.0" },
+    "tests": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "command", "expectedInitialOutcome", "required"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "command": { "type": "string", "minLength": 1 },
+          "expectedInitialOutcome": { "enum": ["PASS", "FAIL"] },
+          "required": { "type": "boolean" }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "schemaVersion": "1.0",
+  "writablePaths": ["build-tools/harness-policy/**", ".harness/**"],
+  "affectedProjects": [":build-tools:harness-policy"],
+  "riskTier": "MEDIUM",
+  "requiredGates": ["POLICY", "BUILD", "STATIC"]
+}
