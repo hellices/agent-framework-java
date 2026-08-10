@@ -12,7 +12,7 @@ Microsoft Agent Framework의 실행 의미론을 Java에서 사용할 수 있도
 - 에이전트 실행은 Spring에 의존하지 않는 임베디드 상태 머신으로 구현합니다.
 - Spring Boot는 호스트 런타임이며 `AgentEngine`을 Bean으로 조립합니다.
 - Spring AI는 필수 기반이 아닌 선택적 어댑터로 취급합니다.
-- 하나의 저장소에서 여러 Maven artifact를 관리하는 multi-module monorepo를 사용합니다.
+- 하나의 저장소에서 여러 Gradle artifact를 관리하는 multi-project monorepo를 사용합니다.
 - 초기 릴리스는 단일 버전과 BOM으로 전체 artifact의 호환성을 보장합니다.
 
 ## 책임 경계
@@ -32,6 +32,7 @@ Microsoft Agent Framework의 실행 의미론을 Java에서 사용할 수 있도
 
 - [기초 설계와 로드맵](docs/superpowers/specs/2026-08-10-agent-framework-java-foundation-design.md)
 - [엔지니어링 하네스 설계](docs/superpowers/specs/2026-08-10-agent-framework-java-engineering-harness-design.md)
+- [Upstream snapshot 분석 인덱스](docs/upstream/snapshots/d0a4165f/README.md)
 
 현재 저장소는 설계 기준을 확정한 단계입니다. 파일·클래스·메서드 단위 구현 계획은 기초
 계약과 호환성 시나리오를 검토한 후 별도로 작성합니다.

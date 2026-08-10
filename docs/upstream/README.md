@@ -26,10 +26,13 @@ Python 구현이 다르면 한쪽을 임의로 표준으로 선택하지 않고 
 
 ## 문서 집합
 
+- [스냅샷 인덱스](snapshots/d0a4165f/README.md)
 - [스냅샷 매니페스트](snapshots/d0a4165f/snapshot-manifest.md)
+- [Coverage ledger](snapshots/d0a4165f/coverage-ledger.md)
+- [호환성 매트릭스](snapshots/d0a4165f/compatibility-matrix.md)
 
-기능별 설계, 언어별 기능 매트릭스와 Java 호환성 결정은 고정 스냅샷 분석이 끝나는 순서대로
-이 인덱스에 추가한다.
+31개 기능 문서는 스냅샷 인덱스에서 기능군별로 묶어 탐색하고, 언어별 기능 매트릭스와 Java
+호환성 결정은 coverage ledger와 호환성 매트릭스를 함께 기준으로 삼는다.
 
 ## 갱신 정책
 
