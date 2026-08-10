@@ -1,0 +1,15 @@
+* text=auto eol=lf
+
+*.bat text eol=crlf
+gradlew text eol=lf
+
+*.jar binary
+*.zip binary
+*.png binary
+*.jpg binary
+*.gif binary
+*.ico binary
+
+gradle/wrapper/gradle-wrapper.jar binary linguist-vendored
+gradlew linguist-vendored
+gradlew.bat linguist-vendored
