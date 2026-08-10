@@ -165,3 +165,15 @@ verification path, and each of those workflows' derived `verify-result` truth ta
 executed as a real shell process against a synthesized `needs` context rather than pattern matched.
 Conditions are compared after whitespace and `${{ }}` normalization only, so reformatting a
 condition is allowed and weakening one is not.
+
+## Readiness
+
+`arc-java-build` is verified by the platform repository and by the application-side smoke workflow:
+
+```bash
+gh workflow run runner-smoke.yml
+```
+
+The smoke workflow fails when the runner runs as root, when any `JAVA_HOME_*_X64` value is not served
+from `/opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/`, when `docker` is present, or when the Java 17,
+21, and 25 compatibility tasks do not pass.
