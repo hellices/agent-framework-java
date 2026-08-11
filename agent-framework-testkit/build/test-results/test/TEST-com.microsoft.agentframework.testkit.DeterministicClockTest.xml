@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.microsoft.agentframework.testkit.DeterministicClockTest" tests="4" skipped="0" failures="0" errors="0" timestamp="2026-08-11T12:11:20.536Z" hostname="hwang-inhwan-ui-Macmini.local" time="0.172">
+  <properties/>
+  <testcase name="steppingClockKeepsItsPositionWhenTheZoneChanges()" classname="com.microsoft.agentframework.testkit.DeterministicClockTest" time="0.13"/>
+  <testcase name="rejectsNullArguments()" classname="com.microsoft.agentframework.testkit.DeterministicClockTest" time="0.008"/>
+  <testcase name="steppingClockAdvancesByTheConfiguredStep()" classname="com.microsoft.agentframework.testkit.DeterministicClockTest" time="0.007"/>
+  <testcase name="fixedClockNeverAdvances()" classname="com.microsoft.agentframework.testkit.DeterministicClockTest" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

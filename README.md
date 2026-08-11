@@ -1,62 +1,139 @@
 # Agent Framework for Java
 
-Microsoft Agent Framework의 실행 의미론을 Java에서 사용할 수 있도록 만드는 프로젝트입니다.
+Bring the observable execution semantics of [Microsoft Agent Framework](https://github.com/microsoft/agent-framework)
+to Java.
 
-이 프로젝트는 독립적인 애플리케이션 서버나 DI 컨테이너를 만들지 않습니다. 핵심은 호스트
-환경에 삽입할 수 있는 `AgentEngine`이며, Spring Boot 같은 애플리케이션 런타임이 객체
-생명주기, 실행 자원, 보안, 트랜잭션과 관찰성 구성을 담당합니다.
+This project does not build an application server or a dependency injection container. The
+deliverable is an embeddable `AgentEngine`. A host runtime such as Spring Boot keeps owning object
+lifecycle, execution resources, security, transactions, and observability configuration.
 
-## 핵심 방향
+> **Status:** early. The build harness, requirements, and module skeleton are in place. Agent
+> behavior is not implemented yet. See [Current state](#current-state).
 
-- Microsoft Agent Framework와 API 이름보다 관찰 가능한 실행 동작의 호환성을 우선합니다.
-- 에이전트 실행은 Spring에 의존하지 않는 임베디드 상태 머신으로 구현합니다.
-- Spring Boot는 호스트 런타임이며 `AgentEngine`을 Bean으로 조립합니다.
-- Spring AI는 필수 기반이 아닌 선택적 어댑터로 취급합니다.
-- 하나의 저장소에서 여러 Gradle artifact를 관리하는 multi-project monorepo를 사용합니다.
-- 초기 릴리스는 단일 버전과 BOM으로 전체 artifact의 호환성을 보장합니다.
+## Why this split
 
-## 책임 경계
+An agent runtime and an application runtime solve different problems. Merging them produces two
+systems that both claim to own thread pools, configuration, and request lifecycle, and neither can
+be tested without the other.
 
-| 영역 | 소유자 |
+So the boundary is explicit:
+
+| Concern | Owner |
 | --- | --- |
-| 모델·도구 호출의 상태 전이 | AgentEngine |
-| 세션 상태 변경 규칙 | AgentEngine |
-| 스트리밍 이벤트 순서와 중단 정책 | AgentEngine |
-| DI, 설정, 객체 생명주기 | Spring Boot 또는 다른 호스트 |
-| 실행기, 스케줄러, HTTP 서버 | 호스트 |
-| 보안, 트랜잭션, 복원력 정책 | 호스트와 통합 모듈 |
-| 공급자 API 변환 | Provider adapter |
-| Spring AI 연동 | 선택적 Spring AI adapter |
+| Model call and tool call state transitions | `AgentEngine` |
+| Session state change rules | `AgentEngine` |
+| Streaming event order and interruption policy | `AgentEngine` |
+| Dependency injection, configuration, object lifecycle | Host runtime |
+| Executors, schedulers, HTTP server | Host runtime |
+| Security, transactions, resilience policy | Host runtime and integration modules |
+| Provider API translation | Provider adapter |
 
-## 문서
+The engine stays framework neutral, so the same agent semantics run under Spring Boot, Quarkus, a
+CLI, or a plain test harness.
 
-- [기초 설계와 로드맵](docs/design/foundation-design.md)
-- [엔지니어링 하네스 설계](docs/design/engineering-harness-design.md)
-- [Gradle Kotlin DSL 및 Java ARC Foundation 설계](docs/design/gradle-kotlin-arc-foundation-design.md)
-- [요구사항](docs/requirements/README.md)
-- [Upstream snapshot 분석 인덱스](docs/upstream/snapshots/d0a4165f/README.md)
+## Design principles
 
-## 기여와 하네스
+- Prefer compatibility of **observable behavior** over matching upstream API names.
+- Implement agent execution as an embedded state machine with no application framework dependency.
+- Treat Spring AI and every other integration as an **optional adapter**, never a foundation.
+- Keep one repository with several published artifacts, aligned by a single version and a BOM.
 
-- [저장소 작업 지침](AGENTS.md)
-- [기여 가이드](CONTRIBUTING.md)
-- [보안 정책](SECURITY.md)
-- [GitHub Actions runner 계약](docs/operations/github-actions-runner-contract.md)
+## Quick start
 
-모든 로컬·CI 검증은 저장소에 포함된 Gradle Wrapper를 사용합니다.
+Requires JDK 17. Compatibility tests additionally use Temurin 21 and 25.
 
 ```bash
+git clone https://github.com/hellices/agent-framework-java.git
+cd agent-framework-java
 ./gradlew check
 ```
 
-## 현재 상태
+Everything local and in CI runs through the committed Gradle Wrapper. There is no separate CI-only
+verification path.
 
-설계 기준과 요구사항을 확정하고, Gradle 엔지니어링 하네스를 저장소에 반영한 단계입니다.
-제품 모듈은 아직 없습니다.
+| Command | Purpose |
+| --- | --- |
+| `./gradlew policyCheck` | Repository, artifact, and workflow policy regression |
+| `./gradlew quality` | Formatting and static analysis on JDK 17 |
+| `./gradlew testJava17` | Tests on the Temurin 17 launcher |
+| `./gradlew check` | Everything above plus the 21 and 25 compatibility runs |
 
-CI의 신뢰 경로는 `arc-java-build` ARC scale set에서 실행됩니다. 러너 계약과 실행 조건은
-[GitHub Actions runner 계약](docs/operations/github-actions-runner-contract.md)을 따릅니다.
+If Temurin 21 or 25 is missing locally, `testJava21` and `testJava25` fail with a toolchain error.
+Run the narrower tasks and let CI cover the rest.
 
-단계별 실행 계획은 저장소에 보관하지 않습니다. 무엇을 만들어야 하는지는
-[요구사항](docs/requirements/README.md)이, 왜 그렇게 만드는지는
-[설계 문서](docs/design/foundation-design.md)가 정의합니다.
+## Repository layout
+
+```text
+agent-framework-api/        Public contracts and value types
+agent-framework-engine/     Embedded execution state machine
+agent-framework-testkit/    Deterministic fixtures for tests
+agent-framework-bom/        Version alignment for published artifacts
+build-logic/                Gradle convention plugins
+build-tools/harness-policy/ Executable repository policy
+config/                     Checkstyle, PMD, SpotBugs configuration
+docs/                       Requirements, design, upstream analysis
+.harness/                   Agent artifact JSON schemas
+```
+
+Module rules are defined in [module composition](docs/design/module-composition.md) and enforced by
+`./gradlew policyCheck`.
+
+## Documentation
+
+Start here depending on what you need.
+
+| Question | Document |
+| --- | --- |
+| What must Java build? | [Requirements](docs/requirements/README.md) |
+| Why is it built this way? | [Foundation design](docs/design/foundation-design.md) |
+| How does the upstream framework behave? | [Upstream snapshot analysis](docs/upstream/snapshots/d0a4165f/README.md) |
+| How do modules relate? | [Module composition](docs/design/module-composition.md) |
+| How is the repository verified? | [Engineering harness design](docs/design/engineering-harness-design.md) |
+| How does the build work? | [Gradle and Java ARC foundation](docs/design/gradle-kotlin-arc-foundation-design.md) |
+
+The requirements are the contract. 244 requirements across twelve documents, each with a stable id,
+a .NET and Python comparison, the reasoning behind the Java decision, and acceptance criteria.
+
+## Contributing
+
+New here? Start with the [getting started guide](docs/operations/getting-started.md). It walks from
+a clone to a merged pull request.
+
+- [Repository instructions](AGENTS.md)
+- [Contributing guide](CONTRIBUTING.md)
+- [Security policy](SECURITY.md)
+- [GitHub Actions runner contract](docs/operations/github-actions-runner-contract.md)
+
+Pick a requirement id, write the failing test first, then implement the smallest change that
+satisfies it. Reference the id in the commit message so the contract and the code stay linked.
+
+## Current state
+
+The repository has a verified foundation and no agent behavior yet.
+
+**In place**
+
+- Gradle Kotlin DSL build with convention plugins and dependency locking
+- Executable repository policy covering build contract, governance, workflows, and module structure
+- Agent artifact JSON schemas under `.harness/`
+- CI on the `arc-java-build` ARC scale set with a fork-safe verification path
+- 244 requirements derived from a pinned upstream snapshot
+- Four product modules with a compiled, tested, publishable surface
+
+**Not started**
+
+- Message and content types, model client ports, tool loop, sessions, interceptors
+- Workflows, hosting, protocol adapters, provider integrations
+
+The first implementation target is the `agent-framework-api` type model, because every other module
+depends on it and the compatibility matrix marks it required for the initial release.
+
+## Translations
+
+- [한국어](docs/ko/README.md)
+
+English is the source of truth. Translations follow.
+
+## License
+
+[MIT](LICENSE)

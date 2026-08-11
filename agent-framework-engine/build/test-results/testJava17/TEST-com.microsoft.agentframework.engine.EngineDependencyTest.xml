@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.microsoft.agentframework.engine.EngineDependencyTest" tests="1" skipped="0" failures="0" errors="0" timestamp="2026-08-11T12:11:24.926Z" hostname="hwang-inhwan-ui-Macmini.local" time="0.132">
+  <properties/>
+  <testcase name="apiContractIsReachableFromTheEngineClasspath()" classname="com.microsoft.agentframework.engine.EngineDependencyTest" time="0.112"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>
