@@ -1,5 +1,9 @@
 # Contributing
 
+New contributors should start with the
+[getting started guide](docs/operations/getting-started.md), which covers prerequisites, the first
+change, and pull request expectations.
+
 Before changing code, read `AGENTS.md`, the approved designs in `docs/design/`, the requirements in
 `docs/requirements/`, and the pinned upstream guidance in `docs/upstream/`.
 

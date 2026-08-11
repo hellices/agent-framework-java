@@ -15,4 +15,8 @@ dependencyResolutionManagement {
 
 rootProject.name = "agent-framework-java"
 
+include(":agent-framework-api")
+include(":agent-framework-bom")
+include(":agent-framework-engine")
+include(":agent-framework-testkit")
 include(":build-tools:harness-policy")
