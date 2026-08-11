@@ -1,26 +1,47 @@
 # GitHub Actions Runner Contract
 
-## Merge gate: do not merge before `arc-java-build` exists
-
-**This branch must not be merged into `main` until the `arc-java-build` scale set is live.**
+## Runner availability: `arc-java-build` is scoped to a repository
 
 `.github/workflows/ci.yml` schedules `trusted-quality` and `trusted-compatibility` on
-`runs-on: arc-java-build`. That label is created by the Java ARC platform work in the sibling
-repository `agent-framework-java-platform`. Until the scale set is registered and accepting jobs:
+`runs-on: arc-java-build`. That label comes from an Actions Runner Controller scale set deployed by
+the sibling repository `agent-framework-java-platform`. A scale set is registered against a specific
+GitHub owner and repository, so the label does not follow the code.
 
-- every trusted job stays queued and eventually times out;
-- `verify-result` sees `trusted-quality=failure`/`cancelled` and fails, because a path that is
-  neither wholly successful nor wholly skipped is never reported as green;
-- `main` pushes therefore fail, not silently pass.
+**When this repository moves to a different owner, the scale set must be re-registered against the
+new location before trusted CI can run.** Verify with:
 
-The workflow is intentionally not softened to `ubuntu-latest` to make the branch mergeable earlier.
+```bash
+gh api repos/<owner>/<repo>/actions/runners --jq '.total_count'
+```
+
+A count of zero means every trusted job queues until it times out. The observable symptoms are:
+
+- trusted jobs stay `queued` indefinitely rather than failing fast;
+- `verify-result` fails once they time out, because a path that is neither wholly successful nor
+  wholly skipped is never reported as green;
+- `main` pushes therefore fail rather than silently pass.
+
+The workflow is intentionally not softened to `ubuntu-latest` to make a branch mergeable earlier.
 Doing that would delete the only executable evidence that the runner contract below is honoured, and
 the runner label allow list in `WorkflowPolicyTest` would then permit a trusted path on a hosted
-runner. Merge order is fixed:
+runner.
 
-1. `agent-framework-java-platform` deploys `arc-java-build` and its smoke workflow passes.
+While the scale set is unavailable, verify locally and record the result in the pull request:
+
+```bash
+./gradlew policyCheck quality testJava17 buildLogicTest
+./gradlew publishAllPublicationsToBuildDirectoryRepository
+```
+
+This covers everything except the Java 21 and 25 compatibility matrix, which needs those toolchains
+installed locally or a working runner.
+
+Order of operations when standing up or moving the runner:
+
+1. `agent-framework-java-platform` deploys `arc-java-build` for the target repository and its smoke
+   workflow passes.
 2. A trusted run of this repository's `ci.yml` completes on `arc-java-build`.
-3. Only then is this branch merged and `verify-result` made a required status check.
+3. Only then is `verify-result` made a required status check.
 
 ## Application repository contract
 

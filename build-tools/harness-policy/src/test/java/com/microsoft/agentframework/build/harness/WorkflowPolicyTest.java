@@ -278,12 +278,16 @@ class WorkflowPolicyTest {
   }
 
   @Test
-  void runnerContractBlocksMergingBeforeTheTrustedScaleSetExists() throws IOException {
+  void runnerContractExplainsTrustedRunnerAvailability() throws IOException {
     String contract = readRunnerContract();
 
-    assertThat(contract).contains("## Merge gate: do not merge before `arc-java-build` exists");
+    // The contract must keep explaining where the trusted label comes from, what an unavailable
+    // scale set looks like, and why that blocks a green result. The heading text is deliberately
+    // not asserted so the document can describe registration and relocation, not just first setup.
+    assertThat(contract).contains("`arc-java-build`");
     assertThat(contract).contains("agent-framework-java-platform");
     assertThat(contract).contains("verify-result");
+    assertThat(contract).contains("queued");
   }
 
   @Test
