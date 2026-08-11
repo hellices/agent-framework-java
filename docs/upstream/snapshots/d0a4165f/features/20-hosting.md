@@ -350,14 +350,23 @@ Python에는 `AgentState`가 있지만 .NET에는 대응 public `HostedAgentStat
 
 ## 배치 원칙
 
-### core에 둘 것
-- protocol-neutral target abstraction
-- `AgentState`/`WorkflowState`에 해당하는 실행 상태 helper
-- `SessionStore` abstraction
-- workflow restore-then-run helper
-- state serialization registry 또는 pluggable codec hook
+### API와 Engine이 단독 소유할 것
+- `AgentSession`, structured `serviceSessionId`와 typed snapshot envelope
+- `SessionStore` abstraction과 serialization codec registry
+- `WorkflowState` 및 restore-then-run 실행 규칙
 
-이 레이어는 OpenAI/A2A/AG-UI/MCP를 몰라야 한다. generic hosting의 본질은 execution state이지 wire protocol이 아니기 때문이다. (출처: [ADR-0027 decision outcome](https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/docs/decisions/0027-hosting-channels.md#L62-L103))
+이 계약은 08 Session과 15~17 Workflow 문서가 정의한다. Hosting module은 같은 타입이나
+store 계약을 다시 선언하지 않고 주입받아 사용한다.
+
+### hosting core가 소유할 것
+- protocol-neutral target resolution과 lifecycle wrapper
+- `AgentState`/`WorkflowState`를 요청 처리에 연결하는 binder
+- session load/run/save coordination
+- protocol adapter가 사용할 run values, session snapshot과 checkpoint cursor projection
+
+이 레이어는 OpenAI/A2A/AG-UI/MCP를 몰라야 한다. generic hosting의 본질은 wire protocol
+구현이 아니라 core 실행 계약을 host 요청 수명에 연결하는 것이기 때문이다. (출처:
+[ADR-0027 decision outcome](https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/docs/decisions/0027-hosting-channels.md#L62-L103))
 
 ### optional adapter에 둘 것
 - protocol-specific parser/renderer는 각 별도 문서의 범위
@@ -380,7 +389,8 @@ Python에는 `AgentState`가 있지만 .NET에는 대응 public `HostedAgentStat
 - deployment/readiness/liveness
 
 ## 제안 아티팩트
-- `agent-framework-core`
+- `agent-framework-api`
+- `agent-framework-engine`
 - `agent-framework-hosting-core`
 - `agent-framework-hosting-spring`
 - protocol adapters는 별도 문서 범위

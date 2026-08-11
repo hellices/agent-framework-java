@@ -33,6 +33,7 @@ Microsoft Agent Framework의 실행 의미론을 Java에서 사용할 수 있도
 - [기초 설계와 로드맵](docs/superpowers/specs/2026-08-10-agent-framework-java-foundation-design.md)
 - [엔지니어링 하네스 설계](docs/superpowers/specs/2026-08-10-agent-framework-java-engineering-harness-design.md)
 - [Gradle Kotlin DSL 및 Java ARC Foundation 설계](docs/superpowers/specs/2026-08-10-gradle-kotlin-arc-foundation-design.md)
+- [Upstream snapshot 분석 인덱스](docs/upstream/snapshots/d0a4165f/README.md)
 
 ## 기여와 하네스
 
