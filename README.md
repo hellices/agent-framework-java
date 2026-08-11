@@ -30,8 +30,9 @@ Microsoft Agent Framework의 실행 의미론을 Java에서 사용할 수 있도
 
 ## 문서
 
-- [기초 설계와 로드맵](docs/superpowers/specs/2026-08-10-agent-framework-java-foundation-design.md)
-- [엔지니어링 하네스 설계](docs/superpowers/specs/2026-08-10-agent-framework-java-engineering-harness-design.md)
+- [기초 설계와 로드맵](docs/design/foundation-design.md)
+- [엔지니어링 하네스 설계](docs/design/engineering-harness-design.md)
+- [요구사항](docs/requirements/README.md)
 - [Upstream snapshot 분석 인덱스](docs/upstream/snapshots/d0a4165f/README.md)
 
 현재 저장소는 설계 기준을 확정한 단계입니다. 파일·클래스·메서드 단위 구현 계획은 기초

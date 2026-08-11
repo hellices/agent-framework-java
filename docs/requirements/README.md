@@ -83,6 +83,6 @@
 
 ## 관련 문서
 
-- [기초 설계와 로드맵](../superpowers/specs/2026-08-10-agent-framework-java-foundation-design.md)
+- [기초 설계와 로드맵](../design/foundation-design.md)
 - [원본 스냅샷 분석](../upstream/snapshots/d0a4165f/README.md)
 - [기능별 호환성 매트릭스](../upstream/snapshots/d0a4165f/compatibility-matrix.md)

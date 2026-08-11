@@ -152,9 +152,9 @@ Spring 통합에서는 Micrometer Observation을 동일 trace context에 연결�
 API 변경과 모든 adapter의 contract test를 한 변경 단위로 검증하기 위해서다.
 
 빌드 도구는 Gradle Kotlin DSL을 사용한다. 이 결정은 `gradle-arc-foundation` 브랜치의
-`docs/superpowers/specs/2026-08-10-gradle-kotlin-arc-foundation-design.md`에서 확정했으며,
-초기 초안의 Maven 전제를 대체한다. 해당 빌드 구현과 설계 문서는 `arc-java-build` 신뢰
-실행 게이트를 통과한 뒤 `main`에 반영한다.
+Gradle Kotlin DSL 및 Java ARC Foundation 설계에서 확정했으며, 초기 초안의 Maven 전제를
+대체한다. 해당 빌드 구현과 설계 문서는 `arc-java-build` 신뢰 실행 게이트를 통과한 뒤
+`main`에 반영하며, 그때 이 저장소의 `docs/design/` 구조로 옮긴다.
 
 초기 목표 구조는 다음과 같다.
 

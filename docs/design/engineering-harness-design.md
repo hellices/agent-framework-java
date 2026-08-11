@@ -760,8 +760,8 @@ deterministic fake 비율을 먼저 개선한다.
 
 ### 프로젝트와 MAF
 
-- [기초 설계](./2026-08-10-agent-framework-java-foundation-design.md)
-- [저장소 upstream 기준](../../upstream/README.md)
+- [기초 설계](./foundation-design.md)
+- [저장소 upstream 기준](../upstream/README.md)
 - [MAF pinned RunTests.cs](https://raw.githubusercontent.com/microsoft/agent-framework/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/tests/AgentConformance.IntegrationTests/RunTests.cs)
 - [Microsoft Agent Framework workflows](https://learn.microsoft.com/en-us/agent-framework/workflows/)
 - [Microsoft Agent Framework repository](https://github.com/microsoft/agent-framework)
