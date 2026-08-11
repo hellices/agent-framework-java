@@ -29,6 +29,11 @@ config/                         Checkstyle, PMD, SpotBugs configuration
 docs/                           Requirements, design, upstream analysis
 ```
 
+Planned grouping directories are `providers/`, `integrations/`, `starters/`, `protocols/`,
+`workflow/`, `compatibility-tests/`, and `samples/`. `build-tools/` already exists for harness code.
+This list is closed and mirrored in `ModuleCompositionPolicyTest`; a project registered outside it,
+or nested more than one level deep, fails `policyCheck`.
+
 Grouping directories are created when the first module in that family lands, not in advance. An
 empty directory communicates nothing and still costs a reader a lookup.
 

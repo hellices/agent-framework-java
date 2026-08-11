@@ -16,9 +16,9 @@ import org.junit.jupiter.params.provider.MethodSource;
 /**
  * Proves the module composition contract holds.
  *
- * <p>Module registration, applied conventions, dependency direction, and artifact coordinates are
- * build failures rather than review comments. Update {@code docs/design/module-composition.md} and
- * this test together.
+ * <p>Module registration, layout, applied conventions, dependency direction, and artifact
+ * coordinates are build failures rather than review comments. Update {@code
+ * docs/design/module-composition.md} and this test together.
  */
 class ModuleCompositionPolicyTest {
 
@@ -27,11 +27,32 @@ class ModuleCompositionPolicyTest {
 
   private static final String PLATFORM_PROJECT = ":agent-framework-bom";
 
+  private static final String HARNESS_PREFIX = ":build-tools:";
+
+  /**
+   * Directories that may hold a family of modules.
+   *
+   * <p>A project outside this set must sit at the repository root. The list is intentionally
+   * closed: adding a family is a layout decision that belongs in the design document, not something
+   * a module author can introduce by creating a directory.
+   */
+  private static final List<String> GROUPING_DIRECTORIES =
+      List.of(
+          "providers",
+          "integrations",
+          "starters",
+          "protocols",
+          "workflow",
+          "compatibility-tests",
+          "samples",
+          "build-tools");
+
   private static final List<String> REQUIRED_PLUGINS =
       List.of(
           "agentframework.java-library-conventions",
           "agentframework.test-conventions",
-          "agentframework.quality-conventions");
+          "agentframework.quality-conventions",
+          "agentframework.library-publishing-conventions");
 
   private static final Map<String, List<String>> ALLOWED_DEPENDENCIES =
       Map.of(
@@ -48,6 +69,49 @@ class ModuleCompositionPolicyTest {
     assertThat(ProjectLayout.includedProjects())
         .containsAll(LIBRARY_PROJECTS)
         .contains(PLATFORM_PROJECT);
+  }
+
+  @Test
+  void everyRegisteredProjectSitsAtTheRootOrInOneGroupingDirectory() {
+    for (String gradlePath : ProjectLayout.includedProjects()) {
+      String[] segments = gradlePath.substring(1).split(":");
+
+      assertThat(segments.length)
+          .withFailMessage(
+              "%s nests %d levels deep. Use a root module or exactly one grouping directory.",
+              gradlePath, segments.length)
+          .isLessThanOrEqualTo(2);
+
+      if (segments.length == 2) {
+        assertThat(GROUPING_DIRECTORIES)
+            .withFailMessage(
+                "%s uses grouping directory '%s', which the module composition contract does not"
+                    + " declare.",
+                gradlePath, segments[0])
+            .contains(segments[0]);
+      }
+    }
+  }
+
+  @Test
+  void everyRegisteredProjectExistsOnDiskWithABuildFile() {
+    for (String gradlePath : ProjectLayout.includedProjects()) {
+      assertThat(ProjectLayout.buildFile(gradlePath))
+          .withFailMessage("%s is registered but has no build file.", gradlePath)
+          .exists();
+    }
+  }
+
+  @Test
+  void everyRegisteredProjectIsDocumented() throws IOException {
+    String contract = moduleCompositionContract();
+
+    for (String gradlePath : ProjectLayout.includedProjects()) {
+      assertThat(contract)
+          .withFailMessage(
+              "%s is registered but absent from docs/design/module-composition.md.", gradlePath)
+          .contains("`" + gradlePath + "`");
+    }
   }
 
   @ParameterizedTest
@@ -73,17 +137,27 @@ class ModuleCompositionPolicyTest {
   }
 
   @Test
-  void noProductProjectDependsOnTheHarnessPolicyProject() {
+  void noProductProjectDependsOnAHarnessProject() {
     for (String gradlePath : LIBRARY_PROJECTS) {
       assertThat(ProjectLayout.projectDependenciesOf(gradlePath))
-          .doesNotContain(":build-tools:harness-policy");
+          .noneMatch(dependency -> dependency.startsWith(HARNESS_PREFIX));
     }
   }
 
   @Test
-  void platformProjectUsesJavaPlatformAndListsEveryLibrary() {
+  void platformDeclaresConstraintsRatherThanDependencies() {
     String buildFile = ProjectLayout.buildFileText(PLATFORM_PROJECT);
+
     assertThat(buildFile).contains("agentframework.platform-conventions");
+    assertThat(buildFile)
+        .withFailMessage(
+            "The BOM must declare constraints. Plain dependencies publish under <dependencies> and"
+                + " force every module onto a consumer that imports the BOM.")
+        .contains("constraints {");
+    assertThat(buildFile)
+        .withFailMessage("allowDependencies() turns BOM entries into forced dependencies.")
+        .doesNotContain("allowDependencies()");
+
     for (String gradlePath : LIBRARY_PROJECTS) {
       assertThat(buildFile).contains("api(project(\"" + gradlePath + "\"))");
     }
@@ -105,13 +179,8 @@ class ModuleCompositionPolicyTest {
     assertThat(text).containsPattern("(?m)^version=\\d+\\.\\d+\\.\\d+(-SNAPSHOT)?$");
   }
 
-  @Test
-  void documentedProjectsMatchRegisteredProjects() throws IOException {
+  private static String moduleCompositionContract() throws IOException {
     Path contract = RepositoryPaths.root().resolve("docs/design/module-composition.md");
-    String text = Files.readString(contract, StandardCharsets.UTF_8);
-    for (String gradlePath : LIBRARY_PROJECTS) {
-      assertThat(text).contains("`" + gradlePath + "`");
-    }
-    assertThat(text).contains("`" + PLATFORM_PROJECT + "`");
+    return Files.readString(contract, StandardCharsets.UTF_8);
   }
 }
