@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-framework-java.dev/harness/review-result.schema.json",
+  "title": "ReviewResult",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "findings", "overallDisposition"],
+  "properties": {
+    "schemaVersion": { "const": "1.0" },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "category", "severity", "location", "summary", "disposition"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "category": {
+            "enum": ["CORRECTNESS", "SECURITY", "PERFORMANCE", "MAINTAINABILITY", "CONTRACT"]
+          },
+          "severity": { "enum": ["LOW", "MEDIUM", "HIGH", "CRITICAL"] },
+          "location": { "type": "string", "minLength": 1 },
+          "summary": { "type": "string", "minLength": 1 },
+          "disposition": { "enum": ["ACCEPTED", "REJECTED", "DEFERRED", "FIXED"] }
+        }
+      }
+    },
+    "overallDisposition": { "enum": ["APPROVED", "CHANGES_REQUESTED", "BLOCKED"] }
+  }
+}

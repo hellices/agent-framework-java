@@ -7,6 +7,10 @@
 - 범위: 저장소 지침, Java 품질 게이트, 호환성 하네스, 에이전트 작업 그래프,
   하네스 회귀, GitHub Actions와 AKS ARC 운영 경계
 
+> **후속 결정:** build tool과 ARC runner 구성은
+> [Gradle Kotlin DSL 및 Java ARC Foundation 설계](./gradle-kotlin-arc-foundation-design.md)가
+> 대체한다. Maven 및 범용 `aks-runners` 관련 내용은 구현 기준으로 사용하지 않는다.
+
 ## 1. 목적
 
 이 저장소는 Microsoft Agent Framework(MAF)의 관찰 가능한 실행 의미론을 Java로
@@ -803,4 +807,3 @@ deterministic fake 비율을 먼저 개선한다.
 - [Anthropic hooks](https://platform.claude.com/docs/en/agent-sdk/hooks)
 - [Anthropic evaluation guidance](https://docs.anthropic.com/en/docs/test-and-evaluate/develop-tests)
 - [OpenAI Evals](https://github.com/openai/evals)
-

@@ -1,0 +1,14 @@
+{
+  "schemaVersion": "1.0",
+  "changedFiles": [
+    { "path": "build-tools/harness-policy/build.gradle.kts", "changeType": "MODIFIED" },
+    { "path": ".harness/schemas/change-summary.schema.json", "changeType": "ADDED" }
+  ],
+  "publicContractImpact": {
+    "publicApiChanged": false,
+    "sessionFormatChanged": false,
+    "telemetryChanged": false,
+    "dependencyChanged": true
+  },
+  "migrationNotes": []
+}

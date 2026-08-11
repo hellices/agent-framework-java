@@ -1,0 +1,14 @@
+{
+  "schemaVersion": "1.0",
+  "findings": [
+    {
+      "id": "review-1",
+      "category": "SECURITY",
+      "severity": "HIGH",
+      "location": ".github/workflows/ci.yml",
+      "summary": "A trusted job must never run fork-authored code.",
+      "disposition": "FIXED"
+    }
+  ],
+  "overallDisposition": "APPROVED"
+}

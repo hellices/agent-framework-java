@@ -32,8 +32,31 @@ Microsoft Agent Framework의 실행 의미론을 Java에서 사용할 수 있도
 
 - [기초 설계와 로드맵](docs/design/foundation-design.md)
 - [엔지니어링 하네스 설계](docs/design/engineering-harness-design.md)
+- [Gradle Kotlin DSL 및 Java ARC Foundation 설계](docs/design/gradle-kotlin-arc-foundation-design.md)
 - [요구사항](docs/requirements/README.md)
 - [Upstream snapshot 분석 인덱스](docs/upstream/snapshots/d0a4165f/README.md)
 
-현재 저장소는 설계 기준을 확정한 단계입니다. 파일·클래스·메서드 단위 구현 계획은 기초
-계약과 호환성 시나리오를 검토한 후 별도로 작성합니다.
+## 기여와 하네스
+
+- [저장소 작업 지침](AGENTS.md)
+- [기여 가이드](CONTRIBUTING.md)
+- [보안 정책](SECURITY.md)
+- [GitHub Actions runner 계약](docs/operations/github-actions-runner-contract.md)
+
+모든 로컬·CI 검증은 저장소에 포함된 Gradle Wrapper를 사용합니다.
+
+```bash
+./gradlew check
+```
+
+## 현재 상태
+
+설계 기준과 요구사항을 확정하고, Gradle 엔지니어링 하네스를 저장소에 반영한 단계입니다.
+제품 모듈은 아직 없습니다.
+
+CI의 신뢰 경로는 `arc-java-build` ARC scale set에서 실행됩니다. 러너 계약과 실행 조건은
+[GitHub Actions runner 계약](docs/operations/github-actions-runner-contract.md)을 따릅니다.
+
+단계별 실행 계획은 저장소에 보관하지 않습니다. 무엇을 만들어야 하는지는
+[요구사항](docs/requirements/README.md)이, 왜 그렇게 만드는지는
+[설계 문서](docs/design/foundation-design.md)가 정의합니다.

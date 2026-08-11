@@ -1,0 +1,17 @@
+{
+  "schemaVersion": "1.0",
+  "suite": "repository-policy",
+  "configuration": {
+    "instructionHash": "sha256:0123456789abcdef",
+    "harnessVersion": "1.0",
+    "toolchain": "gradle-9.7.0-java-17",
+    "upstreamRevision": "d0a4165f170193ba1d026a259af40d35bb7eaefe"
+  },
+  "passed": true,
+  "metrics": {
+    "durationMs": 4200,
+    "toolCalls": 3,
+    "scopeViolations": 0
+  },
+  "violations": []
+}
