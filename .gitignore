@@ -1,0 +1,41 @@
+.worktrees/
+/build/
+build-logic/build/
+build-tools/*/build/
+.gradle/
+.kotlin/
+out/
+bin/
+.gradle-bootstrap/
+
+# Byproduct of `./gradlew ... --write-locks`. Settings-level dependency locking is not activated,
+# so this file locks nothing; only project lockfiles such as
+# build-tools/harness-policy/gradle.lockfile are committed.
+/settings-gradle.lockfile
+
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+.settings/
+.classpath
+.project
+
+.DS_Store
+Thumbs.db
+
+*.log
+*.hprof
+hs_err_pid*
+replay_pid*
+
+.harness/runs/
+.claude/settings.local.json
+.gemini/settings.local.json
+.copilot/
+*.env
+*.pem
+*.key
+kubeconfig
+gradle-local.properties
