@@ -7,36 +7,43 @@
 
 관찰성, 오류 분류, 복원력 경계, 평가, 테스트, 패키징, 호환성 계약을 정의한다. 실행 모델과 프로토콜 자체는 [01 에이전트 실행과 모델 호출](01-agent-execution.md)과 [10 호스팅과 프로토콜](10-hosting.md)이 소유하고, 이 문서는 그 위에 놓이는 운영 품질 규칙만 확정한다.
 
+## 채택 범위
+
+이 문서의 `등급`은 [README](README.md#요구사항-등급) 정의대로 기능을 만들기로 했을 때의 강제력이고, 채택 여부는 [호환성 매트릭스](../upstream/snapshots/d0a4165f/compatibility-matrix.md)를 따른다.
+
+- 기본 운영 품질(`OBS01`, `ERR01`, `SEC01`, `TEST01`, `PKG01`)은 채택 `필수`다.
+- 선택 관찰성 확장(`OBS02`)과 평가 기능(`EVAL01`)은 채택 `선택`이다.
+
 ## 요약
 
-| ID | 요구사항 | 등급 | 단계 |
-| --- | --- | --- | --- |
-| OPS-001 | OpenTelemetry GenAI 규약을 표준으로 삼는다 | 필수 | Core+ |
-| OPS-002 | 관찰성은 bootstrap과 wrapper를 분리한다 | 필수 | Core+ |
-| OPS-003 | 민감 데이터 수집은 기본 끔인 별도 opt-in이다 | 필수 | Core+ |
-| OPS-004 | logging은 tracing과 별도 계층으로 유지한다 | 필수 | Core+ |
-| OPS-005 | feature telemetry는 승인된 origin에만 실시간으로 찍는다 | 권장 | Core+ |
-| OPS-006 | 계측 비활성은 sticky 하게 유지한다 | 필수 | Core+ |
-| OPS-007 | 같은 작업을 두 계층에서 중복 계측하지 않고 카테고리별 제어를 둔다 | 필수 | Core+ |
-| OPS-008 | 공통 오류 taxonomy를 노출한다 | 필수 | Core+ |
-| OPS-009 | validation과 프로그래밍 오류는 built-in 예외로 남긴다 | 필수 | Core+ |
-| OPS-010 | 취소는 일반 실패로 번역하지 않는다 | 필수 | Core+ |
-| OPS-011 | timeout은 결과 envelope에 남긴다 | 필수 | Core+ |
-| OPS-012 | cleanup은 process tree와 remote task 단위로 수행한다 | 필수 | Core+ |
-| OPS-013 | persistent executor는 session-owned resource다 | 필수 | Core+ |
-| OPS-014 | shell과 tool 정책을 보안 경계로 포장하지 않는다 | 필수 | Core+ |
-| OPS-015 | 위험한 우회 경로에는 명시적 안전 장치를 둔다 | 필수 | Core+ |
-| OPS-016 | 재시도·타임아웃·서킷브레이커 운영 정책은 호스트가 소유한다 | 필수 | Core+ |
-| OPS-017 | 평가 SPI는 batch-oriented provider-neutral 계약을 쓴다 | 필수 | Core+ |
-| OPS-018 | evaluation converter를 1급 API로 두고 외부 전송 payload를 최소화한다 | 필수 | Core+ |
-| OPS-019 | 평가 결과는 실행 실패와 품질 실패를 분리한다 | 필수 | Core+ |
-| OPS-020 | workflow 평가는 공개 API와 per-agent subresults를 가져야 한다 | 필수 | Workflow |
-| OPS-021 | generated evaluator와 golden 입력은 결정적으로 재현 가능해야 한다 | 필수 | Optional |
-| OPS-022 | 공급자 공통 contract test와 golden scenario를 유지한다 | 필수 | Core+ |
-| OPS-023 | 패키징은 단일 버전 라인과 Gradle BOM을 기준으로 하고 단계 레지스트리를 따로 둔다 | 필수 | Core+ |
-| OPS-024 | 의존성 관리는 validated bounds와 공급망 pinning을 함께 쓴다 | 필수 | Core+ |
-| OPS-025 | 호환성·설치 가능성 gate를 maturity와 연결한다 | 필수 | Core+ |
-| OPS-026 | 교차 언어 호환성은 공개 surface와 행동으로 판정한다 | 권장 | Core+ |
+| ID | 요구사항 | 채택 | 등급 | 단계 |
+| --- | --- | --- | --- | --- |
+| OPS-001 | OpenTelemetry GenAI 규약을 표준으로 삼는다 | 필수 | 필수 | Core+ |
+| OPS-002 | 관찰성은 bootstrap과 wrapper를 분리한다 | 필수 | 필수 | Core+ |
+| OPS-003 | 민감 데이터 수집은 기본 끔인 별도 opt-in이다 | 필수 | 필수 | Core+ |
+| OPS-004 | logging은 tracing과 별도 계층으로 유지한다 | 필수 | 필수 | Core+ |
+| OPS-005 | feature telemetry는 승인된 origin에만 실시간으로 찍는다 | 선택 | 권장 | Core+ |
+| OPS-006 | 계측 비활성은 sticky 하게 유지한다 | 필수 | 필수 | Core+ |
+| OPS-007 | 같은 작업을 두 계층에서 중복 계측하지 않고 카테고리별 제어를 둔다 | 필수 | 필수 | Core+ |
+| OPS-008 | 공통 오류 taxonomy를 노출한다 | 필수 | 필수 | Core+ |
+| OPS-009 | validation과 프로그래밍 오류는 built-in 예외로 남긴다 | 필수 | 필수 | Core+ |
+| OPS-010 | 취소는 일반 실패로 번역하지 않는다 | 필수 | 필수 | Core+ |
+| OPS-011 | timeout은 결과 envelope에 남긴다 | 필수 | 필수 | Core+ |
+| OPS-012 | cleanup은 process tree와 remote task 단위로 수행한다 | 필수 | 필수 | Core+ |
+| OPS-013 | persistent executor는 session-owned resource다 | 필수 | 필수 | Core+ |
+| OPS-014 | shell과 tool 정책을 보안 경계로 포장하지 않는다 | 필수 | 필수 | Core+ |
+| OPS-015 | 위험한 우회 경로에는 명시적 안전 장치를 둔다 | 필수 | 필수 | Core+ |
+| OPS-016 | 재시도·타임아웃·서킷브레이커 운영 정책은 호스트가 소유한다 | 필수 | 필수 | Core+ |
+| OPS-017 | 평가 SPI는 batch-oriented provider-neutral 계약을 쓴다 | 선택 | 필수 | Core+ |
+| OPS-018 | evaluation converter를 1급 API로 두고 외부 전송 payload를 최소화한다 | 선택 | 필수 | Core+ |
+| OPS-019 | 평가 결과는 실행 실패와 품질 실패를 분리한다 | 선택 | 필수 | Core+ |
+| OPS-020 | workflow 평가는 공개 API와 per-agent subresults를 가져야 한다 | 선택 | 필수 | Workflow |
+| OPS-021 | generated evaluator와 golden 입력은 결정적으로 재현 가능해야 한다 | 선택 | 필수 | Optional |
+| OPS-022 | 공급자 공통 contract test와 golden scenario를 유지한다 | 필수 | 필수 | Core+ |
+| OPS-023 | 패키징은 단일 버전 라인과 Gradle BOM을 기준으로 하고 단계 레지스트리를 따로 둔다 | 필수 | 필수 | Core+ |
+| OPS-024 | 의존성 관리는 validated bounds와 공급망 pinning을 함께 쓴다 | 필수 | 필수 | Core+ |
+| OPS-025 | 호환성·설치 가능성 gate를 maturity와 연결한다 | 필수 | 필수 | Core+ |
+| OPS-026 | 교차 언어 호환성은 공개 surface와 행동으로 판정한다 | 필수 | 권장 | Core+ |
 
 ---
 
@@ -308,19 +315,20 @@
 
 ## OPS-014 shell과 tool 정책을 보안 경계로 포장하지 않는다
 
-**요구사항.** regex denylist, allowlist, command policy 같은 guardrail은 보안 경계가 아니라는 점을 문서와 코드에서 분명히 해야 한다.
+**요구사항.** regex denylist, allowlist, command policy 같은 guardrail은 approval·sandbox 요구를 대체하는 보안 경계로 동작하지 않아야 한다.
 
 **원본 비교**
 
 - .NET: ShellPolicy가 variable expansion과 interpreter escape 우회를 직접 경고한다.
 - Python: shell policy 문서가 guardrail 한계를 노골적으로 적고 approval와 sandbox를 실제 경계로 둔다.
 
-**판단.** 사용자 요구에 맞게 더 안전한 기본 설명을 택한다. 우회 가능한 정책을 security feature처럼 말하면 운영자가 잘못 믿게 된다.
+**판단.** 우회 가능한 정책 객체만으로 신뢰 등급이 올라가면 운영자가 잘못 믿게 된다. Java는 policy-only guardrail과 실제 승인·격리 경계를 구성과 API에서 분리해 드러내야 한다.
 
 **수용 기준**
 
-- 정책 문서와 주석에 우회 가능성, residual risk, sandbox 필요성이 함께 기록된다.
-- approval 또는 sandbox 없이 policy만으로 destructive command 차단을 보장한다고 주장하지 않는다.
+- unattended unsafe mode 또는 approval 비활성 경로는 `acknowledgeUnsafe`와 동등한 명시 인자 없이는 생성되거나 활성화되지 않는다.
+- regex denylist·allowlist·command policy 설정만으로 tool 또는 executor의 approval-required 기본값이 꺼지지 않는다.
+- sandbox capability 또는 격리 backend가 없는 executor는 API나 descriptor에서 sandboxed로 보고되지 않는다.
 
 **근거** [28 errors-resilience-security](../upstream/snapshots/d0a4165f/features/28-errors-resilience-security.md)
 

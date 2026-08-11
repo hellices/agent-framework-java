@@ -3,35 +3,43 @@
 **접두사** `HAR` · **원본 기능** [12 harness](../upstream/snapshots/d0a4165f/features/12-harness.md),
 [13 skills-background-code](../upstream/snapshots/d0a4165f/features/13-skills-background-code.md)
 
-하네스 조립, 반복 정책, 내장 제공자, 스킬, 승인, 선택적 실행 모듈의 계약을 정의한다.
+하네스 조립, 반복 정책, 내장 제공자, 스킬, 승인 기본 조립, 선택적 실행 모듈의 계약을 정의한다.
 하네스는 실행 커널이 아니라 의견이 담긴 조립 계층이다. 모델 호출, 세션, 워크플로 커널은
-각 소유 문서가 맡는다.
+각 소유 문서가 맡고, 승인 상태 기계·standing rule 의미·예산 계산은 [04 도구 정의와 실행 루프](04-tools.md)와 [07 인터셉터와 컨텍스트 관리](07-interceptors.md)가
+소유한다. 이 문서는 하네스가 그 계약을 어떤 기본 조합으로 켜는지만 다룬다.
+
+## 채택 범위
+
+이 문서의 `등급`은 [README](README.md#요구사항-등급) 정의대로 기능을 만들기로 했을 때의 강제력이고, 채택 여부는 [호환성 매트릭스](../upstream/snapshots/d0a4165f/compatibility-matrix.md)를 따른다.
+
+- 하네스(`HAR01`, `HAR02`), 스킬(`SKL01`), 백그라운드(`BKG01`)는 모두 채택 `보류`다.
+- 따라서 이 문서 전체는 MVP 이후에만 검토하는 보류 범위다.
 
 ## 요약
 
-| ID | 요구사항 | 등급 | 단계 |
-| --- | --- | --- | --- |
-| HAR-001 | 하네스는 조립 계층으로만 둔다 | 필수 | Core+ |
-| HAR-002 | 기본 하네스 조립은 보수적 opt-in 정책을 따른다 | 필수 | Core+ |
-| HAR-003 | 하네스는 잘못된 조합을 생성 시점에 거부한다 | 필수 | Core+ |
-| HAR-004 | 자동 반복은 predicate 미들웨어 seam으로 시작한다 | 권장 | Core+ |
-| HAR-005 | 반복은 승인 대기에서 즉시 멈춘다 | 필수 | Core+ |
-| HAR-006 | Todo 제공자는 세션 상태 저장만 코어에 포함한다 | 필수 | Core+ |
-| HAR-007 | Todo 조작 결과는 안정된 계약을 가진다 | 권장 | Core+ |
-| HAR-008 | Mode 제공자는 기본 `plan` 모드와 외부 변경 알림을 제공한다 | 필수 | Core+ |
-| HAR-009 | File memory는 세션 범위를 기본값으로 하고 예약 이름을 막는다 | 필수 | Core+ |
-| HAR-010 | File access는 별도 선택 모듈로만 제공한다 | 선택 | Optional |
-| HAR-011 | Tool approval은 대기열과 standing rule을 세션에 유지한다 | 필수 | Core+ |
-| HAR-012 | Tool approval 규칙은 인자와 호스트 경계를 정확히 구분한다 | 필수 | Core+ |
-| HAR-013 | 승인 재진입은 같은 요청 예산 안에서 계산한다 | 권장 | Core+ |
-| HAR-014 | Skills는 progressive disclosure와 세 도구 표면을 유지한다 | 권장 | Optional |
-| HAR-015 | Skill script 실행은 기본 승인 필요다 | 필수 | Optional |
-| HAR-016 | 파일 기반 skills와 상세 오류는 신뢰 경계를 넘지 않게 다룬다 | 필수 | Optional |
-| HAR-017 | Background agents는 MVP에 넣지 않고 나중에도 polling registry로 시작한다 | 권장 | Optional |
-| HAR-018 | 셸 실행은 별도 tools 모듈에서 수동 조립한다 | 선택 | Optional |
-| HAR-019 | 셸과 로컬 실행의 거부 목록은 가드레일로만 문서화한다 | 필수 | Optional |
-| HAR-020 | LocalCodeAct는 샌드박스로 취급하지 않고 코어에서 제외한다 | 선택 | Optional |
-| HAR-021 | 샌드박스형 CodeAct 백엔드는 별도 선택 모듈로 분리한다 | 선택 | Optional |
+| ID | 요구사항 | 채택 | 등급 | 단계 |
+| --- | --- | --- | --- | --- |
+| HAR-001 | 하네스는 조립 계층으로만 둔다 | 보류 | 필수 | Core+ |
+| HAR-002 | 기본 하네스 조립은 보수적 opt-in 정책을 따른다 | 보류 | 필수 | Core+ |
+| HAR-003 | 하네스는 잘못된 조합을 생성 시점에 거부한다 | 보류 | 필수 | Core+ |
+| HAR-004 | 자동 반복은 predicate 미들웨어 seam으로 시작한다 | 보류 | 권장 | Core+ |
+| HAR-005 | 반복은 승인 대기에서 즉시 멈춘다 | 보류 | 필수 | Core+ |
+| HAR-006 | Todo 제공자는 세션 상태 저장만 코어에 포함한다 | 보류 | 필수 | Core+ |
+| HAR-007 | Todo 조작 결과는 안정된 계약을 가진다 | 보류 | 권장 | Core+ |
+| HAR-008 | Mode 제공자는 기본 `plan` 모드와 외부 변경 알림을 제공한다 | 보류 | 필수 | Core+ |
+| HAR-009 | File memory는 세션 범위를 기본값으로 하고 예약 이름을 막는다 | 보류 | 필수 | Core+ |
+| HAR-010 | File access는 별도 선택 모듈로만 제공한다 | 보류 | 선택 | Optional |
+| HAR-011 | Tool approval은 대기열과 standing rule을 세션에 유지한다 | 보류 | 필수 | Core+ |
+| HAR-012 | Tool approval 규칙은 인자와 호스트 경계를 정확히 구분한다 | 보류 | 필수 | Core+ |
+| HAR-013 | 승인 재진입은 같은 요청 예산 안에서 계산한다 | 보류 | 권장 | Core+ |
+| HAR-014 | Skills는 progressive disclosure와 세 도구 표면을 유지한다 | 보류 | 권장 | Optional |
+| HAR-015 | Skill script 실행은 기본 승인 필요다 | 보류 | 필수 | Optional |
+| HAR-016 | 파일 기반 skills와 상세 오류는 신뢰 경계를 넘지 않게 다룬다 | 보류 | 필수 | Optional |
+| HAR-017 | Background agents는 MVP에 넣지 않고 나중에도 polling registry로 시작한다 | 보류 | 권장 | Optional |
+| HAR-018 | 셸 실행은 별도 tools 모듈에서 수동 조립한다 | 보류 | 선택 | Optional |
+| HAR-019 | 셸과 로컬 실행의 거부 목록은 가드레일로만 문서화한다 | 보류 | 필수 | Optional |
+| HAR-020 | LocalCodeAct는 샌드박스로 취급하지 않고 코어에서 제외한다 | 보류 | 선택 | Optional |
+| HAR-021 | 샌드박스형 CodeAct 백엔드는 별도 선택 모듈로 분리한다 | 보류 | 선택 | Optional |
 
 ---
 
@@ -270,22 +278,20 @@ regex timeout까지 묶여 있어 코어 하네스에 넣기에는 위험하다.
 
 ## HAR-011 Tool approval은 대기열과 standing rule을 세션에 유지한다
 
-**요구사항.** Tool approval 계층은 승인 규칙과 대기 중인 승인 요청을 세션 상태에 저장하고,
-호출자에게는 한 번에 하나의 승인 요청만 보여줘야 한다.
+**요구사항.** 기본 하네스 approval 조립은 [04 도구 정의와 실행 루프](04-tools.md)와 [07 인터셉터와 컨텍스트 관리](07-interceptors.md)가 정의한 승인 규칙 상태와 대기 중 요청 상태를 세션 저장 경로에 연결하고, 호출자 표면에는 한 번에 하나의 pending request만 노출해야 한다.
 
 **원본 비교**
 
 - .NET: approval agent가 rules와 queued state를 세션에 저장하고 one-by-one surface를 사용한다.
 - Python: approval middleware가 `rules`, `queued_approval_requests`, `collected_approval_responses`를 상태에 저장한다.
 
-**판단.** 동일하다. 여러 승인 요청을 한 번에 노출하면 응답 상관관계가 약해지고 재개 로직이 복잡해진다.
-standing rule persistence가 없으면 같은 도구에 대해 매 turn 반복 확인이 필요해진다.
+**판단.** 여러 승인 요청을 한 번에 노출하지 않는 surface는 유지하되, 상태 기계의 의미 자체는 소유 문서를 재정의하지 않는다. 하네스는 approval 컴포넌트를 세션 backing store와 기본 UI surface에 올리는 조립 책임만 가진다.
 
 **수용 기준**
 
-- 승인 규칙은 다음 run에서도 다시 적용된다.
-- 동시에 여러 승인 요청이 생겨도 호출자에게는 하나씩만 표면화된다.
-- 대기 중 승인 요청은 세션 직렬화 후에도 복원된다.
+- 기본 하네스 preset으로 approval을 켜면 core approval 상태가 세션 직렬화 경로에 포함된다.
+- 동시에 여러 pending request가 있어도 하네스 호출 표면은 가장 앞선 요청 하나만 반환한다.
+- 세션을 저장 후 복원한 다음 같은 pending approval run을 다시 읽으면 같은 요청이 다시 표면화된다.
 
 **근거** [12 도구 승인](../upstream/snapshots/d0a4165f/features/12-harness.md)
 
@@ -293,22 +299,20 @@ standing rule persistence가 없으면 같은 도구에 대해 매 turn 반복 �
 
 ## HAR-012 Tool approval 규칙은 인자와 호스트 경계를 정확히 구분한다
 
-**요구사항.** Tool approval의 자동 승인 규칙은 도구 이름만이 아니라 직렬화된 인자와 hosted
-server label 경계까지 구분해야 한다.
+**요구사항.** 기본 하네스의 자동 승인 wiring은 [04 도구 정의와 실행 루프](04-tools.md)가 정의한 exact-argument·host-boundary 규칙을 그대로 사용해야 하며, 이름만 맞으면 승인되는 더 느슨한 하네스 전용 shortcut을 추가하지 않아야 한다.
 
 **원본 비교**
 
 - .NET: name-based auto-approval 충돌 위험을 경고하고 all-tools 규칙을 신뢰 환경으로 제한한다.
 - Python: argument-scoped rule과 hosted `server_label` 범위를 테스트로 고정한다.
 
-**판단.** Java는 Python 쪽의 더 엄격한 상태 기계를 택한다. 이름만 맞으면 승인하는 규칙은 충돌에
-취약하다. hosted/local 경계를 구분하지 않으면 다른 서버의 동형 도구 호출에 규칙이 새어 나간다.
+**판단.** exact-argument와 host-boundary의 의미는 코어 승인 문서가 이미 정의한다. 하네스는 그 의미를 다시 풀어쓰지 않고, 기본 preset이 같은 규칙 세트를 켜도록 조립만 고정해야 한다.
 
 **수용 기준**
 
-- `always approve tool with arguments` 규칙은 직렬화된 인자가 정확히 일치할 때만 적용된다.
-- hosted 도구의 standing rule은 같은 `server_label`에만 재적용된다.
-- 이름만 같은 다른 도구에는 규칙이 자동 적용되지 않는다.
+- 기본 approval preset은 exact-argument matching을 끈 name-only standing rule 모드를 추가로 만들지 않는다.
+- hosted 도구를 조립할 때 하네스는 core approval 상태에 `server_label` 또는 동등한 호스트 경계 식별자를 함께 전달한다.
+- 같은 도구 이름이라도 인자나 호스트 경계가 달라지면 하네스 기본 preset은 새 approval 요청을 다시 표면화한다.
 
 **근거** [12 도구 승인](../upstream/snapshots/d0a4165f/features/12-harness.md)
 
@@ -316,22 +320,20 @@ server label 경계까지 구분해야 한다.
 
 ## HAR-013 승인 재진입은 같은 요청 예산 안에서 계산한다
 
-**요구사항.** 자동 승인으로 재진입한 도구 호출은 별도 요청이 아니라 같은 논리 요청의 예산 안에서
-계산해야 한다.
+**요구사항.** 기본 하네스의 approval re-entry wiring은 [04 도구 정의와 실행 루프](04-tools.md)와 [07 인터셉터와 컨텍스트 관리](07-interceptors.md)가 정의한 공용 요청 예산을 그대로 공유해야 하며, 하네스 계층이 승인 재진입 전용 별도 budget counter를 만들지 않아야 한다.
 
 **원본 비교**
 
 - .NET: approval loop에 별도 `MaxAutoApprovalIterations` cap을 둔다.
 - Python: function invocation budget state를 approval 재진입과 공유한다.
 
-**판단.** Java는 Python의 shared budget state를 기본으로 삼고, .NET식 outer cap은 운영 안전장치로만
-추가한다. 같은 요청에서 발생한 재진입을 별도 예산으로 세면 설명 가능성이 나빠진다.
+**판단.** 예산 의미는 코어 실행 루프가 소유하고 하네스는 그 위에 별도 상태 기계를 얹지 않는다. 필요하면 운영 안전장치로 외곽 cap을 둘 수 있지만, 기본 조립은 core budget semantics를 그대로 따라야 설명 가능성이 유지된다.
 
 **수용 기준**
 
-- 자동 승인 재진입 뒤 두 번째 도구 호출은 남은 공용 예산이 없으면 차단된다.
-- 예산이 소진돼도 마지막 승인 해결 결과는 호출자에게 표면화된다.
-- 선택적 outer cap이 있더라도 usage 집계는 모든 내부 turn 합으로 계산된다.
+- approval-enabled 하네스 preset은 자동 승인 재진입용 독립 budget counter를 추가로 만들지 않는다.
+- 자동 승인 뒤 이어진 도구 호출은 같은 core 남은 예산을 소모한다.
+- 선택적 outer cap이 있더라도 core usage 집계와 차감 규칙은 바꾸지 않고 추가 중단 조건으로만 동작한다.
 
 **근거** [12 Invocation budget](../upstream/snapshots/d0a4165f/features/12-harness.md), [12 도구 승인](../upstream/snapshots/d0a4165f/features/12-harness.md)
 

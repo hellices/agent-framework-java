@@ -9,39 +9,46 @@
 
 호스팅 코어, OpenAI Responses, A2A, AG-UI, Foundry·DevUI·채널, 식별 경계를 정의한다. 세션 계약은 [06 세션과 대화 상태](06-sessions.md)와 워크플로 코어는 [09 워크플로와 오케스트레이션](09-workflows.md)가 소유한다. 이 문서는 호스팅이 주입받은 계약을 어떻게 바인딩하고 저장을 조율하는지에만 집중한다.
 
+## 채택 범위
+
+이 문서의 `등급`은 [README](README.md#요구사항-등급) 정의대로 기능을 만들기로 했을 때의 강제력이고, 채택 여부는 [호환성 매트릭스](../upstream/snapshots/d0a4165f/compatibility-matrix.md)를 따른다.
+
+- 호스팅 코어와 식별 경계(`HOST01`, `ID01`)는 채택 `필수`다.
+- Responses(`RESP01`), A2A(`A2A01`), AG-UI(`AGUI01`), Foundry(`FND01`)와 DevUI·채널 어댑터는 호스팅 코어와 분리된 채택 `선택` 범위다.
+
 ## 요약
 
-| ID | 요구사항 | 등급 | 단계 |
-| --- | --- | --- | --- |
-| HOST-001 | 호스팅 모델과 wire 프로토콜을 분리한다 | 필수 | Core+ |
-| HOST-002 | 세션 계약은 API와 엔진이 소유한다 | 필수 | Core+ |
-| HOST-003 | 호스팅 코어는 바인딩과 상태 조율만 담당한다 | 필수 | Core+ |
-| HOST-004 | 타깃 해결은 인스턴스·팩토리·비동기·빌더를 지원한다 | 필수 | Core+ |
-| HOST-005 | 세션 연속성은 작업 복사본과 단일 생성 규칙을 보장한다 | 필수 | Core+ |
-| HOST-006 | 워크플로 이어받기는 restore-then-run과 durable 폴백을 따른다 | 필수 | Workflow |
-| HOST-007 | 인메모리 연속성은 개발 편의로만 둔다 | 필수 | Hosting |
-| HOST-008 | 인증·인가·단일 writer·확장은 호스트가 책임진다 | 필수 | Hosting |
-| HOST-009 | 원시 서비스 세션 식별자는 권한 경계가 아니다 | 필수 | Hosting |
-| HOST-010 | Spring host binder는 선택 모듈로 분리한다 | 필수 | Hosting |
-| HOST-011 | Responses 어댑터는 요청 파싱과 세션 키 추출을 분리한다 | 필수 | Hosting |
-| HOST-012 | Responses 기본 매핑은 호출자 override를 엄격 거부한다 | 필수 | Hosting |
-| HOST-013 | Responses continuation은 branch pointer와 mutable head를 구분한다 | 필수 | Hosting |
-| HOST-014 | Responses SSE는 최소 프로필과 확장 프로필을 함께 지원한다 | 권장 | Hosting |
-| HOST-015 | Responses 최종 payload는 tool·reasoning·media 항목군을 보존한다 | 필수 | Hosting |
-| HOST-016 | 원격 A2A 에이전트 래퍼를 1급 어댑터로 제공한다 | 권장 | Hosting |
-| HOST-017 | 로컬 A2A 노출은 helper와 Spring binder를 분리한다 | 필수 | Hosting |
-| HOST-018 | A2A continuation은 structured serviceSessionId로 저장한다 | 필수 | Hosting |
-| HOST-019 | A2A continuation token과 새 사용자 메시지를 함께 받지 않는다 | 필수 | Hosting |
-| HOST-020 | A2A 호스트는 message·task·artifact 수명주기를 구분한다 | 필수 | Hosting |
-| HOST-021 | AG-UI 어댑터는 요청 별칭과 resume 정규화를 소유한다 | 필수 | Hosting |
-| HOST-022 | AG-UI 상태는 predictive delta와 deterministic snapshot을 분리한다 | 필수 | Hosting |
-| HOST-023 | AG-UI tool result는 UI payload와 LLM 텍스트를 분리한다 | 권장 | Hosting |
-| HOST-024 | AG-UI 지속성은 threadId와 snapshot scope를 분리한다 | 필수 | Hosting |
-| HOST-025 | AG-UI host binder는 SSE transport와 stream-complete save를 제공한다 | 필수 | Hosting |
-| HOST-026 | Foundry hosting은 선택 어댑터이며 Responses와 Invocations를 분리한다 | 필수 | Optional |
-| HOST-027 | Hosted Foundry 경로는 플랫폼 컨텍스트를 검증하고 로컬 경로를 명시적으로 구분한다 | 필수 | Hosting |
-| HOST-028 | DevUI는 개발 전용 아티팩트로 유지한다 | 권장 | Optional |
-| HOST-029 | 채널·프로토콜 어댑터는 프로토콜별 선택 아티팩트로 분리한다 | 필수 | Optional |
+| ID | 요구사항 | 채택 | 등급 | 단계 |
+| --- | --- | --- | --- | --- |
+| HOST-001 | 호스팅 모델과 wire 프로토콜을 분리한다 | 필수 | 필수 | Core+ |
+| HOST-002 | 세션 계약은 API와 엔진이 소유한다 | 필수 | 필수 | Core+ |
+| HOST-003 | 호스팅 코어는 바인딩과 상태 조율만 담당한다 | 필수 | 필수 | Core+ |
+| HOST-004 | 타깃 해결은 인스턴스·팩토리·비동기·빌더를 지원한다 | 필수 | 필수 | Core+ |
+| HOST-005 | 세션 연속성은 작업 복사본과 단일 생성 규칙을 보장한다 | 필수 | 필수 | Core+ |
+| HOST-006 | 워크플로 이어받기는 restore-then-run과 durable 폴백을 따른다 | 필수 | 필수 | Workflow |
+| HOST-007 | 인메모리 연속성은 개발 편의로만 둔다 | 필수 | 필수 | Hosting |
+| HOST-008 | 인증·인가·단일 writer·확장은 호스트가 책임진다 | 필수 | 필수 | Hosting |
+| HOST-009 | 원시 서비스 세션 식별자는 권한 경계가 아니다 | 필수 | 필수 | Hosting |
+| HOST-010 | Spring host binder는 선택 모듈로 분리한다 | 필수 | 필수 | Hosting |
+| HOST-011 | Responses 어댑터는 요청 파싱과 세션 키 추출을 분리한다 | 선택 | 필수 | Hosting |
+| HOST-012 | Responses 기본 매핑은 호출자 override를 엄격 거부한다 | 선택 | 필수 | Hosting |
+| HOST-013 | Responses continuation은 branch pointer와 mutable head를 구분한다 | 선택 | 필수 | Hosting |
+| HOST-014 | Responses SSE는 최소 프로필과 확장 프로필을 함께 지원한다 | 선택 | 권장 | Hosting |
+| HOST-015 | Responses 최종 payload는 tool·reasoning·media 항목군을 보존한다 | 선택 | 필수 | Hosting |
+| HOST-016 | 원격 A2A 에이전트 래퍼를 1급 어댑터로 제공한다 | 선택 | 권장 | Hosting |
+| HOST-017 | 로컬 A2A 노출은 helper와 Spring binder를 분리한다 | 선택 | 필수 | Hosting |
+| HOST-018 | A2A continuation은 structured serviceSessionId로 저장한다 | 선택 | 필수 | Hosting |
+| HOST-019 | A2A continuation token과 새 사용자 메시지를 함께 받지 않는다 | 선택 | 필수 | Hosting |
+| HOST-020 | A2A 호스트는 message·task·artifact 수명주기를 구분한다 | 선택 | 필수 | Hosting |
+| HOST-021 | AG-UI 어댑터는 요청 별칭과 resume 정규화를 소유한다 | 선택 | 필수 | Hosting |
+| HOST-022 | AG-UI 상태는 predictive delta와 deterministic snapshot을 분리한다 | 선택 | 필수 | Hosting |
+| HOST-023 | AG-UI tool result는 UI payload와 LLM 텍스트를 분리한다 | 선택 | 권장 | Hosting |
+| HOST-024 | AG-UI 지속성은 threadId와 snapshot scope를 분리한다 | 선택 | 필수 | Hosting |
+| HOST-025 | AG-UI host binder는 SSE transport와 stream-complete save를 제공한다 | 선택 | 필수 | Hosting |
+| HOST-026 | Foundry hosting은 선택 어댑터이며 Responses와 Invocations를 분리한다 | 선택 | 필수 | Optional |
+| HOST-027 | Hosted Foundry 경로는 플랫폼 컨텍스트를 검증하고 로컬 경로를 명시적으로 구분한다 | 선택 | 필수 | Hosting |
+| HOST-028 | DevUI는 개발 전용 아티팩트로 유지한다 | 선택 | 권장 | Optional |
+| HOST-029 | 채널·프로토콜 어댑터는 프로토콜별 선택 아티팩트로 분리한다 | 선택 | 필수 | Optional |
 
 ---
 

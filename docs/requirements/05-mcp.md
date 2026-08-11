@@ -8,29 +8,36 @@ MCP 서버를 원격 도구로 연결하고, 필요하면 Java 에이전트나 �
 프로토콜 어댑터는 [10 호스팅과 프로토콜](10-hosting.md), 워크플로 런타임은
 [09 워크플로와 오케스트레이션](09-workflows.md)이 소유한다.
 
+## 채택 범위
+
+이 문서의 `등급`은 [README](README.md#요구사항-등급) 정의대로 기능을 만들기로 했을 때의 강제력이고, 채택 여부는 [호환성 매트릭스](../upstream/snapshots/d0a4165f/compatibility-matrix.md)를 따른다.
+
+- MCP 클라이언트 도구(`MCP01`, `MCP02`)는 채택 `필수`다.
+- MCP 서버 호스팅 helper(`MCPH01`)에 해당하는 `MCP-015`~`MCP-019`는 채택 `선택`이다.
+
 ## 요약
 
-| ID | 요구사항 | 등급 | 단계 |
-| --- | --- | --- | --- |
-| MCP-001 | transport 도구와 연결 어댑터를 함께 둔다 | 필수 | Core+ |
-| MCP-002 | 연결 소유권에 따라 수명주기를 나눈다 | 필수 | Core+ |
-| MCP-003 | 연결 검증과 재연결을 표준화한다 | 필수 | Core+ |
-| MCP-004 | 도구 발견은 prefix와 충돌 검사를 포함한다 | 필수 | Core+ |
-| MCP-005 | 호출 인자와 메타데이터를 분리한다 | 필수 | Core+ |
-| MCP-006 | prompts는 함수처럼 노출하고 resources는 payload로 둔다 | 필수 | Core+ |
-| MCP-007 | sampling은 기본 거부다 | 필수 | Optional |
-| MCP-008 | sampling 요청 수와 토큰 수를 제한한다 | 필수 | Optional |
-| MCP-009 | 연결 소유권에 따라 추적 전파를 구분한다 | 필수 | Core+ |
-| MCP-010 | HTTP 헤더는 같은 origin에만 전파한다 | 필수 | Core+ |
-| MCP-011 | task-required 도구는 작업 수명주기로 우회한다 | 필수 | Optional |
-| MCP-012 | 작업 생성 뒤에는 원 호출을 재발행하지 않는다 | 필수 | Optional |
-| MCP-013 | 취소와 시간 제한은 원격 취소로 연결한다 | 필수 | Optional |
-| MCP-014 | 작업 종료 상태를 명시적 결과로 바꾼다 | 필수 | Optional |
-| MCP-015 | 범용 hosting helper는 별도 아티팩트로 분리한다 | 필수 | Hosting |
-| MCP-016 | hosting helper는 서버 호스트 책임을 가져오지 않는다 | 필수 | Hosting |
-| MCP-017 | hosted agent/workflow adapter는 스키마와 세션 규칙을 고정한다 | 필수 | Hosting |
-| MCP-018 | hosting 결과 매핑은 최종 결과 한 번만 만든다 | 필수 | Hosting |
-| MCP-019 | prompts/resources/sampling/tasks 호스팅은 helper 범위가 아니다 | 필수 | Hosting |
+| ID | 요구사항 | 채택 | 등급 | 단계 |
+| --- | --- | --- | --- | --- |
+| MCP-001 | transport 도구와 연결 어댑터를 함께 둔다 | 필수 | 필수 | Core+ |
+| MCP-002 | 연결 소유권에 따라 수명주기를 나눈다 | 필수 | 필수 | Core+ |
+| MCP-003 | 연결 검증과 재연결을 표준화한다 | 필수 | 필수 | Core+ |
+| MCP-004 | 도구 발견은 prefix와 충돌 검사를 포함한다 | 필수 | 필수 | Core+ |
+| MCP-005 | 호출 인자와 메타데이터를 분리한다 | 필수 | 필수 | Core+ |
+| MCP-006 | prompts는 함수처럼 노출하고 resources는 payload로 둔다 | 필수 | 필수 | Core+ |
+| MCP-007 | sampling은 기본 거부다 | 필수 | 필수 | Optional |
+| MCP-008 | sampling 요청 수와 토큰 수를 제한한다 | 필수 | 필수 | Optional |
+| MCP-009 | 연결 소유권에 따라 추적 전파를 구분한다 | 필수 | 필수 | Core+ |
+| MCP-010 | HTTP 헤더는 같은 origin에만 전파한다 | 필수 | 필수 | Core+ |
+| MCP-011 | task-required 도구는 작업 수명주기로 우회한다 | 필수 | 필수 | Optional |
+| MCP-012 | 작업 생성 뒤에는 원 호출을 재발행하지 않는다 | 필수 | 필수 | Optional |
+| MCP-013 | 취소와 시간 제한은 원격 취소로 연결한다 | 필수 | 필수 | Optional |
+| MCP-014 | 작업 종료 상태를 명시적 결과로 바꾼다 | 필수 | 필수 | Optional |
+| MCP-015 | 범용 hosting helper는 별도 아티팩트로 분리한다 | 선택 | 필수 | Hosting |
+| MCP-016 | hosting helper는 서버 호스트 책임을 가져오지 않는다 | 선택 | 필수 | Hosting |
+| MCP-017 | hosted agent/workflow adapter는 스키마와 세션 규칙을 고정한다 | 선택 | 필수 | Hosting |
+| MCP-018 | hosting 결과 매핑은 최종 결과 한 번만 만든다 | 선택 | 필수 | Hosting |
+| MCP-019 | prompts/resources/sampling/tasks 호스팅은 helper 범위가 아니다 | 선택 | 필수 | Hosting |
 
 ---
 

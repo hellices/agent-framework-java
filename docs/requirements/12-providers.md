@@ -4,20 +4,28 @@
 
 모델 공급자, managed agent runtime, storage, memory, governance, hosting adapter inventory를 Java 모듈 관점에서 정리한다. 개별 protocol wire contract는 [10 호스팅과 프로토콜](10-hosting.md)이, 운영 품질과 패키징 규칙은 [11 운영 품질](11-operations.md)이 소유한다. 이 문서는 어떤 어댑터를 어떤 경계와 우선순위로 옮길지 확정한다.
 
+## 채택 범위
+
+이 문서의 `등급`은 [README](README.md#요구사항-등급) 정의대로 기능을 만들기로 했을 때의 강제력이고, 채택 여부는 [호환성 매트릭스](../upstream/snapshots/d0a4165f/compatibility-matrix.md)를 따른다.
+
+- OpenAI-compatible 첫 vertical slice와 공통 provider 경계는 채택 `필수`다.
+- 호스팅·프로토콜 분리와 provider-owned continuation 경계는 선택 어댑터 범주에 맞춰 채택 `선택`이다.
+- storage·memory·governance와 one-sided long-tail adapter family는 채택 `보류`다.
+
 ## 요약
 
-| ID | 요구사항 | 등급 | 단계 |
-| --- | --- | --- | --- |
-| PRV-001 | 코어는 provider SDK에 직접 의존하지 않는다 | 필수 | Core+ |
-| PRV-002 | 공급자와 통합은 artifact별로 분리한다 | 필수 | Core+ |
-| PRV-003 | all-providers 번들을 기본 제공하지 않는다 | 권장 | Optional |
-| PRV-004 | 어댑터 포팅 우선순위를 P0부터 P4까지 고정한다 | 필수 | Core+ |
-| PRV-005 | hosting과 protocol adapters는 model provider와 분리한다 | 필수 | Hosting |
-| PRV-006 | storage·memory·governance는 모델 공급자와 분리한다 | 필수 | Optional |
-| PRV-007 | 공급자 전용 기능은 선택 capability로 노출한다 | 필수 | Core+ |
-| PRV-008 | 공급자 전용 continuation과 hosted state는 어댑터가 소유한다 | 필수 | Hosting |
-| PRV-009 | 한쪽 언어에만 있는 통합은 선택 tier로 유지한다 | 권장 | Optional |
-| PRV-010 | adapter는 maturity·README·테스트 근거를 함께 제공하고 facade를 유지한다 | 필수 | Optional |
+| ID | 요구사항 | 채택 | 등급 | 단계 |
+| --- | --- | --- | --- | --- |
+| PRV-001 | 코어는 provider SDK에 직접 의존하지 않는다 | 필수 | 필수 | Core+ |
+| PRV-002 | 공급자와 통합은 artifact별로 분리한다 | 필수 | 필수 | Core+ |
+| PRV-003 | all-providers 번들을 기본 제공하지 않는다 | 선택 | 권장 | Optional |
+| PRV-004 | 어댑터 포팅 우선순위를 P0부터 P4까지 고정한다 | 필수 | 필수 | Core+ |
+| PRV-005 | hosting과 protocol adapters는 model provider와 분리한다 | 선택 | 필수 | Hosting |
+| PRV-006 | storage·memory·governance는 모델 공급자와 분리한다 | 보류 | 필수 | Optional |
+| PRV-007 | 공급자 전용 기능은 선택 capability로 노출한다 | 필수 | 필수 | Core+ |
+| PRV-008 | 공급자 전용 continuation과 hosted state는 어댑터가 소유한다 | 선택 | 필수 | Hosting |
+| PRV-009 | 한쪽 언어에만 있는 통합은 선택 tier로 유지한다 | 보류 | 권장 | Optional |
+| PRV-010 | adapter는 maturity·README·테스트 근거를 함께 제공하고 facade를 유지한다 | 필수 | 필수 | Optional |
 
 ---
 

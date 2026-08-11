@@ -11,45 +11,52 @@
 선언형 표면의 계약을 정의한다. 이 문서의 단계는 대부분 `Workflow`다. 하네스 조립과 호스팅
 프로토콜은 다른 문서가 소유한다.
 
+## 채택 범위
+
+이 문서의 `등급`은 [README](README.md#요구사항-등급) 정의대로 기능을 만들기로 했을 때의 강제력이고, 채택 여부는 [호환성 매트릭스](../upstream/snapshots/d0a4165f/compatibility-matrix.md)를 따른다.
+
+- 워크플로 코어(`WF01`~`WF06`)는 채택 `필수`다.
+- 오케스트레이션(`ORC01`, `ORC02`)과 선언형 워크플로(`DEC01`)는 채택 `선택`이다.
+
 ## 요약
 
-| ID | 요구사항 | 등급 | 단계 |
-| --- | --- | --- | --- |
-| WF-001 | 그래프 정의와 실행 런타임을 분리한다 | 필수 | Workflow |
-| WF-002 | 실행자 라우트 등록은 annotation processor 경로를 우선한다 | 권장 | Workflow |
-| WF-003 | 미바인딩 실행자가 남으면 빌드를 거부한다 | 필수 | Workflow |
-| WF-004 | 시작점에서 도달할 수 없는 실행자가 있으면 빌드를 거부한다 | 필수 | Workflow |
-| WF-005 | 출력 지정은 비어 있음, 중복, 겹침을 빌드 시점에 거부한다 | 필수 | Workflow |
-| WF-006 | 런타임 edge kind는 `DIRECT`, `FAN_OUT`, `FAN_IN`으로 고정한다 | 필수 | Workflow |
-| WF-007 | 엣지 실행 의미를 조건 drop과 fan-in barrier로 고정한다 | 필수 | Workflow |
-| WF-008 | 직렬화된 callables는 명시적 재바인딩 없이는 복원하지 않는다 | 필수 | Workflow |
-| WF-009 | 워크플로 실행은 1급 run handle로 제어한다 | 필수 | Workflow |
-| WF-010 | 상태는 polling과 status event 둘 다로 노출한다 | 권장 | Workflow |
-| WF-011 | superstep 수명주기와 체크포인트 순서를 고정한다 | 필수 | Workflow |
-| WF-012 | 공유 상태는 scoped API와 pending/committed 버퍼를 함께 가진다 | 필수 | Workflow |
-| WF-013 | 같은 상태 키의 다중 쓰기는 명시적 실패로 처리한다 | 필수 | Workflow |
-| WF-014 | 메시지 송신은 trace context를 전파하고 예약 이벤트 스푸핑을 막는다 | 필수 | Workflow |
-| WF-015 | 공개 cancel API와 stream 소비자 취소를 분리한다 | 필수 | Workflow |
-| WF-016 | pending request가 남아 있으면 새 메시지를 기본 거부한다 | 필수 | Workflow |
-| WF-017 | 실패 이벤트 순서는 실행자 실패 후 워크플로 실패다 | 필수 | Workflow |
-| WF-018 | 체크포인트는 continuation에 필요한 전체 상태를 담는다 | 필수 | Workflow |
-| WF-019 | restore는 시그니처를 검증하고 stale event를 먼저 비운다 | 필수 | Workflow |
-| WF-020 | latest checkpoint 판정은 정렬 계약에 의존한다 | 필수 | Workflow |
-| WF-021 | pending request는 restore 뒤 다시 발행하되 중복되지 않아야 한다 | 필수 | Workflow |
-| WF-022 | 외부 응답은 request id와 port id를 함께 검증한다 | 필수 | Workflow |
-| WF-023 | 승인 재개는 `original_request` payload를 진실 원천으로 삼는다 | 필수 | Workflow |
-| WF-024 | 파일 체크포인트 저장은 경로와 역직렬화 안전장치를 기본 제공한다 | 필수 | Workflow |
-| WF-025 | run handle은 재개와 pending request 조회 API를 제공한다 | 권장 | Workflow |
-| WF-026 | 하위 워크플로 조합은 host executor 소유권 모델을 따른다 | 필수 | Workflow |
-| WF-027 | 자식 출력, intermediate, request 전파 정책은 명시적으로 설정한다 | 필수 | Workflow |
-| WF-028 | workflow-as-agent 세션은 continuation 상태를 함께 직렬화한다 | 필수 | Workflow |
-| WF-029 | functional workflow는 별도 실험 API로 분리한다 | 권장 | Workflow |
-| WF-030 | 오케스트레이션은 공통 output designation helper와 명시적 기본 정책을 가진다 | 필수 | Workflow |
-| WF-031 | sequential·concurrent는 패턴별 계약과 request-info wrapper를 제공한다 | 권장 | Workflow |
-| WF-032 | handoff는 mesh 기본값, 능력 검증, 필터링, pending-request 차단을 갖는다 | 필수 | Workflow |
-| WF-033 | group-chat은 단일 orchestrator 계약과 no-self-echo 규칙을 갖는다 | 필수 | Workflow |
-| WF-034 | magentic은 단일 manager 계약과 plan review·replan 흐름을 갖는다 | 필수 | Workflow |
-| WF-035 | 선언형 워크플로는 분리된 모듈, 안전한 상태 경로, typed handler SPI를 가진다 | 필수 | Workflow |
+| ID | 요구사항 | 채택 | 등급 | 단계 |
+| --- | --- | --- | --- | --- |
+| WF-001 | 그래프 정의와 실행 런타임을 분리한다 | 필수 | 필수 | Workflow |
+| WF-002 | 실행자 라우트 등록은 annotation processor 경로를 우선한다 | 필수 | 권장 | Workflow |
+| WF-003 | 미바인딩 실행자가 남으면 빌드를 거부한다 | 필수 | 필수 | Workflow |
+| WF-004 | 시작점에서 도달할 수 없는 실행자가 있으면 빌드를 거부한다 | 필수 | 필수 | Workflow |
+| WF-005 | 출력 지정은 비어 있음, 중복, 겹침을 빌드 시점에 거부한다 | 필수 | 필수 | Workflow |
+| WF-006 | 런타임 edge kind는 `DIRECT`, `FAN_OUT`, `FAN_IN`으로 고정한다 | 필수 | 필수 | Workflow |
+| WF-007 | 엣지 실행 의미를 조건 drop과 fan-in barrier로 고정한다 | 필수 | 필수 | Workflow |
+| WF-008 | 직렬화된 callables는 명시적 재바인딩 없이는 복원하지 않는다 | 필수 | 필수 | Workflow |
+| WF-009 | 워크플로 실행은 1급 run handle로 제어한다 | 필수 | 필수 | Workflow |
+| WF-010 | 상태는 polling과 status event 둘 다로 노출한다 | 필수 | 권장 | Workflow |
+| WF-011 | superstep 수명주기와 체크포인트 순서를 고정한다 | 필수 | 필수 | Workflow |
+| WF-012 | 공유 상태는 scoped API와 pending/committed 버퍼를 함께 가진다 | 필수 | 필수 | Workflow |
+| WF-013 | 같은 상태 키의 다중 쓰기는 명시적 실패로 처리한다 | 필수 | 필수 | Workflow |
+| WF-014 | 메시지 송신은 trace context를 전파하고 예약 이벤트 스푸핑을 막는다 | 필수 | 필수 | Workflow |
+| WF-015 | 공개 cancel API와 stream 소비자 취소를 분리한다 | 필수 | 필수 | Workflow |
+| WF-016 | pending request가 남아 있으면 새 메시지를 기본 거부한다 | 필수 | 필수 | Workflow |
+| WF-017 | 실패 이벤트 순서는 실행자 실패 후 워크플로 실패다 | 필수 | 필수 | Workflow |
+| WF-018 | 체크포인트는 continuation에 필요한 전체 상태를 담는다 | 필수 | 필수 | Workflow |
+| WF-019 | restore는 시그니처를 검증하고 stale event를 먼저 비운다 | 필수 | 필수 | Workflow |
+| WF-020 | latest checkpoint 판정은 정렬 계약에 의존한다 | 필수 | 필수 | Workflow |
+| WF-021 | pending request는 restore 뒤 다시 발행하되 중복되지 않아야 한다 | 필수 | 필수 | Workflow |
+| WF-022 | 외부 응답은 request id와 port id를 함께 검증한다 | 필수 | 필수 | Workflow |
+| WF-023 | 승인 재개는 `original_request` payload를 진실 원천으로 삼는다 | 필수 | 필수 | Workflow |
+| WF-024 | 파일 체크포인트 저장은 경로와 역직렬화 안전장치를 기본 제공한다 | 필수 | 필수 | Workflow |
+| WF-025 | run handle은 재개와 pending request 조회 API를 제공한다 | 필수 | 권장 | Workflow |
+| WF-026 | 하위 워크플로 조합은 host executor 소유권 모델을 따른다 | 필수 | 필수 | Workflow |
+| WF-027 | 자식 출력, intermediate, request 전파 정책은 명시적으로 설정한다 | 필수 | 필수 | Workflow |
+| WF-028 | workflow-as-agent 세션은 continuation 상태를 함께 직렬화한다 | 필수 | 필수 | Workflow |
+| WF-029 | functional workflow는 별도 실험 API로 분리한다 | 필수 | 권장 | Workflow |
+| WF-030 | 오케스트레이션은 공통 output designation helper와 명시적 기본 정책을 가진다 | 선택 | 필수 | Workflow |
+| WF-031 | sequential·concurrent는 패턴별 계약과 request-info wrapper를 제공한다 | 선택 | 권장 | Workflow |
+| WF-032 | handoff는 mesh 기본값, 능력 검증, 필터링, pending-request 차단을 갖는다 | 선택 | 필수 | Workflow |
+| WF-033 | group-chat은 단일 orchestrator 계약과 no-self-echo 규칙을 갖는다 | 선택 | 필수 | Workflow |
+| WF-034 | magentic은 단일 manager 계약과 plan review·replan 흐름을 갖는다 | 선택 | 필수 | Workflow |
+| WF-035 | 선언형 워크플로는 분리된 모듈, 안전한 상태 경로, typed handler SPI를 가진다 | 선택 | 필수 | Workflow |
 
 ### 그래프
 
