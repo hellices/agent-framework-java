@@ -1,7 +1,10 @@
 .worktrees/
-/build/
-build-logic/build/
-build-tools/*/build/
+
+# Gradle writes outputs to a `build/` directory in every project. Listing project paths one by one
+# lets a newly registered module leak its outputs into a commit, so match the directory name
+# anywhere instead. `build-logic/` and `build-tools/` are sources and stay tracked; only their
+# `build/` output directories are ignored by this rule.
+build/
 .gradle/
 .kotlin/
 out/

@@ -1,7 +1,0 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<testsuite name="com.microsoft.agentframework.api.ApiContractTest" tests="1" skipped="0" failures="0" errors="0" timestamp="2026-08-11T12:11:20.371Z" hostname="hwang-inhwan-ui-Macmini.local" time="0.217">
-  <properties/>
-  <testcase name="exposesThePublicContractPackage()" classname="com.microsoft.agentframework.api.ApiContractTest" time="0.199"/>
-  <system-out><![CDATA[]]></system-out>
-  <system-err><![CDATA[]]></system-err>
-</testsuite>

@@ -1,1 +1,0 @@
-/Users/hwang-inhwan/workspace/agent-framework-java/agent-framework-api/build/classes/java/test/com/microsoft/agentframework/api/ApiContractTest.class
