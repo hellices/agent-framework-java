@@ -21,6 +21,32 @@ A count of zero means every trusted job queues until it times out. The observabl
   wholly skipped is never reported as green;
 - `main` pushes therefore fail rather than silently pass.
 
+### Re-registration requires reinstalling the release
+
+Editing `githubConfigUrl` on the existing release is not sufficient. The scale set id assigned by
+the previous repository is cached in the `runner-scale-set-id` annotation on the
+`AutoscalingRunnerSet`, and a listener that keeps it crashes on every start:
+
+```text
+No runner scale set found with identifier 1
+```
+
+The listener then restarts in a loop, so the symptom looks like a pod problem rather than a stale
+identifier. Uninstall and reinstall the release so the controller registers a fresh scale set:
+
+```bash
+helm get values arc-java-build -n arc-runners-java -o yaml > values.yaml
+# point githubConfigUrl at the new repository
+helm uninstall arc-java-build -n arc-runners-java
+helm install arc-java-build \
+  oci://ghcr.io/actions/actions-runner-controller-charts/gha-runner-scale-set \
+  --version 0.14.2 --namespace arc-runners-java -f values.yaml
+```
+
+Capture `kubectl get autoscalingrunnerset -A` before and after. Only `arc-java-build` in
+`arc-runners-java` may change; the pre-existing scale sets in `arc-runners` are never touched. The
+existing `gha-token` secret is reused, so no step creates, reads, or prints a credential.
+
 The workflow is intentionally not softened to `ubuntu-latest` to make a branch mergeable earlier.
 Doing that would delete the only executable evidence that the runner contract below is honoured, and
 the runner label allow list in `WorkflowPolicyTest` would then permit a trusted path on a hosted
