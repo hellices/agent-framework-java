@@ -1,8 +1,57 @@
 # Module composition contract
 
-This repository is a Gradle multi-project monorepo. Module identity, dependency direction,
-and artifact coordinates are enforced by `build-tools/harness-policy`. Update this document
-and `ModuleCompositionPolicyTest` together.
+This repository is a Gradle multi-project monorepo. Module identity, layout, dependency direction,
+and artifact coordinates are enforced by `build-tools/harness-policy`. Update this document and
+`ModuleCompositionPolicyTest` together.
+
+## Layout
+
+Core modules sit at the repository root. Extension families that grow to many modules sit under a
+single grouping directory.
+
+```text
+agent-framework-api/            Public contracts
+agent-framework-engine/         Execution state machine
+agent-framework-testkit/        Deterministic fixtures
+agent-framework-bom/            Version alignment
+
+providers/                      Model provider adapters
+integrations/                   MCP, Spring AI, memory, storage adapters
+starters/                       Host framework starters
+protocols/                      Responses, A2A, AG-UI, MCP server hosting
+workflow/                       Workflow graph and orchestration
+compatibility-tests/            Golden scenarios against upstream behavior
+samples/                        Runnable examples, never published
+
+build-logic/                    Gradle convention plugins (included build)
+build-tools/harness-policy/     Executable repository policy
+config/                         Checkstyle, PMD, SpotBugs configuration
+docs/                           Requirements, design, upstream analysis
+```
+
+Grouping directories are created when the first module in that family lands, not in advance. An
+empty directory communicates nothing and still costs a reader a lookup.
+
+### Why this shape
+
+Two layouts are common in Java monorepos of this size, and each fits a different kind of module set.
+
+A **flat root** works when modules are homogeneous. Spring Framework, Micronaut Core, and
+openai-java put every module at the root because the modules are variations of one thing, so a
+reader scanning the root learns the whole system.
+
+**Grouping directories** work when modules are heterogeneous. Spring AI keeps its core at the root
+and groups `models/`, `vector-stores/`, `starters/`, and `mcp/`. Spring Boot groups `platform/`,
+`starter/`, `documentation/`, `smoke-test/`, `integration-test/`, and `system-test/`. LangChain4j
+groups by domain the same way.
+
+This project's planned modules are heterogeneous: a provider adapter, a protocol host, a Spring Boot
+starter, and a sample have almost nothing in common. At 20 to 30 modules a flat root would force a
+reader to infer families from name prefixes alone.
+
+Deeper nesting is rejected. Quarkus splits each extension into `runtime/` and `deployment/`, which
+earns its complexity because a Quarkus extension genuinely executes in two build phases. This
+project has no such split, so a second level would add path depth without adding meaning.
 
 ## Product projects
 
@@ -19,13 +68,23 @@ and `ModuleCompositionPolicyTest` together.
 | --- | --- | --- |
 | `:build-tools:harness-policy` | no | Executable repository, artifact, and workflow policy. |
 
+## Naming
+
+- A published module's leaf directory name equals its artifact id.
+  `providers/agent-framework-openai` publishes as `agent-framework-openai`.
+- A grouping directory never appears in published coordinates. A grouped module sets its archive
+  name from the leaf directory so the Gradle path and the artifact id stay independent.
+- Samples use a `sample-` prefix and are never published, so an artifact search never returns one.
+- Compatibility modules name the surface they verify, such as `compatibility-tests/openai-responses`.
+
 ## Rules
 
 1. Every library project applies `agentframework.java-library-conventions`,
-   `agentframework.test-conventions`, and `agentframework.quality-conventions`.
+   `agentframework.test-conventions`, `agentframework.quality-conventions`, and
+   `agentframework.library-publishing-conventions`.
 2. `:agent-framework-api` declares no project dependency. It is the root of the graph.
 3. `:agent-framework-engine` and `:agent-framework-testkit` depend on `:agent-framework-api` only.
-4. No project depends on `:agent-framework-bom`, and the BOM depends on no harness project.
+4. No project depends on `:agent-framework-bom`, and the BOM lists every published library.
 5. No product project depends on `:build-tools:harness-policy`.
 6. Every project registered in `settings.gradle.kts` exists on disk with a build file.
 7. Dependency versions come from `gradle/libs.versions.toml`. Build files declare no inline version.
@@ -36,21 +95,39 @@ and `ModuleCompositionPolicyTest` together.
 ## Why the graph points this way
 
 The API module is the only contract a provider adapter or a host integration needs to compile
-against. If the engine could be reached from the API, every adapter would drag the execution
-machinery into its classpath and a change to run semantics would ripple into unrelated modules.
+against. If the engine were reachable from the API, every adapter would drag the execution machinery
+onto its classpath and a change to run semantics would ripple into unrelated modules.
 
 The testkit depends on the API rather than the engine for the same reason. Fixtures describe
-contracts, not internals, so a test written against the testkit keeps compiling when the engine
-is restructured.
+contracts, not internals, so a test written against the testkit keeps compiling when the engine is
+restructured.
+
+## Publishing
+
+Every library publishes a main jar, a sources jar, and a javadoc jar, because Maven Central requires
+all three and because a consumer cannot step into the code from an IDE without them.
+
+```bash
+./gradlew publishAllPublicationsToBuildDirectoryRepository
+```
+
+This writes to `build/maven-repository` so publication stays verifiable in CI and in a fork without
+credentials. Release repositories are configured by the release workflow, never by a convention
+plugin.
 
 ## Adding a project
 
-1. Add the row to the product table above.
-2. Add the assertion to `ModuleCompositionPolicyTest` and watch it fail.
-3. Register the project in `settings.gradle.kts` and add its build file.
-4. Run `./gradlew policyCheck quality testJava17`.
+1. Decide placement. Core contract or execution goes to the root. Anything in a growing family goes
+   under its grouping directory.
+2. Add the row to the product table above.
+3. Add the assertion to `ModuleCompositionPolicyTest` and watch it fail.
+4. Register the project in `settings.gradle.kts` and add its build file.
+5. For a grouped module, set the archive name from the leaf directory.
+6. Run `./gradlew :<project>:resolveAndLockAll --write-locks` and commit the lockfile.
+7. Run `./gradlew policyCheck quality testJava17`.
 
 ## Related documents
 
 - [Foundation design](foundation-design.md)
 - [Requirements](../requirements/README.md)
+- [Getting started](../operations/getting-started.md)

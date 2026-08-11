@@ -11,4 +11,9 @@ class EngineDependencyTest {
   void apiContractIsReachableFromTheEngineClasspath() {
     assertThat(ApiContract.packageName()).isEqualTo("com.microsoft.agentframework.api");
   }
+
+  @Test
+  void exposesTheEnginePackage() {
+    assertThat(EngineContract.packageName()).isEqualTo("com.microsoft.agentframework.engine");
+  }
 }

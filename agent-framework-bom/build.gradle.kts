@@ -1,5 +1,5 @@
 plugins {
-    `java-platform`
+    id("agentframework.platform-conventions")
 }
 
 description = "Dependency constraints for every published Agent Framework for Java artifact."

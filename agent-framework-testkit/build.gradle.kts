@@ -2,6 +2,7 @@ plugins {
     id("agentframework.java-library-conventions")
     id("agentframework.test-conventions")
     id("agentframework.quality-conventions")
+    id("agentframework.library-publishing-conventions")
 }
 
 description = "Deterministic fixtures and contract-test bases for Agent Framework for Java."

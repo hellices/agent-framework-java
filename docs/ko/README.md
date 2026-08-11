@@ -56,11 +56,15 @@ cd agent-framework-java
 | `./gradlew quality` | JDK 17에서 포매팅과 정적 분석 |
 | `./gradlew testJava17` | Temurin 17 런처로 테스트 |
 | `./gradlew check` | 위 전부와 21·25 호환성 실행 |
+| `./gradlew publishAllPublicationsToBuildDirectoryRepository` | 모든 아티팩트를 `build/maven-repository`에 게시 |
 
 로컬에 Temurin 21이나 25가 없으면 `testJava21`, `testJava25`가 툴체인 오류로 실패합니다. 좁은
 태스크만 실행하고 나머지는 CI에 맡기면 됩니다.
 
 ## 저장소 구조
+
+핵심 모듈은 루트에 둡니다. 모듈이 많아질 계열은 그룹 디렉터리로 묶으며, 이는 Spring AI와
+Spring Boot가 같은 규모에서 쓰는 형태입니다.
 
 ```text
 agent-framework-api/        공개 계약과 값 타입
@@ -73,6 +77,9 @@ config/                     Checkstyle, PMD, SpotBugs 설정
 docs/                       요구사항, 설계, 업스트림 분석
 .harness/                   에이전트 아티팩트 JSON 스키마
 ```
+
+예정된 그룹 디렉터리는 `providers/`, `integrations/`, `starters/`, `protocols/`, `workflow/`,
+`compatibility-tests/`, `samples/`입니다. 각 디렉터리는 첫 모듈이 들어올 때 만듭니다.
 
 모듈 규칙은 [모듈 구성 계약](../design/module-composition.md)이 정의하고 `./gradlew policyCheck`가
 강제합니다.

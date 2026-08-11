@@ -83,10 +83,17 @@ class ModuleCompositionPolicyTest {
   @Test
   void platformProjectUsesJavaPlatformAndListsEveryLibrary() {
     String buildFile = ProjectLayout.buildFileText(PLATFORM_PROJECT);
-    assertThat(buildFile).contains("`java-platform`");
+    assertThat(buildFile).contains("agentframework.platform-conventions");
     for (String gradlePath : LIBRARY_PROJECTS) {
       assertThat(buildFile).contains("api(project(\"" + gradlePath + "\"))");
     }
+  }
+
+  @ParameterizedTest
+  @MethodSource("libraryProjects")
+  void libraryProjectIsPublishable(String gradlePath) {
+    assertThat(ProjectLayout.buildFileText(gradlePath))
+        .contains("agentframework.library-publishing-conventions");
   }
 
   @Test
