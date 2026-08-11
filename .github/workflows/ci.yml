@@ -1,0 +1,282 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  fork-verify:
+    name: Fork minimum verification
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Eclipse Temurin 17
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
+        with:
+          validate-wrappers: true
+          cache-read-only: true
+
+      - name: Run policy, quality, and Java 17 tests
+        run: ./gradlew --no-daemon policyCheck quality testJava17
+
+      - name: Upload verification reports
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: fork-verification-reports
+          path: |
+            **/build/reports/
+            **/build/test-results/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  trusted-quality:
+    name: Trusted quality on JDK 17
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: arc-java-build
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Select preinstalled Eclipse Temurin toolchains
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+        with:
+          distribution: temurin
+          java-version: |
+            17
+            21
+            25
+
+      - name: Record runner tool cache provenance
+        run: |
+          set -eu
+          printf '### Runner tool cache provenance\n\n' >> "$GITHUB_STEP_SUMMARY"
+          for version in 17 21 25; do
+            home_variable="JAVA_HOME_${version}_X64"
+            home_path=$(printenv "$home_variable")
+            case "$home_path" in
+              /opt/hostedtoolcache/*) provenance=tool-cache ;;
+              *) provenance=downloaded ;;
+            esac
+            printf -- '- %s=%s (%s)\n' "$home_variable" "$home_path" "$provenance" \
+              >> "$GITHUB_STEP_SUMMARY"
+            printf '%s=%s (%s)\n' "$home_variable" "$home_path" "$provenance"
+          done
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
+        with:
+          validate-wrappers: true
+
+      - name: Run repository policy and quality
+        env:
+          JAVA_HOME: ${{ env.JAVA_HOME_17_X64 }}
+        run: ./gradlew --no-daemon policyCheck quality
+
+      - name: Upload verification reports
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: trusted-quality-reports
+          path: |
+            **/build/reports/
+            **/build/test-results/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  trusted-compatibility:
+    name: Trusted tests on JDK ${{ matrix.java }}
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: arc-java-build
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        java: ['17', '21', '25']
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Select preinstalled Eclipse Temurin toolchains
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+        with:
+          distribution: temurin
+          java-version: |
+            17
+            21
+            25
+
+      - name: Record runner tool cache provenance
+        run: |
+          set -eu
+          printf '### Runner tool cache provenance\n\n' >> "$GITHUB_STEP_SUMMARY"
+          for version in 17 21 25; do
+            home_variable="JAVA_HOME_${version}_X64"
+            home_path=$(printenv "$home_variable")
+            case "$home_path" in
+              /opt/hostedtoolcache/*) provenance=tool-cache ;;
+              *) provenance=downloaded ;;
+            esac
+            printf -- '- %s=%s (%s)\n' "$home_variable" "$home_path" "$provenance" \
+              >> "$GITHUB_STEP_SUMMARY"
+            printf '%s=%s (%s)\n' "$home_variable" "$home_path" "$provenance"
+          done
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
+        with:
+          validate-wrappers: true
+
+      - name: Run Java ${{ matrix.java }} compatibility tests
+        env:
+          JAVA_HOME: ${{ env.JAVA_HOME_17_X64 }}
+        run: ./gradlew --no-daemon testJava${{ matrix.java }}
+
+      - name: Upload verification reports
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: trusted-compatibility-reports-java-${{ matrix.java }}
+          path: |
+            **/build/reports/
+            **/build/test-results/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  verify-result:
+    name: Verify result
+    if: always()
+    needs:
+      - fork-verify
+      - trusted-quality
+      - trusted-compatibility
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Require exactly one complete verification path
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+          VERIFICATION_PATHS: |
+            fork=fork-verify
+            trusted=trusted-quality,trusted-compatibility
+        run: |
+          set -eu
+          results=$(printf '%s' "$NEEDS_JSON" | awk '
+            { document = document $0 }
+            END {
+              gsub(/[ \t\r\n]/, "", document)
+              gsub(/"outputs":[{][^{}]*[}]/, "", document)
+              gsub(/,[}]/, "}", document)
+              gsub(/[{],/, "{", document)
+              while (match(document, /"[A-Za-z0-9_.-]+":[{]"result":"[a-z]+"/)) {
+                entry = substr(document, RSTART, RLENGTH)
+                document = substr(document, RSTART + RLENGTH)
+                split(entry, field, "\"")
+                print field[2] "=" field[6]
+              }
+            }')
+          if [ -z "$results" ]; then
+            printf 'verify-result read no job result from the needs context.\n' >&2
+            exit 1
+          fi
+          printf 'needs results:\n%s\n' "$results"
+          printf 'verification paths:\n%s\n' "$VERIFICATION_PATHS"
+
+          broken=0
+          declared=$(printf '%s' "$VERIFICATION_PATHS" | tr ' \n' '\n\n' \
+            | sed -e '/^$/d' -e 's/^[^=]*=//' | tr ',' '\n' | sed -e '/^$/d')
+
+          while IFS='=' read -r job result; do
+            [ -n "$job" ] || continue
+            case "$result" in
+              success | skipped) ;;
+              *)
+                printf '%s reported %s.\n' "$job" "$result" >&2
+                broken=1
+                ;;
+            esac
+            if ! printf '%s\n' "$declared" | grep -qx -- "$job"; then
+              printf '%s belongs to no declared verification path.\n' "$job" >&2
+              broken=1
+            fi
+          done <<RESULTS
+          $results
+          RESULTS
+
+          complete=''
+          for definition in $VERIFICATION_PATHS; do
+            path_name=${definition%%=*}
+            members=0
+            successes=0
+            skips=0
+            for job in $(printf '%s' "${definition#*=}" | tr ',' ' '); do
+              members=$((members + 1))
+              result=$(printf '%s\n' "$results" | awk -F= -v job="$job" '$1 == job { print $2 }')
+              case "$result" in
+                success) successes=$((successes + 1)) ;;
+                skipped) skips=$((skips + 1)) ;;
+                '')
+                  printf 'path %s declares %s, which is not in needs.\n' "$path_name" "$job" >&2
+                  broken=1
+                  ;;
+              esac
+            done
+            if [ "$members" -eq 0 ]; then
+              printf 'path %s declares no job.\n' "$path_name" >&2
+              broken=1
+            elif [ "$successes" -eq "$members" ]; then
+              complete="$complete $path_name"
+            elif [ "$skips" -ne "$members" ]; then
+              printf 'path %s neither completed nor was entirely skipped.\n' "$path_name" >&2
+              broken=1
+            fi
+          done
+
+          if [ "$broken" -ne 0 ]; then
+            printf 'Verification did not complete cleanly.\n' >&2
+            exit 1
+          fi
+
+          count=$(printf '%s' "$complete" | wc -w | tr -d ' ')
+          if [ "$count" -ne 1 ]; then
+            printf 'Expected exactly one complete verification path, found %s:%s\n' \
+              "$count" "$complete" >&2
+            exit 1
+          fi
+
+          printf 'Verification path completed:%s\n' "$complete"

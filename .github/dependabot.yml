@@ -1,0 +1,49 @@
+version: 2
+updates:
+  - package-ecosystem: "gradle"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "02:00"
+      timezone: "Asia/Seoul"
+    open-pull-requests-limit: 5
+    groups:
+      quality-tools:
+        patterns:
+          - "com.diffplug.spotless:*"
+          - "com.github.spotbugs:*"
+          - "com.github.spotbugs.snom:*"
+          - "com.google.googlejavaformat:*"
+          - "com.puppycrawl.tools:*"
+          - "net.sourceforge.pmd:*"
+          - "org.jacoco:*"
+      test-tools:
+        patterns:
+          - "org.assertj:*"
+          - "org.junit:*"
+          - "org.junit.jupiter:*"
+          - "org.junit.platform:*"
+      serialization-tools:
+        patterns:
+          - "com.fasterxml.jackson.core:*"
+          - "com.fasterxml.jackson.dataformat:*"
+          - "com.networknt:*"
+
+  - package-ecosystem: "gradle"
+    directory: "/build-logic"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "02:15"
+      timezone: "Asia/Seoul"
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "02:30"
+      timezone: "Asia/Seoul"
+    open-pull-requests-limit: 5

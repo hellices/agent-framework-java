@@ -1,0 +1,16 @@
+* @hwang-inhwan
+/AGENTS.md @hwang-inhwan
+/CLAUDE.md @hwang-inhwan
+/GEMINI.md @hwang-inhwan
+/.harness/ @hwang-inhwan
+/.github/ @hwang-inhwan
+/build-logic/ @hwang-inhwan
+/build-tools/ @hwang-inhwan
+/config/ @hwang-inhwan
+/gradle/ @hwang-inhwan
+/settings.gradle.kts @hwang-inhwan
+/build.gradle.kts @hwang-inhwan
+/docs/upstream/ @hwang-inhwan
+/docs/design/ @hwang-inhwan
+/docs/requirements/ @hwang-inhwan
+/docs/operations/ @hwang-inhwan

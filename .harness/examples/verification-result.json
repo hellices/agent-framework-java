@@ -1,0 +1,21 @@
+{
+  "schemaVersion": "1.0",
+  "checks": [
+    {
+      "name": "repository policy",
+      "command": "./gradlew policyCheck",
+      "exitCode": 0,
+      "status": "PASS",
+      "durationMs": 4200,
+      "artifactPath": "build-tools/harness-policy/build/reports/tests/test/index.html"
+    },
+    {
+      "name": "quality",
+      "command": "./gradlew quality",
+      "exitCode": 0,
+      "status": "PASS",
+      "durationMs": 18300
+    }
+  ],
+  "overallStatus": "PASS"
+}
