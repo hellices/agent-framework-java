@@ -69,10 +69,21 @@ val signingKey =
 val signingPassword = providers.environmentVariable("SIGNING_PASSWORD").orNull
 
 // Read the value, not merely its presence: `-Pagentframework.release=false` must mean "not a
-// release". This matches how `agentframework.requirePublishedBom` is interpreted, so the two flags
-// obey one rule.
+// release". A bare `-Pagentframework.release` carries the empty string in Gradle and is the usual
+// way to write a boolean flag, so it means "release"; anything else is rejected rather than
+// silently treated as false, because failing open here publishes unsigned artifacts.
 val releaseBuild =
-    providers.gradleProperty("agentframework.release").map(String::toBoolean).getOrElse(false)
+    providers.gradleProperty("agentframework.release").map { raw ->
+        when (raw.trim().lowercase()) {
+            "", "true" -> true
+            "false" -> false
+            else ->
+                throw GradleException(
+                    "agentframework.release must be true or false, but was '$raw'. " +
+                        "An unrecognised value would otherwise disable release signing silently."
+                )
+        }
+    }.getOrElse(false)
 
 if (signingKey == null && releaseBuild) {
     // Fail when publishing runs, not while configuring. A release branch must still be able to run

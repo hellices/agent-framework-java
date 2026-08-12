@@ -8,6 +8,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Set;
+import java.util.function.Predicate;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.Assumptions;
@@ -54,11 +55,12 @@ class SigningContractTest {
 
   @Test
   void everyMainJarIsSignedRatherThanOnlyTheMetadata() {
-    // A signature on the pom alone would satisfy a file count while leaving the jar unsigned, which
-    // Central rejects. Assert on the artifact consumers download.
+    // A signature on the pom, or on the sources and javadoc jars alone, would satisfy a file count
+    // while leaving the main jar unsigned. Central rejects that, so assert on the artifact
+    // consumers actually download.
     requireSignedPublishOutput();
 
-    Set<String> signedJars = signatureTargets(".jar.asc");
+    Set<String> signedJars = signatureTargets(".jar.asc", SigningContractTest::isMainJarSignature);
 
     for (String artifact : PUBLISHED_ARTIFACTS) {
       if (artifact.endsWith("-bom")) {
@@ -66,9 +68,14 @@ class SigningContractTest {
         continue;
       }
       assertThat(signedJars)
-          .withFailMessage("%s published a jar with no detached signature.", artifact)
+          .withFailMessage("%s published a main jar with no detached signature.", artifact)
           .contains(artifact);
     }
+  }
+
+  private static boolean isMainJarSignature(Path signature) {
+    String name = fileNameOf(signature);
+    return !name.endsWith("-sources.jar.asc") && !name.endsWith("-javadoc.jar.asc");
   }
 
   @Test
@@ -140,6 +147,10 @@ class SigningContractTest {
 
   /** Returns the artifact directory names that own at least one signature with the given suffix. */
   private static Set<String> signatureTargets(String suffix) {
+    return signatureTargets(suffix, path -> true);
+  }
+
+  private static Set<String> signatureTargets(String suffix, Predicate<Path> accept) {
     Path repository = publishedRepository();
     if (!Files.isDirectory(repository)) {
       return Set.of();
@@ -149,6 +160,7 @@ class SigningContractTest {
       return files
           .filter(Files::isRegularFile)
           .filter(path -> fileNameOf(path).endsWith(suffix))
+          .filter(accept)
           .map(SigningContractTest::owningArtifact)
           .collect(Collectors.toUnmodifiableSet());
     } catch (IOException cause) {
