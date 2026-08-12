@@ -50,7 +50,7 @@ The `Grade` column in this document is, as [README](README.md#requirement-grades
 **Requirement.** The public interceptor API must be provided as types with separated
 responsibilities, at least `AgentExecutionInterceptor`, `ModelCallInterceptor`,
 `ToolCallInterceptor`, and `SessionInterceptor`, and a single general-purpose middleware type that
-accepts everything is not offered as a first-class public extension point.
+accepts everything must not be offered as a first-class public extension point.
 
 **Upstream comparison**
 
@@ -358,8 +358,8 @@ boundary in the interceptor contract.
 ## INT-013 Cancellation propagates to every interceptor and to compaction
 
 **Requirement.** The cancellation signal must reach the agent, model, tool, and session interceptors
-and the compaction strategies without interruption, and a cancellation exception is not turned into
-a success.
+and the compaction strategies without interruption, and a cancellation exception must not be turned
+into a success.
 
 **Upstream comparison**
 

@@ -43,7 +43,7 @@ The `Grade` column in this document is, as [README](README.md#requirement-grades
 | WF-018 | A checkpoint carries the full state needed for continuation | Required | Required | Workflow |
 | WF-019 | Restore validates the signature and drains stale events first | Required | Required | Workflow |
 | WF-020 | Determining the latest checkpoint relies on an ordering contract | Required | Required | Workflow |
-| WF-021 | Pending requests are republished after restore without being duplicated | Required | Required | Workflow |
+| WF-021 | Pending requests are republished after restore but must not be duplicated | Required | Required | Workflow |
 | WF-022 | An external response is validated on both the request id and the port id | Required | Required | Workflow |
 | WF-023 | Approval resumption takes the `original_request` payload as the source of truth | Required | Required | Workflow |
 | WF-024 | The file checkpoint store provides path and deserialization safeguards by default | Required | Required | Workflow |
@@ -539,7 +539,7 @@ between implementations, the restore API is not deterministic.
 
 ---
 
-## WF-021 Pending requests are republished after restore without being duplicated
+## WF-021 Pending requests are republished after restore but must not be duplicated
 
 **Requirement.** Restoring from a checkpoint that has pending requests must republish the request
 information, and a request that has already been handled must not be published again.
