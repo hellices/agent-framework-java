@@ -88,7 +88,7 @@ class DocumentationLanguagePolicyTest {
    * fails {@link #pendingTranslationListHasNotWidened()} instead of quietly exempting one more
    * document from the language scan.
    */
-  private static final int PENDING_TRANSLATION_SIZE = 36;
+  private static final int PENDING_TRANSLATION_SIZE = 16;
 
   /**
    * Documents that have not been translated yet. Every entry is removed by the task that translates
@@ -98,26 +98,6 @@ class DocumentationLanguagePolicyTest {
    */
   private static final Set<String> PENDING_TRANSLATION =
       Set.of(
-          "docs/upstream/README.md",
-          "docs/upstream/snapshots/d0a4165f/README.md",
-          "docs/upstream/snapshots/d0a4165f/compatibility-matrix.md",
-          "docs/upstream/snapshots/d0a4165f/coverage-ledger.md",
-          "docs/upstream/snapshots/d0a4165f/snapshot-manifest.md",
-          "docs/upstream/snapshots/d0a4165f/features/01-agent-lifecycle.md",
-          "docs/upstream/snapshots/d0a4165f/features/02-message-content.md",
-          "docs/upstream/snapshots/d0a4165f/features/03-model-execution.md",
-          "docs/upstream/snapshots/d0a4165f/features/04-structured-output.md",
-          "docs/upstream/snapshots/d0a4165f/features/05-function-tools.md",
-          "docs/upstream/snapshots/d0a4165f/features/06-tool-approval.md",
-          "docs/upstream/snapshots/d0a4165f/features/07-mcp-client-tools.md",
-          "docs/upstream/snapshots/d0a4165f/features/08-sessions.md",
-          "docs/upstream/snapshots/d0a4165f/features/09-history-context-memory.md",
-          "docs/upstream/snapshots/d0a4165f/features/10-middleware.md",
-          "docs/upstream/snapshots/d0a4165f/features/11-compaction.md",
-          "docs/upstream/snapshots/d0a4165f/features/12-harness.md",
-          "docs/upstream/snapshots/d0a4165f/features/13-skills-background-code.md",
-          "docs/upstream/snapshots/d0a4165f/features/14-workflow-graph.md",
-          "docs/upstream/snapshots/d0a4165f/features/15-workflow-runtime.md",
           "docs/upstream/snapshots/d0a4165f/features/16-workflow-checkpoint-hitl.md",
           "docs/upstream/snapshots/d0a4165f/features/17-workflow-composition.md",
           "docs/upstream/snapshots/d0a4165f/features/18-orchestrations.md",
