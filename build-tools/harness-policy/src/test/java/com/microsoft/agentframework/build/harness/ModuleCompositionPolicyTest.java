@@ -30,12 +30,20 @@ class ModuleCompositionPolicyTest {
   /**
    * Projects allowed to sit at the repository root.
    *
-   * <p>Closed for the same reason as the grouping directories. Without it a root path is
-   * unconstrained, so a provider or sample could be registered as {@code :agent-framework-openai}
-   * and still satisfy the layout contract.
+   * <p>Written out rather than derived from {@link #LIBRARY_PROJECTS}. Deriving it would couple two
+   * unrelated decisions: {@code everyRegisteredProductProjectIsClassified} tells the author of a
+   * new module to add it to the library list, and if that list also governed root placement,
+   * following that advice would legalise {@code :agent-framework-openai} at the root — the case the
+   * layout check exists to reject.
+   *
+   * <p>Adding an entry here is a layout decision and belongs in the design document.
    */
   private static final List<String> ROOT_PROJECTS =
-      Stream.concat(LIBRARY_PROJECTS.stream(), Stream.of(PLATFORM_PROJECT)).toList();
+      List.of(
+          ":agent-framework-api",
+          ":agent-framework-engine",
+          ":agent-framework-testkit",
+          ":agent-framework-bom");
 
   /**
    * Grouping directories whose modules are built but never published.
@@ -81,6 +89,22 @@ class ModuleCompositionPolicyTest {
 
   static Stream<String> libraryProjects() {
     return LIBRARY_PROJECTS.stream();
+  }
+
+  @Test
+  void rootAllowlistAndLibraryListStayConsistent() {
+    // The two lists are separate on purpose, so they can drift. A root project that is neither a
+    // library nor the platform would be a layout decision nobody recorded, and a library placed in
+    // a group is fine but must not linger in the root allowlist.
+    for (String rootProject : ROOT_PROJECTS) {
+      assertThat(LIBRARY_PROJECTS.contains(rootProject) || PLATFORM_PROJECT.equals(rootProject))
+          .withFailMessage(
+              "%s is allowed at the root but is neither a library nor the platform. The root is"
+                  + " reserved for the core modules; anything else belongs in a grouping"
+                  + " directory.",
+              rootProject)
+          .isTrue();
+    }
   }
 
   @Test

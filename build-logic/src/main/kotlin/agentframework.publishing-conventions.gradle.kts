@@ -74,7 +74,17 @@ val signingKey =
                 val resolved =
                     if (file.isAbsolute) file
                     else isolated.rootProject.projectDirectory.file(path).asFile
-                if (resolved.isFile) resolved.readText() else null
+                if (!resolved.isFile) {
+                    // Naming a path and having it be wrong is an error, not a reason to look
+                    // elsewhere. Falling through would sign with a different key, or publish
+                    // unsigned, and report success either way.
+                    throw GradleException(
+                        "SIGNING_KEY_FILE points at '$path', resolved to '$resolved', " +
+                            "which is not a file. A relative path is resolved against the " +
+                            "repository root."
+                    )
+                }
+                resolved.readText()
             }
             ?: providers.environmentVariable("SIGNING_KEY").orNull)
         ?.takeIf(String::isNotBlank)
