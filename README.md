@@ -97,6 +97,7 @@ Start here depending on what you need.
 | How do modules relate? | [Module composition](docs/design/module-composition.md) |
 | How is the repository verified? | [Engineering harness design](docs/design/engineering-harness-design.md) |
 | How does the build work? | [Gradle and Java ARC foundation](docs/design/gradle-kotlin-arc-foundation-design.md) |
+| How is documentation organized? | [Documentation language and information architecture](docs/design/documentation-language-policy.md) |
 
 The requirements are the contract. 244 requirements across twelve documents, each with a stable id,
 a .NET and Python comparison, the reasoning behind the Java decision, and acceptance criteria.
