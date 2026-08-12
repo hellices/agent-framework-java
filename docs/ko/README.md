@@ -134,6 +134,9 @@ Java 판단 근거, 수용 기준을 가집니다.
 ## 번역
 
 이 문서는 [영문 README](../../README.md)의 번역본입니다. 영문이 정본이며 번역이 뒤따릅니다.
+English documents are authoritative.
+
+- [문서 인덱스](../README.md)
 
 ## 라이선스
 

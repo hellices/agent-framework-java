@@ -23,6 +23,7 @@ val repositoryPolicySources =
             "**/.gradle/**",
             "**/.kotlin/**",
             "**/.gradle-bootstrap/**",
+            ".superpowers/**",
             ".worktrees/**",
             ".harness/runs/**"
         )
