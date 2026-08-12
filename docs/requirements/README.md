@@ -45,7 +45,7 @@ Every requirement has a fixed id in the form `<prefix>-<three digits>`, for exam
 | Grade | Meaning |
 | --- | --- |
 | Required | The feature is not released without this requirement. |
-| Recommended | It may be implemented differently when the reasoning is recorded. |
+| Recommended | It may be implemented differently when a reasonable justification is recorded. |
 | Optional | Implement it when it is needed. The release ships without it. |
 
 A grade states **how binding the requirement is once the feature has been chosen for

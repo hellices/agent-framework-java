@@ -12,7 +12,7 @@ the tool call loop by [04 Tool definitions and the tool call loop](04-tools.md),
 
 The `Grade` column in this document is, as [README](README.md#requirement-grades) defines it, how binding a requirement is once the decision to build the feature has been made; whether the feature is adopted at all follows the [compatibility matrix](../upstream/snapshots/d0a4165f/compatibility-matrix.md).
 
-- The agent core (`AG01` through `AG04`) and model execution (`MOD01`, `MOD02`) are all adoption `Required`.
+- The agent core (`AG01`–`AG04`) and model execution (`MOD01`, `MOD02`) are all adoption `Required`.
 
 ## Summary
 
@@ -73,7 +73,7 @@ optional.
 - .NET: uses `Guid.NewGuid().ToString("N")` as the default when `Id` is empty. `Name` and `Description` are virtual properties.
 - Python: creates a `uuid4()` string when `id` is omitted and keeps `name` and `description` as fields.
 
-**Decision.** The two are the same. Attributing a run to an agent in observability requires the
+**Decision.** Both upstreams agree. Attributing a run to an agent in observability requires the
 identifier to always exist. Allowing automatic generation to fail would give the tracing layer
 conditional code, so the value is always filled in, without exception.
 
@@ -249,7 +249,7 @@ through the model call port defined by the core.
 - .NET: has `IChatClient`, which `ChatClientAgent` uses.
 - Python: has the `BaseChatClient` and `SupportsChatGetResponse` protocols.
 
-**Decision.** The two are the same. Without this separation, neither provider replacement nor
+**Decision.** Both upstreams agree. Without this separation, neither provider replacement nor
 deterministic testing is possible. This port is owned by `agent-framework-api` and implemented by
 provider adapters.
 
@@ -321,9 +321,9 @@ options win. This precedence must be documented and pinned by a test.
 - .NET: implements the merge rules for default options and run options and pins them by test.
 - Python: keeps option merging and validation in separate functions and tests them.
 
-**Decision.** The two are the same. An implicit merge rule produces bugs where the same setting is
-applied differently depending on the path. What matters is not the rule itself but that "the rule is
-fixed and verified".
+**Decision.** Both upstreams agree. An implicit merge rule produces bugs where the same setting is
+applied differently depending on the path. What matters is not the rule itself but that "the rule
+is fixed and verified".
 
 **Acceptance criteria**
 
@@ -391,8 +391,8 @@ final response as a completed run. Usage and the finish reason must be reconstru
 - .NET: provides a helper that combines the fragments into a final response.
 - Python: reconstructs the final response from the fragments the stream wrapper buffered plus its finalization step.
 
-**Decision.** The two are the same. Without this requirement, streaming users lose usage totals and
-the finish reason. For observability and billing to see the same values on both paths,
+**Decision.** Both upstreams agree. Without this requirement, streaming users lose usage totals
+and the finish reason. For observability and billing to see the same values on both paths,
 reconstruction has to be guaranteed.
 
 **Acceptance criteria**

@@ -526,4 +526,4 @@ makes responsibilities excessively broad. If needed, a separate artifact must be
 | Agent public execution API and model port | [01 Agent execution and model calls](01-agent-execution.md) |
 | Workflow graph and checkpoint runtime | [09 Workflows and orchestration](09-workflows.md) |
 | General hosting lifecycle and protocol adapters | [10 Hosting and protocols](10-hosting.md) |
-| Provider-specific model integration and infrastructure adapters | [12 Provider integration](12-providers.md) |
+| Provider-specific model integration and infrastructure adapters | [12 Provider integrations](12-providers.md) |

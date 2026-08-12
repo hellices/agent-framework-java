@@ -77,8 +77,8 @@ used as a basis for user isolation or authorization checks.
 - .NET: Hosting boundaries are handled by `HostedSessionContext.UserId` and user-partitioned stores, not by `ConversationId`.
 - Python: Explicitly states that `service_session_id` is trusted application state but not an authorization boundary.
 
-**Decision.** The same approach applies here. Using this value as an authorization boundary turns
-provider format changes into security rules. The safer default is a separate host identity context.
+**Decision.** Both upstreams agree. Using this value as an authorization boundary turns provider
+format changes into security rules. The safer default is a separate host identity context.
 
 **Acceptance criteria**
 
@@ -102,9 +102,9 @@ instance fields or global caches.
 - .NET: Provider-local state is placed in `StateBag` and `ProviderSessionState<TState>`.
 - Python: Provider state is placed in `AgentSession.state[source_id]` or an external backend, not in provider instances.
 
-**Decision.** The same approach applies here. The session must be the single source of truth for
-restart and resumption to work. Placing state in instance fields may pass tests but evaporates at
-process boundaries.
+**Decision.** Both upstreams agree. The session must be the single source of truth for restart and
+resumption to work. Placing state in instance fields may pass tests but evaporates at process
+boundaries.
 
 **Acceptance criteria**
 
@@ -228,9 +228,9 @@ via atomic replacement; concurrent-write semantics are fixed at last-writer-wins
 - .NET: Prevents torn writes via temp file followed by overwrite rename and fixes last-writer-wins in documentation and tests.
 - Python: `FileSessionStore` also uses temp file and replace; cross-process coordination is not performed.
 
-**Decision.** The same approach applies here. The core does not need to be responsible for
-distributed locking. However, partial file exposure must be prevented. Java also defaults to
-simple, verifiable atomic replacement.
+**Decision.** Both upstreams agree. The core does not need to be responsible for distributed
+locking. However, partial file exposure must be prevented. Java also defaults to simple,
+verifiable atomic replacement.
 
 **Acceptance criteria**
 
@@ -253,9 +253,9 @@ reject final paths that escape the store root.
 - .NET: The hosted file store builds agent/user/conversation partition paths and tests for traversal rejection.
 - Python: Implements safe filename stem and resolved-path containment checks, along with symlink escape rejection.
 
-**Decision.** The same approach applies here. Since session IDs can be external input, they must
-not be used directly as filenames. Root containment checking is a mandatory security rule for
-the Java file store.
+**Decision.** Both upstreams agree. Since session IDs can be external input, they must not be used
+directly as filenames. Root containment checking is a mandatory security rule for the Java file
+store.
 
 **Acceptance criteria**
 
@@ -330,9 +330,9 @@ state.
 - .NET: Places provider state in the session state via the `AIContextProvider` and `ProviderSessionState<TState>` combination.
 - Python: `ContextProvider` stores provider-scoped state in `AgentSession.state[source_id]`.
 
-**Decision.** The same approach applies here. If a provider holds session state in its own fields,
-session resumption and parallel execution break. Fixing a namespace key makes it easy for stores
-and tests to determine state ownership.
+**Decision.** Both upstreams agree. If a provider holds session state in its own fields, session
+resumption and parallel execution break. Fixing a namespace key makes it easy for stores and tests
+to determine state ownership.
 
 **Acceptance criteria**
 
@@ -382,7 +382,7 @@ exists, no load-enabled history provider is present, and no service-stored conve
 - .NET: Separates the service-stored path from the local history provider path.
 - Python: Production code auto-adds `InMemoryHistoryProvider` only under the above conditions.
 
-**Decision.** Follows the Python code and tests. If auto-injection conditions are broad,
+**Decision.** The Python code and tests are followed. If auto-injection conditions are broad,
 service-stored history and local history overlap. Per the principle that code overrides
 documentation, the narrow conditions are fixed.
 
@@ -407,8 +407,8 @@ must not be the default; per-service-call persistence is performed only when exp
 - .NET: Opt-in via the `RequirePerServiceCallChatHistoryPersistence` option and a dedicated decorator.
 - Python: The middleware owns per-call persistence only when `require_per_service_call_history_persistence=True`.
 
-**Decision.** The same approach applies here. Defaulting to end-of-run atomicity is simpler.
-Intermediate storage is expensive and boundary-complex, so explicit opt-in is correct.
+**Decision.** Both upstreams agree. Defaulting to end-of-run atomicity is simpler. Intermediate
+storage is expensive and boundary-complex, so explicit opt-in is correct.
 
 **Acceptance criteria**
 
@@ -432,8 +432,8 @@ service conversation identifier, it must fail explicitly before execution begins
 - .NET: Fails with a conflict when a local history provider and a real `ConversationId` are simultaneously present.
 - Python: Immediately errors in local-history mode when an existing service-managed conversation is present.
 
-**Decision.** The same approach applies here. Mixing both paths makes it ambiguous which history
-is the source of truth. The safer default is fast failure rather than silent mixing.
+**Decision.** Both upstreams agree. Mixing both paths makes it ambiguous which history is the
+source of truth. The safer default is fast failure rather than silent mixing.
 
 **Acceptance criteria**
 
@@ -458,9 +458,9 @@ conversation handle is passed to the next call.
 - .NET: `MessageInjectingChatClient` owns the session `StateBag` queue and `ConversationId` propagation.
 - Python: Places `message_injection.pending_messages` in session state and performs queue drain and follow-up calls in an internal loop.
 
-**Decision.** The same approach applies here. If the queue lives outside the session, state is
-broken at resumption time and during parallel calls. Continuity handle propagation must also be
-fixed as a session-driven rule.
+**Decision.** Both upstreams agree. If the queue lives outside the session, state is broken at
+resumption time and during parallel calls. Continuity handle propagation must also be fixed as a
+session-driven rule.
 
 **Acceptance criteria**
 
@@ -510,8 +510,8 @@ instructions.
 - .NET: Foundry, Mem0, and chat-history memory providers follow explicit scope and user-message injection patterns.
 - Python: Mem0, CosmosMemory, and FoundryMemory separate storage scope from retrieval scope and inject as untrusted context messages.
 
-**Decision.** The same approach applies here. Promoting retrieval results to instructions collapses
-the indirect prompt injection boundary. Scope separation is also a safe default.
+**Decision.** Both upstreams agree. Promoting retrieval results to instructions collapses the
+indirect prompt injection boundary. Scope separation is also a safe default.
 
 **Acceptance criteria**
 

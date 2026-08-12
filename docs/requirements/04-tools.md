@@ -185,8 +185,8 @@ same loop.
 
 - Tools without a local body still appear in the model's selection candidate list.
 - Even if the model invokes such a tool, the Java core does not fabricate a fake success `function_result`.
-- `additionalTools` is a run-time exposure-only list and does not require registering a local
-  function body.
+- `additionalTools` is an exposure-only list applied at run time and does not require registering
+  a local function body.
 
 **Evidence** [05 Public API and types](../upstream/snapshots/d0a4165f/features/05-function-tools.md),
 [05 Concrete acceptance scenarios](../upstream/snapshots/d0a4165f/features/05-function-tools.md)

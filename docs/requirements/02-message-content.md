@@ -45,9 +45,10 @@ its own `Message`, `Content`, `ChatResponse`, `AgentResponse`, `ChatResponseUpda
 - .NET: `ChatMessage` and `AIContent` are delegated to the external `Microsoft.Extensions.AI` types, and only the `AgentResponse` family is wrapped.
 - Python: The core directly defines `Content`, `Message`, `ChatResponse`, `AgentResponse`, and `ResponseStream`.
 
-**Decision.** Adopts the Python decision. If the Java public API is locked to external SDK types,
-the core cannot control content taxonomy and serialization rules. The core must own the types so
-that features such as approval, MCP, and hosted assets can also be built on the same model.
+**Decision.** The Python decision is adopted. If the Java public API is locked to external SDK
+types, the core cannot control content taxonomy and serialization rules. The core must own the
+types so that features such as approval, MCP, and hosted assets can also be built on the same
+model.
 
 **Acceptance criteria**
 
@@ -94,7 +95,7 @@ and allowing custom values does not block provider extensions or intermediate re
 - .NET: The string execution overload wraps the string into a single `user` message.
 - Python: `normalize_messages()` normalizes `None`, `str`, `Content`, `Message`, and mixed sequences.
 
-**Decision.** Adopts the broader normalization scope from Python. Java also allows convenience
+**Decision.** The broader normalization scope from Python is adopted. Java also allows convenience
 inputs, but the internal canonical form must be a single type so that interceptors, sessions, and
 tests always see the same data type.
 
@@ -120,9 +121,9 @@ content in order and must not interpret or stringify non-text content.
 - .NET: `AgentResponse.Text` and `AgentResponseUpdate.Text` concatenate only `TextContent`.
 - Python: `Message.text` and `ChatResponse.text` also project only `text` content.
 
-**Decision.** The approach is the same. Text projection is an auxiliary human-readable view and
-does not replace the original content. Mixing non-text as arbitrary strings breaks multimodal
-fidelity and destabilizes structured parsing.
+**Decision.** Both upstreams agree. Text projection is an auxiliary human-readable view and does
+not replace the original content. Mixing non-text as arbitrary strings breaks multimodal fidelity
+and destabilizes structured parsing.
 
 **Acceptance criteria**
 
@@ -146,16 +147,16 @@ distinct kinds.
 - .NET: The core does not define its own taxonomy and preserves the external `AIContent` hierarchy opaquely.
 - Python: A single `Content` union model directly represents text, media, tool calls, usage, hosted assets, and more.
 
-**Decision.** Adopts Python's breadth but resolves it in a Java-idiomatic way using a sealed
-hierarchy or tagged union. If the core does not know the basic kinds and passes everything
-opaquely, common semantics like tool results, usage, and hosted assets cannot be fixed as test
-and serialization contracts.
+**Decision.** Python's breadth is adopted, but it is resolved in a Java-idiomatic way using a
+sealed hierarchy or tagged union. If the core does not know the basic kinds and passes everything
+opaquely, common semantics like tool results, usage, and hosted assets cannot be fixed as test and
+serialization contracts.
 
 **Acceptance criteria**
 
 - The six categories above are represented as distinct discriminators or subtypes.
 - Text content and tool call content are not mixed within the same type branch.
-- Each content can be identified by its kind in the core JSON representation.
+- Each content's own kind can be identified in the core JSON representation.
 
 **Evidence** [02 Content model and multimodal representation](../upstream/snapshots/d0a4165f/features/02-message-content.md),
 [02 Java decision](../upstream/snapshots/d0a4165f/features/02-message-content.md)
@@ -172,8 +173,8 @@ at creation time, and must preserve the media type when the value is valid.
 - .NET: No equivalent URI validation logic is identified in the agent core of this snapshot.
 - Python: `_validate_uri()` rejects empty URIs, malformed data URIs, and URIs without a scheme, and handles the media type.
 
-**Decision.** Adopts the Python approach. Accepting URIs loosely causes late failures deeper in
-the runtime or allows invalid external references to be stored in sessions. A safer default is
+**Decision.** The Python approach is adopted. Accepting URIs loosely causes late failures deeper
+in the runtime or allows invalid external references to be stored in sessions. A safer default is
 correct.
 
 **Acceptance criteria**
@@ -198,7 +199,7 @@ public escape hatches.
 - .NET: `AgentResponse` and `AgentResponseUpdate` have `AdditionalProperties` and `RawRepresentation`.
 - Python: `Message`, `Content`, `ChatResponse`, `AgentResponse`, and update types all have the same two fields.
 
-**Decision.** The approach is the same. An escape hatch is needed to avoid losing provider-specific
+**Decision.** Both upstreams agree. An escape hatch is needed to avoid losing provider-specific
 metadata and debug-purpose raw objects. However, core semantic rules must not depend on these
 fields.
 
@@ -248,7 +249,7 @@ core must not prepend the same instruction again.
 - .NET: No equivalent helper or deduplication rule is identified in this snapshot.
 - Python: `prepend_instructions_to_messages()` skips insertion when the same leading instruction already exists.
 
-**Decision.** Adopts the Python approach. Duplicate system prompts waste tokens and alter
+**Decision.** The Python approach is adopted. Duplicate system prompts waste tokens and alter
 behavior. Deduplication is not a feature addition but a safe default.
 
 **Acceptance criteria**
@@ -274,7 +275,7 @@ extension fields.
 - .NET: Usage is linked to the response/update model, but the concrete field set is delegated to the external `UsageDetails` type.
 - Python: `UsageDetails` allows input/output/total/cache/reasoning token count and extension keys together.
 
-**Decision.** Takes the common denominator of the two upstreams. Java specifies standard fields
+**Decision.** The common denominator of the two upstreams is taken. Java specifies standard fields
 explicitly while retaining an extension map so that provider-specific billing metrics are not
 lost.
 
@@ -300,7 +301,7 @@ lost.
 - .NET: `AgentResponse` and `AgentResponseUpdate` carry nearly the same metadata fields.
 - Python: `ChatResponse`, `AgentResponse`, `ChatResponseUpdate`, and `AgentResponseUpdate` expose fields along the same axes.
 
-**Decision.** The approach is the same. Streaming reconstruction, observability, and continuation
+**Decision.** Both upstreams agree. Streaming reconstruction, observability, and continuation
 execution all depend on these axes.
 
 **Acceptance criteria**
@@ -325,9 +326,9 @@ secondary signal when absent, and must sum usage fragments into response-level u
 - .NET: Reconstructs logical message boundaries using `messageId` and sums usage.
 - Python: Determines boundaries by `message_id` or role changes, and accumulates usage content into response-level usage.
 
-**Decision.** Combines the two upstreams. Prioritizing `messageId` is precise, and the role-change
-fallback is resilient to provider drift. Usage must be folded from fragments to response level so
-that streaming and non-streaming see the same metadata.
+**Decision.** The two upstreams are combined. Prioritizing `messageId` is precise, and the
+role-change fallback is resilient to provider drift. Usage must be folded from fragments to
+response level so that streaming and non-streaming see the same metadata.
 
 **Acceptance criteria**
 
@@ -352,9 +353,9 @@ after stream transformations.
 - .NET: Response/update transformation helpers exist, but a general-purpose `ResponseStream` wrapper is not identified.
 - Python: `ResponseStream` fixes the ordering of finalizer, `map()`, `flat_map()`, cleanup hook, and result hook via tests.
 
-**Decision.** Adopts the Python approach. Java streaming must also combine update iteration with
-final response retrieval so that upper layers can compose safely. However, this is a core stream
-contract, not a host runtime feature.
+**Decision.** The Python approach is adopted. Java streaming must also combine update iteration
+with final response retrieval so that upper layers can compose safely. However, this is a core
+stream contract, not a host runtime feature.
 
 **Acceptance criteria**
 

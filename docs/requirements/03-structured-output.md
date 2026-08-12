@@ -43,9 +43,8 @@ execution.
 - .NET: explicitly requests structured output via `RunAsync<T>()` and `ResponseFormat`.
 - Python: `value` is meaningful only when `ChatOptions["response_format"]` is supplied.
 
-**Decision.** The upstream behavior is adopted as-is. Making structured output a hidden default
-breaks the free-text path unexpectedly. The structured contract must activate only when the
-caller requests it.
+**Decision.** Both upstreams agree. Making structured output a hidden default breaks the free-text
+path unexpectedly. The structured contract must activate only when the caller requests it.
 
 **Acceptance criteria**
 
@@ -68,9 +67,9 @@ guarantees only JSON.
 - .NET: requests a typed schema via the generic type `T` and serializer options.
 - Python: `response_format` accepts a Pydantic type or a JSON schema mapping.
 
-**Decision.** Combines the strengths of both upstreams. Java must separate a typed route from a
-JSON-only route. Forcing a strong binding on every caller blocks lightweight JSON collection
-use cases.
+**Decision.** The strengths of both upstreams are combined. Java must separate a typed route from
+a JSON-only route. Forcing a strong binding on every caller blocks lightweight JSON collection use
+cases.
 
 **Acceptance criteria**
 
@@ -95,7 +94,7 @@ time.
 - .NET: wraps non-object schemas in a wrapper object and tracks with `IsWrappedInObject`.
 - Python: does not create a separate wrapper schema; parses the final text directly.
 
-**Decision.** Adopts the .NET approach. In Java, it is better to make wire-level request
+**Decision.** The .NET approach is adopted. In Java, it is better to make wire-level request
 contracts explicit. Requesting non-objects directly causes ambiguous expected formats across
 providers.
 
@@ -121,9 +120,9 @@ takes highest precedence, followed by the per-run chat options, and finally the 
 - .NET: supports three layers — initialization options, invocation options, and run options — and the last value wins.
 - Python: `response_format` is carried in `ChatOptions` and passed from both default and run options.
 
-**Decision.** Adopts the .NET precedence rules. Structured output must have a fixed precedence
-just like general option merging, so the caller can reason about which schema was actually
-applied.
+**Decision.** The .NET precedence rules are adopted. Structured output must have a fixed
+precedence just like general option merging, so the caller can reason about which schema was
+actually applied.
 
 **Acceptance criteria**
 
@@ -147,9 +146,9 @@ for lack of support.
 - .NET: documents that `ResponseFormat` may be ignored by implementations.
 - Python: has no native structured capability protocol; the outcome depends on whether the provider honors `response_format`.
 
-**Decision.** The upstream behavior is adopted as-is. Structured support is a provider
-capability. If the core secretly makes a second call, cost, latency, and auditability all
-break. AgentEngine must not assume host responsibilities either.
+**Decision.** Both upstreams agree. Structured support is a provider capability. If the core
+secretly makes a second call, cost, latency, and auditability all break. AgentEngine must not
+assume host responsibilities either.
 
 **Acceptance criteria**
 
@@ -172,9 +171,8 @@ completion time, but at the point when the response's typed accessor is read.
 - .NET: deserializes the text when `AgentResponse<T>.Result` is read.
 - Python: `ChatResponse.value` and `AgentResponse.value` do not parse until the property is accessed.
 
-**Decision.** The upstream behavior is adopted as-is. Separating execution from parsing lets
-interceptors and post-processors see the raw response first, and the caller pays the parse
-cost only when needed.
+**Decision.** Both upstreams agree. Separating execution from parsing lets interceptors and
+post-processors see the raw response first, and the caller pays the parse cost only when needed.
 
 **Acceptance criteria**
 
@@ -197,7 +195,7 @@ only the direct concatenation of text content bodies from the last non-empty ass
 - .NET: `AgentResponse<T>.Result` parses against the entire response `Text`.
 - Python: parses only the direct concat of text contents from the last non-empty assistant message.
 
-**Decision.** Adopts the Python approach. The display projection may insert newlines or
+**Decision.** The Python approach is adopted. The display projection may insert newlines or
 whitespace that corrupt JSON. Not mixing tool messages or earlier assistant messages is safer.
 
 **Acceptance criteria**
@@ -222,9 +220,9 @@ and the JSON-only path must report a parsing error only when the JSON is invalid
 - .NET: raises explicit exceptions for failures such as empty text and null deserialize.
 - Python: distinguishes mapping parse failures as `ValueError` and schema mismatches as `ValidationError`.
 
-**Decision.** Combines the Python error classification with the .NET explicit-failure approach.
-The caller must be able to distinguish "the JSON itself is broken" from "the JSON is valid but
-the type does not match" in order to formulate a recovery strategy.
+**Decision.** The Python error classification is combined with the .NET explicit-failure approach.
+The caller must be able to distinguish "the JSON itself is broken" from "the JSON is valid but the
+type does not match" in order to formulate a recovery strategy.
 
 **Acceptance criteria**
 
@@ -248,8 +246,8 @@ JSON result is `null`, the typed accessor must not return a value but must fail 
 - .NET: treats both empty text and `null` deserialize as exceptions.
 - Python: returns `None` for empty text.
 
-**Decision.** Adopts the .NET approach. A structured output request is a contract that "a value
-must exist." Treating an empty value or `null` as success results in a silent failure.
+**Decision.** The .NET approach is adopted. A structured output request is a contract that "a
+value must exist." Treating an empty value or `null` as success results in a silent failure.
 
 **Acceptance criteria**
 
@@ -300,8 +298,8 @@ more parse with the original JSON.
 - .NET: parses via an original JSON fallback even when a wrapper was expected but a bare primitive arrives.
 - Python: a corresponding wrapper-retry path is not confirmed in this snapshot.
 
-**Decision.** Adopts the .NET compatibility fallback. Absorbs provider drift, but only permits
-leniency up to the point where the JSON itself is invalid.
+**Decision.** The .NET compatibility fallback is adopted. It absorbs provider drift, but only
+permits leniency up to the point where the JSON itself is invalid.
 
 **Acceptance criteria**
 
@@ -325,7 +323,7 @@ structured value must be read only from the final response after stream terminat
 - .NET: there is no typed streaming public API such as `RunStreamingAsync<T>()`.
 - Python: streaming structured output is also read only from `value` after `get_final_response()`.
 
-**Decision.** Takes the conservative common denominator of both upstreams. Producing a
+**Decision.** The conservative common denominator of both upstreams is taken. Producing a
 structured value on every update makes it difficult to distinguish partial JSON fragments from
 complete JSON.
 
@@ -349,4 +347,4 @@ complete JSON.
 | General execution entry point and cancellation model | [01 Agent execution and model calls](01-agent-execution.md) |
 | Tool call loop and tool approval | [04 Tool definitions and the tool call loop](04-tools.md) |
 | Session persistence and response cache durability | [06 Sessions and conversation state](06-sessions.md) |
-| Per-provider wire format encoding | [12 Provider integration](12-providers.md) |
+| Per-provider wire format encoding | [12 Provider integrations](12-providers.md) |

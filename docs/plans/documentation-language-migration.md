@@ -35,7 +35,7 @@ by a stale suppression; the list is deleted in the final task.
   | Source value, identified by its definition | English value |
   | --- | --- |
   | Grade whose definition is "the feature is not released without this requirement" | `Required` |
-  | Grade whose definition is "may be implemented differently when the rationale is recorded" | `Recommended` |
+  | Grade whose definition is "may be implemented differently when a reasonable justification is recorded" | `Recommended` |
   | Grade whose definition is "implement when needed; release without it" | `Optional` |
   | Compatibility-matrix adoption verdict meaning "not decided in this snapshot" | `Deferred` |
   | Requirement status meaning "withdrawn, id never reused" | `Withdrawn` |
@@ -1670,7 +1670,7 @@ Expected:
 
 | File | ids | urls | pin | fence | rows | seps | h2 | h3 | bullets |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| `docs/requirements/README.md` | 0 | 0 | 0 | 0 | 30 | 4 | 7 | 0 | 8 |
+| `docs/requirements/README.md` | 0 | 0 | 0 | 0 | 30 | 4 | 7 | 0 | 9 |
 | `docs/requirements/01-agent-execution.md` | 16 | 0 | 0 | 0 | 26 | 2 | 19 | 0 | 75 |
 | `docs/requirements/02-message-content.md` | 13 | 0 | 0 | 0 | 22 | 2 | 16 | 0 | 67 |
 | `docs/requirements/03-structured-output.md` | 12 | 0 | 0 | 0 | 21 | 2 | 15 | 0 | 61 |
