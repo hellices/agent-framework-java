@@ -262,8 +262,8 @@ Spring AI adapter 자체도 코어 계약과 직접 provider vertical slice가 �
 ### 단계 3: 직접 Provider와 Spring Boot 호스팅
 
 - 공급자 adapter 하나를 end-to-end로 연결한다.
-- Spring Boot auto-configuration이 호스트 자원으로 엔진을 조립하고 starter는 필요한
-  dependency만 집계한다.
+- Spring Boot auto-configuration이 호스트 자원으로 엔진, factory, 조건부 default Agent를
+  조립하고 starter는 auto-configuration과 필요한 dependency만 집계한다.
 - Standalone과 Spring Boot sample에 동일한 agent 정의를 사용한다.
 
 종료 조건은 애플리케이션 코드의 agent 정의를 바꾸지 않고 두 호스트에서 동일한 golden

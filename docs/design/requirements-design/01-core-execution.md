@@ -36,7 +36,7 @@ com.microsoft.agentframework.api.structured
 
 com.microsoft.agentframework.spi.model
   ChatClient, ChatRequest, ChatResponse, ChatResponseUpdate
-  ModelCapability<T>, ModelOptions
+  ModelCatalog, ModelCapability<T>, ModelOptions
 
 com.microsoft.agentframework.spi.tool
   ToolSchemaGenerator, ToolArgumentValidator, ToolResultMapper, ExecutionStrategy
@@ -44,6 +44,13 @@ com.microsoft.agentframework.spi.tool
 
 `ChatClient`는 공급자 SDK 타입을 노출하지 않는다. `ToolHandler`는 모델이 만든 JSON-safe
 arguments와 `ToolContext`를 별도 인자로 받으며, context가 schema에 들어가지 않는다.
+
+`ModelCatalog`는 host assembly가 만드는 instance-scoped immutable model index다.
+
+- stable model name → `ChatClient`
+- optional default model name
+- duplicate name rejection
+- no static/global discovery
 
 ### 2.2 Engine
 
@@ -97,12 +104,17 @@ no-input 실행은 `AgentRunRequest.empty()` 또는 별도 overload로 표현한
 framework adapter와 standalone assembly는 port 조립을 끝낸 factory를 제공하므로 일반 사용자는
 `AgentEngineBuilder`를 직접 다루지 않는다.
 
+`AgentFactory`는 `AgentEngine`과 `ModelCatalog`를 합성한다.
+
+- `builder()`: catalog default model 사용; default가 없으면 actionable failure
+- `builder(name)`: named model resolve
+- `builder(ChatClient)`: explicit model
+
 ### 3.2 AgentEngine
 
 `AgentEngine`은 `Agent`를 구현하거나 `Agent` 구현을 만드는 application service다. host는
 builder로 다음 port를 주입한다.
 
-- `ChatClient`
 - session services
 - ordered interceptor lists
 - `ExecutionStrategy`
@@ -111,6 +123,10 @@ builder로 다음 port를 주입한다.
 
 builder는 지원하지 않는 interceptor seam, 누락된 mandatory port, 상충하는 tool option을 build
 시점에 거부한다.
+
+engine은 특정 model에 bind되지 않는다. `AgentFactory`가 `ModelCatalog`에서 model을 선택해
+immutable Agent definition에 `ChatClient`를 결합하고, engine은 그 definition으로 run을
+실행한다. run-level model override도 같은 public port를 사용한다.
 
 ### 3.3 Tool facade
 

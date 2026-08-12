@@ -29,6 +29,7 @@ lifecycle, reactive, telemetry 사용 경험을 책임지는 충분히 두꺼운
 ```text
 AgentFrameworkAssembly
   AgentEngine
+  ModelCatalog
   AgentFactory
   model/provider ports
   session/history ports
@@ -59,23 +60,105 @@ semantic kernel
 integrations/agent-framework-spring-ai
 integrations/agent-framework-spring-boot-autoconfigure
 starters/agent-framework-spring-boot-starter
+starters/agent-framework-spring-boot-starter-spring-ai
 integrations/agent-framework-spring-boot-responses-autoconfigure (optional)
 starters/agent-framework-spring-boot-starter-responses (optional)
 ```
 
+dependency direction:
+
+```text
+agent-framework-spring-boot-starter
+  -> agent-framework-spring-boot-autoconfigure
+  -> agent-framework-engine
+
+agent-framework-spring-boot-starter-spring-ai
+  -> agent-framework-spring-boot-starter
+  -> agent-framework-spring-ai
+```
+
+starter는 production class를 갖지 않지만 autoconfiguration을 transitive dependency로 포함한다.
+따라서 사용자가 auto-configuration class를 직접 import하거나 infrastructure `@Bean`을 작성할
+필요가 없다.
+
 ### Pattern
 
-- `@AutoConfiguration`
+- 단계별 `@AutoConfiguration`과 명시적 `before/after`
 - `@ConditionalOnClass` and `@ConditionalOnMissingBean`
 - typed `@ConfigurationProperties`
 - `ObjectProvider<T>`로 optional ports 수집
 - ordered `AgentEngineCustomizer` chain
-- configured `AgentFactory` bean
+- 조건을 만족하면 `AgentEngine`, configured `AgentFactory`, default `Agent` bean
 - workflow module과 필수 ports가 있을 때 `WorkflowRunner` bean
 - starter는 dependency aggregation만 수행
 
-user bean이 auto-configured default를 이긴다. auto-configuration은 server endpoint를 자동 열지
-않고 protocol starter의 explicit opt-in property가 있을 때만 binder를 등록한다.
+auto-configuration chain:
+
+```text
+SpringAiModelCatalogAutoConfiguration
+  after Spring AI model auto-configurations
+  -> adapts named ChatModel beans into one ModelCatalog
+
+DirectModelCatalogAutoConfiguration
+  -> contributes named direct ChatClient beans
+
+AgentFrameworkEngineAutoConfiguration
+  after session/execution/interceptor auto-configurations
+  -> AgentEngine
+
+AgentFrameworkFactoryAutoConfiguration
+  after engine + model catalog
+  -> AgentFactory
+
+AgentFrameworkDefaultAgentAutoConfiguration
+  after factory
+  -> optional default Agent
+```
+
+각 단계는 `@AutoConfiguration(after = ...)`, `afterName`, 또는 동등한 ordered import metadata로
+명시한다. starter dependency declaration order에 기대지 않는다. negative bean condition이
+나중에 생길 bean을 기다려 재평가될 것이라고 가정하지 않는다.
+
+default bean conditions:
+
+```text
+AgentEngine
+  missing user AgentEngine + required non-model runtime ports available
+
+AgentFactory
+  missing user AgentFactory + AgentEngine + ModelCatalog available
+
+default Agent
+  missing every user Agent
+  + AgentFactory available
+  + exactly one default model selection
+  + agent.framework.default-agent.enabled=true (matchIfMissing)
+```
+
+user bean이 auto-configured default를 이긴다. model이 정확히 하나면 default Agent가 자동
+생성된다. 여러 named model에 default가 없으면 factory는 유지하되 default Agent만 만들지 않고
+condition report가 model 선택 방법을 설명한다.
+
+`ModelCatalog`는 여러 model을 허용한다. Spring adapter는 named `ChatModel`과 direct
+`ChatClient`를 immutable catalog로 변환하며 이름 충돌을 거부한다. `@Primary` 또는 properties로
+default를 지정하고, 지정이 없어도 named builder는 계속 사용할 수 있다.
+
+auto-configuration은 server endpoint를 자동 열지 않고 protocol starter의 explicit opt-in
+property가 있을 때만 binder를 등록한다.
+
+default Agent properties:
+
+```yaml
+agent:
+  framework:
+    default-agent:
+      enabled: true
+      name: assistant
+      instructions: You are a helpful assistant.
+```
+
+properties는 name, instructions, model selection, session policy 같은 안전한 공통값만 다룬다.
+classpath의 tool/MCP capability를 default Agent에 자동 연결하지 않는다.
 
 ### Agent interceptor와 Spring AOP
 

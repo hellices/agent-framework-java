@@ -68,6 +68,7 @@ public interface AgentFactory {
 }
 ```
 
+- factory는 model-independent `AgentEngine`과 immutable `ModelCatalog`를 합성한다.
 - model 하나가 명확하면 `builder()` 사용
 - model이 여러 개면 name 또는 explicit port 선택
 - 여러 named model이 있어도 factory는 생성하며, default가 없는 `builder()` 호출만 명시적으로
@@ -110,11 +111,40 @@ HTTP server, DI container, shutdown hook, global registry는 만들지 않는다
 기존 Spring AI 애플리케이션:
 
 ```kotlin
-implementation("com.microsoft.agentframework:agent-framework-spring-boot-starter")
+implementation("com.microsoft.agentframework:agent-framework-spring-boot-starter-spring-ai")
 implementation("org.springframework.ai:spring-ai-starter-model-openai")
 ```
 
-Spring AI가 정확히 하나의 model bean을 제공하면 auto-configuration이 `AgentFactory`를 만든다.
+Spring AI가 정확히 하나의 model bean을 제공하면 starter가 포함한 auto-configuration이
+`AgentEngine`, `AgentFactory`, default `Agent` Bean을 만든다. 기본 경로에는 application
+`@Configuration`이나 `@Bean Agent`가 필요 없다.
+
+```yaml
+agent:
+  framework:
+    default-agent:
+      instructions: You are a helpful assistant.
+```
+
+사용 코드는 default Agent를 바로 주입한다.
+
+```java
+@Service
+final class SupportService {
+    private final Agent agent;
+
+    SupportService(Agent agent) {
+        this.agent = agent;
+    }
+
+    String ask(String question) {
+        return agent.run(question).await().text();
+    }
+}
+```
+
+다중 Agent, Agent별 tool/model/instructions, custom session policy가 필요할 때만 Agent Bean을
+정의한다.
 
 ```java
 @Bean
@@ -127,31 +157,15 @@ Agent assistant(AgentFactory agents, WeatherFunctions weather) {
 }
 ```
 
-사용 코드는 일반 Bean injection이다.
-
-```java
-@Service
-final class SupportService {
-    private final Agent assistant;
-
-    SupportService(Agent assistant) {
-        this.assistant = assistant;
-    }
-
-    String ask(String question) {
-        return assistant.run(question).await().text();
-    }
-}
-```
-
 starter만으로 model을 발명할 수는 없다. 다음 중 하나가 있어야 한다.
 
-- Spring AI model starter가 만든 model bean
+- Spring AI-specific Agent Framework starter + Spring AI model starter가 만든 model bean
 - direct provider adapter가 만든 `ChatClient`
 - user-defined `ChatClient`
 
-zero model이면 condition report가 missing dependency를 설명한다. 여러 model인데 default가
-없으면 classpath order로 고르지 않고 named builder 또는 primary model을 요구한다.
+zero model이면 condition report가 missing dependency를 설명하고 `AgentFactory`/default Agent를
+만들지 않는다. 여러 model인데 default가 없으면 `AgentFactory`는 만들되 default Agent를
+만들지 않고 named builder 또는 primary model을 요구한다.
 
 ## 6. Quarkus와 Jakarta EE
 
@@ -316,7 +330,7 @@ provider × framework 조합별 artifact를 모두 만들지 않는다.
 | 환경 | 최소 dependencies |
 | --- | --- |
 | standalone direct provider | `agent-framework-standalone` + provider adapter |
-| Spring AI | Agent Framework Spring Boot starter + Spring AI model starter |
+| Spring AI | Agent Framework Spring AI starter + Spring AI model starter |
 | Spring direct provider | Agent Framework Spring Boot starter + provider adapter |
 | Quarkus | Agent Framework Quarkus extension + provider adapter |
 | Jakarta EE | Agent Framework Jakarta integration + provider adapter |
@@ -326,8 +340,11 @@ provider × framework 조합별 artifact를 모두 만들지 않는다.
 ## 13. Developer experience acceptance tests
 
 - starter + single model → `AgentFactory` 사용 가능
+- starter + single model + no user Agent → default Agent injection 가능
+- user Agent/Engine/Factory bean → corresponding auto-configured default backs off
 - zero model → actionable condition/error message
-- multiple models without selection → fail-fast
+- multiple models without default → default Agent backs off; unqualified `builder()` fails with
+  actionable model-selection error
 - multiple named models + explicit selection → factory remains usable
 - same Agent definition works in standalone, Spring, Quarkus, Jakarta tests
 - tool/MCP attachment requires one explicit `.tools(...)`

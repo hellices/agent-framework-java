@@ -147,11 +147,13 @@ plain Java builder가 reference assembly다.
 
 ```text
 AgentEngine.builder()
-  -> modelClient(port)
   -> sessionStore(port)
   -> executionStrategy(host-owned)
   -> interceptors(explicit ordered list)
   -> build()
+
+AgentFactory(engine, modelCatalog)
+  -> builder() / builder(modelName) / builder(ChatClient)
 ```
 
 framework adapter가 제공하는 기능은 이 builder로도 표현 가능해야 한다.
