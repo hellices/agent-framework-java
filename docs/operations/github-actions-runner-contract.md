@@ -47,6 +47,27 @@ Capture `kubectl get autoscalingrunnerset -A` before and after. Only `arc-java-b
 `arc-runners-java` may change; the pre-existing scale sets in `arc-runners` are never touched. The
 existing `gha-token` secret is reused, so no step creates, reads, or prints a credential.
 
+### Runner pods must be exempt from node consolidation
+
+Karpenter consolidates underutilised nodes, and a runner pod in the middle of a job looks
+underutilised to it. When that happens the job is reported as `cancelled` mid-step, with no error in
+the build output:
+
+```
+Normal  Evicted  pod/arc-java-build-...-runner-...  Evicted pod: Underutilized
+```
+
+This is easy to misread as a flaky build, because the failing step differs from run to run and the
+log simply stops. Check for it with:
+
+```bash
+kubectl get events -n arc-runners-java --sort-by=.lastTimestamp | grep Evicted
+```
+
+The runner template therefore carries `karpenter.sh/do-not-disrupt: "true"`. Preserve that
+annotation whenever the release is reinstalled; a `helm upgrade` from stale values will silently
+drop it and the cancellations return.
+
 The workflow is intentionally not softened to `ubuntu-latest` to make a branch mergeable earlier.
 Doing that would delete the only executable evidence that the runner contract below is honoured, and
 the runner label allow list in `WorkflowPolicyTest` would then permit a trusted path on a hosted

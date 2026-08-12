@@ -289,12 +289,15 @@ class WorkflowPolicyTest {
     assertThat(contract).contains("verify-result");
     assertThat(contract).contains("queued");
 
-    // These two carry the failure that cost the most time: changing the URL alone leaves the scale
-    // set id from the previous repository cached, and the listener then crash-loops. Generic words
-    // above would survive a rewrite that dropped the recovery procedure, so assert the tokens that
-    // only this procedure uses.
+    // These carry the failures that cost the most time. Changing the URL alone leaves the scale set
+    // id from the previous repository cached, and the listener then crash-loops. Karpenter evicting
+    // a busy runner reports the job as cancelled with no error in the build log, which reads as a
+    // flaky build. Generic words above would survive a rewrite that dropped either procedure, so
+    // assert the tokens only they use.
     assertThat(contract).contains("runner-scale-set-id");
     assertThat(contract).contains("helm uninstall");
+    assertThat(contract).contains("karpenter.sh/do-not-disrupt");
+    assertThat(contract).contains("Evicted");
   }
 
   @Test
