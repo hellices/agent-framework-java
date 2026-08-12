@@ -503,7 +503,7 @@ Source:
 
 ### 1. Difference between the FAQ's general statements and the shell code's concrete boundaries
 
-`TRANSPARENCY_FAQ` recommends containerization/sandboxing, security measures, and human oversight. However, the production code states much more strongly that “regex policy is not a security control”, and also leaves the default denylist empty. When writing operational documentation, the code-level threat model should take priority over the FAQ's general statements.  
+`TRANSPARENCY_FAQ` recommends containerization/sandboxing, security measures, and human oversight. However, the production code states much more strongly that “regex policy is not a security control”, and also leaves the default denylist empty. When writing operational documentation, the code-level threat model must take priority over the FAQ's general statements.  
 Source:  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/TRANSPARENCY_FAQ.md#L77-L87  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/tools/agent_framework_tools/shell/_policy.py#L8-L35  
@@ -535,7 +535,7 @@ Java would benefit from having a common branch hierarchy like Python.
 - `IntegrationException`
 - `WorkflowException`
 - `ToolException`  
-However, invalid argument / invalid state / programmer errors should retain built-in/standard exceptions such as `IllegalArgumentException` and `IllegalStateException`. This makes the validation boundary clear.  
+However, invalid argument / invalid state / programmer errors must retain built-in/standard exceptions such as `IllegalArgumentException` and `IllegalStateException`. This makes the validation boundary clear.  
 Evidence:  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/CODING_STANDARD.md#L223-L227  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/core/agent_framework/exceptions.py#L44-L146  

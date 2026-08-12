@@ -234,7 +234,7 @@ The most important state concept in this feature is the difference between `prev
   - Multiple requests can branch from the same prior response.
   - Each branch is stored under a new `resp_*` id.
 - `conversation`/`conversation_id` is a **mutable head**.
-  - Only one request should advance the same stable id at a time.
+  - Only one request must advance the same stable id.
   - The helper provides neither locking nor optimistic concurrency control.
 
 The Python README explains this directly, and the .NET helper also states that `PreviousResponseId` is not a stable partition key whereas `ConversationId` is the stable key. (Source: [Python mutable head note](https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/hosting-responses/README.md#L57-L60), [.NET OpenAIResponsesRunRequest docs](https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI.Hosting.OpenAI/OpenAIResponsesRunRequest.cs#L39-L49), [.NET GetSessionStoreId remarks](https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI.Hosting.OpenAI/OpenAIResponses.cs#L131-L142))

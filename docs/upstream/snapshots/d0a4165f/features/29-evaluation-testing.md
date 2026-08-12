@@ -1,6 +1,6 @@
 # 29. Evaluation & Testing
 
-## State/snapshot
+## State
 
 - Document status: upstream snapshot analysis document
 - Reference snapshot: `d0a4165f170193ba1d026a259af40d35bb7eaefe`
@@ -577,14 +577,14 @@ Source:
 
 ### Decision 1. Introduce a batch-based evaluator SPI
 
-Java should follow the `.NET IAgentEvaluator` and Python `Evaluator` models and have a batch evaluator SPI of the form `List<EvalItem> -> EvalResults`. This is more advantageous than per-item calls for cloud/provider evaluators and score aggregation.  
+Java must follow the `.NET IAgentEvaluator` and Python `Evaluator` models and have a batch evaluator SPI of the form `List<EvalItem> -> EvalResults`. This is more advantageous than per-item calls for cloud/provider evaluators and score aggregation.  
 Evidence:  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI/Evaluation/IAgentEvaluator.cs#L13-L15  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/core/agent_framework/_evaluation.py#L687-L718
 
 ### Decision 2. Treat the Converter as a first-class API
 
-Java should have a dedicated converter layer, like Python's `AgentEvalConverter`, that transforms runtime `Message`/tool definitions into an evaluator schema. This converter should not be a simple formatter; it should also bear responsibility for outbound data minimization such as tool-call argument sanitization.  
+Java must have a dedicated converter layer, like Python's `AgentEvalConverter`, that transforms runtime `Message`/tool definitions into an evaluator schema. This converter is not a simple formatter; it must also bear responsibility for outbound data minimization such as tool-call argument sanitization.  
 Evidence:  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/core/agent_framework/_evaluation.py#L786-L795  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/core/agent_framework/_evaluation.py#L847-L926  
@@ -598,7 +598,7 @@ Evidence:
 
 ### Decision 4. Design workflow evaluation as an explicit public API
 
-Java should provide `evaluateWorkflow(...)` as a separate public API, as Python does. The result must officially support an `overall + subResults(per-agent)` structure, and an agent-level interaction extraction helper from an event stream or run result should also be designed together.  
+Java must provide `evaluateWorkflow(...)` as a separate public API, as Python does. The result must officially support an `overall + subResults(per-agent)` structure, and an agent-level interaction extraction helper from an event stream or run result must also be designed together.  
 Evidence:  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/core/agent_framework/_evaluation.py#L1834-L2025  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/core/agent_framework/_evaluation.py#L934-L1009  
@@ -606,7 +606,7 @@ Evidence:
 
 ### Decision 5. Treat version pinning as the default operational principle for generated evaluators
 
-Version pinning is always recommended for generated/provider rubric evaluator references, and in a CI gate context it should be treated as effectively required. A latest-floating evaluator breaks replay reproducibility.  
+Version pinning is always recommended for generated/provider rubric evaluator references, and in a CI gate context it must be treated as effectively required. A latest-floating evaluator breaks replay reproducibility.  
 Evidence:  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI/Evaluation/GeneratedEvaluatorRef.cs#L16-L30  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/foundry/agent_framework_foundry/_foundry_evals.py#L73-L78  
@@ -628,7 +628,7 @@ Evidence:
 
 ### Decision 8. Public API separates “evaluation execution” from “quality gate”
 
-The Java result model should provide quality gate helpers like Python's `raise_for_status()` / `.NET AssertAllPassed()`, but separated from raw result access. This allows UI/reporting and CI gating to share the same result object.  
+The Java result model must provide quality gate helpers like Python's `raise_for_status()` / `.NET AssertAllPassed()`, but must separate them from raw result access. This allows UI/reporting and CI gating to share the same result object.  
 Evidence:  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/core/agent_framework/_evaluation.py#L470-L543  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI/Evaluation/AgentEvaluationResults.cs#L95-L159  

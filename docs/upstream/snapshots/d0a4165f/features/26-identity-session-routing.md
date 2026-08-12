@@ -379,12 +379,12 @@ Additionally, the route/link/multicast area is not often mentioned in README or 
 ## Basic principles
 
 1. **Separate session key extraction from authorization binding**.  
-   The helper that parses `threadId`, `contextId`, `conversationId`, `taskId`, and `serviceSessionId` and the Spring host filter/interceptor that binds them to an authenticated principal/tenant must be अलग artifacts or at a minimum different layers.
+   The helper that parses `threadId`, `contextId`, `conversationId`, `taskId`, and `serviceSessionId` and the Spring host filter/interceptor that binds them to an authenticated principal/tenant must be separate artifacts or at a minimum different layers.
 
 2. **Support structured service continuation**.  
    Java's `AgentSession.serviceSessionId` must also be able to accommodate a provider-owned structured type, not just a `String`. In particular, multi-field continuation such as A2A is better represented as a separate typed record/class.
 
-3. **Implement principal-derived isolation** only in the Spring host module**.  
+3. **Implement principal-derived isolation only in the Spring host module**.  
    Example:
    - `Authentication` / JWT claims → isolation key
    - session store decorator

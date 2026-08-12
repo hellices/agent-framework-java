@@ -387,7 +387,7 @@ Source:
 
 ### 1. The README's “built-in OpenTelemetry integration” description and the actual opt-in boundary
 
-The README broadly describes the framework as having a built-in OpenTelemetry integration. This description is directionally correct, but at the code level it is more accurate to note that workflow telemetry in particular is not active by default and is enabled only when `WithOpenTelemetry()` is called. Operational design should therefore prioritize code-level opt-in semantics over the README's description.  
+The README broadly describes the framework as having a built-in OpenTelemetry integration. This description is directionally correct, but at the code level it is more accurate to note that workflow telemetry in particular is not active by default and is enabled only when `WithOpenTelemetry()` is called. Operational design must therefore prioritize code-level opt-in semantics over the README's description.  
 Source:  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/README.md#L50-L52  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI.Workflows/OpenTelemetryWorkflowBuilderExtensions.cs#L42-L44  

@@ -494,7 +494,7 @@ Evidence:
 
 ### Decision 4. Binary/API compatibility gate is linked to the release stage
 
-Java, like `.NET`, should enable the binary/API compatibility gate by default for stable/released artifacts, and may have a reporting-oriented or relaxed gate for preview/experimental artifacts. Intentional breaks must be recorded as suppression/waiver artifacts.  
+Java, like `.NET`, can enable the binary/API compatibility gate by default for stable/released artifacts, and may have a reporting-oriented or relaxed gate for preview/experimental artifacts. Intentional breaks must be recorded as suppression/waiver artifacts.  
 Evidence:  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/nuget/nuget-package.props#L16-L23  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/CONTRIBUTING.md#L77-L97  
@@ -512,7 +512,7 @@ Evidence:
 
 ### Decision 6. Cross-language compatibility is assessed based on import surface and behavior
 
-Compatibility documentation between Java and `.NET`/Python should be assessed based on the following rather than “the same version number scheme”.
+Compatibility documentation between Java and `.NET`/Python must be assessed based on the following rather than “the same version number scheme”.
 - correspondence of public API names/concepts
 - correspondence of stable vs experimental stage
 - alignment of conformance/behavior tests

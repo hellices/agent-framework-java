@@ -399,7 +399,7 @@ The most significant language difference is **the scope of functionality itself*
 - `.NET` = hosting wrapper + persistence/integration layer
 - Python = full protocol adapter + hosting + client + state tooling
 
-should be recorded as such. (Source: [.NET remarks](https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI.Hosting.AGUI.AspNetCore/AGUIEndpointRouteBuilderExtensions.cs#L27-L32), [Python AG-UI README quick start and client](https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/ag-ui/README.md#L11-L107))
+must be recorded as such. (Source: [.NET remarks](https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI.Hosting.AGUI.AspNetCore/AGUIEndpointRouteBuilderExtensions.cs#L27-L32), [Python AG-UI README quick start and client](https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/ag-ui/README.md#L11-L107))
 
 Another code-first difference is state semantics. Python explicitly distinguishes `StateDeltaEvent` from `StateSnapshotEvent` and provides a separate deterministic `state_update` path, whereas the `.NET` repo-local implementation does not reimplement such state authoring logic and instead stays on the side of preserving raw AG-UI state events. (Source: [Python state_update doc](https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/ag-ui/agent_framework_ag_ui/_state.py#L5-L14), [Python PredictiveStateHandler doc](https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/ag-ui/agent_framework_ag_ui/_predictive_state.py#L19-L27), [.NET SharedStateTests](https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/tests/Microsoft.Agents.AI.Hosting.AGUI.AspNetCore.IntegrationTests/SharedStateTests.cs#L30-L42))
 
@@ -429,7 +429,7 @@ As the Python implementation already demonstrates, AG-UI has more protocol-level
   - auth dependency injection point
   - principal-derived snapshot scope helper
 
-Like `.NET`, the host binder should focus on transport and persistence integration rather than reimplementing protocol semantics.
+Like `.NET`, the host binder must focus on transport and persistence integration rather than reimplementing protocol semantics.
 
 ### 3. State policy
 - `threadId` is not used as a bare persistent key.

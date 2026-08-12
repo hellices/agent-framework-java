@@ -369,7 +369,7 @@ That is, while both belong to the DevUI category, the code-first behaviors diffe
 
 - DevUI must be placed as a **development-tool-only module**.
 - It is appropriate to maintain it as a separate dev/test artifact rather than a production runtime dependency.
-- `meta`, discovery, local execution, optional proxy, and deployment helpers should be co-located, but host binding and auth policy must be separately configurable according to the Spring profile.
+- `meta`, discovery, local execution, optional proxy, and deployment helpers must be co-located, but host binding and auth policy must be separately configurable according to the Spring profile.
 
 ## Acceptance scenarios
 
@@ -495,7 +495,7 @@ No separate task cancellation surface is visible. (Source: [ResolveBackendUrl la
 ## Java decisions
 
 - If there is a Java distributed app orchestrator corresponding to Aspire, it is appropriate to split it out as a **dev-only aggregator module**.
-- It must not be mixed with the production API gateway, and should be treated as a companion service of the local dashboard/dev shell.
+- It must not be mixed with the production API gateway, and must be treated as a companion service of the local dashboard/dev shell.
 
 ## Acceptance scenarios
 
