@@ -57,11 +57,15 @@ verification path.
 | `./gradlew quality` | Formatting and static analysis on JDK 17 |
 | `./gradlew testJava17` | Tests on the Temurin 17 launcher |
 | `./gradlew check` | Everything above plus the 21 and 25 compatibility runs |
+| `./gradlew publishAllPublicationsToBuildDirectoryRepository` | Publish every artifact to `build/maven-repository` |
 
 If Temurin 21 or 25 is missing locally, `testJava21` and `testJava25` fail with a toolchain error.
 Run the narrower tasks and let CI cover the rest.
 
 ## Repository layout
+
+Core modules sit at the root. Extension families that grow to many modules get a grouping
+directory, the shape Spring AI and Spring Boot use at this scale.
 
 ```text
 agent-framework-api/        Public contracts and value types
@@ -74,6 +78,9 @@ config/                     Checkstyle, PMD, SpotBugs configuration
 docs/                       Requirements, design, upstream analysis
 .harness/                   Agent artifact JSON schemas
 ```
+
+Planned grouping directories are `providers/`, `integrations/`, `starters/`, `protocols/`,
+`workflow/`, `compatibility-tests/`, and `samples/`. Each is created when its first module lands.
 
 Module rules are defined in [module composition](docs/design/module-composition.md) and enforced by
 `./gradlew policyCheck`.

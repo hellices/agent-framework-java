@@ -49,6 +49,20 @@ Do not mix current upstream `main` behavior into the pinned snapshot without a r
 Reuse existing helpers and fixtures. Keep edits inside the affected projects. Do not hide failures
 with broad catches, silent fallbacks, deleted assertions, or `@Disabled`.
 
+## Review loop
+
+Every push to a pull request branch requests a Copilot review, and the loop continues until a
+review returns no findings:
+
+1. Push, then request a review from Copilot on the pull request.
+2. Wait for the review rather than assuming silence means approval.
+3. Reply to each inline comment describing what changed and why, then resolve the thread.
+4. Check whether further comments arrived, and repeat from step 1 if the response required a push.
+
+Reply with the reasoning, not just a confirmation: when a suggestion was declined or implemented
+differently, say which and why. A green pipeline is not evidence that a review is unnecessary. Every
+defect found in this repository so far was found while all checks were passing.
+
 ## Verification contract
 
 Local and CI verification use the same Gradle tasks:

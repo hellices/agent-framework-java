@@ -127,6 +127,15 @@ Trusted jobs run on a self-hosted scale set described in the
 [runner contract](github-actions-runner-contract.md). There is no CI-only quality logic; every check
 above is a Gradle task you can run locally.
 
+If trusted jobs sit in `queued` and never start, the scale set is not registered for this
+repository. That is an infrastructure state, not a problem with your change. Verify locally and say
+so in the pull request:
+
+```bash
+./gradlew policyCheck quality testJava17 buildLogicTest
+./gradlew publishAllPublicationsToBuildDirectoryRepository
+```
+
 ## Troubleshooting
 
 **`Cannot find a Java installation ... matching languageVersion=21`**

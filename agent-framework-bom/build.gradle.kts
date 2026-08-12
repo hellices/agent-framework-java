@@ -1,15 +1,17 @@
 plugins {
-    `java-platform`
+    id("agentframework.platform-conventions")
 }
 
 description = "Dependency constraints for every published Agent Framework for Java artifact."
 
-javaPlatform {
-    allowDependencies()
-}
-
+// Entries must be constraints, not dependencies. A `java-platform` with plain `api(project(...))`
+// publishes a POM whose <dependencies> block forces all three modules onto any consumer that
+// imports the BOM, which is the opposite of what a BOM is for. Constraints publish under
+// <dependencyManagement> and only align versions for modules the consumer actually declares.
 dependencies {
-    api(project(":agent-framework-api"))
-    api(project(":agent-framework-engine"))
-    api(project(":agent-framework-testkit"))
+    constraints {
+        api(project(":agent-framework-api"))
+        api(project(":agent-framework-engine"))
+        api(project(":agent-framework-testkit"))
+    }
 }

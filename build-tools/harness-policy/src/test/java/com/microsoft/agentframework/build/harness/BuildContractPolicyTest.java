@@ -15,6 +15,7 @@ import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Set;
+import java.util.regex.Pattern;
 import org.junit.jupiter.api.Test;
 
 class BuildContractPolicyTest {
@@ -62,17 +63,29 @@ class BuildContractPolicyTest {
   void versionCatalogPinsEveryToolVersion() throws IOException {
     String catalog = read("gradle/libs.versions.toml");
 
-    assertThat(catalog).contains("assertj = \"3.27.7\"");
-    assertThat(catalog).contains("checkstyle = \"12.3.1\"");
-    assertThat(catalog).contains("googleJavaFormat = \"1.24.0\"");
-    assertThat(catalog).contains("jackson = \"2.22.1\"");
-    assertThat(catalog).contains("jacoco = \"0.8.15\"");
-    assertThat(catalog).contains("jsonSchemaValidator = \"3.0.6\"");
-    assertThat(catalog).contains("junit = \"5.14.4\"");
-    assertThat(catalog).contains("pmd = \"7.26.0\"");
-    assertThat(catalog).contains("spotbugsPlugin = \"6.5.10\"");
-    assertThat(catalog).contains("spotbugsTool = \"4.10.3\"");
-    assertThat(catalog).contains("spotless = \"8.9.0\"");
+    // The contract is that every tool carries an exact version, not that it carries one particular
+    // version. Asserting the literal values turned a legitimate dependency upgrade into a policy
+    // violation, which is the opposite of what this test is for.
+    for (String tool :
+        List.of(
+            "assertj",
+            "checkstyle",
+            "googleJavaFormat",
+            "jackson",
+            "jacoco",
+            "jsonSchemaValidator",
+            "junit",
+            "pmd",
+            "spotbugsPlugin",
+            "spotbugsTool",
+            "spotless")) {
+      assertThat(catalog)
+          .withFailMessage(
+              "%s must be pinned to an exact version in the catalog. A range or a missing entry"
+                  + " makes a build depend on when it ran.",
+              tool)
+          .containsPattern("(?m)^" + tool + " = \"[0-9][0-9A-Za-z.+-]*\"$");
+    }
   }
 
   @Test
@@ -109,10 +122,21 @@ class BuildContractPolicyTest {
   void policyProjectLocksItsResolvedClasspaths() throws IOException {
     String lockfile = read("build-tools/harness-policy/gradle.lockfile");
 
-    assertThat(lockfile).contains("com.networknt:json-schema-validator:3.0.6");
-    assertThat(lockfile).contains("org.assertj:assertj-core:3.27.7");
-    assertThat(lockfile).contains("org.junit.jupiter:junit-jupiter:5.14.4");
-    assertThat(lockfile).contains("com.fasterxml.jackson.core:jackson-databind:2.22.1");
+    // Same reasoning as the catalog check: the contract is that each dependency is locked to an
+    // exact coordinate, not that it is locked to today's version.
+    for (String module :
+        List.of(
+            "com.networknt:json-schema-validator",
+            "org.assertj:assertj-core",
+            "org.junit.jupiter:junit-jupiter",
+            "com.fasterxml.jackson.core:jackson-databind")) {
+      assertThat(lockfile)
+          .withFailMessage(
+              "%s must appear in the lockfile with an exact version, otherwise the policy project"
+                  + " resolves differently from one run to the next.",
+              module)
+          .containsPattern("(?m)^" + Pattern.quote(module) + ":[0-9][0-9A-Za-z.+-]*=");
+    }
   }
 
   @Test
