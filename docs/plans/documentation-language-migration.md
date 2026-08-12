@@ -2635,6 +2635,154 @@ The ledger title cell for `25-foundry-devui-channels.md` already reads `25. Foun
 
 ---
 
+## Task 6 review — findings report
+
+**Commands run and outcomes:**
+
+1. `./gradlew :build-tools:harness-policy:test --tests '*DocumentationLanguagePolicyTest*' --tests '*MarkdownLinkPolicyTest*'` — PASS (`DocumentationLanguagePolicyTest` 79 tests, `MarkdownLinkPolicyTest` 71 tests, 0 failures)
+2. `./gradlew policyCheck` — PASS (377 tests in `build-tools:harness-policy`, 0 failures, 7 skipped by pre-existing release-only guards)
+3. Structural preservation sweep over the sixteen feature documents: nine `doc_metrics` counts, table cell shapes (`awk -F'|' NF`), line counts, H1 lines, inline-code and fence marker counts, permalink totals, ledger-versus-H1 byte identity, Korean scan — all PASS
+
+**Checks that could not run:** `testJava21` and `testJava25` require Temurin 21 and 25 toolchains; not verified locally. `./gradlew quality` and `./gradlew check` were not run because this change touches Markdown only and adds no Java, Kotlin, or build source.
+
+**Named findings applied (one commit, sixteen documents scanned, thirteen changed):**
+
+| # | File and line | Change |
+| --- | --- | --- |
+| 1 | `features/31-provider-integrations.md`:27 | Link display text `Microsoft.Agents.AI.AI.Hosting.csproj` corrected to `Microsoft.Agents.AI.Hosting.csproj`; the target URL already pointed at the existing file and is unchanged. |
+| 2 | `features/26-identity-session-routing.md`:382 | The Devanagari word that the Korean base itself carried in place of the word for "separate" is now the English word `separate`; the sentence keeps its `must be … artifacts` obligation. |
+| 3 | `features/29-evaluation-testing.md`:3 | Level-2 heading `State/snapshot` corrected to `State`, matching the one-word source heading used by features 27, 28, 30, and 31. Features 16 to 19 keep `State/snapshot` because their source heading is the two-word compound. |
+| 4 | `features/17-workflow-composition.md`:282 | `worth adopting directly` restored to `worth referencing as-is`; the source states reference value, not an adoption decision. |
+| 5 | `features/16-workflow-checkpoint-hitl.md`:266 | Golden scenario 5 now reads `execution must proceed with ActionComplete`; the source states an obligation that the flat present tense had dropped. |
+| 6 | `features/26-identity-session-routing.md`:387 | Decision bullet 3 emphasis repaired to `**Implement principal-derived isolation only in the Spring host module**.` The source line carries a stray third emphasis marker, and the English line had mirrored it into a bold span that covered only half the directive and left two literal asterisks in the rendered output. No word was added, removed, or reordered; bullets 1, 2, and 4 already use whole-directive emphasis. |
+| 7 | `features/21-openai-responses-hosting.md`:237 | Invented qualifier `at a time` removed; the source says only one request, with no temporal window. The same line is also finding 8, row 4. |
+
+**Finding 8 — obligation modality normalised against the Korean base at `7371e51`:**
+
+The Korean base states obligations with the verb ending transliterated `-ya handa` and states advice with
+the endings transliterated `-pyeoni jota`, `-jjogi natda`, `-geosi jota`, and `gwonjang`. Every cited line
+was compared against `git show 7371e51:<file>` at the same line number; the Korean and English documents
+are line-aligned, so the citation line numbers resolve to the same sentence in both.
+
+| # | Line | Source ending | Before | After |
+| --- | --- | --- | --- | --- |
+| 1 | `18-orchestrations.md`:341 (decision) | obligation, then advice | `should abstract … should have` | `must abstract … should have` (second clause keeps `should`; its source ending is advisory) |
+| 2 | `23-ag-ui.md`:432 (decision) | obligation | `should focus` | `must focus` |
+| 3 | `28-errors-resilience-security.md`:538 (decision) | obligation | `should retain` | `must retain` |
+| 4 | `29-evaluation-testing.md`:580 (decision) | obligation | `should follow … and have` | `must follow … and have` |
+| 5 | `29-evaluation-testing.md`:587 (decision) | obligation, twice | `should have … should not be a simple formatter; it should also bear` | `must have … is not a simple formatter; it must also bear` (the middle clause is a plain source predicate, so its invented modal is dropped) |
+| 6 | `29-evaluation-testing.md`:601 (decision) | obligation, twice | `should provide … should also be designed` | `must provide … must also be designed` |
+| 7 | `29-evaluation-testing.md`:631 (decision) | obligation | `should provide …, but separated from raw result access` | `must provide …, but must separate them from raw result access` |
+| 8 | `30-packaging-compatibility.md`:515 (decision) | obligation | `should be assessed` | `must be assessed` |
+| 9 | `31-provider-integrations.md`:311 (decision) | obligation | `should absorb` | `must absorb` |
+| 10 | `19-declarative.md`:354 | obligation | `should be read code-first` | `must be read code-first` |
+| 11 | `21-openai-responses-hosting.md`:237 | obligation | `should advance … at a time` | `must advance` |
+| 12 | `23-ag-ui.md`:402 | obligation | `should be recorded as such` | `must be recorded as such` |
+| 13 | `27-observability.md`:390 | obligation | `should therefore prioritize` | `must therefore prioritize` |
+| 14 | `28-errors-resilience-security.md`:506 | obligation | `should take priority` | `must take priority` |
+| 15 | `31-provider-integrations.md`:158 | obligation | `should be understood as` | `must be understood as` |
+
+**Corpus-wide modality comparison heuristic:**
+
+The heuristic reads every line of the Korean base at `7371e51` for features 16 to 31, selects the lines
+carrying the obligation ending, reads the English line at the same number, and classifies it as
+`OK-MUST`, `HAS-SHOULD`, or `NO-MODAL` (case-insensitive, so a sentence-initial `Must` counts). A reverse
+pass classifies every English `should` by the source ending on its line.
+
+| Pattern | Source lines matched | `OK-MUST` before fix | `HAS-SHOULD` | `NO-MODAL` |
+| --- | ---: | ---: | ---: | ---: |
+| obligation ending, full form | 299 | 276 | 19 | 4 |
+| obligation ending, conjugated forms | 23 | 19 | 2 | 2 |
+| nominalised obligation form | 0 | 0 | 0 | 0 |
+
+The two obligation patterns overlap on two lines, so the union of flagged lines is twenty-five distinct
+lines, and a twenty-sixth (`20-hosting.md`:404) was flagged only by the case-sensitive first pass. All
+twenty-six were adjudicated. Nineteen were changed to `must`: the fifteen cited lines above, plus
+`16-workflow-checkpoint-hitl.md`:266 from finding 5, and the three found only by the heuristic —
+`25-foundry-devui-channels.md`:372 `should be co-located` to `must be co-located`,
+`25-foundry-devui-channels.md`:498 `should be treated` to `must be treated`, and
+`29-evaluation-testing.md`:609 `should be treated as effectively required` to `must be treated as
+effectively required`. One more line was corrected in the opposite direction:
+`30-packaging-compatibility.md`:497 already rendered its obligation clause as `must be recorded`, but
+rendered the surrounding permissive source ending as `should enable`; that invented obligation is now
+`can enable`, matching the `may have` in the same sentence.
+
+Six flagged lines were adjudicated as already correct and left unchanged:
+
+| Line | Why no change |
+| --- | --- |
+| `18-orchestrations.md`:300 | `Python requires that the manager config be … and that participant names be unique` — the obligation is carried by `requires` plus the subjunctive. |
+| `19-declarative.md`:91 | `require passing a pre-created agent` — obligation carried by `require`. |
+| `20-hosting.md`:404 | `Must accept direct instance, …` — sentence-initial `Must`; only the case-sensitive first pass missed it. |
+| `26-identity-session-routing.md`:7 | The source clause is a rhetorical question inside a quoted scope statement, not a normative rule. |
+| `26-identity-session-routing.md`:263 | `requires that a multi-user host attach a scoping decorator` — obligation carried by `requires`. |
+| `31-provider-integrations.md`:72 | `the Java port requires the core middleware chain to exist first`, inside an inventory table cell — obligation carried by `requires`. |
+
+Fifteen advisory source lines, plus the second clause of `18-orchestrations.md`:341, keep `should` or a
+comparable non-binding rendering and were deliberately not strengthened: `16`:249, `17`:287, `18`:339,
+`18`:340, `18`:342, `19`:358, `21`:505, `21`:523, `22`:454, `24`:450, `24`:452, `28`:531, `29`:594,
+`30`:478, and `30`:485. Their source endings are the advisory forms, not the obligation ending.
+
+The reverse pass found eight further English `should` occurrences whose source line carries no modal
+ending; all eight are correct: `17`:209 and `18`:226 are the code identifiers `ShouldTerminateAsync` and a
+link label, `21`:213 is the code identifier `shouldStream`, `20`:353 and `20`:361 are nominalised
+ownership headings, and `22`:356, `24`:262, and `27`:262 report an upstream instruction to use something
+(`states that … should be used`, `documents that … should be used`, `warns that … should be enabled only
+for development/test`).
+
+**Metrics (base `56235b3` versus working tree — identical for all sixteen files):**
+
+| File | ids | urls | pin | fence | rows | seps | h2 | h3 | bullets | lines |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `features/16-workflow-checkpoint-hitl.md` | 0 | 269 | 270 | 0 | 0 | 0 | 16 | 23 | 180 | 382 |
+| `features/17-workflow-composition.md` | 0 | 212 | 212 | 0 | 0 | 0 | 16 | 23 | 170 | 367 |
+| `features/18-orchestrations.md` | 0 | 291 | 292 | 0 | 0 | 0 | 14 | 63 | 173 | 426 |
+| `features/19-declarative.md` | 0 | 248 | 249 | 0 | 0 | 0 | 15 | 14 | 208 | 398 |
+| `features/20-hosting.md` | 0 | 154 | 156 | 0 | 5 | 1 | 37 | 30 | 172 | 476 |
+| `features/21-openai-responses-hosting.md` | 0 | 166 | 166 | 0 | 6 | 1 | 51 | 29 | 240 | 604 |
+| `features/22-a2a.md` | 0 | 170 | 170 | 0 | 5 | 1 | 48 | 31 | 216 | 536 |
+| `features/23-ag-ui.md` | 0 | 163 | 163 | 0 | 5 | 1 | 44 | 25 | 205 | 522 |
+| `features/24-mcp-hosting.md` | 0 | 150 | 150 | 0 | 6 | 1 | 50 | 19 | 180 | 520 |
+| `features/25-foundry-devui-channels.md` | 0 | 267 | 266 | 0 | 21 | 5 | 99 | 31 | 317 | 871 |
+| `features/26-identity-session-routing.md` | 0 | 149 | 149 | 0 | 0 | 0 | 46 | 23 | 147 | 473 |
+| `features/27-observability.md` | 0 | 202 | 203 | 0 | 0 | 0 | 14 | 49 | 281 | 657 |
+| `features/28-errors-resilience-security.md` | 0 | 269 | 270 | 0 | 0 | 0 | 14 | 64 | 388 | 815 |
+| `features/29-evaluation-testing.md` | 0 | 274 | 275 | 0 | 0 | 0 | 14 | 68 | 386 | 845 |
+| `features/30-packaging-compatibility.md` | 0 | 216 | 217 | 0 | 0 | 0 | 14 | 61 | 317 | 711 |
+| `features/31-provider-integrations.md` | 0 | 377 | 378 | 0 | 135 | 11 | 12 | 16 | 55 | 312 |
+
+Table cell shapes (`awk -F'|' '/^\|/ {print NF}' | sort | uniq -c`) are identical to the base for all
+sixteen files, including the 135-row inventory table in feature 31. Inline-code backtick counts and fenced
+block counts are identical to the base for all sixteen files. Every H1 is byte-identical to the base
+except feature 25, whose H1 Task 6 translated as planned.
+
+**URL, permalink, H1, ledger, and language checks (post-fix):**
+
+- All-documents permalink total: `7286`
+- Pin-specific permalink total in features 16 to 31: `3575`
+- Ledger-versus-H1 byte identity: `PASS: ledger title matches H1: 25. Foundry hosting, DevUI, Aspire integration, ChatKit, Telegram, and other confirmed channel adapters`
+- Korean scan `rg -l '\p{Hangul}' --glob '*.md' .`: prints only `./docs/ko/README.md`
+- Non-Latin residue scan for the Devanagari block across `docs/`: no match
+
+**Emphasis-count note:** the feature 26 repair changes that one line from three emphasis markers to two.
+No metric in the verification toolbox counts emphasis markers, and the repaired line is the only one in
+the sixteen documents whose emphasis markers do not pair.
+
+**Ambiguities found and deliberately not resolved:**
+
+1. The Korean base at `26-identity-session-routing.md`:387 has an unpaired emphasis marker and
+   `26-identity-session-routing.md`:382 has a Devanagari word where the Korean word for "separate"
+   belongs. Both are defects of the source document. The English documents render the evident intent;
+   the source snapshot is not edited, because the snapshot is pinned evidence.
+2. `18-orchestrations.md`:294 keeps `only one active speaker at a time`. The source says only one active
+   speaker, but the sentence is descriptive prose about turn-taking rather than a normative rule, so the
+   idiomatic qualifier does not create or weaken an obligation. It is recorded here rather than removed.
+3. `30-packaging-compatibility.md`:497 mixes a permissive ending with an obligation ending in one
+   sentence. The rendering above splits them into `can`/`may` and `must`; the source does not say whether
+   the default-on gate is a recommendation or merely permitted.
+
+---
+
 ## Success criteria
 
 The migration is complete when all of the following hold:
