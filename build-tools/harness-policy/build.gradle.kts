@@ -1,3 +1,5 @@
+import com.microsoft.agentframework.build.logic.RepositoryPolicyInputs
+
 plugins {
     id("agentframework.java-library-conventions")
     id("agentframework.test-conventions")
@@ -16,26 +18,12 @@ dependencies {
 // Without declaring them, a workflow, instruction, contract, or documentation edit leaves every
 // policy task UP-TO-DATE and `check` reports success without re-running a single policy.
 //
-// Project output is matched where a project root can be, not at any depth: `**/build/**` also
-// excludes `build-tools/harness-policy/src/test/java/com/microsoft/agentframework/build/harness`,
-// which is where these policies live, so an edit to a policy source would drop out of the declared
-// inputs. The depth-limited patterns mirror the `/build/`, `/*/build/`, and `/*/*/build/` rules in
-// `.gitignore` for the same reason.
-val repositoryPolicySources =
-    rootProject.layout.projectDirectory.asFileTree.matching {
-        exclude(
-            "build/**",
-            "*/build/**",
-            "*/*/build/**",
-            "**/.git/**",
-            "**/.gradle/**",
-            "**/.kotlin/**",
-            "**/.gradle-bootstrap/**",
-            ".superpowers/**",
-            ".worktrees/**",
-            ".harness/runs/**"
-        )
-    }
+// `RepositoryPolicyInputs` removes build output by location: only a directory that actually is a
+// Gradle project root loses its own `build` directory. Removing it by name would also remove
+// `build-tools/harness-policy/src/test/java/com/microsoft/agentframework/build/harness`, where
+// these policies live; removing it by depth would also remove `docs/build/` and `docs/*/build/`,
+// so a canonical document under a `build` path segment would stop invalidating the policies.
+val repositoryPolicySources = RepositoryPolicyInputs.repositoryPolicySources(project)
 
 tasks.withType<Test>().configureEach {
     inputs.files(repositoryPolicySources)

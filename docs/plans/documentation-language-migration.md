@@ -110,7 +110,7 @@ rg -l '\p{Hangul}' --glob '*.md' .
 
 | Path | Change |
 | --- | --- |
-| `build-tools/harness-policy/build.gradle.kts` | Exclude `.superpowers/**` from the declared policy input tree |
+| `build-tools/harness-policy/build.gradle.kts` | Declare the policy input tree through the shared `RepositoryPolicyInputs`, which removes build output by location instead of by name or depth |
 | `README.md` | English label on the companion link, link to `docs/README.md`, remove the last Korean characters |
 | `docs/operations/getting-started.md` | Replace the one Korean grade value with `Required` |
 | `docs/ko/README.md` | Backlink to `docs/README.md`, authoritative-source marker, expanded companion guide |
@@ -155,7 +155,10 @@ rg -l '\p{Hangul}' --glob '*.md' .
 - Create: `build-tools/harness-policy/src/test/java/com/microsoft/agentframework/build/harness/DocumentationLanguagePolicyTest.java`
 - Create: `build-tools/harness-policy/src/test/java/com/microsoft/agentframework/build/harness/MarkdownLinkPolicyTest.java`
 - Create: `docs/README.md`
+- Create: `build-logic/src/main/kotlin/com/microsoft/agentframework/build/logic/RepositoryPolicyInputs.kt`
+- Create: `build-logic/src/test/kotlin/com/microsoft/agentframework/build/logic/RepositoryPolicyInputsTest.kt`
 - Modify: `build-tools/harness-policy/build.gradle.kts`
+- Modify: `build-tools/harness-policy/src/test/java/com/microsoft/agentframework/build/harness/BuildContractPolicyTest.java` (one added case)
 - Modify: `README.md`
 - Modify: `docs/operations/getting-started.md`
 - Modify: `docs/requirements/README.md` (one added link line only)
@@ -183,6 +186,10 @@ rg -l '\p{Hangul}' --glob '*.md' .
   - `MarkdownDocuments.anchorOf(String headingText)` — `String`
   - `DocumentationLanguagePolicyTest.PENDING_TRANSLATION` — the 52-entry migration list that Tasks 2 through 6 shrink and Task 8 deletes
   - `DocumentationLanguagePolicyTest.PENDING_TRANSLATION_SIZE` — the exact size that list must have, lowered in the same commit that removes entries
+  - `DocumentationLanguagePolicyTest.ORIGINAL_PENDING_TRANSLATION` — the frozen 52-entry membership the ratchet was installed with; never edited by Tasks 2 through 6, deleted by Task 8
+  - `DocumentationLanguagePolicyTest.ORIGINAL_PENDING_TRANSLATION_SIZE` — `52`, the size of that frozen baseline
+  - `RepositoryPolicyInputs.repositoryPolicySources(Project)` — `FileTree` of the repository files the policy tasks read
+  - `RepositoryPolicyInputs.excludePatterns(File)` — `List<String>` of the Ant patterns that tree excludes
 
 - [ ] **Step 1: Write the Markdown scanner helper**
 
@@ -505,7 +512,7 @@ final class MarkdownDocuments {
 
 - [ ] **Step 2: Write the failing language, companion, and navigation policy test**
 
-Create `build-tools/harness-policy/src/test/java/com/microsoft/agentframework/build/harness/DocumentationLanguagePolicyTest.java`. The `PENDING_TRANSLATION` set below lists exactly the 52 documents Tasks 2 through 6 translate; copy it verbatim.
+Create `build-tools/harness-policy/src/test/java/com/microsoft/agentframework/build/harness/DocumentationLanguagePolicyTest.java`. `ORIGINAL_PENDING_TRANSLATION` and `PENDING_TRANSLATION` below both list exactly the 52 documents Tasks 2 through 6 translate; copy them verbatim. The two sets start identical and then diverge: only `PENDING_TRANSLATION` shrinks, while `ORIGINAL_PENDING_TRANSLATION` stays frozen as the evidence of what the ratchet was installed with. Pinning the size alone would accept a one-for-one swap that translates one document and exempts a different one, so membership is pinned too.
 
 ```java
 package com.microsoft.agentframework.build.harness;
@@ -528,6 +535,71 @@ import org.junit.jupiter.params.provider.MethodSource;
 class DocumentationLanguagePolicyTest {
 
   /**
+   * The membership the migration declared when the ratchet was installed. It is frozen: no task
+   * ever adds to it, edits it, or reorders it, and only the final task deletes it together with
+   * {@link #PENDING_TRANSLATION}. Pinning membership instead of a count alone is what makes {@link
+   * #pendingTranslationListOnlyHoldsOriginallyDeclaredDocuments()} reject a one-for-one swap that
+   * translates one document and exempts a different one at the same size.
+   */
+  private static final Set<String> ORIGINAL_PENDING_TRANSLATION =
+      Set.of(
+          "docs/design/engineering-harness-design.md",
+          "docs/design/foundation-design.md",
+          "docs/design/gradle-kotlin-arc-foundation-design.md",
+          "docs/requirements/README.md",
+          "docs/requirements/01-agent-execution.md",
+          "docs/requirements/02-message-content.md",
+          "docs/requirements/03-structured-output.md",
+          "docs/requirements/04-tools.md",
+          "docs/requirements/05-mcp.md",
+          "docs/requirements/06-sessions.md",
+          "docs/requirements/07-interceptors.md",
+          "docs/requirements/08-harness.md",
+          "docs/requirements/09-workflows.md",
+          "docs/requirements/10-hosting.md",
+          "docs/requirements/11-operations.md",
+          "docs/requirements/12-providers.md",
+          "docs/upstream/README.md",
+          "docs/upstream/snapshots/d0a4165f/README.md",
+          "docs/upstream/snapshots/d0a4165f/compatibility-matrix.md",
+          "docs/upstream/snapshots/d0a4165f/coverage-ledger.md",
+          "docs/upstream/snapshots/d0a4165f/snapshot-manifest.md",
+          "docs/upstream/snapshots/d0a4165f/features/01-agent-lifecycle.md",
+          "docs/upstream/snapshots/d0a4165f/features/02-message-content.md",
+          "docs/upstream/snapshots/d0a4165f/features/03-model-execution.md",
+          "docs/upstream/snapshots/d0a4165f/features/04-structured-output.md",
+          "docs/upstream/snapshots/d0a4165f/features/05-function-tools.md",
+          "docs/upstream/snapshots/d0a4165f/features/06-tool-approval.md",
+          "docs/upstream/snapshots/d0a4165f/features/07-mcp-client-tools.md",
+          "docs/upstream/snapshots/d0a4165f/features/08-sessions.md",
+          "docs/upstream/snapshots/d0a4165f/features/09-history-context-memory.md",
+          "docs/upstream/snapshots/d0a4165f/features/10-middleware.md",
+          "docs/upstream/snapshots/d0a4165f/features/11-compaction.md",
+          "docs/upstream/snapshots/d0a4165f/features/12-harness.md",
+          "docs/upstream/snapshots/d0a4165f/features/13-skills-background-code.md",
+          "docs/upstream/snapshots/d0a4165f/features/14-workflow-graph.md",
+          "docs/upstream/snapshots/d0a4165f/features/15-workflow-runtime.md",
+          "docs/upstream/snapshots/d0a4165f/features/16-workflow-checkpoint-hitl.md",
+          "docs/upstream/snapshots/d0a4165f/features/17-workflow-composition.md",
+          "docs/upstream/snapshots/d0a4165f/features/18-orchestrations.md",
+          "docs/upstream/snapshots/d0a4165f/features/19-declarative.md",
+          "docs/upstream/snapshots/d0a4165f/features/20-hosting.md",
+          "docs/upstream/snapshots/d0a4165f/features/21-openai-responses-hosting.md",
+          "docs/upstream/snapshots/d0a4165f/features/22-a2a.md",
+          "docs/upstream/snapshots/d0a4165f/features/23-ag-ui.md",
+          "docs/upstream/snapshots/d0a4165f/features/24-mcp-hosting.md",
+          "docs/upstream/snapshots/d0a4165f/features/25-foundry-devui-channels.md",
+          "docs/upstream/snapshots/d0a4165f/features/26-identity-session-routing.md",
+          "docs/upstream/snapshots/d0a4165f/features/27-observability.md",
+          "docs/upstream/snapshots/d0a4165f/features/28-errors-resilience-security.md",
+          "docs/upstream/snapshots/d0a4165f/features/29-evaluation-testing.md",
+          "docs/upstream/snapshots/d0a4165f/features/30-packaging-compatibility.md",
+          "docs/upstream/snapshots/d0a4165f/features/31-provider-integrations.md");
+
+  /** The size {@link #ORIGINAL_PENDING_TRANSLATION} was declared with. */
+  private static final int ORIGINAL_PENDING_TRANSLATION_SIZE = 52;
+
+  /**
    * The number of documents still awaiting translation. A translating task lowers this number in
    * the same commit that removes the entries, so an entry added to {@link #PENDING_TRANSLATION}
    * fails {@link #pendingTranslationListHasNotWidened()} instead of quietly exempting one more
@@ -538,7 +610,8 @@ class DocumentationLanguagePolicyTest {
   /**
    * Documents that have not been translated yet. Every entry is removed by the task that translates
    * it, and {@link #pendingTranslationEntryStillContainsKoreanText(String)} fails once an entry no
-   * longer needs migration, so this list can only shrink. It is deleted entirely by the final task.
+   * longer needs migration, so this list can only shrink, and only towards {@link
+   * #ORIGINAL_PENDING_TRANSLATION}. It is deleted entirely by the final task.
    */
   private static final Set<String> PENDING_TRANSLATION =
       Set.of(
@@ -650,6 +723,40 @@ class DocumentationLanguagePolicyTest {
                 + " the document, and never add a document to it.",
             PENDING_TRANSLATION_SIZE, PENDING_TRANSLATION.size())
         .hasSize(PENDING_TRANSLATION_SIZE);
+  }
+
+  @Test
+  void pendingTranslationListOnlyHoldsOriginallyDeclaredDocuments() {
+    List<String> undeclared =
+        PENDING_TRANSLATION.stream()
+            .filter(path -> !ORIGINAL_PENDING_TRANSLATION.contains(path))
+            .sorted()
+            .toList();
+
+    assertThat(ORIGINAL_PENDING_TRANSLATION)
+        .withFailMessage(
+            "The migration list may only hold documents the ratchet was installed with. A size"
+                + " check alone accepts a one-for-one swap that translates one document and exempts"
+                + " another, so membership is pinned too. Entries that were never declared: %s.",
+            undeclared)
+        .containsAll(PENDING_TRANSLATION);
+  }
+
+  @Test
+  void originalPendingTranslationListIsTheFrozenBaseline() {
+    assertThat(ORIGINAL_PENDING_TRANSLATION)
+        .withFailMessage(
+            "The declared baseline is frozen at %d entries but holds %d. Shrink"
+                + " PENDING_TRANSLATION instead; ORIGINAL_PENDING_TRANSLATION is the evidence that"
+                + " the list never widened.",
+            ORIGINAL_PENDING_TRANSLATION_SIZE, ORIGINAL_PENDING_TRANSLATION.size())
+        .hasSize(ORIGINAL_PENDING_TRANSLATION_SIZE);
+    assertThat(PENDING_TRANSLATION_SIZE)
+        .withFailMessage(
+            "The migration list ratchets down from %d, so a target size above the declared baseline"
+                + " can only come from widening it.",
+            ORIGINAL_PENDING_TRANSLATION_SIZE)
+        .isBetween(0, ORIGINAL_PENDING_TRANSLATION_SIZE);
   }
 
   @Test
@@ -899,7 +1006,23 @@ returns exactly the canonical locations of policy section 8.1:
 
 Run: `./gradlew :build-tools:harness-policy:test --tests '*DocumentationLanguagePolicyTest*' --tests '*MarkdownLinkPolicyTest*' --tests '*MarkdownDocumentsTest*'`
 
-Expected: FAIL. `koreanCompanionDeclaresEnglishAsAuthoritative`, `englishEntryPointsLinkToTheKoreanCompanion`, `rootReadmeLinksTheDocumentationIndex`, and the three `directoryIndexLinksBackToTheDocumentationIndex` cases fail; the `englishEntryPointsLinkToTheKoreanCompanion` failure is a `NoSuchFileException` for `docs/README.md`. `canonicalDocumentContainsNoKoreanText` fails for `README.md` and `docs/operations/getting-started.md`.
+Expected: FAIL, with exactly ten failing cases, because `docs/README.md` does not exist yet, the
+entry points do not link the index or the companion, and two documents still hold Korean text:
+
+| # | Test | Failing case | Why |
+| ---: | --- | --- | --- |
+| 1 | `DocumentationLanguagePolicyTest.canonicalDocumentContainsNoKoreanText` | `README.md` | the companion link label on `README.md:141` is still written in Korean |
+| 2 | `DocumentationLanguagePolicyTest.canonicalDocumentContainsNoKoreanText` | `docs/operations/getting-started.md` | the requirement grade value is still written in Korean |
+| 3 | `DocumentationLanguagePolicyTest.documentationIndexExistsAndIsScanned` | — | `docs/README.md` does not exist |
+| 4 | `DocumentationLanguagePolicyTest.koreanCompanionDeclaresEnglishAsAuthoritative` | — | the companion has no authoritative-source marker and no `](../README.md)` |
+| 5 | `DocumentationLanguagePolicyTest.englishEntryPointsLinkToTheKoreanCompanion` | — | `NoSuchFileException` for `docs/README.md` |
+| 6 | `DocumentationLanguagePolicyTest.rootReadmeLinksTheDocumentationIndex` | — | `README.md` has no `](docs/README.md)` |
+| 7 | `DocumentationLanguagePolicyTest.directoryIndexLinksBackToTheDocumentationIndex` | `docs/requirements/README.md` | no backlink yet |
+| 8 | `DocumentationLanguagePolicyTest.directoryIndexLinksBackToTheDocumentationIndex` | `docs/upstream/README.md` | no backlink yet |
+| 9 | `DocumentationLanguagePolicyTest.directoryIndexLinksBackToTheDocumentationIndex` | `docs/ko/README.md` | no backlink yet |
+| 10 | `MarkdownDocumentsTest.repositoryScanReturnsOwnedLocationsOnly` | — | the scan cannot return `docs/README.md` |
+
+`MarkdownLinkPolicyTest` passes at this point: no document links to `docs/README.md` yet.
 
 - [ ] **Step 5: Create the English documentation index**
 
@@ -1039,22 +1162,81 @@ rg -n 'English documents are authoritative\.' docs/ko/README.md
 
 Expected: one match in each of the four lines of output.
 
-- [ ] **Step 9: Declare the agent plugin directory outside the policy input tree**
+- [ ] **Step 9: Declare the policy input tree by location, not by name or depth**
 
-In `build-tools/harness-policy/build.gradle.kts`, extend the `exclude(...)` list of
-`repositoryPolicySources` with `".superpowers/**"` so an untracked agent plugin directory can never
-invalidate or feed the policy tasks, and match project output where a project root can be instead of
-at any depth. `**/build/**` also excludes
-`build-tools/harness-policy/src/test/java/com/microsoft/agentframework/build/harness`, which is
-where these policies live, so an edit to a policy source would drop out of the declared inputs; the
-depth-limited patterns mirror the `/build/`, `/*/build/`, and `/*/*/build/` rules in `.gitignore`.
-The list becomes:
+The policy tasks read repository files, so the declared input tree decides whether an edit re-runs a
+policy at all. Two hazards have to be excluded at once, and a single glob cannot do both:
+
+- a rule that matches a `build` segment anywhere also removes
+  `build-tools/harness-policy/src/test/java/com/microsoft/agentframework/build/harness`, where these
+  policies live, so an edit to a policy source would drop out of the declared inputs;
+- a depth-limited rule such as `*`/`build/**` and `*`/`*`/`build/**` still removes `docs/build/` and
+  `docs/*`/`build/`, which the scanner deliberately owns, so a canonical document under a `build`
+  path segment would leave every policy task UP-TO-DATE.
+
+Build output is therefore removed by location: only a directory that actually is a Gradle project
+root - it holds a `build.gradle.kts` or a `settings.gradle.kts` - loses its own `build` directory.
+Untracked, generated, or agent-owned locations - `.git`, `.gradle`, `.kotlin`, `.gradle-bootstrap`,
+`.superpowers`, `.worktrees`, and `.harness/runs` - are removed by name at any depth instead,
+because a policy never reads from them and an untracked agent plugin directory must never invalidate
+or feed a policy task. The rule is shared build behaviour, so it lives in the `build-logic` included
+build and is never copied into a project script.
+
+Create `build-logic/src/main/kotlin/com/microsoft/agentframework/build/logic/RepositoryPolicyInputs.kt`:
 
 ```kotlin
-        exclude(
-            "build/**",
-            "*/build/**",
-            "*/*/build/**",
+package com.microsoft.agentframework.build.logic
+
+import java.io.File
+import java.util.ArrayDeque
+import org.gradle.api.Project
+import org.gradle.api.file.FileTree
+
+/**
+ * Declares the repository files the policy tasks read.
+ *
+ * The policy tasks read repository files that Gradle cannot infer from a compile classpath. Without
+ * declaring them, a workflow, instruction, contract, or documentation edit leaves every policy task
+ * UP-TO-DATE and `check` reports success without re-running a single policy.
+ *
+ * Build output is removed by location, never by name and never by depth. A rule matching a `build`
+ * segment anywhere also removes
+ * `build-tools/harness-policy/src/test/java/com/microsoft/agentframework/build/harness`, where the
+ * policies themselves live. A depth-limited rule still removes `docs/build/`, so a canonical
+ * document under a `build` path segment would stop invalidating the policies. Only a directory that
+ * is a Gradle project root - it holds a `build.gradle.kts` or a `settings.gradle.kts` - contributes
+ * an exclusion, and only for its own `build` directory.
+ */
+object RepositoryPolicyInputs {
+
+    /** Files that mark a directory as the root of a Gradle project or of an included build. */
+    private val BUILD_SCRIPT_NAMES = setOf("build.gradle.kts", "settings.gradle.kts")
+
+    /**
+     * How deep a project root is searched for. `build-tools/harness-policy` is the deepest project
+     * this repository declares, and `.gitignore` pins project output to the same three levels.
+     */
+    private const val MAXIMUM_PROJECT_DEPTH = 3
+
+    /** Directories never descended into while looking for project roots. */
+    private val UNSEARCHED_DIRECTORIES =
+        setOf(
+            "build",
+            "node_modules",
+            ".git",
+            ".gradle",
+            ".kotlin",
+            ".gradle-bootstrap",
+            ".superpowers",
+            ".worktrees"
+        )
+
+    /**
+     * Generated, vendored, or agent-owned locations the repository does not own as source. They are
+     * matched at any depth because a policy never reads from them.
+     */
+    private val NON_SOURCE_EXCLUSIONS =
+        listOf(
             "**/.git/**",
             "**/.gradle/**",
             "**/.kotlin/**",
@@ -1063,7 +1245,245 @@ The list becomes:
             ".worktrees/**",
             ".harness/runs/**"
         )
+
+    /**
+     * Returns the Ant patterns the policy input tree excludes, relative to the repository root.
+     *
+     * @param repositoryRoot the root of the repository the policies read
+     * @return the build output of every Gradle project root, plus the non-source locations
+     */
+    fun excludePatterns(repositoryRoot: File): List<String> =
+        projectOutputExclusions(repositoryRoot) + NON_SOURCE_EXCLUSIONS
+
+    /**
+     * Returns the repository files the policy tasks read.
+     *
+     * @param project the project that owns the policy tasks
+     * @return the repository tree without project output and without non-source locations
+     */
+    fun repositoryPolicySources(project: Project): FileTree {
+        val repositoryRoot = project.rootProject.layout.projectDirectory
+        return repositoryRoot.asFileTree.matching { exclude(excludePatterns(repositoryRoot.asFile)) }
+    }
+
+    private fun projectOutputExclusions(repositoryRoot: File): List<String> {
+        val exclusions = mutableListOf<String>()
+        val queue = ArrayDeque<Pair<File, Int>>()
+        queue.addLast(repositoryRoot to 0)
+        while (queue.isNotEmpty()) {
+            val (directory, depth) = queue.removeFirst()
+            if (isProjectRoot(directory)) {
+                exclusions.add(buildOutputPattern(repositoryRoot, directory))
+            }
+            if (depth == MAXIMUM_PROJECT_DEPTH) {
+                continue
+            }
+            directory.listFiles()
+                ?.filter { it.isDirectory && it.name !in UNSEARCHED_DIRECTORIES }
+                ?.forEach { queue.addLast(it to depth + 1) }
+        }
+        return exclusions.sorted()
+    }
+
+    private fun isProjectRoot(directory: File): Boolean =
+        BUILD_SCRIPT_NAMES.any { directory.resolve(it).isFile }
+
+    private fun buildOutputPattern(repositoryRoot: File, projectRoot: File): String {
+        val relative =
+            repositoryRoot
+                .toPath()
+                .relativize(projectRoot.toPath())
+                .joinToString("/") { segment -> segment.toString() }
+        return if (relative.isEmpty()) "build/**" else "$relative/build/**"
+    }
+}
 ```
+
+Then, in `build-tools/harness-policy/build.gradle.kts`, replace the inline `matching { exclude(...) }`
+tree with the shared declaration:
+
+```kotlin
+import com.microsoft.agentframework.build.logic.RepositoryPolicyInputs
+
+// ...
+
+val repositoryPolicySources = RepositoryPolicyInputs.repositoryPolicySources(project)
+```
+
+Create `build-logic/src/test/kotlin/com/microsoft/agentframework/build/logic/RepositoryPolicyInputsTest.kt`.
+The unit cases pin which directories contribute an exclusion; the Gradle TestKit cases run a task
+that declares the same tree twice and prove that a Markdown edit under `docs/build/` re-runs it
+while a project-output edit does not:
+
+```kotlin
+package com.microsoft.agentframework.build.logic
+
+import java.io.File
+import org.assertj.core.api.Assertions.assertThat
+import org.gradle.testkit.runner.GradleRunner
+import org.gradle.testkit.runner.TaskOutcome
+import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.io.TempDir
+
+/**
+ * The repository policy tasks read repository files instead of a compile classpath, so the declared
+ * input tree decides whether an edit re-runs a policy at all. Excluding build output by name or by
+ * depth also drops documentation that legitimately lives under a `build` path segment, which turns
+ * a documentation change into a silent UP-TO-DATE.
+ */
+class RepositoryPolicyInputsTest {
+
+    @Test
+    fun onlyGradleProjectRootsContributeABuildOutputExclusion(@TempDir root: File) {
+        writeRepository(root)
+
+        val patterns = RepositoryPolicyInputs.excludePatterns(root)
+
+        assertThat(patterns)
+            .contains("build/**", "module/build/**", "group/leaf/build/**")
+            .doesNotContain(
+                "docs/build/**",
+                "group/build/**",
+                "**/build/**",
+                "*/build/**",
+                "*/*/build/**"
+            )
+    }
+
+    @Test
+    fun untrackedAndGeneratedNoiseStaysOutsideTheInputTree(@TempDir root: File) {
+        writeRepository(root)
+
+        val patterns = RepositoryPolicyInputs.excludePatterns(root)
+
+        assertThat(patterns)
+            .contains(
+                "**/.git/**",
+                "**/.gradle/**",
+                "**/.kotlin/**",
+                "**/.gradle-bootstrap/**",
+                ".superpowers/**",
+                ".worktrees/**",
+                ".harness/runs/**"
+            )
+    }
+
+    @Test
+    fun documentationUnderABuildPathSegmentInvalidatesThePolicyTask(@TempDir root: File) {
+        writeRepository(root)
+        val documentation = root.resolve("docs/build/reference.md")
+        val projectOutput = root.resolve("module/build/generated.md")
+
+        assertThat(runProbe(root).outcome).isEqualTo(TaskOutcome.SUCCESS)
+        assertThat(runProbe(root).outcome).isEqualTo(TaskOutcome.UP_TO_DATE)
+
+        documentation.writeText("# Reference\n\nA canonical document that changed.\n")
+
+        assertThat(runProbe(root).outcome).isEqualTo(TaskOutcome.SUCCESS)
+
+        projectOutput.writeText("# Generated\n\nProject output that changed.\n")
+
+        assertThat(runProbe(root).outcome).isEqualTo(TaskOutcome.UP_TO_DATE)
+    }
+
+    @Test
+    fun policySourcesUnderABuildPackageInvalidateThePolicyTask(@TempDir root: File) {
+        writeRepository(root)
+        val policySource = root.resolve("module/src/test/java/com/example/build/harness/Policy.java")
+
+        assertThat(runProbe(root).outcome).isEqualTo(TaskOutcome.SUCCESS)
+        assertThat(runProbe(root).outcome).isEqualTo(TaskOutcome.UP_TO_DATE)
+
+        policySource.writeText("class Policy { int rules = 2; }\n")
+
+        assertThat(runProbe(root).outcome).isEqualTo(TaskOutcome.SUCCESS)
+    }
+
+    private fun runProbe(root: File) =
+        GradleRunner.create()
+            .withProjectDir(root)
+            .withArguments("policyProbe", "--stacktrace")
+            .build()
+            .task(":policyProbe")!!
+
+    private fun writeRepository(root: File) {
+        write(root, "settings.gradle.kts", "rootProject.name = \"fixture\"\ninclude(\":module\")\n")
+        write(
+            root,
+            "build.gradle.kts",
+            """
+            buildscript {
+                dependencies {
+                    classpath(files("$BUILD_LOGIC_CLASSES"))
+                }
+            }
+
+            val repositoryPolicySources =
+                com.microsoft.agentframework.build.logic.RepositoryPolicyInputs
+                    .repositoryPolicySources(project)
+            val marker = layout.buildDirectory.file("policy-probe.txt")
+
+            tasks.register("policyProbe") {
+                inputs.files(repositoryPolicySources)
+                    .withPropertyName("repositoryPolicySources")
+                    .withPathSensitivity(PathSensitivity.RELATIVE)
+                outputs.file(marker)
+                doLast {
+                    marker.get().asFile.writeText("ran")
+                }
+            }
+            """.trimIndent() + "\n"
+        )
+        write(root, "module/build.gradle.kts", "")
+        write(root, "group/leaf/build.gradle.kts", "")
+        write(root, "docs/build/reference.md", "# Reference\n")
+        write(root, "docs/README.md", "# Documentation\n")
+        write(root, "module/build/generated.md", "# Generated\n")
+        write(
+            root,
+            "module/src/test/java/com/example/build/harness/Policy.java",
+            "class Policy {}\n"
+        )
+    }
+
+    private fun write(root: File, relativePath: String, content: String) {
+        val file = root.resolve(relativePath)
+        file.parentFile.mkdirs()
+        file.writeText(content)
+    }
+
+    private companion object {
+
+        /**
+         * Where this test loaded the helper from. The fixture build script puts exactly that on its
+         * buildscript classpath, so the probe exercises the production code rather than a copy of
+         * the patterns.
+         */
+        val BUILD_LOGIC_CLASSES: String =
+            File(
+                    RepositoryPolicyInputs::class
+                        .java
+                        .protectionDomain
+                        .codeSource
+                        .location
+                        .toURI()
+                )
+                .invariantSeparatorsPath
+    }
+}
+```
+
+Run: `./gradlew buildLogicTest`
+
+Expected: PASS. Replacing `RepositoryPolicyInputs.excludePatterns` with the depth-limited
+`"build/**", "*/build/**", "*/*/build/**"` list fails
+`onlyGradleProjectRootsContributeABuildOutputExclusion` and
+`documentationUnderABuildPathSegmentInvalidatesThePolicyTask`, which is the regression this step
+prevents.
+
+`BuildContractPolicyTest.policyInputsExcludeProjectOutputByLocationOnly` keeps the project script
+honest under `./gradlew policyCheck`: it fails if the script stops using the shared declaration or
+reintroduces a name-matched or depth-matched build glob.
 
 - [ ] **Step 10: Format and run the tests to verify they pass**
 
@@ -1077,9 +1497,9 @@ those 66 come from the canonical locations only.
 
 - [ ] **Step 11: Confirm the policy entry point and the quality gate**
 
-Run: `./gradlew policyCheck quality`
+Run: `./gradlew policyCheck quality buildLogicTest`
 
-Expected: BUILD SUCCESSFUL. `policyCheck` runs the new tests through `:build-tools:harness-policy:test`; `quality` proves the new sources satisfy spotless, Checkstyle, PMD, and SpotBugs.
+Expected: BUILD SUCCESSFUL. `policyCheck` runs the new tests through `:build-tools:harness-policy:test`; `quality` proves the new sources satisfy spotless, Checkstyle, PMD, and SpotBugs; `buildLogicTest` runs the Gradle TestKit probe for the declared policy input tree.
 
 Run: `git diff --stat build-tools/harness-policy/gradle.lockfile`
 
@@ -1092,6 +1512,9 @@ git add build-tools/harness-policy/src/test/java/com/microsoft/agentframework/bu
   build-tools/harness-policy/src/test/java/com/microsoft/agentframework/build/harness/MarkdownDocumentsTest.java \
   build-tools/harness-policy/src/test/java/com/microsoft/agentframework/build/harness/DocumentationLanguagePolicyTest.java \
   build-tools/harness-policy/src/test/java/com/microsoft/agentframework/build/harness/MarkdownLinkPolicyTest.java \
+  build-tools/harness-policy/src/test/java/com/microsoft/agentframework/build/harness/BuildContractPolicyTest.java \
+  build-logic/src/main/kotlin/com/microsoft/agentframework/build/logic/RepositoryPolicyInputs.kt \
+  build-logic/src/test/kotlin/com/microsoft/agentframework/build/logic/RepositoryPolicyInputsTest.kt \
   build-tools/harness-policy/build.gradle.kts docs/README.md README.md \
   docs/operations/getting-started.md docs/requirements/README.md docs/upstream/README.md docs/ko/README.md
 git commit -m "docs: add the English documentation index and language policy tests" -m "Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
@@ -1141,7 +1564,7 @@ In `DocumentationLanguagePolicyTest.java`, delete these three lines from `PENDIN
 ```
 
 Lower `PENDING_TRANSLATION_SIZE` from `52` to `49` in the same edit, so
-`pendingTranslationListHasNotWidened` keeps pinning the exact size of the list.
+`pendingTranslationListHasNotWidened` keeps pinning the exact size of the list. Remove the entries from `PENDING_TRANSLATION` only; `ORIGINAL_PENDING_TRANSLATION` is frozen and is never edited, so `pendingTranslationListOnlyHoldsOriginallyDeclaredDocuments` keeps rejecting a document that was swapped in rather than translated.
 
 - [ ] **Step 3: Run the tests to verify they fail**
 
@@ -1272,7 +1695,7 @@ In `DocumentationLanguagePolicyTest.java`, delete these seven lines from `PENDIN
           "docs/requirements/06-sessions.md",
 ```
 
-Lower `PENDING_TRANSLATION_SIZE` from `49` to `42` in the same edit.
+Lower `PENDING_TRANSLATION_SIZE` from `49` to `42` in the same edit. Remove the entries from `PENDING_TRANSLATION` only; `ORIGINAL_PENDING_TRANSLATION` is frozen and is never edited, so `pendingTranslationListOnlyHoldsOriginallyDeclaredDocuments` keeps rejecting a document that was swapped in rather than translated.
 
 - [ ] **Step 3: Run the tests to verify they fail**
 
@@ -1429,7 +1852,7 @@ In `DocumentationLanguagePolicyTest.java`, delete these six lines from `PENDING_
           "docs/requirements/12-providers.md",
 ```
 
-Lower `PENDING_TRANSLATION_SIZE` from `42` to `36` in the same edit.
+Lower `PENDING_TRANSLATION_SIZE` from `42` to `36` in the same edit. Remove the entries from `PENDING_TRANSLATION` only; `ORIGINAL_PENDING_TRANSLATION` is frozen and is never edited, so `pendingTranslationListOnlyHoldsOriginallyDeclaredDocuments` keeps rejecting a document that was swapped in rather than translated.
 
 - [ ] **Step 3: Run the tests to verify they fail**
 
@@ -1595,7 +2018,7 @@ In `DocumentationLanguagePolicyTest.java`, delete these twenty lines from `PENDI
           "docs/upstream/snapshots/d0a4165f/features/15-workflow-runtime.md",
 ```
 
-Lower `PENDING_TRANSLATION_SIZE` from `36` to `16` in the same edit.
+Lower `PENDING_TRANSLATION_SIZE` from `36` to `16` in the same edit. Remove the entries from `PENDING_TRANSLATION` only; `ORIGINAL_PENDING_TRANSLATION` is frozen and is never edited, so `pendingTranslationListOnlyHoldsOriginallyDeclaredDocuments` keeps rejecting a document that was swapped in rather than translated.
 
 - [ ] **Step 3: Run the tests to verify they fail**
 
@@ -1779,7 +2202,7 @@ In `DocumentationLanguagePolicyTest.java`, delete these sixteen lines from `PEND
 ```
 
 Lower `PENDING_TRANSLATION_SIZE` from `16` to `0` in the same edit. The list is then empty and Task 8
-deletes it.
+deletes it together with the frozen baseline. Remove the entries from `PENDING_TRANSLATION` only; `ORIGINAL_PENDING_TRANSLATION` is frozen and is never edited, so `pendingTranslationListOnlyHoldsOriginallyDeclaredDocuments` keeps rejecting a document that was swapped in rather than translated.
 
 - [ ] **Step 3: Run the tests to verify they fail**
 
@@ -1980,8 +2403,8 @@ finish that task first.
 
 In `DocumentationLanguagePolicyTest.java`:
 
-- delete the `PENDING_TRANSLATION` field, the `PENDING_TRANSLATION_SIZE` constant, and their Javadoc;
-- delete the `pendingTranslation()` method source, the `pendingTranslationEntryStillContainsKoreanText` test, the `pendingTranslationListHasNotWidened` test, and the `everyPendingTranslationEntryIsAScannedDocument` test;
+- delete the `PENDING_TRANSLATION` and `ORIGINAL_PENDING_TRANSLATION` fields, the `PENDING_TRANSLATION_SIZE` and `ORIGINAL_PENDING_TRANSLATION_SIZE` constants, and their Javadoc;
+- delete the `pendingTranslation()` method source, the `pendingTranslationEntryStillContainsKoreanText` test, the `pendingTranslationListHasNotWidened` test, the `pendingTranslationListOnlyHoldsOriginallyDeclaredDocuments` test, the `originalPendingTranslationListIsTheFrozenBaseline` test, and the `everyPendingTranslationEntryIsAScannedDocument` test;
 - delete the now-unused `java.util.Set` import, which no remaining member uses; keep `java.nio.charset.StandardCharsets`, `java.nio.file.Files`, and `java.util.List`, which the companion and directory-index tests still use;
 - reduce `canonicalDocuments()` to:
 
