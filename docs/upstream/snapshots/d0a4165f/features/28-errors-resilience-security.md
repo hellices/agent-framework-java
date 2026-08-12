@@ -591,7 +591,7 @@ Evidence:
 
 ### Decision 9. Keep retry as a caller-owned policy, not core implicit behavior
 
-Since generic runtime retry was not directly demonstrated in this snapshot, it is safer for Java to have callers/test/individual provider adapters or app policies explicitly own it, rather than inserting silent retries in the core library. Test/CI retry and runtime retry must be documented separately.  
+Since generic runtime retry was not directly demonstrated in this snapshot, it is safer for Java, too, to have an idempotency-aware provider adapter or an app policy explicitly own it rather than inserting silent retry in the core library. Test/CI retry and runtime retry must be documented separately.  
 Evidence:  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/tests/AgentConformance.IntegrationTests/RunTests.cs#L20-L23  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/.github/workflows/python-integration-tests.yml#L61-L67  
