@@ -53,7 +53,7 @@ public entry는 `AgentEngine`과 builder/factory에 한정한다. 상태 기계 
 
 - `workflow/agent-framework-workflow-core`: immutable graph, run state machine, checkpoint port
 - `integrations/agent-framework-harness`: `Agent`를 조립하는 optional facade
-- `agent-framework-hosting-core`: target/session/checkpoint coordination only
+- `hosting/agent-framework-hosting-core`: target/session/checkpoint coordination only
 
 이 모듈들은 engine internal에 의존하지 않는다. `Agent`, session port, tool/content contract처럼
 공개 API를 통해 조합한다.
@@ -62,11 +62,16 @@ public entry는 `AgentEngine`과 builder/factory에 한정한다. 상태 기계 
 
 - `providers/`: model provider SDK adapter
 - `integrations/`: MCP, storage, memory, Spring AI, telemetry adapter
+- `hosting/`: framework-neutral hosting coordination and standalone assembly
 - `protocols/`: Responses, A2A, AG-UI, MCP hosting wire adapter
-- `starters/`: host framework assembly
+- `starters/`: dependency-only framework starter artifacts
 
 adapter는 outbound port를 구현하거나 inbound protocol을 public use case로 변환한다. adapter가
 engine state machine을 복제하거나 tool loop를 다시 소유하지 않는다.
+
+integration은 endpoint-first가 아니다. framework 내부 사용자는 endpoint를 거치지 않고
+container-native component로 `AgentEngine`과 `Agent`를 주입받는다. endpoint는 Responses, A2A,
+AG-UI 같은 wire protocol을 실제로 노출할 애플리케이션만 별도 opt-in module로 추가한다.
 
 ## 3. 의존성 규칙
 
@@ -147,6 +152,11 @@ AgentEngine.builder()
 
 framework adapter가 제공하는 기능은 이 builder로도 표현 가능해야 한다.
 
+`hosting/agent-framework-standalone`은 이 reference assembly의 batteries-included facade다.
+서버나 DI container를 만들지 않고 JDK client, host-owned execution strategy, in-memory store,
+provider adapter를 하나의 `AutoCloseable` assembly로 묶는다. standalone 경로가 모든
+framework contract test의 기준 구현이다.
+
 ### 5.2 Spring Boot
 
 - `*-autoconfigure`: conditional beans, ordered customizers, configuration properties
@@ -156,6 +166,10 @@ framework adapter가 제공하는 기능은 이 builder로도 표현 가능해�
 - Spring AI `ChatModel`/`ToolCallback`은 optional adapter
 - engine tool loop 사용 시 Spring AI automatic tool execution 비활성
 
+Spring integration은 Spring application 안에서 native bean처럼 사용되는 것이 우선이다.
+protocol endpoint auto-configuration은 protocol별 starter가 명시적으로 추가된 경우에만
+활성화한다.
+
 ### 5.3 Quarkus
 
 - 기본은 CDI bean을 제공하는 runtime artifact 하나
@@ -163,6 +177,10 @@ framework adapter가 제공하는 기능은 이 builder로도 표현 가능해�
   deployment artifact 추가
 - Mutiny `Uni`/`Multi`는 boundary에서 core async/stream contract로 변환
 - build item, recorder, Arc container type은 core API에 노출하지 않음
+
+runtime/deployment split이 필요하면 기존 `agent-framework-quarkus` runtime coordinate는
+유지하고 `agent-framework-quarkus-deployment` sibling project만 추가한다. repository directory
+nesting을 늘리지 않아도 Quarkus artifact 역할과 consumer coordinate를 모두 유지할 수 있다.
 
 ### 5.4 Jakarta EE
 

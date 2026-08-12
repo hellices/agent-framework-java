@@ -112,6 +112,10 @@ session-specific state를 숨기지 않는다.
 
 ## 6. Typed interceptor pipeline
 
+이 pipeline은 upstream MAF middleware의 Java 대응물이다. 이름을 바꾼 이유는 middleware라는
+말이 HTTP filter, Spring AOP, CDI interceptor, provider advisor까지 모두 포함해 책임 경계를
+흐리기 때문이다.
+
 네 seam:
 
 - `AgentRunInterceptor`
@@ -131,6 +135,34 @@ A-pre -> B-pre -> handler -> B-post -> A-post
 `next` 미호출은 short-circuit다. unsupported seam은 builder/initialization에서 실패한다.
 Spring `Ordered`, Quarkus priority, CDI priority는 adapter가 deterministic list로 변환하며 engine이
 다시 정렬하지 않는다.
+
+### 6.1 Framework AOP와의 경계
+
+Agent interceptor를 Spring `Advisor`, AOP Alliance `MethodInterceptor`, WebFilter, CDI
+interceptor로 자동 변환하지 않는다. 전체 실행의 nesting만 고정한다.
+
+```text
+HTTP/security filter
+  -> application service AOP
+    -> AgentEngine
+      -> AgentRunInterceptor
+        -> ModelCallInterceptor
+          -> model adapter
+            -> provider-native advisor/client middleware
+```
+
+Spring adapter는 Agent Framework interceptor interface를 구현한 bean만 수집한다.
+
+1. Spring `Ordered`/`@Order`로 정렬한다.
+2. 같은 order는 bean name으로 결정적으로 정렬한다.
+3. `InterceptorRegistration(id, order, interceptor)` 목록으로 변환한다.
+4. engine은 등록 순서를 그대로 사용하고 재정렬하지 않는다.
+
+Quarkus/Jakarta EE adapter도 priority와 bean identifier를 같은 registration model로 변환한다.
+container AOP와 agent interceptor 사이에 하나의 전역 order를 만들지 않는다.
+
+여러 seam에 걸친 기능은 immutable `InterceptorBundle`로 조립하되 bundle 내부 등록도 동일
+order contract를 따른다.
 
 ## 7. Compaction
 
@@ -171,6 +203,17 @@ borrowed-client adapter:
 - never opens/closes borrowed resource
 
 async close가 필요하면 completion-returning lifecycle port를 사용한다.
+
+MCP transport/client는 교체 가능한 adapter다.
+
+- `integrations/agent-framework-mcp`: MCP Java SDK direct adapter
+- `integrations/agent-framework-spring-ai-mcp`: Spring AI가 관리하는 MCP connection을 감싸는
+  borrowed-client adapter
+
+두 adapter를 동시에 활성화하지 않는다. host 조립 시 정확히 하나의 `McpClientPort`를
+선택하며 후보가 둘 이상이면 시작 단계에서 실패한다. transport/connect/auth는 선택된 adapter가
+소유하지만 discovery normalization, collision, sampling budget, task transition, cancellation과
+session/tool-loop 의미는 Agent Framework integration이 소유한다.
 
 ### 8.2 Discovery
 

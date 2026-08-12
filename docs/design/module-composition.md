@@ -17,6 +17,7 @@ agent-framework-bom/            Version alignment
 
 providers/                      Model provider adapters
 integrations/                   MCP, Spring AI, memory, storage adapters
+hosting/                        Framework-neutral target/session/checkpoint coordination
 starters/                       Host framework starters
 protocols/                      Responses, A2A, AG-UI, MCP server hosting
 workflow/                       Workflow graph and orchestration
@@ -29,7 +30,7 @@ config/                         Checkstyle, PMD, SpotBugs configuration
 docs/                           Requirements, design, upstream analysis
 ```
 
-Planned grouping directories are `providers/`, `integrations/`, `starters/`, `protocols/`,
+Planned grouping directories are `providers/`, `integrations/`, `hosting/`, `starters/`, `protocols/`,
 `workflow/`, `compatibility-tests/`, and `samples/`. `build-tools/` already exists for harness code.
 This list is closed and mirrored in `ModuleCompositionPolicyTest`; a project registered outside it,
 or nested more than one level deep, fails `policyCheck`.
@@ -54,9 +55,11 @@ This project's planned modules are heterogeneous: a provider adapter, a protocol
 starter, and a sample have almost nothing in common. At 20 to 30 modules a flat root would force a
 reader to infer families from name prefixes alone.
 
-Deeper nesting is rejected. Quarkus splits each extension into `runtime/` and `deployment/`, which
-earns its complexity because a Quarkus extension genuinely executes in two build phases. This
-project has no such split, so a second level would add path depth without adding meaning.
+Deeper nesting is rejected. Quarkus splits each extension into runtime and deployment artifacts,
+which earns its complexity because a Quarkus extension genuinely executes in two build phases. This
+project keeps `agent-framework-quarkus` as the stable runtime coordinate and adds the sibling
+`agent-framework-quarkus-deployment` artifact only when build-time augmentation is proven necessary.
+A second directory level would add path depth without adding published identity.
 
 ## Product projects
 

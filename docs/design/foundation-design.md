@@ -113,8 +113,9 @@ agent, session, tool과 workflow 전체의 의미를 표현할 수 없기 때문
 
 ### 4.3 Spring 및 Spring AI 통합
 
-Spring Boot는 실제 호스트 런타임으로 사용한다. Starter가 `AgentEngine`, port 구현과
-interceptor를 Bean으로 조립하되 코어는 `ApplicationContext`를 참조하지 않는다.
+Spring Boot는 실제 호스트 런타임으로 사용한다. Auto-configuration 모듈이 `AgentEngine`, port
+구현과 interceptor를 Bean으로 조립하고 starter는 dependency aggregation만 담당한다. 코어는
+`ApplicationContext`를 참조하지 않는다.
 
 Spring AI는 필수 의존성이 아니다. 코어 계약이 안정된 뒤 다음 기능만 선택적으로
 연결한다.
@@ -170,6 +171,9 @@ agent-framework-java/
 │   ├── agent-framework-mcp
 │   ├── agent-framework-spring-ai
 │   └── agent-framework-spring-boot-autoconfigure
+├── hosting/
+│   ├── agent-framework-hosting-core
+│   └── agent-framework-standalone
 ├── starters/
 │   └── agent-framework-spring-boot-starter
 ├── compatibility-tests/
@@ -187,7 +191,7 @@ agent-framework-java/
 - API는 외부 애플리케이션 프레임워크에 의존하지 않는다.
 - Engine은 API에만 의존하며 Spring에 의존하지 않는다.
 - Provider 및 integration 모듈은 공개 port를 구현하고 엔진 내부 구현을 참조하지 않는다.
-- Spring Boot autoconfigure가 조립을 담당하며 코어가 starter를 역참조하지 않는다.
+- standalone 또는 framework-native facade가 조립을 담당하며 코어가 starter를 역참조하지 않는다.
 - Sample은 제품 artifact에서 참조하지 않는다.
 - Compatibility test는 공개 API를 통해서만 제품 동작을 검증한다.
 
@@ -209,7 +213,7 @@ agent-framework-java/
 - OpenAI-compatible 또는 Azure OpenAI 계열 provider 하나
 - MCP Java SDK 직접 연동
 - OpenTelemetry 관찰성
-- Spring Boot에서 엔진을 조립하는 최소 starter
+- Spring Boot에서 엔진을 조립하는 auto-configuration과 dependency-only starter
 - standalone 및 Spring Boot sample
 
 ### 6.2 MVP에서 제외
@@ -258,7 +262,8 @@ Spring AI adapter 자체도 코어 계약과 직접 provider vertical slice가 �
 ### 단계 3: 직접 Provider와 Spring Boot 호스팅
 
 - 공급자 adapter 하나를 end-to-end로 연결한다.
-- Spring Boot autoconfigure와 starter가 호스트 자원으로 엔진을 조립하도록 한다.
+- Spring Boot auto-configuration이 호스트 자원으로 엔진을 조립하고 starter는 필요한
+  dependency만 집계한다.
 - Standalone과 Spring Boot sample에 동일한 agent 정의를 사용한다.
 
 종료 조건은 애플리케이션 코드의 agent 정의를 바꾸지 않고 두 호스트에서 동일한 golden

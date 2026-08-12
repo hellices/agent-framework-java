@@ -9,7 +9,7 @@
 ## 2. 모듈
 
 ```text
-agent-framework-hosting-core
+hosting/agent-framework-hosting-core
   TargetResolver, HostingRequest, HostingResult, continuation/session coordination
 
 protocols/
@@ -29,7 +29,10 @@ integrations/
   storage/memory/governance adapters
 
 starters/
-  Spring Boot, Quarkus, Jakarta EE binders
+  dependency-only framework starter artifacts
+
+hosting/agent-framework-standalone
+  plain-Java batteries-included assembly
 ```
 
 module은 구현 단계에 첫 기능과 함께 추가하며 빈 module을 미리 만들지 않는다.
@@ -74,6 +77,7 @@ workflow는 session cursor를 먼저 restore하고 durable store를 fallback으�
 ## 4. Protocol adapters
 
 protocol module은 wire DTO와 pure converter를 소유하고 host framework route는 소유하지 않는다.
+framework 애플리케이션이 내부에서 agent를 사용하기 위해 protocol endpoint를 거칠 필요는 없다.
 
 ### 4.1 OpenAI Responses
 
@@ -205,7 +209,25 @@ provider adapter public facade:
 | retry/rate limit | host |
 | release/maturity | repository policy |
 
-## 11. Tests
+## 11. 중복 기능 단일 소유자
+
+framework와 provider가 같은 이름의 기능을 제공해도 한 실행 경로에는 소유자가 하나뿐이다.
+
+| 관심사 | canonical owner | adapter 역할 |
+| --- | --- | --- |
+| agent/model/tool 반복 | AgentEngine | framework automatic execution 비활성 |
+| MCP connection/transport/auth | 선택된 MCP adapter | direct SDK 또는 Spring AI 중 하나 |
+| MCP collision/sampling/task semantics | Agent Framework MCP integration | connection 위 의미 적용 |
+| durable session | SessionStore port + adapter | Spring AI ChatMemory는 context projection만 |
+| application retry/circuit breaker | host | core는 암묵 retry 없음 |
+| semantic telemetry events | Agent Framework | Micrometer/OTel exporter로 변환 |
+| exporter/provider lifecycle | host framework | core가 bootstrap하지 않음 |
+| request auth/tenant | host binder | 검증된 context만 core에 전달 |
+
+auto-configuration 후보가 둘 이상이면 classpath 순서로 임의 선택하지 않고 명시 설정 또는 user
+bean을 요구한다.
+
+## 12. Tests
 
 - hosting core without any framework dependency
 - resolver adapters and cache policy
@@ -217,13 +239,13 @@ provider adapter public facade:
 - provider common contract and option rejection
 - BOM/maturity/installability policy
 
-## 12. 현재 구현
+## 13. 현재 구현
 
 hosting/protocol/provider/telemetry/evaluation production module은 아직 없다. packaging/BOM과
 dependency policy에 해당하는 `OPS-023`·`OPS-024` 일부만 `partial`이고 `implemented` 항목은
 없다.
 
-## 13. 요구사항 매핑
+## 14. 요구사항 매핑
 
 `HOST`, `OPS`, `PRV`의 canonical rows는
 [Requirements traceability matrix](requirements-traceability-matrix.md)에 있다.

@@ -67,6 +67,7 @@ class ModuleCompositionPolicyTest {
       List.of(
           "providers",
           "integrations",
+          "hosting",
           "starters",
           "protocols",
           "workflow",
