@@ -1,5 +1,6 @@
 plugins {
     id("maven-publish")
+    id("signing")
 }
 
 // Publishing is a convention rather than per-module boilerplate so that every artifact carries the
@@ -39,9 +40,30 @@ publishing {
     repositories {
         // A local repository keeps `publish` verifiable in CI and in a fork without credentials.
         // Release repositories are added by the release workflow, not by this convention.
+        //
+        // The path is derived from the settings-time root directory rather than
+        // `rootProject.layout`, because reading another project's model during configuration breaks
+        // project isolation and the configuration cache. With twenty or more modules planned, that
+        // is a feature this build will need.
         maven {
             name = "buildDirectory"
-            url = uri(rootProject.layout.buildDirectory.dir("maven-repository"))
+            url = isolated.rootProject.projectDirectory.dir("build/maven-repository").asFile.toURI()
         }
+    }
+}
+
+// Maven Central rejects an upload whose artifacts carry no PGP signature, so signing belongs to the
+// publishing contract rather than to a release script. Without a key the build must still work for
+// a contributor and for a fork, so signing activates only when credentials are present; that keeps
+// the local publish path, which CI exercises on every pull request, credential free.
+signing {
+    val signingKey = providers.environmentVariable("SIGNING_KEY").orNull
+    val signingPassword = providers.environmentVariable("SIGNING_PASSWORD").orNull
+
+    isRequired = signingKey != null
+
+    if (signingKey != null) {
+        useInMemoryPgpKeys(signingKey, signingPassword)
+        sign(publishing.publications)
     }
 }

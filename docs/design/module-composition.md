@@ -120,6 +120,15 @@ This writes to `build/maven-repository` so publication stays verifiable in CI an
 credentials. Release repositories are configured by the release workflow, never by a convention
 plugin.
 
+Central also rejects unsigned artifacts, so the publishing convention applies PGP signing. Signing
+activates only when `SIGNING_KEY` is present in the environment, which keeps the local and fork
+publish path credential free while making a release fail early rather than at upload time.
+
+The BOM must manage versions without forcing dependencies. `PublishedBomContractTest` parses the
+published POM and fails when any `<dependencies>` block appears outside `<dependencyManagement>`,
+because reading the build file alone cannot tell a constraint from a plain declaration sitting
+beside it.
+
 ## Adding a project
 
 1. Decide placement. Core contract or execution goes to the root. Anything in a growing family goes

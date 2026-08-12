@@ -288,6 +288,13 @@ class WorkflowPolicyTest {
     assertThat(contract).contains("agent-framework-java-platform");
     assertThat(contract).contains("verify-result");
     assertThat(contract).contains("queued");
+
+    // These two carry the failure that cost the most time: changing the URL alone leaves the scale
+    // set id from the previous repository cached, and the listener then crash-loops. Generic words
+    // above would survive a rewrite that dropped the recovery procedure, so assert the tokens that
+    // only this procedure uses.
+    assertThat(contract).contains("runner-scale-set-id");
+    assertThat(contract).contains("helm uninstall");
   }
 
   @Test
