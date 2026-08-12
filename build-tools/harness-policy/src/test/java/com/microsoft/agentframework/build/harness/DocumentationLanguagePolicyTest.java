@@ -18,6 +18,14 @@ import org.junit.jupiter.params.provider.MethodSource;
 class DocumentationLanguagePolicyTest {
 
   /**
+   * The number of documents still awaiting translation. A translating task lowers this number in
+   * the same commit that removes the entries, so an entry added to {@link #PENDING_TRANSLATION}
+   * fails {@link #pendingTranslationListHasNotWidened()} instead of quietly exempting one more
+   * document from the language scan.
+   */
+  private static final int PENDING_TRANSLATION_SIZE = 52;
+
+  /**
    * Documents that have not been translated yet. Every entry is removed by the task that translates
    * it, and {@link #pendingTranslationEntryStillContainsKoreanText(String)} fails once an entry no
    * longer needs migration, so this list can only shrink. It is deleted entirely by the final task.
@@ -121,6 +129,35 @@ class DocumentationLanguagePolicyTest {
                 + " scan covers it.",
             relativePath)
         .isTrue();
+  }
+
+  @Test
+  void pendingTranslationListHasNotWidened() {
+    assertThat(PENDING_TRANSLATION)
+        .withFailMessage(
+            "The migration list must hold exactly %d entries but holds %d. The list only shrinks:"
+                + " remove an entry and lower PENDING_TRANSLATION_SIZE in the commit that translates"
+                + " the document, and never add a document to it.",
+            PENDING_TRANSLATION_SIZE, PENDING_TRANSLATION.size())
+        .hasSize(PENDING_TRANSLATION_SIZE);
+  }
+
+  @Test
+  void everyPendingTranslationEntryIsAScannedDocument() {
+    assertThat(documentPaths())
+        .withFailMessage(
+            "Every migration entry must name a document the scan covers, otherwise an entry can"
+                + " exempt a path that no policy reads. Scanned documents: %s. Migration list: %s.",
+            documentPaths(), PENDING_TRANSLATION)
+        .containsAll(PENDING_TRANSLATION);
+  }
+
+  @Test
+  void documentationIndexExistsAndIsScanned() {
+    assertThat(RepositoryPaths.root().resolve(MarkdownDocuments.DOCUMENTATION_INDEX))
+        .as("The English documentation index every directory index links back to")
+        .isRegularFile();
+    assertThat(documentPaths()).contains(MarkdownDocuments.DOCUMENTATION_INDEX);
   }
 
   @Test

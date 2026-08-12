@@ -2,11 +2,8 @@ package com.microsoft.agentframework.build.harness;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.SimpleFileVisitor;
-import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -17,14 +14,29 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Stream;
 
 /**
  * Reads repository-owned Markdown for the documentation language, companion, and link policies.
  *
- * <p>The walk is a filesystem walk rather than a {@code git ls-files} call so the policy runs in a
- * test JVM with no process dependency. The excluded directory names mirror {@code .gitignore} plus
- * the agent plugin directory, so generated output and untracked tooling can never widen or narrow
- * the canonical document set.
+ * <p>{@link #files()} is an allowlist of locations, not a filtered walk of the working tree. It
+ * returns Markdown from exactly the canonical locations section 8.1 of the documentation language
+ * policy names: the root documents listed in {@link #OWNED_ROOT_DOCUMENTS}, the Markdown files
+ * directly inside {@code .github}, and every Markdown file under {@code docs}. Everything else in
+ * the working tree is out of scope because the repository does not own it as documentation:
+ * generated build output, ignored session artifacts, agent plugin directories, nested worktrees,
+ * dependency notices, and untracked scratch files. Nothing a contributor happens to leave on disk
+ * can widen the canonical document set.
+ *
+ * <p>Ownership is decided by location alone, never by a directory name. A rule such as "skip every
+ * directory called {@code build}" also skips {@code com/microsoft/agentframework/build/harness},
+ * which is why {@code .gitignore} pins project output with {@code /build/}, {@code /*}{@code
+ * /build/}, and {@code /*}{@code /*}{@code /build/} instead of a bare {@code build/}. A {@code
+ * build}, {@code bin}, or {@code out} path segment inside an owned location is scanned like any
+ * other segment.
+ *
+ * <p>The scan reads the filesystem rather than calling {@code git ls-files} so the policy runs in a
+ * test JVM with no process dependency.
  */
 final class MarkdownDocuments {
 
@@ -34,24 +46,18 @@ final class MarkdownDocuments {
   /** The English documentation index every directory index links back to. */
   static final String DOCUMENTATION_INDEX = "docs/README.md";
 
-  private static final Set<String> EXCLUDED_DIRECTORY_NAMES =
-      Set.of(
-          ".git",
-          ".gradle",
-          ".gradle-bootstrap",
-          ".kotlin",
-          ".idea",
-          ".vscode",
-          ".settings",
-          ".copilot",
-          ".superpowers",
-          ".worktrees",
-          "build",
-          "bin",
-          "out",
-          "node_modules");
+  /**
+   * Root Markdown the repository owns: the product overview, the canonical instructions, the
+   * contribution and security contracts, and the vendor instruction adapters.
+   */
+  private static final List<String> OWNED_ROOT_DOCUMENTS =
+      List.of("README.md", "AGENTS.md", "CONTRIBUTING.md", "SECURITY.md", "CLAUDE.md", "GEMINI.md");
 
-  private static final String EXCLUDED_PATH_PREFIX = ".harness/runs";
+  /** GitHub metadata Markdown the repository owns: direct children only, as section 8.1 states. */
+  private static final String OWNED_GITHUB_DIRECTORY = ".github";
+
+  /** The documentation tree the repository owns in full. */
+  private static final String OWNED_DOCUMENTATION_TREE = "docs";
 
   private static final String MARKDOWN_SUFFIX = ".md";
 
@@ -80,40 +86,46 @@ final class MarkdownDocuments {
    * Returns every repository-owned Markdown file, sorted by repository-relative path.
    *
    * @return the Markdown files this policy governs
-   * @throws IOException when the repository cannot be walked
+   * @throws IOException when a canonical location cannot be read
    */
   static List<Path> files() throws IOException {
-    Path root = RepositoryPaths.root();
+    return filesUnder(RepositoryPaths.root());
+  }
+
+  /**
+   * Returns the Markdown files the canonical locations hold under a scan root.
+   *
+   * @param root the repository root, or an equivalent tree in a test
+   * @return the owned Markdown files, sorted by root-relative path
+   * @throws IOException when a canonical location cannot be read
+   */
+  static List<Path> filesUnder(Path root) throws IOException {
     List<Path> markdown = new ArrayList<>();
-    Files.walkFileTree(
-        root,
-        new SimpleFileVisitor<Path>() {
-
-          @Override
-          public FileVisitResult preVisitDirectory(Path directory, BasicFileAttributes attributes) {
-            if (directory.equals(root)) {
-              return FileVisitResult.CONTINUE;
-            }
-            Path name = directory.getFileName();
-            boolean excludedName =
-                name != null && EXCLUDED_DIRECTORY_NAMES.contains(name.toString());
-            boolean excludedPath = relativePath(directory).startsWith(EXCLUDED_PATH_PREFIX);
-            return excludedName || excludedPath
-                ? FileVisitResult.SKIP_SUBTREE
-                : FileVisitResult.CONTINUE;
-          }
-
-          @Override
-          public FileVisitResult visitFile(Path file, BasicFileAttributes attributes) {
-            Path name = file.getFileName();
-            if (name != null && name.toString().endsWith(MARKDOWN_SUFFIX)) {
-              markdown.add(file);
-            }
-            return FileVisitResult.CONTINUE;
-          }
-        });
-    markdown.sort(Comparator.comparing(MarkdownDocuments::relativePath));
+    for (String name : OWNED_ROOT_DOCUMENTS) {
+      Path document = root.resolve(name);
+      if (Files.isRegularFile(document)) {
+        markdown.add(document);
+      }
+    }
+    Path github = root.resolve(OWNED_GITHUB_DIRECTORY);
+    if (Files.isDirectory(github)) {
+      try (Stream<Path> children = Files.list(github)) {
+        children.filter(MarkdownDocuments::isMarkdownFile).forEach(markdown::add);
+      }
+    }
+    Path documentation = root.resolve(OWNED_DOCUMENTATION_TREE);
+    if (Files.isDirectory(documentation)) {
+      try (Stream<Path> tree = Files.walk(documentation)) {
+        tree.filter(MarkdownDocuments::isMarkdownFile).forEach(markdown::add);
+      }
+    }
+    markdown.sort(Comparator.comparing((Path file) -> relativePath(root, file)));
     return List.copyOf(markdown);
+  }
+
+  private static boolean isMarkdownFile(Path file) {
+    Path name = file.getFileName();
+    return name != null && name.toString().endsWith(MARKDOWN_SUFFIX) && Files.isRegularFile(file);
   }
 
   /**
@@ -123,7 +135,18 @@ final class MarkdownDocuments {
    * @return the relative path
    */
   static String relativePath(Path file) {
-    return RepositoryPaths.root().relativize(file).toString().replace('\\', '/');
+    return relativePath(RepositoryPaths.root(), file);
+  }
+
+  /**
+   * Returns a path relative to a scan root, with {@code /} separators.
+   *
+   * @param root the scan root
+   * @param file any path inside that root
+   * @return the relative path
+   */
+  static String relativePath(Path root, Path file) {
+    return root.relativize(file).toString().replace('\\', '/');
   }
 
   /**

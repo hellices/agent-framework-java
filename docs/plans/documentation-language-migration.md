@@ -7,9 +7,11 @@ keep one maintained Korean companion at `docs/ko/README.md`, and make `./gradlew
 whenever that contract regresses.
 
 **Architecture:** A new English documentation index at `docs/README.md` becomes the documentation
-map. Three new Java policy sources under `build-tools/harness-policy` scan repository-owned Markdown
-and enforce three rules: no Korean text outside the companion, exactly one document under
-`docs/ko/`, and every relative Markdown link plus heading fragment resolves inside the repository.
+map. Four new Java policy sources under `build-tools/harness-policy` scan the repository-owned
+Markdown that section 8.1 of the policy names — the six root documents, `.github/*.md`, and
+`docs/**/*.md` — and enforce three rules: no Korean text outside the companion, exactly one document
+under `docs/ko/`, and every relative Markdown link plus heading fragment resolves inside the
+repository.
 Fifty-two Korean-centred documents are then translated in place, in directory-sized batches, each
 batch guarded by objective before/after preservation counts. The policy tests carry a shrinking
 `PENDING_TRANSLATION` list so the rule is executable from the first commit and cannot be satisfied
@@ -149,6 +151,7 @@ rg -l '\p{Hangul}' --glob '*.md' .
 
 **Files:**
 - Create: `build-tools/harness-policy/src/test/java/com/microsoft/agentframework/build/harness/MarkdownDocuments.java`
+- Create: `build-tools/harness-policy/src/test/java/com/microsoft/agentframework/build/harness/MarkdownDocumentsTest.java`
 - Create: `build-tools/harness-policy/src/test/java/com/microsoft/agentframework/build/harness/DocumentationLanguagePolicyTest.java`
 - Create: `build-tools/harness-policy/src/test/java/com/microsoft/agentframework/build/harness/MarkdownLinkPolicyTest.java`
 - Create: `docs/README.md`
@@ -158,15 +161,17 @@ rg -l '\p{Hangul}' --glob '*.md' .
 - Modify: `docs/requirements/README.md` (one added link line only)
 - Modify: `docs/upstream/README.md` (one added link line only)
 - Modify: `docs/ko/README.md` (one added link line and one added marker sentence only)
-- Test: the three Java sources above are the tests; they run under `./gradlew :build-tools:harness-policy:test` and `./gradlew policyCheck`
+- Test: the four Java sources above are the tests; they run under `./gradlew :build-tools:harness-policy:test` and `./gradlew policyCheck`
 
 **Interfaces:**
 - Consumes: `RepositoryPaths.root()` from `build-tools/harness-policy/src/main/java/com/microsoft/agentframework/build/harness/RepositoryPaths.java`, which returns the closest ancestor holding both `settings.gradle.kts` and `gradle/libs.versions.toml`.
 - Produces, used by Tasks 2 through 8:
   - `MarkdownDocuments.KOREAN_COMPANION` — `String`, value `docs/ko/README.md`
   - `MarkdownDocuments.DOCUMENTATION_INDEX` — `String`, value `docs/README.md`
-  - `MarkdownDocuments.files()` — `List<Path>` of repository-owned Markdown, throws `IOException`
+  - `MarkdownDocuments.files()` — `List<Path>` of the Markdown the canonical locations of policy section 8.1 hold, throws `IOException`
+  - `MarkdownDocuments.filesUnder(Path root)` — the same allowlist scan against any root, so the ownership invariant is testable, throws `IOException`
   - `MarkdownDocuments.relativePath(Path)` — `String` with `/` separators
+  - `MarkdownDocuments.relativePath(Path root, Path file)` — `String` relative to a scan root
   - `MarkdownDocuments.containsHangul(String)` — `boolean`
   - `MarkdownDocuments.hangulLines(Path)` — `List<String>` of `path:line`, throws `IOException`
   - `MarkdownDocuments.links(Path)` — `List<MarkdownDocuments.Link>`, throws `IOException`
@@ -177,6 +182,7 @@ rg -l '\p{Hangul}' --glob '*.md' .
   - `MarkdownDocuments.anchors(Path)` — `Set<String>`, throws `IOException`
   - `MarkdownDocuments.anchorOf(String headingText)` — `String`
   - `DocumentationLanguagePolicyTest.PENDING_TRANSLATION` — the 52-entry migration list that Tasks 2 through 6 shrink and Task 8 deletes
+  - `DocumentationLanguagePolicyTest.PENDING_TRANSLATION_SIZE` — the exact size that list must have, lowered in the same commit that removes entries
 
 - [ ] **Step 1: Write the Markdown scanner helper**
 
@@ -187,11 +193,8 @@ package com.microsoft.agentframework.build.harness;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.SimpleFileVisitor;
-import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -202,14 +205,29 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Stream;
 
 /**
  * Reads repository-owned Markdown for the documentation language, companion, and link policies.
  *
- * <p>The walk is a filesystem walk rather than a {@code git ls-files} call so the policy runs in a
- * test JVM with no process dependency. The excluded directory names mirror {@code .gitignore} plus
- * the agent plugin directory, so generated output and untracked tooling can never widen or narrow
- * the canonical document set.
+ * <p>{@link #files()} is an allowlist of locations, not a filtered walk of the working tree. It
+ * returns Markdown from exactly the canonical locations section 8.1 of the documentation language
+ * policy names: the root documents listed in {@link #OWNED_ROOT_DOCUMENTS}, the Markdown files
+ * directly inside {@code .github}, and every Markdown file under {@code docs}. Everything else in
+ * the working tree is out of scope because the repository does not own it as documentation:
+ * generated build output, ignored session artifacts, agent plugin directories, nested worktrees,
+ * dependency notices, and untracked scratch files. Nothing a contributor happens to leave on disk
+ * can widen the canonical document set.
+ *
+ * <p>Ownership is decided by location alone, never by a directory name. A rule such as "skip every
+ * directory called {@code build}" also skips {@code com/microsoft/agentframework/build/harness},
+ * which is why {@code .gitignore} pins project output with {@code /build/}, {@code /*}{@code
+ * /build/}, and {@code /*}{@code /*}{@code /build/} instead of a bare {@code build/}. A {@code
+ * build}, {@code bin}, or {@code out} path segment inside an owned location is scanned like any
+ * other segment.
+ *
+ * <p>The scan reads the filesystem rather than calling {@code git ls-files} so the policy runs in a
+ * test JVM with no process dependency.
  */
 final class MarkdownDocuments {
 
@@ -219,22 +237,18 @@ final class MarkdownDocuments {
   /** The English documentation index every directory index links back to. */
   static final String DOCUMENTATION_INDEX = "docs/README.md";
 
-  private static final Set<String> EXCLUDED_DIRECTORY_NAMES =
-      Set.of(
-          ".git",
-          ".gradle",
-          ".gradle-bootstrap",
-          ".kotlin",
-          ".idea",
-          ".vscode",
-          ".superpowers",
-          ".worktrees",
-          "build",
-          "bin",
-          "out",
-          "node_modules");
+  /**
+   * Root Markdown the repository owns: the product overview, the canonical instructions, the
+   * contribution and security contracts, and the vendor instruction adapters.
+   */
+  private static final List<String> OWNED_ROOT_DOCUMENTS =
+      List.of("README.md", "AGENTS.md", "CONTRIBUTING.md", "SECURITY.md", "CLAUDE.md", "GEMINI.md");
 
-  private static final String EXCLUDED_PATH_PREFIX = ".harness/runs";
+  /** GitHub metadata Markdown the repository owns: direct children only, as section 8.1 states. */
+  private static final String OWNED_GITHUB_DIRECTORY = ".github";
+
+  /** The documentation tree the repository owns in full. */
+  private static final String OWNED_DOCUMENTATION_TREE = "docs";
 
   private static final String MARKDOWN_SUFFIX = ".md";
 
@@ -263,39 +277,46 @@ final class MarkdownDocuments {
    * Returns every repository-owned Markdown file, sorted by repository-relative path.
    *
    * @return the Markdown files this policy governs
-   * @throws IOException when the repository cannot be walked
+   * @throws IOException when a canonical location cannot be read
    */
   static List<Path> files() throws IOException {
-    Path root = RepositoryPaths.root();
+    return filesUnder(RepositoryPaths.root());
+  }
+
+  /**
+   * Returns the Markdown files the canonical locations hold under a scan root.
+   *
+   * @param root the repository root, or an equivalent tree in a test
+   * @return the owned Markdown files, sorted by root-relative path
+   * @throws IOException when a canonical location cannot be read
+   */
+  static List<Path> filesUnder(Path root) throws IOException {
     List<Path> markdown = new ArrayList<>();
-    Files.walkFileTree(
-        root,
-        new SimpleFileVisitor<Path>() {
-
-          @Override
-          public FileVisitResult preVisitDirectory(Path directory, BasicFileAttributes attributes) {
-            if (directory.equals(root)) {
-              return FileVisitResult.CONTINUE;
-            }
-            Path name = directory.getFileName();
-            boolean excludedName = name != null && EXCLUDED_DIRECTORY_NAMES.contains(name.toString());
-            boolean excludedPath = relativePath(directory).startsWith(EXCLUDED_PATH_PREFIX);
-            return excludedName || excludedPath
-                ? FileVisitResult.SKIP_SUBTREE
-                : FileVisitResult.CONTINUE;
-          }
-
-          @Override
-          public FileVisitResult visitFile(Path file, BasicFileAttributes attributes) {
-            Path name = file.getFileName();
-            if (name != null && name.toString().endsWith(MARKDOWN_SUFFIX)) {
-              markdown.add(file);
-            }
-            return FileVisitResult.CONTINUE;
-          }
-        });
-    markdown.sort(Comparator.comparing(MarkdownDocuments::relativePath));
+    for (String name : OWNED_ROOT_DOCUMENTS) {
+      Path document = root.resolve(name);
+      if (Files.isRegularFile(document)) {
+        markdown.add(document);
+      }
+    }
+    Path github = root.resolve(OWNED_GITHUB_DIRECTORY);
+    if (Files.isDirectory(github)) {
+      try (Stream<Path> children = Files.list(github)) {
+        children.filter(MarkdownDocuments::isMarkdownFile).forEach(markdown::add);
+      }
+    }
+    Path documentation = root.resolve(OWNED_DOCUMENTATION_TREE);
+    if (Files.isDirectory(documentation)) {
+      try (Stream<Path> tree = Files.walk(documentation)) {
+        tree.filter(MarkdownDocuments::isMarkdownFile).forEach(markdown::add);
+      }
+    }
+    markdown.sort(Comparator.comparing((Path file) -> relativePath(root, file)));
     return List.copyOf(markdown);
+  }
+
+  private static boolean isMarkdownFile(Path file) {
+    Path name = file.getFileName();
+    return name != null && name.toString().endsWith(MARKDOWN_SUFFIX) && Files.isRegularFile(file);
   }
 
   /**
@@ -305,7 +326,18 @@ final class MarkdownDocuments {
    * @return the relative path
    */
   static String relativePath(Path file) {
-    return RepositoryPaths.root().relativize(file).toString().replace('\\', '/');
+    return relativePath(RepositoryPaths.root(), file);
+  }
+
+  /**
+   * Returns a path relative to a scan root, with {@code /} separators.
+   *
+   * @param root the scan root
+   * @param file any path inside that root
+   * @return the relative path
+   */
+  static String relativePath(Path root, Path file) {
+    return root.relativize(file).toString().replace('\\', '/');
   }
 
   /**
@@ -316,7 +348,8 @@ final class MarkdownDocuments {
    */
   static boolean containsHangul(String text) {
     return text.codePoints()
-        .anyMatch(codePoint -> Character.UnicodeScript.of(codePoint) == Character.UnicodeScript.HANGUL);
+        .anyMatch(
+            codePoint -> Character.UnicodeScript.of(codePoint) == Character.UnicodeScript.HANGUL);
   }
 
   /**
@@ -485,6 +518,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
@@ -492,6 +526,14 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
 
 class DocumentationLanguagePolicyTest {
+
+  /**
+   * The number of documents still awaiting translation. A translating task lowers this number in
+   * the same commit that removes the entries, so an entry added to {@link #PENDING_TRANSLATION}
+   * fails {@link #pendingTranslationListHasNotWidened()} instead of quietly exempting one more
+   * document from the language scan.
+   */
+  private static final int PENDING_TRANSLATION_SIZE = 52;
 
   /**
    * Documents that have not been translated yet. Every entry is removed by the task that translates
@@ -576,7 +618,8 @@ class DocumentationLanguagePolicyTest {
   @ParameterizedTest(name = "{0} is written in English")
   @MethodSource("canonicalDocuments")
   void canonicalDocumentContainsNoKoreanText(String relativePath) throws IOException {
-    List<String> korean = MarkdownDocuments.hangulLines(RepositoryPaths.root().resolve(relativePath));
+    List<String> korean =
+        MarkdownDocuments.hangulLines(RepositoryPaths.root().resolve(relativePath));
 
     assertThat(korean)
         .withFailMessage(
@@ -599,11 +642,41 @@ class DocumentationLanguagePolicyTest {
   }
 
   @Test
+  void pendingTranslationListHasNotWidened() {
+    assertThat(PENDING_TRANSLATION)
+        .withFailMessage(
+            "The migration list must hold exactly %d entries but holds %d. The list only shrinks:"
+                + " remove an entry and lower PENDING_TRANSLATION_SIZE in the commit that translates"
+                + " the document, and never add a document to it.",
+            PENDING_TRANSLATION_SIZE, PENDING_TRANSLATION.size())
+        .hasSize(PENDING_TRANSLATION_SIZE);
+  }
+
+  @Test
+  void everyPendingTranslationEntryIsAScannedDocument() {
+    assertThat(documentPaths())
+        .withFailMessage(
+            "Every migration entry must name a document the scan covers, otherwise an entry can"
+                + " exempt a path that no policy reads. Scanned documents: %s. Migration list: %s.",
+            documentPaths(), PENDING_TRANSLATION)
+        .containsAll(PENDING_TRANSLATION);
+  }
+
+  @Test
+  void documentationIndexExistsAndIsScanned() {
+    assertThat(RepositoryPaths.root().resolve(MarkdownDocuments.DOCUMENTATION_INDEX))
+        .as("The English documentation index every directory index links back to")
+        .isRegularFile();
+    assertThat(documentPaths()).contains(MarkdownDocuments.DOCUMENTATION_INDEX);
+  }
+
+  @Test
   void koreanCompanionExistsAndIsKorean() throws IOException {
     Path companion = RepositoryPaths.root().resolve(MarkdownDocuments.KOREAN_COMPANION);
 
     assertThat(companion).isRegularFile();
-    assertThat(MarkdownDocuments.containsHangul(Files.readString(companion, StandardCharsets.UTF_8)))
+    assertThat(
+            MarkdownDocuments.containsHangul(Files.readString(companion, StandardCharsets.UTF_8)))
         .isTrue();
   }
 
@@ -644,7 +717,10 @@ class DocumentationLanguagePolicyTest {
   @MethodSource("directoryIndexes")
   void directoryIndexLinksBackToTheDocumentationIndex(String relativePath) throws IOException {
     Path root = RepositoryPaths.root();
-    Path parent = root.resolve(relativePath).getParent();
+    Path parent =
+        Objects.requireNonNull(
+            root.resolve(relativePath).getParent(),
+            "A directory index always lives inside a directory.");
     String backlink =
         "](" + parent.relativize(root.resolve(MarkdownDocuments.DOCUMENTATION_INDEX)) + ")";
 
@@ -673,6 +749,7 @@ Create `build-tools/harness-policy/src/test/java/com/microsoft/agentframework/bu
 package com.microsoft.agentframework.build.harness;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.tuple;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
@@ -771,12 +848,56 @@ class MarkdownLinkPolicyTest {
 
     assertThat(MarkdownDocuments.anchors(document)).containsExactly("title", "notes", "notes-1");
   }
+
+  @Test
+  void linkExtractionReadsEveryLinkOutsideFencedBlocks(@TempDir Path directory) throws IOException {
+    Path document = directory.resolve("sample.md");
+    Files.writeString(
+        document,
+        String.join(
+            "\n",
+            "[index](../README.md) and [site](https://example.com).",
+            "```bash",
+            "[fenced](never-scanned.md)",
+            "```",
+            "| [table](docs/README.md) | [anchor](#current-state) |",
+            ""),
+        StandardCharsets.UTF_8);
+
+    assertThat(MarkdownDocuments.links(document))
+        .extracting(MarkdownDocuments.Link::line, MarkdownDocuments.Link::target)
+        .containsExactly(
+            tuple(1, "../README.md"),
+            tuple(1, "https://example.com"),
+            tuple(5, "docs/README.md"),
+            tuple(5, "#current-state"));
+  }
 }
 ```
 
+- [ ] **Step 3b: Write the failing scanner ownership test**
+
+`files()` decides which documents every other policy reads, so its scope needs a direct test.
+Create
+`build-tools/harness-policy/src/test/java/com/microsoft/agentframework/build/harness/MarkdownDocumentsTest.java`
+with `@TempDir` cases that build a fake repository and assert `MarkdownDocuments.filesUnder(root)`
+returns exactly the canonical locations of policy section 8.1:
+
+- the six owned root documents, `.github/*.md`, and `docs/**/*.md` are returned, while
+  `LICENSE.md`, `.github/ISSUE_TEMPLATE/bug.md`, and Markdown inside a module are not;
+- untracked Markdown outside the owned locations — a root scratch file, a `notes/` directory,
+  `.copilot/`, `.superpowers/`, `.worktrees/`, and `.harness/runs/` — is ignored;
+- Markdown under a `build`, `bin`, or `out` path segment **inside** `docs/` is returned, which is
+  the case a name-based directory exclusion silently drops;
+- generated project output (`build/`, `*/*/build/`, `node_modules/`) is out of scope because it is
+  not an owned location;
+- the result is sorted by root-relative path;
+- and, against the real repository, every scanned path is a root document, a direct `.github`
+  child, or a file under `docs/`.
+
 - [ ] **Step 4: Run the new tests and confirm they fail**
 
-Run: `./gradlew :build-tools:harness-policy:test --tests '*DocumentationLanguagePolicyTest*' --tests '*MarkdownLinkPolicyTest*'`
+Run: `./gradlew :build-tools:harness-policy:test --tests '*DocumentationLanguagePolicyTest*' --tests '*MarkdownLinkPolicyTest*' --tests '*MarkdownDocumentsTest*'`
 
 Expected: FAIL. `koreanCompanionDeclaresEnglishAsAuthoritative`, `englishEntryPointsLinkToTheKoreanCompanion`, `rootReadmeLinksTheDocumentationIndex`, and the three `directoryIndexLinksBackToTheDocumentationIndex` cases fail; the `englishEntryPointsLinkToTheKoreanCompanion` failure is a `NoSuchFileException` for `docs/README.md`. `canonicalDocumentContainsNoKoreanText` fails for `README.md` and `docs/operations/getting-started.md`.
 
@@ -882,11 +1003,17 @@ with:
 | How is documentation organized? | [Documentation language and information architecture](docs/design/documentation-language-policy.md) |
 ```
 
-Replace the single bullet under `## Translations` with:
+Replace the whole `## Translations` body — the bullet and the sentence under it — with:
 
 ```markdown
 - [Korean companion guide](docs/ko/README.md)
+
+English is the source of truth. The Korean companion guide is a single orientation document, not a
+translation of the English documentation; when the two disagree, the English document wins.
 ```
+
+The previous sentence, "English is the source of truth. Translations follow.", promised translations
+that section 11 of the policy lists as a non-goal.
 
 - [ ] **Step 7: Remove the last Korean value from the operations guide**
 
@@ -916,11 +1043,18 @@ Expected: one match in each of the four lines of output.
 
 In `build-tools/harness-policy/build.gradle.kts`, extend the `exclude(...)` list of
 `repositoryPolicySources` with `".superpowers/**"` so an untracked agent plugin directory can never
-invalidate or feed the policy tasks. The list becomes:
+invalidate or feed the policy tasks, and match project output where a project root can be instead of
+at any depth. `**/build/**` also excludes
+`build-tools/harness-policy/src/test/java/com/microsoft/agentframework/build/harness`, which is
+where these policies live, so an edit to a policy source would drop out of the declared inputs; the
+depth-limited patterns mirror the `/build/`, `/*/build/`, and `/*/*/build/` rules in `.gitignore`.
+The list becomes:
 
 ```kotlin
         exclude(
-            "**/build/**",
+            "build/**",
+            "*/build/**",
+            "*/*/build/**",
             "**/.git/**",
             "**/.gradle/**",
             "**/.kotlin/**",
@@ -934,11 +1068,12 @@ invalidate or feed the policy tasks. The list becomes:
 - [ ] **Step 10: Format and run the tests to verify they pass**
 
 Run: `./gradlew :build-tools:harness-policy:spotlessApply`
-Then run: `./gradlew :build-tools:harness-policy:test --tests '*DocumentationLanguagePolicyTest*' --tests '*MarkdownLinkPolicyTest*'`
+Then run: `./gradlew :build-tools:harness-policy:test --tests '*DocumentationLanguagePolicyTest*' --tests '*MarkdownLinkPolicyTest*' --tests '*MarkdownDocumentsTest*'`
 
 Expected: PASS. The language scan covers every Markdown file except `docs/ko/README.md` and the 52
-`PENDING_TRANSLATION` entries; the link test reports no unresolved link in any of the 66 documents
-(64 before this migration, plus this plan and `docs/README.md`).
+`PENDING_TRANSLATION` entries; the link test reports no unresolved link in any of the 66 owned
+documents (64 before this migration, plus this plan and `docs/README.md`); the scanner test proves
+those 66 come from the canonical locations only.
 
 - [ ] **Step 11: Confirm the policy entry point and the quality gate**
 
@@ -954,6 +1089,7 @@ Expected: no output, because no dependency changed.
 
 ```bash
 git add build-tools/harness-policy/src/test/java/com/microsoft/agentframework/build/harness/MarkdownDocuments.java \
+  build-tools/harness-policy/src/test/java/com/microsoft/agentframework/build/harness/MarkdownDocumentsTest.java \
   build-tools/harness-policy/src/test/java/com/microsoft/agentframework/build/harness/DocumentationLanguagePolicyTest.java \
   build-tools/harness-policy/src/test/java/com/microsoft/agentframework/build/harness/MarkdownLinkPolicyTest.java \
   build-tools/harness-policy/build.gradle.kts docs/README.md README.md \
@@ -1003,6 +1139,9 @@ In `DocumentationLanguagePolicyTest.java`, delete these three lines from `PENDIN
           "docs/design/foundation-design.md",
           "docs/design/gradle-kotlin-arc-foundation-design.md",
 ```
+
+Lower `PENDING_TRANSLATION_SIZE` from `52` to `49` in the same edit, so
+`pendingTranslationListHasNotWidened` keeps pinning the exact size of the list.
 
 - [ ] **Step 3: Run the tests to verify they fail**
 
@@ -1132,6 +1271,8 @@ In `DocumentationLanguagePolicyTest.java`, delete these seven lines from `PENDIN
           "docs/requirements/05-mcp.md",
           "docs/requirements/06-sessions.md",
 ```
+
+Lower `PENDING_TRANSLATION_SIZE` from `49` to `42` in the same edit.
 
 - [ ] **Step 3: Run the tests to verify they fail**
 
@@ -1287,6 +1428,8 @@ In `DocumentationLanguagePolicyTest.java`, delete these six lines from `PENDING_
           "docs/requirements/11-operations.md",
           "docs/requirements/12-providers.md",
 ```
+
+Lower `PENDING_TRANSLATION_SIZE` from `42` to `36` in the same edit.
 
 - [ ] **Step 3: Run the tests to verify they fail**
 
@@ -1451,6 +1594,8 @@ In `DocumentationLanguagePolicyTest.java`, delete these twenty lines from `PENDI
           "docs/upstream/snapshots/d0a4165f/features/14-workflow-graph.md",
           "docs/upstream/snapshots/d0a4165f/features/15-workflow-runtime.md",
 ```
+
+Lower `PENDING_TRANSLATION_SIZE` from `36` to `16` in the same edit.
 
 - [ ] **Step 3: Run the tests to verify they fail**
 
@@ -1632,6 +1777,9 @@ In `DocumentationLanguagePolicyTest.java`, delete these sixteen lines from `PEND
           "docs/upstream/snapshots/d0a4165f/features/30-packaging-compatibility.md",
           "docs/upstream/snapshots/d0a4165f/features/31-provider-integrations.md",
 ```
+
+Lower `PENDING_TRANSLATION_SIZE` from `16` to `0` in the same edit. The list is then empty and Task 8
+deletes it.
 
 - [ ] **Step 3: Run the tests to verify they fail**
 
@@ -1832,8 +1980,8 @@ finish that task first.
 
 In `DocumentationLanguagePolicyTest.java`:
 
-- delete the `PENDING_TRANSLATION` field and its Javadoc;
-- delete the `pendingTranslation()` method source and the `pendingTranslationEntryStillContainsKoreanText` test;
+- delete the `PENDING_TRANSLATION` field, the `PENDING_TRANSLATION_SIZE` constant, and their Javadoc;
+- delete the `pendingTranslation()` method source, the `pendingTranslationEntryStillContainsKoreanText` test, the `pendingTranslationListHasNotWidened` test, and the `everyPendingTranslationEntryIsAScannedDocument` test;
 - delete the now-unused `java.util.Set` import, which no remaining member uses; keep `java.nio.charset.StandardCharsets`, `java.nio.file.Files`, and `java.util.List`, which the companion and directory-index tests still use;
 - reduce `canonicalDocuments()` to:
 

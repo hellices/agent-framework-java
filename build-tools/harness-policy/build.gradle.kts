@@ -15,10 +15,18 @@ dependencies {
 // The policy tests read repository files that Gradle cannot infer from the compile classpath.
 // Without declaring them, a workflow, instruction, contract, or documentation edit leaves every
 // policy task UP-TO-DATE and `check` reports success without re-running a single policy.
+//
+// Project output is matched where a project root can be, not at any depth: `**/build/**` also
+// excludes `build-tools/harness-policy/src/test/java/com/microsoft/agentframework/build/harness`,
+// which is where these policies live, so an edit to a policy source would drop out of the declared
+// inputs. The depth-limited patterns mirror the `/build/`, `/*/build/`, and `/*/*/build/` rules in
+// `.gitignore` for the same reason.
 val repositoryPolicySources =
     rootProject.layout.projectDirectory.asFileTree.matching {
         exclude(
-            "**/build/**",
+            "build/**",
+            "*/build/**",
+            "*/*/build/**",
             "**/.git/**",
             "**/.gradle/**",
             "**/.kotlin/**",

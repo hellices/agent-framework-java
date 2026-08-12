@@ -151,8 +151,12 @@ Repository-owned Markdown under these paths must not contain Hangul characters:
 - `.github/*.md`;
 - `docs/**/*.md`, except `docs/ko/README.md`.
 
-Generated build output, ignored session artifacts, dependency notices, and the Korean companion are
-outside this scan.
+These locations are an allowlist, not a filter. The scan collects Markdown from them and from
+nowhere else, and it excludes no location by directory name, so a `build`, `bin`, or `out` path
+segment inside an owned location stays in scope while generated build output, ignored session
+artifacts, nested worktrees, dependency notices, and untracked scratch files stay out of scope
+because the repository does not own them as documentation. The Korean companion is scanned for
+navigation and links but exempt from the language rule.
 
 ### 8.2 Companion uniqueness
 
@@ -163,7 +167,7 @@ outside this scan.
 
 ### 8.3 Link integrity
 
-Policy tests inspect tracked repository-owned Markdown files and verify that:
+Policy tests inspect the repository-owned Markdown files section 8.1 lists and verify that:
 
 - every relative file link resolves;
 - fragments targeting Markdown headings resolve to a generated GitHub-style anchor;

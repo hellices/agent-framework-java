@@ -141,7 +141,8 @@ depends on it and the compatibility matrix marks it required for the initial rel
 
 - [Korean companion guide](docs/ko/README.md)
 
-English is the source of truth. Translations follow.
+English is the source of truth. The Korean companion guide is a single orientation document, not a
+translation of the English documentation; when the two disagree, the English document wins.
 
 ## License
 
