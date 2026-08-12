@@ -171,30 +171,15 @@ class ModuleCompositionPolicyTest {
   }
 
   @Test
-  void signingAttachesToPublicationsCreatedAfterTheConvention() throws IOException {
-    String convention = publishingConventionText();
-
-    // Both faults below cost a release rather than a build: they only appear once a real key is
-    // present, which no pull request exercises.
-    //
-    // `sign(publishing.publications)` reads the collection while it is still empty, because each
-    // module creates its publication after this convention is applied. The signing task is then
-    // registered without a signatory and fails at release time.
-    assertThat(convention)
+  void signingProducesDetachedSignaturesForEveryPublication() throws IOException {
+    // Superseded by SigningContractTest, which publishes with a real key. Reading this file could
+    // only ever match text: `sign(publishing.publications )` with one extra space slipped through
+    // the previous version of this check, which is exactly the fault it existed to prevent.
+    assertThat(publishingConventionText())
         .withFailMessage(
-            "Signing must react to publications as they are created. Passing the publication"
-                + " collection directly evaluates it while empty and fails the release with"
-                + " \"No configured signatory\".")
-        .doesNotContain("sign(publishing.publications)");
-
-    // `useInMemoryPgpKeys` silently builds no signatory when the password is null, so an
-    // unprotected key must be passed with an empty password rather than a null one.
-    assertThat(convention)
-        .withFailMessage(
-            "An unprotected signing key must be passed with an empty password. `useInMemoryPgpKeys`"
-                + " creates no signatory for a null password, and the release then fails with"
-                + " \"No configured signatory\".")
-        .doesNotContain("useInMemoryPgpKeys(signingKey, signingPassword)");
+            "The publishing convention must configure signing. Whether it attaches correctly is"
+                + " proved by SigningContractTest against real published artifacts.")
+        .contains("signing {");
   }
 
   @Test

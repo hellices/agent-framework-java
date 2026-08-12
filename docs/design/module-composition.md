@@ -122,9 +122,15 @@ plugin.
 
 Central also rejects unsigned artifacts, so the publishing convention applies PGP signing. Signing
 stays optional by default, which keeps the local and fork publish path credential free. A release
-build passes `-Pagentframework.release=true`, and a missing `SIGNING_KEY` then fails the build
-immediately rather than at the upload step, where the failure would surface after the release is
-already in motion.
+build passes `-Pagentframework.release=true`, and a missing `SIGNING_KEY` then fails the publish
+task rather than the upload, where the failure would surface after the release is already in
+motion. The flag is read by value, so `-Pagentframework.release=false` means what it says.
+
+Signing only misbehaves once a key exists, which no ordinary pull request provides. CI therefore
+generates a throwaway key, publishes through the release path, and `SigningContractTest` asserts
+that every artifact carries a detached signature; the workflow then runs `gpg --verify` so a
+signature that exists but does not validate cannot pass. A text assertion is not enough here: an
+earlier version of that guard was defeated by a single extra space.
 
 The BOM must manage versions without forcing dependencies. `PublishedBomContractTest` parses the
 published POM and fails when any `<dependencies>` block appears outside `<dependencyManagement>`,

@@ -56,33 +56,43 @@ publishing {
 // publishing contract rather than to a release script.
 //
 // A contributor and a fork must still be able to publish locally, so signing stays optional by
-// default. A release build passes `-Pagentframework.release=true`, which makes a missing key fail
-// the build immediately instead of at the upload step, where the failure would surface after the
-// release is already in motion.
+// default. A release build passes `-Pagentframework.release=true`, and a missing key then fails the
+// publish task instead of the upload, where the failure would surface after the release is already
+// in motion.
 val signingKey = providers.environmentVariable("SIGNING_KEY").orNull
 val signingPassword = providers.environmentVariable("SIGNING_PASSWORD").orNull
-val releaseBuild = providers.gradleProperty("agentframework.release").isPresent
+
+// Read the value, not merely its presence: `-Pagentframework.release=false` must mean "not a
+// release". This matches how `agentframework.requirePublishedBom` is interpreted, so the two flags
+// obey one rule.
+val releaseBuild =
+    providers.gradleProperty("agentframework.release").map(String::toBoolean).getOrElse(false)
 
 if (signingKey == null && releaseBuild) {
-    throw GradleException(
-        "A release build must sign its artifacts, but SIGNING_KEY is absent. " +
-            "Maven Central rejects unsigned uploads, so this fails now rather than after " +
-            "the release has started."
-    )
+    // Fail when publishing runs, not while configuring. A release branch must still be able to run
+    // `test` or `quality` with this flag set and no key present.
+    tasks.withType<PublishToMavenRepository>().configureEach {
+        doFirst {
+            throw GradleException(
+                "A release build must sign its artifacts, but SIGNING_KEY is absent. " +
+                    "Maven Central rejects unsigned uploads, so this fails before the upload " +
+                    "rather than after the release has started."
+            )
+        }
+    }
 }
 
 if (signingKey != null) {
     signing {
         isRequired = releaseBuild
 
-        // `useInMemoryPgpKeys` builds no signatory when the password is null, which surfaces later
-        // as "No configured signatory" on the signing task rather than here. An unprotected key is
-        // a legitimate CI setup, so an absent password means an empty one.
+        // `useInMemoryPgpKeys` builds no signatory when the password is null, and the failure
+        // surfaces later as "No configured signatory" on the signing task rather than here. An
+        // unprotected key is a legitimate CI setup, so an absent password means an empty one.
         useInMemoryPgpKeys(signingKey, signingPassword ?: "")
 
-        // Each module creates its publication after this convention is applied, so the collection
-        // is empty right now. Reacting to publications as they appear keeps the signatory attached
-        // to every signing task.
+        // Publications are created by each module after this convention applies. Reacting to them
+        // as they appear keeps signing correct regardless of that ordering.
         publishing.publications.configureEach { sign(this) }
     }
 }
