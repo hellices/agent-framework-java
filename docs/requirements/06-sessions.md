@@ -24,7 +24,7 @@
 | SES-004 | 내구성 스냅샷은 타입·버전 봉투를 강제한다 | 필수 | 필수 | Core+ |
 | SES-005 | 세션 상태는 안정적인 타입 레지스트리로 직렬화한다 | 필수 | 필수 | Core+ |
 | SES-006 | 내구성 저장 전 상태 값을 엄격히 검증한다 | 필수 | 필수 | Core+ |
-| SES-007 | 인메모리 저장소는 분기 안전 복사본을 돌려준다 | 필수 | 필수 | Core+ |
+| SES-007 | 인메모리 저장소는 분기 안전한 독립 스냅샷을 돌려준다 | 필수 | 필수 | Core+ |
 | SES-008 | 파일 저장소는 원자적으로 교체하고 마지막 기록이 이긴다 | 필수 | 권장 | Core+ |
 | SES-009 | 파일 기반 세션 저장소는 경로 이탈을 막는다 | 필수 | 필수 | Core+ |
 | SES-010 | 파싱 손상과 스키마 불일치를 구분해 복구한다 | 필수 | 필수 | Core+ |
@@ -140,22 +140,26 @@
 
 ## SES-005 세션 상태는 안정적인 타입 레지스트리로 직렬화한다
 
-**요구사항.** 커스텀 세션 상태는 안정적인 타입 ID와 codec 쌍을 등록하는 레지스트리로
-직렬화해야 하며, 프레임워크 소유 기본 타입은 미리 등록해야 한다.
+**요구사항.** 커스텀 세션 상태는 안정적인 타입 ID와 codec 쌍을 등록한 instance-scoped
+registry로 직렬화해야 하며, 프레임워크 소유 기본 타입은 조립 시 등록해야 한다. 전역 mutable
+registry, class name 기반 자동 복원, `Class.forName`은 사용하지 않는다.
 
 **원본 비교**
 
 - .NET: `StateBag`는 typed access를 주지만 inspected core path에 Python식 공개 type-id registry는 확인되지 않는다.
 - Python: `register_state_type()`가 stable type id, codec pair, framework 기본 타입 선등록을 강제한다.
 
-**판단.** Python 방식을 택한다. Java 기본 JSON 매퍼만으로는 cold-start 복원 시 타입을
-안전하게 되살리기 어렵다. 명시적 레지스트리가 더 예측 가능하다.
+**판단.** Python의 명시적 type id를 채택하되 registry를 process-global 함수로 직역하지
+않는다. Java DI container와 plain Java builder가 같은 registry 인스턴스를 주입하고, 조립이
+끝나면 불변으로 고정해야 classloader와 native-image 환경에서도 예측 가능하다.
 
 **수용 기준**
 
 - 같은 타입을 두 번 다른 type id로 등록할 수 없다.
 - 같은 type id를 다른 타입에 재사용할 수 없다.
 - 프레임워크 기본 메시지 타입은 추가 등록 없이 직렬화·복원된다.
+- 서로 다른 engine 인스턴스의 registry가 상태를 공유하지 않는다.
+- snapshot의 class name만으로 런타임 클래스를 로드하지 않는다.
 
 **근거** [08 공개 API·타입](../upstream/snapshots/d0a4165f/features/08-sessions.md),
 [08 확장점](../upstream/snapshots/d0a4165f/features/08-sessions.md),
@@ -187,24 +191,26 @@
 
 ---
 
-## SES-007 인메모리 저장소는 분기 안전 복사본을 돌려준다
+## SES-007 인메모리 저장소는 분기 안전한 독립 스냅샷을 돌려준다
 
-**요구사항.** 인메모리 세션 저장소는 저장 시점과 조회 시점 모두 복사본을 사용해야 하며,
-live reference를 그대로 돌려주지 않는다.
+**요구사항.** 인메모리 세션 저장소는 저장 시점과 조회 시점 모두 불변 값 또는 구조적으로
+독립된 스냅샷을 사용해야 하며 live mutable reference를 돌려주지 않는다. 부재는
+`Optional` 또는 동등한 명시적 결과로 표현하고 `null`을 허용하지 않는다.
 
 **원본 비교**
 
 - .NET: inspected 범위에서 동등한 공개 인메모리 session store 계약은 확인되지 않는다.
 - Python: `SessionStore.set()`과 `get()`이 모두 deepcopy를 써서 branch-like continuation을 격리한다.
 
-**판단.** Python 방식을 채택한다. Java에서도 조회 결과를 그대로 수정하면 저장본이 오염되는
-버그가 가장 흔하다. 세션 분기 재실행을 안전하게 하려면 복사 의미론이 기본이어야 한다.
+**판단.** Python의 branch isolation 의미는 채택하되 `deepcopy`를 직역하지 않는다. Java는
+불변 snapshot, codec round-trip, copy-on-write 중 구현에 맞는 방법을 선택할 수 있다.
+`Cloneable`이나 임의 reflection deep copy는 계약이 아니다.
 
 **수용 기준**
 
-- 저장한 세션 객체를 호출자가 수정해도 저장소 내부 값은 바뀌지 않는다.
-- `get()` 결과를 수정한 뒤 다시 `get()` 하면 원본 저장 상태가 유지된다.
-- 존재하지 않는 key 조회는 빈 복사본이 아니라 `null` 또는 명시적 부재를 돌려준다.
+- 저장 시 사용한 mutable source나 builder를 호출자가 수정해도 저장소 내부 값은 바뀌지 않는다.
+- 조회 결과에서 새 builder를 만들어 수정해도 다시 조회한 원본 저장 상태가 유지된다.
+- 존재하지 않는 key 조회는 `Optional.empty()` 또는 동등한 명시적 부재를 돌려준다.
 
 **근거** [08 상세 실행 흐름](../upstream/snapshots/d0a4165f/features/08-sessions.md),
 [08 동시성·취소](../upstream/snapshots/d0a4165f/features/08-sessions.md),

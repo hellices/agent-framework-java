@@ -23,13 +23,13 @@
 | HOST-001 | 호스팅 모델과 wire 프로토콜을 분리한다 | 필수 | 필수 | Core+ |
 | HOST-002 | 세션 계약은 API와 엔진이 소유한다 | 필수 | 필수 | Core+ |
 | HOST-003 | 호스팅 코어는 바인딩과 상태 조율만 담당한다 | 필수 | 필수 | Core+ |
-| HOST-004 | 타깃 해결은 인스턴스·팩토리·비동기·빌더를 지원한다 | 필수 | 필수 | Core+ |
+| HOST-004 | 타깃 해결은 하나의 비동기 resolver 계약으로 통일한다 | 필수 | 필수 | Core+ |
 | HOST-005 | 세션 연속성은 작업 복사본과 단일 생성 규칙을 보장한다 | 필수 | 필수 | Core+ |
 | HOST-006 | 워크플로 이어받기는 restore-then-run과 durable 폴백을 따른다 | 필수 | 필수 | Workflow |
 | HOST-007 | 인메모리 연속성은 개발 편의로만 둔다 | 필수 | 필수 | Hosting |
 | HOST-008 | 인증·인가·단일 writer·확장은 호스트가 책임진다 | 필수 | 필수 | Hosting |
 | HOST-009 | 원시 서비스 세션 식별자는 권한 경계가 아니다 | 필수 | 필수 | Hosting |
-| HOST-010 | Spring host binder는 선택 모듈로 분리한다 | 필수 | 필수 | Hosting |
+| HOST-010 | host framework binder는 프레임워크별 선택 모듈로 분리한다 | 필수 | 필수 | Hosting |
 | HOST-011 | Responses 어댑터는 요청 파싱과 세션 키 추출을 분리한다 | 선택 | 필수 | Hosting |
 | HOST-012 | Responses 기본 매핑은 호출자 override를 엄격 거부한다 | 선택 | 필수 | Hosting |
 | HOST-013 | Responses continuation은 branch pointer와 mutable head를 구분한다 | 선택 | 필수 | Hosting |
@@ -118,20 +118,28 @@
 
 ---
 
-## HOST-004 타깃 해결은 인스턴스·팩토리·비동기·빌더를 지원한다
+## HOST-004 타깃 해결은 하나의 비동기 resolver 계약으로 통일한다
 
-**요구사항.** 호스팅 코어는 direct instance, sync factory, async factory, builder 기반 target resolution과 명시적 cache 정책을 지원해야 한다.
+**요구사항.** 호스팅 코어는 agent와 workflow target을 하나의 framework-neutral
+`TargetResolver<T>` 또는 동등한 비동기 계약으로 해결하고, instance·sync factory·async
+factory·builder는 convenience adapter로 수용해야 한다. cache/lifecycle 정책은 resolver 입력
+형태와 분리한다.
 
 **원본 비교**
 
 - .NET: AddAIAgent/AddWorkflow가 custom factory와 lifetime 선택을 제공한다.
 - Python: AgentState/WorkflowState가 instance, callable, awaitable, SupportsBuild와 cache_target on/off를 지원한다.
 
-**판단.** 둘 다 같은 문제를 푼다. Java는 Python의 입력 형태 폭과 .NET의 lifecycle 선택성을 함께 채택해 host 조립 비용을 낮춘다.
+**판단.** 둘 다 같은 문제를 풀지만 네 입력 형태를 public overload나 union으로 고정하면
+Spring `ObjectProvider`, Quarkus/Jakarta CDI `Instance<T>`, plain Java `Supplier<T>`를 모두
+중복 지원하게 된다. 하나의 resolver port와 작은 adapter factory가 Java의 interface
+segregation과 DI container 중립성을 더 잘 지킨다.
 
 **수용 기준**
 
-- 동일한 agent 또는 workflow를 인스턴스, 팩토리, 비동기 팩토리, 빌더로 등록할 수 있다.
+- 동일한 agent 또는 workflow를 인스턴스, `Supplier`, completion-returning factory, builder에서
+  resolver adapter로 등록할 수 있다.
+- hosting 실행 경로는 resolver의 구체 원천을 분기하지 않는다.
 - cache on/off 설정 차이가 반복 실행에서 관찰 가능하다.
 
 **근거** [20 hosting](../upstream/snapshots/d0a4165f/features/20-hosting.md)
@@ -243,21 +251,31 @@
 
 ---
 
-## HOST-010 Spring host binder는 선택 모듈로 분리한다
+## HOST-010 host framework binder는 프레임워크별 선택 모듈로 분리한다
 
-**요구사항.** Spring MVC/WebFlux route binding, SSE writer, HTTP error mapping, principal-derived isolation helper는 hosting core와 분리된 선택 모듈에 있어야 한다.
+**요구사항.** Spring MVC/WebFlux, Quarkus REST, Jakarta REST/CDI의 route binding, streaming
+writer, HTTP error mapping, principal-derived isolation helper는 hosting core와 분리된
+프레임워크별 선택 모듈에 있어야 한다. plain Java 조립은 동일한 hosting port를 builder와
+constructor로 사용해야 한다.
 
 **원본 비교**
 
 - .NET: Hosting.AspNetCore, Hosting.A2A.AspNetCore, Hosting.AGUI.AspNetCore처럼 host seam을 별도 패키지로 둔다.
 - Python: framework package를 최소화하거나 app-owned route를 직접 작성하는 helper-first seam을 선호한다.
 
-**판단.** Java 생태계에서는 Spring 의존성이 크다. 그래서 .NET의 별도 host seam 구조를 취하되 generic core는 Python처럼 프레임워크 비의존으로 유지한다.
+**판단.** .NET의 별도 host seam 구조를 취하되 특정 Java container를 표준으로 만들지 않는다.
+Spring Boot는 auto-configuration/starter, Jakarta EE는 CDI producer/portable extension,
+Quarkus는 runtime bean을 기본 패턴으로 쓴다. Quarkus deployment artifact는 실제 build-time
+augmentation이나 native-image metadata 생성이 필요할 때만 추가한다.
 
 **수용 기준**
 
-- hosting core 모듈은 Spring dependency를 직접 갖지 않는다.
-- Spring binder 모듈을 제거해도 protocol adapter와 core tests가 성립한다.
+- hosting core 모듈은 Spring, Quarkus, Jakarta EE dependency를 직접 갖지 않는다.
+- 어떤 binder 모듈을 제거해도 protocol adapter와 core tests가 성립한다.
+- framework adapter는 container가 소유한 request scope, security context, executor,
+  transaction lifecycle을 core로 넘겨주지 않는다.
+- Reactor와 Mutiny 타입은 adapter에서 `Flow.Publisher` 또는 동등한 core streaming port로
+  변환되고 core API에 노출되지 않는다.
 
 **근거** [20 hosting](../upstream/snapshots/d0a4165f/features/20-hosting.md),
 [22 a2a](../upstream/snapshots/d0a4165f/features/22-a2a.md),

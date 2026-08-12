@@ -224,7 +224,8 @@ switch나 multi-selection은 builder lowering으로 처리해야 한다.
 ## WF-008 직렬화된 callables는 명시적 재바인딩 없이는 복원하지 않는다
 
 **요구사항.** edge와 workflow 정의를 직렬화할 때 live callable은 저장하지 않고, 복원 시에는 symbolic
-name을 명시적 registry에 다시 바인딩할 때만 사용해야 한다.
+name을 명시적 instance-scoped registry에 다시 바인딩할 때만 사용해야 한다. registry는
+workflow 조립 또는 restore options로 주입하고 static/global singleton으로 발견하지 않는다.
 
 **원본 비교**
 
@@ -239,6 +240,8 @@ name을 명시적 registry에 다시 바인딩할 때만 사용해야 한다.
 - 정의 직렬화 결과에 live lambda나 method reference가 그대로 저장되지 않는다.
 - 복원 후 필요한 callable을 찾지 못하면 첫 호출에서 명시적 예외가 난다.
 - 자동 fallback routing이나 무음 no-op 복원은 허용되지 않는다.
+- 서로 다른 workflow host가 registry 상태를 전역으로 공유하지 않고, 조립 뒤 registry 변경은
+  현재 restore에 영향을 주지 않는다.
 
 **근거** [14 상태·영속화](../upstream/snapshots/d0a4165f/features/14-workflow-graph.md), [14 Java 결정](../upstream/snapshots/d0a4165f/features/14-workflow-graph.md)
 

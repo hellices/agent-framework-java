@@ -92,6 +92,8 @@ Start here depending on what you need.
 | Question | Document |
 | --- | --- |
 | What must Java build? | [Requirements](docs/requirements/README.md) |
+| How does each requirement map to Java architecture and code? | [Requirements-driven design](docs/design/requirements-design/README.md) |
+| Is the public API idiomatic and extensible Java? | [Java API audit](docs/requirements/java-api-audit.md) |
 | Why is it built this way? | [Foundation design](docs/design/foundation-design.md) |
 | How does the upstream framework behave? | [Upstream snapshot analysis](docs/upstream/snapshots/d0a4165f/README.md) |
 | How do modules relate? | [Module composition](docs/design/module-composition.md) |

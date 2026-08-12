@@ -95,11 +95,17 @@
 4. **Java 생태계 관습을 따른다.** 원본 API 이름보다 관찰 가능한 동작의 호환을 우선한다.
 5. **경계를 흐리지 않는다.** `AgentEngine`이 호스트 런타임의 책임을 가져오지 않는다.
 
+Java 공개 API와 확장 지점은 [Java API and extension principles](java-api-principles.md)를 함께
+따른다. 원본의 관찰 가능한 의미가 같더라도 `null` 편의, 동적 dictionary, 암묵적 global registry,
+임의 class 복원처럼 Java에서 안전하지 않은 구현 형태는 직역하지 않는다.
+
 두 원본이 모두 제공하지 않는 기능은 요구사항으로 만들지 않는다. 필요하면 별도 설계로
 제안한다.
 
 ## 관련 문서
 
 - [기초 설계와 로드맵](../design/foundation-design.md)
+- [Java API와 확장 원칙](java-api-principles.md)
+- [Java 관용성·확장성 감사](java-api-audit.md)
 - [원본 스냅샷 분석](../upstream/snapshots/d0a4165f/README.md)
 - [기능별 호환성 매트릭스](../upstream/snapshots/d0a4165f/compatibility-matrix.md)

@@ -84,21 +84,23 @@ asset 같은 기능도 같은 모델 위에 올릴 수 있다.
 
 ## MSG-003 입력을 메시지 목록으로 정규화한다
 
-**요구사항.** 코어는 `null`, 문자열, 단일 `Content`, 단일 `Message`, 메시지 시퀀스를
-일관된 `List<Message>`로 정규화해야 하며, 문자열과 단일 `Content`는 사용자 메시지 하나로
-올려야 한다.
+**요구사항.** 코어는 문자열, 단일 `Content`, 단일 `Message`, 메시지 시퀀스를 일관된
+`List<Message>`로 정규화해야 하며, 문자열과 단일 `Content`는 사용자 메시지 하나로 올려야
+한다. 입력 없음은 전용 no-input 진입점 또는 빈 목록으로 표현하고 `null`은 거부한다.
 
 **원본 비교**
 
 - .NET: 문자열 실행 오버로드는 문자열을 `user` 메시지 하나로 감싼다.
 - Python: `normalize_messages()`가 `None`, `str`, `Content`, `Message`, 혼합 시퀀스를 모두 정규화한다.
 
-**판단.** Python의 더 넓은 정규화 범위를 채택한다. Java에서도 편의 입력을 허용하되 내부
-표준형은 하나여야 한다. 그래야 인터셉터, 세션, 테스트가 항상 같은 자료형을 본다.
+**판단.** Python의 편의 입력 범위는 채택하되 `None`을 Java `null`로 직역하지 않는다.
+Java에서 `null`→빈 목록 변환은 호출 실수를 숨긴다. no-input overload와 `List.of()`가 같은
+의도를 non-null 계약으로 표현할 수 있다.
 
 **수용 기준**
 
-- `null` 입력 정규화 결과는 빈 목록이다.
+- no-input 진입점과 빈 목록 입력의 정규화 결과는 빈 목록이다.
+- `null` 입력은 public boundary에서 즉시 실패한다.
 - 문자열 입력 정규화 결과는 `user` 역할의 텍스트 메시지 하나다.
 - 단일 `Content` 입력 정규화 결과는 `user` 역할의 메시지 하나다.
 - 기존 `Message` 목록 입력은 순서를 바꾸지 않고 유지된다.
@@ -142,15 +144,18 @@ asset 같은 기능도 같은 모델 위에 올릴 수 있다.
 - .NET: 코어는 자체 taxonomy를 정의하지 않고 외부 `AIContent` 계층을 opaque하게 보존한다.
 - Python: 하나의 `Content` 합집합 모델로 텍스트, 미디어, 도구 호출, usage, hosted asset 등을 직접 표현한다.
 
-**판단.** Python의 breadth를 택하되 Java답게 sealed hierarchy나 tagged union으로 푼다.
-코어가 기본 종류를 모르고 전부 opaque하게 넘기면 도구 결과, 사용량, hosted asset 같은
-공통 의미를 테스트와 직렬화 계약으로 고정할 수 없다.
+**판단.** Python의 breadth를 택하되 Java에서는 알려진 core 종류와 provider extension
+envelope를 함께 둔다. 순수 sealed hierarchy는 새 provider content가 들어올 때마다 core
+수정을 요구하므로 사용하지 않는다. core가 공통 종류를 이해하면서도 미지의 종류를 손실 없이
+보존해야 한다.
 
 **수용 기준**
 
 - 위 여섯 범주가 서로 구분되는 discriminator 또는 subtype으로 표현된다.
 - 텍스트 콘텐츠와 도구 호출 콘텐츠가 같은 타입 분기 안에 섞이지 않는다.
 - 각 콘텐츠는 코어 JSON 표현에서 자신의 종류를 식별할 수 있다.
+- 새 provider content는 core hierarchy 수정이나 전역 factory 등록 없이 typed extension
+  envelope로 round-trip된다.
 
 **근거** [02 Content 모델과 Multimodal 표현](../upstream/snapshots/d0a4165f/features/02-message-content.md),
 [02 Java 결정](../upstream/snapshots/d0a4165f/features/02-message-content.md)
@@ -183,22 +188,28 @@ asset 같은 기능도 같은 모델 위에 올릴 수 있다.
 
 ## MSG-007 추가 속성과 원시 표현을 보존한다
 
-**요구사항.** 모든 메시지·콘텐츠·응답·업데이트 타입은 `additionalProperties`와
-`rawRepresentation`를 보존해야 하며, 코어는 두 필드를 공개 escape hatch로만 취급해야 한다.
+**요구사항.** 모든 메시지·콘텐츠·응답·업데이트 타입은 JSON-safe 추가 속성과 선택적
+provider 원시 표현을 구분해 보존해야 한다. 추가 속성은 영속 가능한 typed extension 값이고,
+원시 표현은 adapter-local transient diagnostic handle이며 등록된 codec 없이는 세션에
+직렬화하지 않는다.
 
 **원본 비교**
 
 - .NET: `AgentResponse`와 `AgentResponseUpdate`가 `AdditionalProperties`와 `RawRepresentation`을 가진다.
 - Python: `Message`, `Content`, `ChatResponse`, `AgentResponse`와 update 타입이 모두 같은 두 필드를 가진다.
 
-**판단.** 동일하다. 공급자별 메타데이터와 디버그용 원본 객체를 잃지 않으려면 escape hatch가
-필요하다. 다만 코어 의미 규칙은 이 필드에 의존하지 않아야 한다.
+**판단.** 공급자 메타데이터와 디버그용 원본을 보존한다는 의미는 동일하다. 그러나 Python
+객체나 .NET SDK 객체를 Java `Object` 필드 하나로 직역하면 classloader, native image,
+직렬화 안전성 문제가 생긴다. 내구성 extension value와 일시적 native handle을 별도
+수명주기로 다룬다.
 
 **수용 기준**
 
 - 어댑터가 넣은 `additionalProperties` key/value를 같은 객체에서 다시 읽을 수 있다.
 - `rawRepresentation`이 있어도 텍스트 투영과 응답 복원 규칙은 달라지지 않는다.
 - 코어 공개 요구사항은 `rawRepresentation`의 구체 타입을 전제하지 않는다.
+- 미등록 provider SDK 객체가 세션 snapshot에 자동 직렬화되지 않는다.
+- 추가 속성 키는 namespace와 값 타입을 식별하며 다른 adapter와 충돌하면 실패한다.
 
 **근거** [02 상태·영속화](../upstream/snapshots/d0a4165f/features/02-message-content.md),
 [02 Java 결정](../upstream/snapshots/d0a4165f/features/02-message-content.md)

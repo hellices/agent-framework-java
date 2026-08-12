@@ -35,7 +35,7 @@
 | HAR-014 | Skills는 progressive disclosure와 세 도구 표면을 유지한다 | 보류 | 권장 | Optional |
 | HAR-015 | Skill script 실행은 기본 승인 필요다 | 보류 | 필수 | Optional |
 | HAR-016 | 파일 기반 skills와 상세 오류는 신뢰 경계를 넘지 않게 다룬다 | 보류 | 필수 | Optional |
-| HAR-017 | Background agents는 MVP에 넣지 않고 나중에도 polling registry로 시작한다 | 보류 | 권장 | Optional |
+| HAR-017 | Background agents는 MVP에 넣지 않고 instance-scoped polling store로 시작한다 | 보류 | 권장 | Optional |
 | HAR-018 | 셸 실행은 별도 tools 모듈에서 수동 조립한다 | 보류 | 선택 | Optional |
 | HAR-019 | 셸과 로컬 실행의 거부 목록은 가드레일로만 문서화한다 | 보류 | 필수 | Optional |
 | HAR-020 | LocalCodeAct는 샌드박스로 취급하지 않고 코어에서 제외한다 | 보류 | 선택 | Optional |
@@ -408,10 +408,11 @@ regex timeout까지 묶여 있어 코어 하네스에 넣기에는 위험하다.
 
 ---
 
-## HAR-017 Background agents는 MVP에 넣지 않고 나중에도 polling registry로 시작한다
+## HAR-017 Background agents는 MVP에 넣지 않고 instance-scoped polling store로 시작한다
 
 **요구사항.** Background agents는 Java 코어 하네스 MVP에 포함하지 않으며, 후속 단계에 도입하더라도
-실시간 push가 아닌 polling task registry 계약부터 시작해야 한다.
+실시간 push가 아닌 polling task store 계약부터 시작해야 한다. store는 harness 또는 host가
+주입하는 instance-scoped 자원이며 static/global registry가 아니다.
 
 **원본 비교**
 
@@ -426,6 +427,8 @@ child agent trust boundary, clear/continue 규칙을 함께 설계해야 하므�
 - 코어 하네스 모듈은 background task 도구를 기본 제공하지 않는다.
 - 후속 모듈이 추가되더라도 상태 조회 기본 계약은 polling API다.
 - runtime reference를 잃은 task는 명시적 `LOST` 상태로 전이한다.
+- 두 harness 인스턴스가 background task 상태를 전역으로 공유하지 않으며, 내구성 여부와
+  lifecycle은 주입된 store 구현이 결정한다.
 
 **근거** [13 Background agents](../upstream/snapshots/d0a4165f/features/13-skills-background-code.md)
 

@@ -52,6 +52,8 @@
 ## OPS-001 OpenTelemetry GenAI 규약을 표준으로 삼는다
 
 **요구사항.** 관찰성의 표준 semantic convention은 OpenTelemetry GenAI 규약이어야 한다.
+이 결정은 core 공개 API가 OpenTelemetry SDK 타입에 직접 의존한다는 뜻이 아니며, telemetry
+adapter가 표준 vocabulary와 context를 변환해야 한다.
 
 **원본 비교**
 
@@ -64,6 +66,8 @@
 
 - 공개 span과 metric 이름은 OTel GenAI vocabulary에 맞는다.
 - provider, agent, workflow 식별 태그가 custom ad-hoc key가 아니라 표준 의미 체계 위에 놓인다.
+- `agent-framework-api`와 `agent-framework-engine`의 공개 signature에 OpenTelemetry,
+  Micrometer, Spring Observation 타입이 없다.
 
 **근거** [27 observability](../upstream/snapshots/d0a4165f/features/27-observability.md)
 
@@ -151,7 +155,9 @@
 
 ## OPS-006 계측 비활성은 sticky 하게 유지한다
 
-**요구사항.** 운영자가 instrumentation을 끄면 force 재활성화 전까지 framework helper가 다시 켜지 못하게 해야 한다.
+**요구사항.** 운영자가 application-scoped instrumentation control에서 계측을 끄면 force
+재활성화 전까지 framework helper가 다시 켜지 못하게 해야 한다. 상태는 host가 소유하며
+JVM-global static flag로 모든 application context에 공유하지 않는다.
 
 **원본 비교**
 
@@ -164,6 +170,7 @@
 
 - disable 뒤에는 민감 telemetry enable이나 provider bootstrap 호출만으로 계측이 다시 켜지지 않는다.
 - force 재활성화 경로가 별도 API로 드러난다.
+- 같은 JVM의 독립 application context 두 개가 instrumentation 상태를 공유하지 않는다.
 
 **근거** [27 observability](../upstream/snapshots/d0a4165f/features/27-observability.md)
 

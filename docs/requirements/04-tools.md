@@ -91,22 +91,28 @@
 
 ## TOOL-003 입력 스키마는 추론하되 명시 스키마가 이긴다
 
-**요구사항.** 도구 입력 스키마는 기본적으로 함수 시그니처에서 추론하되, 명시 스키마가 있으면
-추론 결과를 완전히 덮어써야 한다.
+**요구사항.** 도구 입력 스키마는 신뢰할 수 있는 Java 타입·parameter metadata에서 추론하되,
+정확한 이름이나 generic type을 알 수 없으면 추측하지 않고 명시 스키마를 요구해야 한다.
+명시 스키마가 있으면 추론 결과를 완전히 덮어쓴다.
 
 **원본 비교**
 
 - .NET: first-class schema 추론 helper가 없고 외부에서 준비한 도구 정의를 받는다.
 - Python: 시그니처 추론과 명시 Pydantic·JSON Schema override를 모두 지원한다.
 
-**판단.** Python을 택한다. Java는 어노테이션과 타입 정보를 읽어 추론할 수 있다. 다만 사람이
-쓴 명시 스키마가 있으면 그것이 더 신뢰할 수 있으므로 우선권을 고정한다.
+**판단.** Python의 편의는 채택하되 runtime reflection만 표준 경로로 두지 않는다. Java
+parameter name은 `-parameters` 또는 명시 annotation 없이는 보장되지 않고 generic type은
+소거될 수 있다. annotation processor, 명시 metadata, pluggable schema generator를 같은
+계약으로 수용하고 불충분한 metadata는 fail-closed한다.
 
 **수용 기준**
 
 - 단순 함수 정의만으로 객체형 입력 스키마가 생성된다.
 - 명시 스키마를 주면 설명, 필수 필드, 제약이 추론값이 아니라 명시값으로 나온다.
 - 명시 스키마와 추론 스키마를 부분 병합하지 않는다.
+- parameter name이나 generic type을 신뢰할 수 없을 때 `arg0` 같은 추정 schema를 공개하지 않고
+  명시 schema를 요구한다.
+- core schema API는 Jackson, Spring, provider SDK의 type token을 노출하지 않는다.
 
 **근거** [05 Function tool definition / decorator / schema generation](../upstream/snapshots/d0a4165f/features/05-function-tools.md)
 
@@ -249,7 +255,8 @@ Java는 한 타입에 모아 문서와 테스트를 같이 고정해야 한다.
 
 - 설정을 생략하면 `enabled=true`와 `includeDetailedErrors=false`가 채워진다.
 - `maxIterations`와 `maxConsecutiveErrorsPerRequest`는 1 미만 값을 거부한다.
-- `maxFunctionCalls`는 `null` 또는 양수만 허용한다.
+- `maxFunctionCalls`는 생략하거나 양수로만 설정한다. Java public API가 `null`을 유효한 옵션
+  값으로 요구하지 않는다.
 
 **근거** [05 공개 API·타입](../upstream/snapshots/d0a4165f/features/05-function-tools.md),
 [05 Invocation configuration / layers / budgets](../upstream/snapshots/d0a4165f/features/05-function-tools.md)
@@ -329,22 +336,27 @@ API와 수용 기준에 분명히 써 두는 편이 운영상 더 정직하다.
 
 ## TOOL-013 도구 결과는 `Content` 목록으로 정규화한다
 
-**요구사항.** 도구 반환값은 기본적으로 `Content` 목록으로 정규화해야 하며, raw 결과 우회는 명시
-opt-in일 때만 허용해야 한다.
+**요구사항.** 도구 반환값은 기본적으로 `Content` 목록 또는 명시적 `ToolResult`로
+정규화해야 하며, raw 결과 우회는 명시 opt-in일 때만 허용해야 한다. typed handler의
+`null` 반환은 성공 결과로 간주하지 않는다.
 
 **원본 비교**
 
 - .NET: repo-local core는 결과 정규화 규칙보다 하위 함수 호출 seam에 집중한다.
 - Python: `None`, 문자열, 단일 `Content`, 임의 객체를 `list[Content]`로 정규화하고 `SKIP_PARSING`을 별도 opt-in으로 둔다.
 
-**판단.** Python을 택한다. 모델과 세션 계층은 콘텐츠 중심으로 움직여야 한다. raw 결과는 디버그나
-특수 어댑터용 예외 경로로만 허용하는 편이 안전하다.
+**판단.** Python의 콘텐츠 중심 의미는 유지하되 `None`을 Java `null`로 직역하지 않는다.
+`void`/`Consumer` convenience adapter는 원본의 `None → [""]` 의미를 명시적으로 만들고,
+`ToolHandler`가 `null`을 반환하면 구현 오류다. engine 조립은 임의 객체를 JSON-safe
+콘텐츠로 바꾸는 기본 result mapper를 제공하며 adapter는 이를 교체할 수 있다.
 
 **수용 기준**
 
-- `null` 반환은 빈 문자열 텍스트 결과 한 개로 정규화된다.
+- `void` convenience handler는 빈 문자열 텍스트 콘텐츠 한 개로 정규화된다.
+- typed handler가 `null`을 반환하면 `IllegalStateException`으로 실패한다.
 - 문자열 반환은 텍스트 콘텐츠 한 개가 된다.
-- 임의 객체 반환은 JSON 텍스트 또는 동등한 구조화 텍스트로 정규화된다.
+- 임의 객체 반환은 기본 result mapper를 통해 JSON 텍스트 또는 동등한 JSON-safe 구조화
+  콘텐츠로 정규화되며, 명시 mapper가 있으면 기본값을 대체한다.
 - raw 결과 우회를 켜지 않으면 원시 JVM 객체가 그대로 상위 루프로 올라가지 않는다.
 
 **근거** [05 Parallel calls와 execution result semantics](../upstream/snapshots/d0a4165f/features/05-function-tools.md)

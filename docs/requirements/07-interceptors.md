@@ -22,7 +22,7 @@
 | INT-001 | 공개 확장점은 책임별 타입 인터셉터로 고정한다 | 필수 | 필수 | MVP |
 | INT-002 | 인터셉터는 DI·트랜잭션·보안·AOP를 재구현하지 않는다 | 필수 | 필수 | MVP |
 | INT-003 | 등록 순서가 전처리 순서와 감싸기 방향을 결정한다 | 필수 | 필수 | MVP |
-| INT-004 | 인터셉터 컨텍스트는 명시적이며 가변적이다 | 필수 | 필수 | MVP |
+| INT-004 | 인터셉터 컨텍스트는 명시적이며 변경 지점이 제한된다 | 필수 | 필수 | MVP |
 | INT-005 | 지원하지 않는 seam 설치는 즉시 실패한다 | 필수 | 필수 | MVP |
 | INT-006 | `next`를 호출하지 않으면 단축 종료한다 | 필수 | 필수 | MVP |
 | INT-007 | 후처리에서 결과를 대체할 수 있다 | 필수 | 필수 | MVP |
@@ -118,24 +118,29 @@ builder와 런타임 모두 같은 ordering semantics를 써야 한다.
 
 ---
 
-## INT-004 인터셉터 컨텍스트는 명시적이며 가변적이다
+## INT-004 인터셉터 컨텍스트는 명시적이며 변경 지점이 제한된다
 
 **요구사항.** 각 seam은 메시지, 옵션, 세션, 메타데이터, 결과, 스트림 훅을 담은 명시적
-컨텍스트 객체를 사용해야 하며, 전역 스레드 로컬에 의존하지 않는다.
+컨텍스트 객체를 사용해야 하며 전역 스레드 로컬에 의존하지 않는다. 입력과 core-owned 상태는
+불변이고, 결과 교체와 extension attribute 변경은 typed API로만 허용한다.
 
 **원본 비교**
 
 - .NET: typed context object보다 decorator와 callback shape가 중심이지만 실행 옵션과 function context를 명시적으로 전달한다.
 - Python: `AgentContext`, `ChatContext`, `FunctionInvocationContext`가 metadata와 mutable result를 공유 표면으로 둔다.
 
-**판단.** Python의 명시적 context 모델을 채택한다. Java 비동기 실행과 스트리밍에서는 전역
-상태보다 컨텍스트 객체가 안전하다. `.NET`의 callback 경험은 컨텍스트 필드 설계 참고로만 쓴다.
+**판단.** Python의 명시적 context 의미는 채택하되 shared mutable object를 직역하지 않는다.
+Java 비동기 실행과 스트리밍에서 임의 setter와 `Map<String, Object>`는 경쟁 조건과 namespace
+충돌을 만든다. 불변 request snapshot, controlled result replacement, typed `ContextKey<T>`가
+같은 확장성을 더 안전하게 제공한다.
 
 **수용 기준**
 
 - 각 seam에 대응하는 공개 컨텍스트 타입이 있다.
 - 인터셉터는 컨텍스트를 통해 결과를 읽고 교체할 수 있다.
 - 실행 중 필요한 메타데이터를 읽기 위해 thread-local API를 호출할 필요가 없다.
+- core-owned 입력과 세션 identity를 인터셉터가 임의 setter로 바꿀 수 없다.
+- extension attribute는 값 타입을 식별하는 typed key를 사용하고 key 충돌 시 실패한다.
 
 **근거** [10 API·타입](../upstream/snapshots/d0a4165f/features/10-middleware.md),
 [10 상태](../upstream/snapshots/d0a4165f/features/10-middleware.md),
