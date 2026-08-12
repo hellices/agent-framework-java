@@ -214,7 +214,7 @@ Token count computation counts the text kinds (`TextContent`, `TextReasoningCont
 
 ## 7.3 The .NET trigger / target model
 
-.NET has a first-class predicate called `CompactionTrigger`, which `CompactionStrategy` evaluates first. The optional `target` decides “when to stop” during compaction. When no target is given, the default is the **inverse of the trigger**.  
+.NET has a primary predicate called `CompactionTrigger`, which `CompactionStrategy` evaluates first. The optional `target` decides “when to stop” during compaction. When no target is given, the default is the **inverse of the trigger**.  
 ([CompactionTrigger delegate](https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI/Compaction/CompactionTrigger.cs#L15-L15), [base trigger/target docs](https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI/Compaction/CompactionStrategy.cs#L25-L35), [default target code](https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI/Compaction/CompactionStrategy.cs#L64-L68), [default target test](https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/tests/Microsoft.Agents.AI.UnitTests/Compaction/CompactionStrategyTests.cs#L134-L171))
 
 The prepared trigger factory provides the following.

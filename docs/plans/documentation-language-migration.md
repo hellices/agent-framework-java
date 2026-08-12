@@ -2239,17 +2239,22 @@ Translate `24-mcp-hosting.md`, `25-foundry-devui-channels.md`, `26-identity-sess
 `30-packaging-compatibility.md`, and `31-provider-integrations.md` with the rules in Step 4, plus:
 
 - `25-foundry-devui-channels.md` is the one feature document whose H1 contains Korean words. Translate only that trailing phrase, keeping the rest of the title byte-identical, so the H1 becomes `# 25. Foundry hosting, DevUI, Aspire integration, ChatKit, Telegram, and other confirmed channel adapters`.
-- In the same commit, update the title cell of the `25-foundry-devui-channels.md` row in `docs/upstream/snapshots/d0a4165f/coverage-ledger.md` to quote that exact new H1 text, so the ledger keeps matching the document it verifies.
+  - **Note:** The coverage-ledger title cell for row 25 already carries the full English title (`25. Foundry hosting, DevUI, Aspire integration, ChatKit, Telegram, and other confirmed channel adapters`) as a temporary forward-reference set during the Task 5 review. Do **not** change the ledger cell again; translate only the feature document H1 so the two values agree.
 - `31-provider-integrations.md` holds a 135-row inventory table. Keep every row and every cell count; translate only the descriptive cells.
 
-Verify the ledger and the H1 agree:
+After translating `25-foundry-devui-channels.md`, run the following executable verification to confirm the ledger title and the H1 are byte-identical (this step is mandatory and its output must be recorded in the Task 6 report):
 
 ```bash
-rg -n '^# ' docs/upstream/snapshots/d0a4165f/features/25-foundry-devui-channels.md
-rg -n '25-foundry-devui-channels' docs/upstream/snapshots/d0a4165f/coverage-ledger.md
+H1=$(rg -m1 '^# ' docs/upstream/snapshots/d0a4165f/features/25-foundry-devui-channels.md | sed 's/^# //')
+CELL=$(rg -m1 '25-foundry-devui-channels' docs/upstream/snapshots/d0a4165f/coverage-ledger.md | awk -F'`' '{print $4}')
+if [ "$H1" = "$CELL" ]; then
+  echo "PASS: ledger title matches H1: $H1"
+else
+  echo "FAIL: ledger='$CELL'  H1='$H1'"
+fi
 ```
 
-Expected: the ledger row quotes the same title text that the H1 now carries.
+Expected: `PASS: ledger title matches H1: 25. Foundry hosting, DevUI, Aspire integration, ChatKit, Telegram, and other confirmed channel adapters`
 
 - [ ] **Step 6: Verify preservation**
 
@@ -2583,6 +2588,42 @@ deliberately not resolved.
 | `docs/design/gradle-kotlin-arc-foundation-design.md` | 0 | 8 | 0 | 10 | 12 | 1 | 14 | 15 | 84 |
 
 **Plan update:** Step 4 instruction updated to reflect `Approval date:` for `foundation-design.md`.
+
+**Ambiguities:** none.
+
+---
+
+## Task 5 review — minor fixes report
+
+**Commands run and outcomes:**
+
+1. `./gradlew :build-tools:harness-policy:test --tests '*DocumentationLanguagePolicyTest*' --tests '*MarkdownLinkPolicyTest*'` — PASS
+2. `./gradlew policyCheck` — PASS
+
+**Checks that could not run:** `testJava21` and `testJava25` require Temurin 21 and 25 toolchains; not verified locally.
+
+**Three fixes applied (one commit):**
+
+| # | File | Change |
+| --- | --- | --- |
+| 1 | `docs/upstream/snapshots/d0a4165f/features/11-compaction.md` §7.3 | Replaced `first-class predicate` with `primary predicate`; matches upstream intent without implying a Java-first-class-citizen claim. |
+| 2 | `docs/upstream/snapshots/d0a4165f/features/05-function-tools.md` Java decisions | Upgraded source obligation from `should separate` to `must separate`; cross-request state contamination is a correctness defect, not a recommendation. |
+| 3 | `docs/plans/documentation-language-migration.md` Task 6 Step 5 | Replaced the instruction to update the ledger title cell with an explicit note that the cell already carries the English title as a forward-reference, added a mandatory executable byte-identity check (`H1 == CELL`), and removed the redundant prose verification block. Task 6 now explicitly owns removal of the temporary mismatch between the ledger and the still-Korean feature-25 H1. |
+
+**Coverage ledger row 25 (no ledger change now):**
+
+The ledger title cell for `25-foundry-devui-channels.md` already reads `25. Foundry hosting, DevUI, Aspire integration, ChatKit, Telegram, and other confirmed channel adapters` (English). The feature document H1 still contains Korean (`기타 확인된 channel adapters`). This temporary mismatch is intentional and is owned by Task 6 Step 5, which must translate the H1 to match the ledger cell and then run the mandatory executable verification.
+
+**Metrics (unchanged — content edits only, no structural changes):**
+
+| File | ids | urls | pin | fence | h2 | h3 | bullets |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `features/05-function-tools.md` | 0 | 258 | 258 | 0 | 14 | 37 | 173 |
+| `features/11-compaction.md` | 0 | 162 | 163 | 0 | 16 | 63 | 169 |
+
+**URL/permalink totals (post-fix):** `7286` (all docs); `7286` (pin-specific).
+
+**Korean scan (post-fix):** `docs/ko/README.md` plus features 16–31 (all pending Task 6 translation) — no unexpected Korean outside the expected pending set.
 
 **Ambiguities:** none.
 
