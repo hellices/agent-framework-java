@@ -61,10 +61,22 @@ publishing {
 // in motion.
 // The key may arrive as a value or as a path to a file holding it. A file keeps the key out of the
 // process environment, which GitHub Actions prints when it logs a step's `env` block.
-val signingKeyFile = providers.environmentVariable("SIGNING_KEY_FILE").orNull?.takeIf(String::isNotBlank)
+//
+// The path is resolved against the settings-time root, not the subproject: this convention runs in
+// every module, so a repository-relative path would otherwise resolve differently in each one and
+// find the key in none of them.
+val signingKeyFile =
+    providers.environmentVariable("SIGNING_KEY_FILE").orNull?.takeIf(String::isNotBlank)
 val signingKey =
-    (signingKeyFile?.let { providers.fileContents(layout.projectDirectory.file(it)).asText.orNull }
-        ?: providers.environmentVariable("SIGNING_KEY").orNull)
+    (signingKeyFile
+            ?.let { path ->
+                val file = java.io.File(path)
+                val resolved =
+                    if (file.isAbsolute) file
+                    else isolated.rootProject.projectDirectory.file(path).asFile
+                if (resolved.isFile) resolved.readText() else null
+            }
+            ?: providers.environmentVariable("SIGNING_KEY").orNull)
         ?.takeIf(String::isNotBlank)
 val signingPassword = providers.environmentVariable("SIGNING_PASSWORD").orNull
 

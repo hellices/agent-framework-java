@@ -27,6 +27,25 @@ class ModuleCompositionPolicyTest {
 
   private static final String PLATFORM_PROJECT = ":agent-framework-bom";
 
+  /**
+   * Projects allowed to sit at the repository root.
+   *
+   * <p>Closed for the same reason as the grouping directories. Without it a root path is
+   * unconstrained, so a provider or sample could be registered as {@code :agent-framework-openai}
+   * and still satisfy the layout contract.
+   */
+  private static final List<String> ROOT_PROJECTS =
+      Stream.concat(LIBRARY_PROJECTS.stream(), Stream.of(PLATFORM_PROJECT)).toList();
+
+  /**
+   * Grouping directories whose modules are built but never published.
+   *
+   * <p>Kept separate from the grouping list so that adding a family does not accidentally waive its
+   * publishing obligation.
+   */
+  private static final List<String> NON_PUBLISHED_GROUPS =
+      List.of("samples", "compatibility-tests");
+
   private static final String HARNESS_PREFIX = ":build-tools:";
 
   /**
@@ -65,6 +84,39 @@ class ModuleCompositionPolicyTest {
   }
 
   @Test
+  void everyRegisteredProductProjectIsClassified() {
+    // The lists above drive the publishing, dependency-direction, and BOM checks. A new module can
+    // otherwise satisfy the layout and existence checks while none of those ever look at it, so
+    // registering one without classifying it must fail here rather than pass silently.
+    List<String> unclassified =
+        ProjectLayout.includedProjects().stream()
+            .filter(path -> !path.startsWith(HARNESS_PREFIX))
+            .filter(path -> !LIBRARY_PROJECTS.contains(path))
+            .filter(path -> !PLATFORM_PROJECT.equals(path))
+            .filter(path -> !isExemptFromPublishing(path))
+            .toList();
+
+    assertThat(unclassified)
+        .withFailMessage(
+            "These projects are registered but classified by no policy: %s. Add each to"
+                + " LIBRARY_PROJECTS, to the platform, or to a group that this contract exempts"
+                + " from publishing, so the publishing, dependency, and BOM checks cover it.",
+            unclassified)
+        .isEmpty();
+  }
+
+  /**
+   * Reports whether a project is deliberately outside the published surface.
+   *
+   * <p>Samples and compatibility tests exist to be built, not shipped, so they carry no publishing
+   * or BOM obligation.
+   */
+  private static boolean isExemptFromPublishing(String gradlePath) {
+    return NON_PUBLISHED_GROUPS.stream()
+        .anyMatch(group -> gradlePath.startsWith(":" + group + ":"));
+  }
+
+  @Test
   void settingsRegistersEveryProductProject() {
     assertThat(ProjectLayout.includedProjects())
         .containsAll(LIBRARY_PROJECTS)
@@ -89,6 +141,16 @@ class ModuleCompositionPolicyTest {
                     + " declare.",
                 gradlePath, segments[0])
             .contains(segments[0]);
+      } else {
+        // Without a closed list, a root path is unconstrained and `:agent-framework-openai` would
+        // satisfy the layout contract even though a provider belongs under `providers/`. That is
+        // the case this test exists to reject.
+        assertThat(ROOT_PROJECTS)
+            .withFailMessage(
+                "%s sits at the repository root, which is reserved for the core modules %s. A"
+                    + " provider, sample, or tool belongs in a grouping directory: %s.",
+                gradlePath, ROOT_PROJECTS, GROUPING_DIRECTORIES)
+            .contains(gradlePath);
       }
     }
   }

@@ -161,25 +161,19 @@ jobs:
             -Pagentframework.requireSignatures=true
           # A signature file that gpg rejects would still satisfy a file-existence check.
           #
-          # Start from the signatures rather than the jars: an earlier publish in this job leaves
-          # unsigned snapshot jars behind, and picking a jar first can select one that has no
-          # matching `.asc`.
+          # Verify every signature, not just the main jars: Central rejects the upload when any
+          # artifact's signature is malformed, including a pom, a sources jar, or a javadoc jar.
+          # The contract test separately proves that every payload has one.
           found=0
           while IFS= read -r signature; do
-            signed="${signature%.asc}"
-            case "$signed" in
-              *-sources.jar|*-javadoc.jar) continue ;;
-              *.jar) ;;
-              *) continue ;;
-            esac
-            gpg --batch --quiet --verify "$signature" "$signed"
+            gpg --batch --quiet --verify "$signature" "${signature%.asc}"
             found=$((found + 1))
-          done < <(find build/maven-repository -name '*.jar.asc')
+          done < <(find build/maven-repository -name '*.asc')
           if [ "$found" -eq 0 ]; then
-            echo 'No signed main jars were found to verify.'
+            echo 'No signatures were found to verify.'
             exit 1
           fi
-          echo "Verified $found signed jars."
+          echo "Verified $found signatures."
 
       - name: Verify a release without a key fails before uploading
         env:

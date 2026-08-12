@@ -17,9 +17,11 @@ tasks.withType<Test>().configureEach {
     useJUnitPlatform()
     failFast = false
 
-    // Without an explicit heap the JVM sizes it from the host's memory, not from the container
-    // limit, so several test JVMs on a large node can together exceed the runner's cgroup and get
-    // the pod OOM-killed. The build then reports a cancelled step with no failure in the log.
+    // A modern JVM sizes its heap from the cgroup limit, not from host memory, so one test JVM is
+    // not the problem. Several are: `testJava17`, `testJava21`, and `testJava25` can run
+    // concurrently, and each sizes itself against the whole container without accounting for its
+    // siblings. Their defaults then add up past the runner's limit and the pod is OOM-killed, which
+    // the build reports as a cancelled step with no failure in the log.
     maxHeapSize = "1g"
 
     systemProperty("java.awt.headless", "true")

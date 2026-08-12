@@ -96,9 +96,11 @@ and the log stops. Distinguish them by the event text.
 Warning  Evicted  ...  The node was low on resource: memory. ... Container runner was using 2810464Ki
 ```
 
-A JVM sizes its default heap from the host's memory rather than the container limit, so a large node
-makes several test JVMs claim far more than the runner's cgroup allows. Test tasks therefore set an
-explicit `maxHeapSize`, and the runner container requests 6Gi with a 10Gi limit.
+A modern JVM sizes its heap from the cgroup limit rather than host memory, so a single test JVM is
+not the hazard. Several are: the compatibility tasks can run concurrently, and each sizes itself
+against the whole container without accounting for its siblings, so their defaults add up past the
+runner's limit. Test tasks therefore set an explicit `maxHeapSize`, and the runner container
+requests 6Gi with a 10Gi limit.
 
 The workflow is intentionally not softened to `ubuntu-latest` to make a branch mergeable earlier.
 Doing that would delete the only executable evidence that the runner contract below is honoured, and

@@ -40,9 +40,29 @@ class SigningContractTest {
           "agent-framework-bom");
 
   @Test
+  void everyPublishedPayloadCarriesItsOwnSignature() {
+    requireSignedPublishOutput();
+
+    // Central requires a signature for every uploaded file, not one per module. Reducing signatures
+    // to module names let an unsigned pom, sources jar, or javadoc jar pass as long as some sibling
+    // was signed, so compare each payload with its own `.asc`.
+    List<Path> unsigned = payloadsWithoutSignature();
+
+    assertThat(unsigned)
+        .withFailMessage(
+            "These published files carry no detached signature: %s. Maven Central rejects the whole"
+                + " upload when any artifact is unsigned, including a pom, a sources jar, or a"
+                + " javadoc jar.",
+            unsigned)
+        .isEmpty();
+  }
+
+  @Test
   void everyPublishedArtifactCarriesADetachedSignature() {
     requireSignedPublishOutput();
 
+    // Keeps the module list honest: the file-level check above cannot notice a module that
+    // published nothing at all.
     Set<String> signedArtifacts = signatureTargets(".asc");
 
     for (String artifact : PUBLISHED_ARTIFACTS) {
@@ -183,6 +203,43 @@ class SigningContractTest {
           !signed.isEmpty(),
           "Skipped: no signed publish output. Publish with a signing key set to verify signing.");
     }
+  }
+
+  /**
+   * Returns every published file that should carry a signature but does not.
+   *
+   * <p>Checksums are excluded because Central does not sign them, and signatures obviously do not
+   * sign themselves. Maven metadata is excluded for the same reason: it is repository bookkeeping
+   * rather than a released artifact.
+   */
+  private static List<Path> payloadsWithoutSignature() {
+    Path repository = publishedRepository();
+    if (!Files.isDirectory(repository)) {
+      return List.of();
+    }
+
+    try (Stream<Path> files = Files.walk(repository)) {
+      return files
+          .filter(Files::isRegularFile)
+          .filter(SigningContractTest::isSignablePayload)
+          .filter(path -> !Files.exists(path.resolveSibling(fileNameOf(path) + ".asc")))
+          .sorted()
+          .toList();
+    } catch (IOException cause) {
+      throw new UncheckedIOException("Cannot scan " + repository, cause);
+    }
+  }
+
+  private static boolean isSignablePayload(Path path) {
+    String name = fileNameOf(path);
+    if (name.endsWith(".asc")
+        || name.endsWith(".md5")
+        || name.endsWith(".sha1")
+        || name.endsWith(".sha256")
+        || name.endsWith(".sha512")) {
+      return false;
+    }
+    return !name.startsWith("maven-metadata");
   }
 
   private static List<Path> mainJarsWithoutSignature() {
