@@ -59,7 +59,13 @@ publishing {
 // default. A release build passes `-Pagentframework.release=true`, and a missing key then fails the
 // publish task instead of the upload, where the failure would surface after the release is already
 // in motion.
-val signingKey = providers.environmentVariable("SIGNING_KEY").orNull
+// The key may arrive as a value or as a path to a file holding it. A file keeps the key out of the
+// process environment, which GitHub Actions prints when it logs a step's `env` block.
+val signingKeyFile = providers.environmentVariable("SIGNING_KEY_FILE").orNull?.takeIf(String::isNotBlank)
+val signingKey =
+    (signingKeyFile?.let { providers.fileContents(layout.projectDirectory.file(it)).asText.orNull }
+        ?: providers.environmentVariable("SIGNING_KEY").orNull)
+        ?.takeIf(String::isNotBlank)
 val signingPassword = providers.environmentVariable("SIGNING_PASSWORD").orNull
 
 // Read the value, not merely its presence: `-Pagentframework.release=false` must mean "not a

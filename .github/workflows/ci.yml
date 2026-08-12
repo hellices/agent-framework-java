@@ -115,11 +115,13 @@ jobs:
           --tests '*PublishedBomContractTest*' --rerun-tasks
           -Pagentframework.requirePublishedBom=true
 
-      # Signing only misbehaves once a key exists, and two faults have already reached this
-      # repository that way. A throwaway key generated here exercises the release path on every
-      # pull request without any secret.
+      # Signing only misbehaves once a key exists, and a fault has already reached this repository
+      # that way. A throwaway key generated here exercises the release path on every pull request
+      # without any secret.
+      #
+      # The key is written to a file rather than the environment: Actions prints a step's `env`
+      # block, so an environment variable would publish the private key into the run log.
       - name: Generate a throwaway signing key
-        id: signing-key
         run: |
           set -euo pipefail
           export GNUPGHOME="$(mktemp -d)"
@@ -133,12 +135,10 @@ jobs:
           Expire-Date: 0
           %commit
           SPEC
-          gpg --batch --gen-key "$GNUPGHOME/spec"
-          {
-            echo 'SIGNING_KEY<<PGPKEY'
-            gpg --batch --armor --export-secret-keys ci-verification@example.invalid
-            echo 'PGPKEY'
-          } >> "$GITHUB_ENV"
+          gpg --batch --quiet --gen-key "$GNUPGHOME/spec"
+          gpg --batch --quiet --armor --export-secret-keys ci-verification@example.invalid \
+            > "$GNUPGHOME/signing-key.asc"
+          echo "SIGNING_KEY_FILE=$GNUPGHOME/signing-key.asc" >> "$GITHUB_ENV"
 
       - name: Verify the release path signs every published artifact
         env:
@@ -158,20 +158,21 @@ jobs:
           # A signature file that gpg rejects would still satisfy a file-existence check.
           jar="$(find build/maven-repository -name 'agent-framework-api-*.jar' \
             ! -name '*sources*' ! -name '*javadoc*' | head -1)"
-          gpg --verify "$jar.asc" "$jar"
+          gpg --batch --quiet --verify "$jar.asc" "$jar"
 
       - name: Verify a release without a key fails before uploading
         env:
           JAVA_HOME: ${{ env.JAVA_HOME_17_X64 }}
+          SIGNING_KEY_FILE: ""
         run: |
           set -euo pipefail
-          if env -u SIGNING_KEY ./gradlew --no-daemon \
-            publishAllPublicationsToBuildDirectoryRepository \
-            -Pagentframework.release=true > release-guard.log 2>&1; then
-            echo 'A release with no SIGNING_KEY must fail, but it succeeded.'
+          log="$(mktemp)"
+          if ./gradlew --no-daemon publishAllPublicationsToBuildDirectoryRepository \
+            -Pagentframework.release=true > "$log" 2>&1; then
+            echo 'A release with no signing key must fail, but it succeeded.'
             exit 1
           fi
-          grep -q 'must sign its artifacts' release-guard.log
+          grep -q 'must sign its artifacts' "$log"
 
       - name: Upload verification reports
         if: always()

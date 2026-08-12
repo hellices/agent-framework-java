@@ -132,6 +132,10 @@ that every artifact carries a detached signature; the workflow then runs `gpg --
 signature that exists but does not validate cannot pass. A text assertion is not enough here: an
 earlier version of that guard was defeated by a single extra space.
 
+The key reaches the build through `SIGNING_KEY_FILE`, a path, rather than `SIGNING_KEY`, a value.
+GitHub Actions prints each step's `env` block, so an environment variable holding a private key
+ends up in the run log. `SIGNING_KEY` still works for a release that has no way to stage a file.
+
 The BOM must manage versions without forcing dependencies. `PublishedBomContractTest` parses the
 published POM and fails when any `<dependencies>` block appears outside `<dependencyManagement>`,
 because reading the build file alone cannot tell a constraint from a plain declaration sitting
