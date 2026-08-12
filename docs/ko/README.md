@@ -1,143 +1,72 @@
-# Agent Framework for Java
+# Agent Framework for Java 한국어 안내
 
-[Microsoft Agent Framework](https://github.com/microsoft/agent-framework)의 관찰 가능한 실행
-의미론을 Java에서 사용할 수 있게 만듭니다.
+## 프로젝트 목적과 현재 상태
 
-이 프로젝트는 애플리케이션 서버나 DI 컨테이너를 만들지 않습니다. 산출물은 호스트에 삽입할 수
-있는 `AgentEngine`이며, Spring Boot 같은 호스트 런타임이 객체 생명주기, 실행 자원, 보안,
-트랜잭션, 관찰성 구성을 계속 소유합니다.
+이 저장소는 [Microsoft Agent Framework](https://github.com/microsoft/agent-framework)의 관찰 가능한 실행 의미론을 Java로 옮기는 작업을 진행합니다. 산출물의 중심은 애플리케이션 서버가 아니라 호스트에 내장하는 `AgentEngine`입니다.
 
-> **상태:** 초기 단계입니다. 빌드 하네스, 요구사항, 모듈 뼈대가 준비됐고 에이전트 동작은 아직
-> 구현하지 않았습니다. [현재 상태](#현재-상태)를 참고하세요.
+현재 저장소에는 빌드 하네스, 문서 계약, 모듈 골격이 준비되어 있지만 에이전트 동작 자체는 아직 구현되지 않았습니다. 큰 흐름은 [루트 README](../../README.md)에서, 문서 전체 목록은 [문서 인덱스](../README.md)에서, 구현 진행 상황은 이 문서의 [현재 상태](#현재-상태)에서 확인할 수 있습니다.
 
-## 왜 이렇게 나누는가
+## 런타임 소유권과 아키텍처 경계
 
-에이전트 런타임과 애플리케이션 런타임은 서로 다른 문제를 풉니다. 둘을 합치면 스레드 풀, 설정,
-요청 수명주기를 양쪽이 모두 소유한다고 주장하게 되고, 결국 어느 쪽도 상대 없이는 테스트할 수
-없게 됩니다.
+`AgentEngine`는 모델 호출과 도구 호출의 상태 전이, 세션 상태 변경 규칙, 스트리밍 이벤트 순서를 소유합니다. 이 경계 덕분에 엔진은 프레임워크 중립을 유지하고, 같은 의미론을 서로 다른 호스트 환경에 삽입할 수 있습니다.
 
-그래서 경계를 명시합니다.
+호스트 런타임은 의존성 주입, 구성, 객체 생명주기, 실행기, 스케줄러, HTTP 서버, 보안, 트랜잭션을 소유합니다. 저장소의 모듈 배치와 경계 규칙은 [기초 설계](../design/foundation-design.md)와 [모듈 구성 계약](../design/module-composition.md)에서 정리합니다.
 
-| 관심사 | 소유자 |
-| --- | --- |
-| 모델 호출과 도구 호출의 상태 전이 | `AgentEngine` |
-| 세션 상태 변경 규칙 | `AgentEngine` |
-| 스트리밍 이벤트 순서와 중단 정책 | `AgentEngine` |
-| DI, 설정, 객체 생명주기 | 호스트 런타임 |
-| 실행기, 스케줄러, HTTP 서버 | 호스트 런타임 |
-| 보안, 트랜잭션, 복원력 정책 | 호스트 런타임과 통합 모듈 |
-| 공급자 API 변환 | 공급자 어댑터 |
+## 빠른 시작과 공통 Gradle 명령
 
-엔진이 프레임워크 중립을 유지하므로 같은 에이전트 의미론을 Spring Boot, Quarkus, CLI, 순수
-테스트 하네스 어디서나 실행할 수 있습니다.
-
-## 설계 원칙
-
-- 업스트림 API 이름 일치보다 **관찰 가능한 동작**의 호환을 우선합니다.
-- 에이전트 실행은 애플리케이션 프레임워크에 의존하지 않는 임베디드 상태 머신으로 구현합니다.
-- Spring AI를 포함한 모든 통합은 기반이 아니라 **선택적 어댑터**로 취급합니다.
-- 하나의 저장소에서 여러 아티팩트를 관리하고 단일 버전과 BOM으로 정렬합니다.
-
-## 빠른 시작
-
-JDK 17이 필요합니다. 호환성 테스트는 Temurin 21과 25를 추가로 사용합니다.
+개발과 검증의 기준 JDK는 17입니다. 호환성 확인은 Temurin 21과 25에서도 수행하므로, 로컬에 두 버전이 없으면 해당 검증은 CI에 맡길 수 있습니다.
 
 ```bash
-git clone https://github.com/hellices/agent-framework-java.git
-cd agent-framework-java
+./gradlew policyCheck
+./gradlew quality
+./gradlew testJava17
 ./gradlew check
 ```
 
-로컬과 CI 모두 저장소에 포함된 Gradle Wrapper로 실행합니다. CI 전용 검증 경로는 없습니다.
+- `./gradlew policyCheck`: 저장소 정책과 문서·구조 규칙을 확인합니다.
+- `./gradlew quality`: JDK 17에서 포매팅과 정적 분석을 실행합니다.
+- `./gradlew testJava17`: 기본 테스트 실행 경로입니다.
+- `./gradlew check`: 위 검증에 더해 추가 호환성 실행까지 묶어 확인합니다.
+- 처음 기여를 시작할 때 필요한 흐름은 [시작 가이드](../operations/getting-started.md)에서 확인합니다.
 
-| 명령 | 목적 |
-| --- | --- |
-| `./gradlew policyCheck` | 저장소·아티팩트·워크플로 정책 회귀 |
-| `./gradlew quality` | JDK 17에서 포매팅과 정적 분석 |
-| `./gradlew testJava17` | Temurin 17 런처로 테스트 |
-| `./gradlew check` | 위 전부와 21·25 호환성 실행 |
-| `./gradlew publishAllPublicationsToBuildDirectoryRepository` | 모든 아티팩트를 `build/maven-repository`에 게시 |
+## 저장소와 모듈 구성
 
-로컬에 Temurin 21이나 25가 없으면 `testJava21`, `testJava25`가 툴체인 오류로 실패합니다. 좁은
-태스크만 실행하고 나머지는 CI에 맡기면 됩니다.
+이 저장소를 읽을 때 먼저 아래 경로의 역할을 익히면 탐색이 빨라집니다.
 
-## 저장소 구조
+- `agent-framework-api`: 공개 타입과 계약의 출발점입니다.
+- `agent-framework-engine`: 임베디드 실행 상태 머신을 담습니다.
+- `agent-framework-testkit`: 결정적 테스트 지원 도구를 담습니다.
+- `agent-framework-bom`: 공개 아티팩트 버전을 정렬합니다.
+- `build-logic`: Gradle 관례 플러그인을 담습니다.
+- `build-tools/harness-policy`: 저장소 정책을 실행 가능한 테스트로 검증합니다.
+- `config`: 정적 분석과 품질 도구 구성을 담습니다.
+- `docs`: 요구사항, 설계, 운영, 업스트림 근거 문서를 담습니다.
+- `.harness`: 에이전트 아티팩트 스키마와 하네스 자산을 담습니다.
 
-핵심 모듈은 루트에 둡니다. 모듈이 많아질 계열은 그룹 디렉터리로 묶으며, 이는 Spring AI와
-Spring Boot가 같은 규모에서 쓰는 형태입니다.
+## 어떤 문서를 언제 읽어야 하는가
 
-```text
-agent-framework-api/        공개 계약과 값 타입
-agent-framework-engine/     임베디드 실행 상태 머신
-agent-framework-testkit/    결정적 테스트 fixture
-agent-framework-bom/        published artifact 버전 정렬
-build-logic/                Gradle convention plugin
-build-tools/harness-policy/ 실행 가능한 저장소 정책
-config/                     Checkstyle, PMD, SpotBugs 설정
-docs/                       요구사항, 설계, 업스트림 분석
-.harness/                   에이전트 아티팩트 JSON 스키마
-```
+- [요구사항 인덱스](../requirements/README.md): Java 구현이 무엇을 만족해야 하는지 확인할 때 읽습니다.
+- [기초 설계](../design/foundation-design.md): 아키텍처 방향과 초기 구현 순서를 이해할 때 읽습니다.
+- [모듈 구성 계약](../design/module-composition.md): 코드와 모듈을 어디에 둘지 판단할 때 읽습니다.
+- [시작 가이드](../operations/getting-started.md): 로컬 개발, 검증, 기여 절차를 따라갈 때 읽습니다.
+- [고정 업스트림 스냅샷 안내](../upstream/snapshots/d0a4165f/README.md): 현재 저장소가 어떤 업스트림 근거를 기준으로 해석되었는지 확인할 때 읽습니다.
 
-예정된 그룹 디렉터리는 `providers/`, `integrations/`, `starters/`, `protocols/`, `workflow/`,
-`compatibility-tests/`, `samples/`입니다. 각 디렉터리는 첫 모듈이 들어올 때 만듭니다.
+요구사항은 구현 대상의 범위를 잡아 주고, 설계 문서는 왜 그런 구조를 택했는지 설명하며, 운영 가이드는 작업 절차를 안내하고, 고정 업스트림 근거는 비교 기준과 출처를 보여 줍니다.
 
-모듈 규칙은 [모듈 구성 계약](../design/module-composition.md)이 정의하고 `./gradlew policyCheck`가
-강제합니다.
+## 현재 상태
 
-## 문서
+저장소는 검증 가능한 기반을 갖췄지만 에이전트 동작 구현은 아직 시작 전 단계입니다. 빌드 로직, 정책 검증, 문서 체계, 모듈 골격은 준비되어 있고 다음 구현 목표는 `agent-framework-api`의 타입 모델입니다. 이후의 엔진·통합·프로토콜 작업은 이 타입 모델 위에 쌓입니다.
 
-필요에 따라 시작점을 고르세요.
-
-| 질문 | 문서 |
-| --- | --- |
-| Java는 무엇을 만들어야 하는가 | [요구사항](../requirements/README.md) |
-| 왜 그렇게 만드는가 | [기초 설계](../design/foundation-design.md) |
-| 원본 프레임워크는 어떻게 동작하는가 | [업스트림 스냅샷 분석](../upstream/snapshots/d0a4165f/README.md) |
-| 모듈은 어떤 관계인가 | [모듈 구성 계약](../design/module-composition.md) |
-| 저장소는 어떻게 검증되는가 | [엔지니어링 하네스 설계](../design/engineering-harness-design.md) |
-| 빌드는 어떻게 동작하는가 | [Gradle과 Java ARC 기반 설계](../design/gradle-kotlin-arc-foundation-design.md) |
-
-요구사항이 계약입니다. 12개 문서에 244개 요구사항이 있고, 각각 고정 ID, .NET과 Python 비교,
-Java 판단 근거, 수용 기준을 가집니다.
-
-## 기여
+## 기여와 보안 안내
 
 - [저장소 작업 지침](../../AGENTS.md)
 - [기여 가이드](../../CONTRIBUTING.md)
 - [보안 정책](../../SECURITY.md)
-- [GitHub Actions runner 계약](../operations/github-actions-runner-contract.md)
+- [라이선스](../../LICENSE)
 
-요구사항 ID를 하나 고르고, 실패하는 테스트를 먼저 쓴 뒤, 그것을 통과시키는 최소 변경을
-구현하세요. 커밋 메시지에 ID를 남기면 계약과 코드가 계속 연결됩니다.
+문서를 읽고 바로 작업을 시작하려면 루트 안내와 시작 가이드를 먼저 확인한 뒤, 변경 범위에 맞는 요구사항과 설계 문서를 따라가면 됩니다.
 
-## 현재 상태
+## 정본 언어
 
-검증된 기반은 있고 에이전트 동작은 아직 없습니다.
-
-**준비된 것**
-
-- convention plugin과 의존성 잠금을 갖춘 Gradle Kotlin DSL 빌드
-- 빌드 계약, 거버넌스, 워크플로, 모듈 구조를 덮는 실행 가능한 저장소 정책
-- `.harness/` 아래 에이전트 아티팩트 JSON 스키마
-- fork 안전 검증 경로를 갖춘 `arc-java-build` ARC scale set CI
-- 고정된 업스트림 스냅샷에서 도출한 244개 요구사항
-- 컴파일·테스트·배포 가능한 표면을 가진 제품 모듈 4개
-
-**시작하지 않은 것**
-
-- 메시지와 콘텐츠 타입, 모델 클라이언트 포트, 도구 루프, 세션, 인터셉터
-- 워크플로, 호스팅, 프로토콜 어댑터, 공급자 통합
-
-첫 구현 대상은 `agent-framework-api`의 타입 모델입니다. 다른 모든 모듈이 여기에 의존하고,
-호환성 매트릭스도 초기 릴리스 필수로 판정했기 때문입니다.
-
-## 번역
-
-이 문서는 [영문 README](../../README.md)의 번역본입니다. 영문이 정본이며 번역이 뒤따릅니다.
+이 문서는 한국어 안내서이지만 계약과 세부 정의의 기준은 영문 문서입니다.
 English documents are authoritative.
-
-- [문서 인덱스](../README.md)
-
-## 라이선스
-
-[MIT](../../LICENSE)
