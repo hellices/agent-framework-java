@@ -143,9 +143,13 @@ jobs:
       - name: Verify the release path signs every published artifact
         env:
           JAVA_HOME: ${{ env.JAVA_HOME_17_X64 }}
-        run: >-
-          ./gradlew --no-daemon publishAllPublicationsToBuildDirectoryRepository
-          -Pagentframework.release=true
+        run: |
+          set -euo pipefail
+          # The earlier publish in this job left unsigned snapshot jars under a different
+          # timestamp. Clearing them keeps this step's output unambiguous.
+          rm -rf build/maven-repository
+          ./gradlew --no-daemon publishAllPublicationsToBuildDirectoryRepository \
+            -Pagentframework.release=true
 
       - name: Verify the signatures exist and validate
         env:
@@ -156,9 +160,26 @@ jobs:
             --tests '*SigningContractTest*' --rerun-tasks \
             -Pagentframework.requireSignatures=true
           # A signature file that gpg rejects would still satisfy a file-existence check.
-          jar="$(find build/maven-repository -name 'agent-framework-api-*.jar' \
-            ! -name '*sources*' ! -name '*javadoc*' | head -1)"
-          gpg --batch --quiet --verify "$jar.asc" "$jar"
+          #
+          # Start from the signatures rather than the jars: an earlier publish in this job leaves
+          # unsigned snapshot jars behind, and picking a jar first can select one that has no
+          # matching `.asc`.
+          found=0
+          while IFS= read -r signature; do
+            signed="${signature%.asc}"
+            case "$signed" in
+              *-sources.jar|*-javadoc.jar) continue ;;
+              *.jar) ;;
+              *) continue ;;
+            esac
+            gpg --batch --quiet --verify "$signature" "$signed"
+            found=$((found + 1))
+          done < <(find build/maven-repository -name '*.jar.asc')
+          if [ "$found" -eq 0 ]; then
+            echo 'No signed main jars were found to verify.'
+            exit 1
+          fi
+          echo "Verified $found signed jars."
 
       - name: Verify a release without a key fails before uploading
         env:

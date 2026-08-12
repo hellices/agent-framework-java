@@ -89,6 +89,45 @@ class SigningContractTest {
     }
   }
 
+  @Test
+  void noPublishedJarIsLeftWithoutASignature() {
+    // Publishing twice in one job leaves the earlier snapshot jars behind, unsigned. A check that
+    // stops at "some signature exists" passes while an unsigned artifact sits in the repository, so
+    // require every main jar to have its own.
+    List<Path> unsigned = mainJarsWithoutSignature();
+
+    if (!signaturesAreRequired()) {
+      Assumptions.assumeTrue(
+          !signatureTargets(".jar.asc").isEmpty(), "Skipped: no signed publish output.");
+    }
+
+    assertThat(unsigned)
+        .withFailMessage(
+            "These published jars carry no detached signature: %s. Maven Central rejects an"
+                + " unsigned artifact even when its siblings are signed.",
+            unsigned)
+        .isEmpty();
+  }
+
+  private static List<Path> mainJarsWithoutSignature() {
+    Path repository = publishedRepository();
+    if (!Files.isDirectory(repository)) {
+      return List.of();
+    }
+
+    try (Stream<Path> files = Files.walk(repository)) {
+      return files
+          .filter(Files::isRegularFile)
+          .filter(path -> fileNameOf(path).endsWith(".jar"))
+          .filter(path -> !fileNameOf(path).endsWith("-sources.jar"))
+          .filter(path -> !fileNameOf(path).endsWith("-javadoc.jar"))
+          .filter(path -> !Files.exists(path.resolveSibling(fileNameOf(path) + ".asc")))
+          .toList();
+    } catch (IOException cause) {
+      throw new UncheckedIOException("Cannot scan " + repository, cause);
+    }
+  }
+
   private static boolean signaturesAreRequired() {
     return Boolean.parseBoolean(System.getProperty("agentframework.requireSignatures", "false"));
   }
