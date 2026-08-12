@@ -46,7 +46,7 @@ In other words, this document covers only “how protocol adapters use the gener
 
 ---
 
-## Separation of Hosting Model and Protocol
+## Separation of hosting model and protocol
 
 ### Core distinction
 
@@ -71,7 +71,7 @@ The part responsible for these common aspects is precisely the subject of this d
 
 ---
 
-## Host Composition / Lifecycle / Scaling Responsibilities
+## Host composition / lifecycle / scaling responsibilities
 
 ### What the host must own
 
@@ -165,9 +165,9 @@ In other words, this package exports only protocol-neutral execution-state helpe
 
 ---
 
-## Detailed Execution Flow
+## Detailed execution flow
 
-## .NET: Agent Registration and Resolution
+## .NET: agent registration and resolution
 
 1. The host registers a keyed `AIAgent` with `AddAIAgent(name, ...)`.
 2. DI creates the agent with the configured lifetime.
@@ -177,7 +177,7 @@ In other words, this package exports only protocol-neutral execution-state helpe
 
 The key point is that **there is no separate agent-side holder**, and DI lifetime and `AgentSessionStore` together perform the distributed role that Python's `AgentState` plays. This asymmetry is intentionally explained in ADR-0032. (Source: [AgentHostingServiceCollectionExtensions](https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI.Hosting/AgentHostingServiceCollectionExtensions.cs#L25-L144), [AIHostAgent](https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI.Hosting/AIHostAgent.cs#L24-L72), [ADR-0032 no agent-side holder](https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/docs/decisions/0032-dotnet-hosting-protocol-helpers.md#L101-L143))
 
-## .NET: Workflow Registration and Restore-then-Run
+## .NET: workflow registration and restore-then-run
 
 1. The host registers a keyed workflow with `AddWorkflow(name, factory, lifetime)`.
 2. The application creates a `HostedWorkflowState` from a workflow instance or workflow factory.
@@ -220,7 +220,7 @@ For this reason, Python workflow hosting is thinner at the generic helper level,
 
 ---
 
-## State and Persistence
+## State and persistence
 
 ## Agent session
 
@@ -230,7 +230,7 @@ The generic contract of `.NET` is `AgentSessionStore`. `GetSessionAsync` **may r
 ### Python
 The Python core `SessionStore` is based on `dict[str, AgentSession]`, and both `get()` and `set()` use `copy.deepcopy` to separate the stored snapshot from the working copy. `FileSessionStore` encodes/decodes a typed envelope to/from JSON or MessagePack files using msgspec, and custom state enables cold-start restore through the `register_state_type()` registry. (Source: [SessionStore](https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/core/agent_framework/_sessions.py#L1692-L1767), [FileSessionStore overview](https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/core/agent_framework/_sessions.py#L1769-L1797), [FileSessionStore init/get](https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/core/agent_framework/_sessions.py#L1806-L1858), [register_state_type](https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/core/agent_framework/_sessions.py#L268-L335))
 
-## Workflow Checkpoint and Snapshot Head
+## Workflow checkpoint and snapshot head
 
 ### .NET
 `HostedWorkflowState` maintains a `CheckpointManager` and an in-memory `sessionId -> CheckpointInfo` cursor. On a cursor miss it reads the manager's latest checkpoint, enabling resume even after a restart. This structure is a 2-tier arrangement of **head cursor + durable checkpoint store**. (Source: [HostedWorkflowState fields/remarks](https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI.Hosting/HostedWorkflowState.cs#L18-L39), [cursor miss fallback](https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI.Hosting/HostedWorkflowState.cs#L218-L226), [Record/UpdateCursor](https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI.Hosting/HostedWorkflowState.cs#L350-L382))
@@ -256,7 +256,7 @@ Python `WorkflowState` does not store checkpoints. The application must directly
 
 ---
 
-## Concurrency, Streaming, and Cancellation
+## Concurrency, streaming, and cancellation
 
 ## Concurrency
 
@@ -282,9 +282,9 @@ Python `WorkflowState` does not store checkpoints. The application must directly
 
 ---
 
-## Errors, Validation, and Security
+## Errors, validation, and security
 
-## Errors and Validation
+## Errors and validation
 
 - Python `SessionStore.validate_session_id()` performs only minimal validation of whether the session id is a non-empty string.
 - The .NET `AgentSessionStore` contract requires implementers to treat `sessionStoreId` as opaque and to make no assumptions about parsing or key format.
@@ -299,7 +299,7 @@ Python `WorkflowState` does not store checkpoints. The application must directly
 
 ---
 
-## .NET Implementation and Tests
+## .NET implementation and tests
 
 ### Implementation highlights
 - Agent registration: `AddAIAgent(...)` registers a keyed `AIAgent` service.
@@ -317,7 +317,7 @@ Python `WorkflowState` does not store checkpoints. The application must directly
 
 ---
 
-## Python Implementation and Tests
+## Python implementation and tests
 
 ### Implementation highlights
 - `AgentState` handles target caching and create-on-miss session lifecycle.

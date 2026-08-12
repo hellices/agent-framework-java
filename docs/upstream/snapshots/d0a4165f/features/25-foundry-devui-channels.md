@@ -291,13 +291,13 @@ Source:
 DevUI itself does not define a new independent session store. It uses the underlying OpenAI Responses/Conversations services and resolves keyed/non-keyed agent/workflow registrations. That is, the DevUI state consumes the state surface of the OpenAI-compatible backend already exposed by the host. (Source: [.NET DevUI prerequisite on responses/conversations](https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI.DevUI/DevUIExtensions.cs#L18-L23), [.NET DevUIExtensionsTests workflow/agent resolution](https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/tests/Microsoft.Agents.AI.DevUI.UnitTests/DevUIExtensionsTests.cs#L42-L66))
 
 ### Python
-The Python DevServer on its own has:
+The Python DevServer has the following of its own:
 - discovered entities registry
 - loaded object cache
 - cleanup hooks
 - running response task registry
 - conversation/deployment managers  
-of its own. Entity discovery uses sparse scan followed by lazy load, and also supports cache invalidation for hot reload. (Source: [EntityDiscovery fields](https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/devui/agent_framework_devui/_discovery.py#L23-L35), [lazy loading and enrichment](https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/devui/agent_framework_devui/_discovery.py#L75-L155), [invalidate_entity / invalidate_all](https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/devui/agent_framework_devui/_discovery.py#L239-L288), [DevServer running tasks and managers](https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/devui/agent_framework_devui/_server.py#L111-L116))
+Entity discovery uses sparse scan followed by lazy load, and also supports cache invalidation for hot reload. (Source: [EntityDiscovery fields](https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/devui/agent_framework_devui/_discovery.py#L23-L35), [lazy loading and enrichment](https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/devui/agent_framework_devui/_discovery.py#L75-L155), [invalidate_entity / invalidate_all](https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/devui/agent_framework_devui/_discovery.py#L239-L288), [DevServer running tasks and managers](https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/devui/agent_framework_devui/_server.py#L111-L116))
 
 ## Extension points
 
