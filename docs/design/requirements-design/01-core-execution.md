@@ -20,14 +20,14 @@ session persistence와 interceptor pipeline은
 ```text
 com.microsoft.agentframework.api.agent
   Agent, AgentId, AgentRunRequest, AgentRunOptions, AgentResponse, AgentResponseUpdate
-  AgentRun, AgentStreamingRun, CancellationSignal
+  AgentFactory, AgentBuilder, AgentRun, AgentStreamingRun, CancellationSignal
 
 com.microsoft.agentframework.api.message
   Message, Role, Content, TextContent, MediaContent, ToolCallContent, ToolResultContent
   ProviderExtensionContent, Usage, FinishReason, MessageAttribution
 
 com.microsoft.agentframework.api.tool
-  Tool, ToolDefinition, ToolHandler, ToolArguments, ToolResult, ToolMode
+  Tools, Tool, ToolSet, ToolDefinition, ToolHandler, ToolArguments, ToolResult, ToolMode
   ToolExecutionOptions, ToolApprovalRequest, ToolApprovalResponse
 
 com.microsoft.agentframework.api.structured
@@ -93,6 +93,10 @@ Agent.runStreaming(request)   -> AgentStreamingRun(updates + final completion + 
 no-input 실행은 `AgentRunRequest.empty()` 또는 별도 overload로 표현한다. `null`은 빈 입력이
 아니다.
 
+`AgentFactory`는 thread-safe singleton facade이고 호출마다 새 `AgentBuilder`를 만든다.
+framework adapter와 standalone assembly는 port 조립을 끝낸 factory를 제공하므로 일반 사용자는
+`AgentEngineBuilder`를 직접 다루지 않는다.
+
 ### 3.2 AgentEngine
 
 `AgentEngine`은 `Agent`를 구현하거나 `Agent` 구현을 만드는 application service다. host는
@@ -107,6 +111,21 @@ builder로 다음 port를 주입한다.
 
 builder는 지원하지 않는 interceptor seam, 누락된 mandatory port, 상충하는 tool option을 build
 시점에 거부한다.
+
+### 3.3 Tool facade
+
+`Tools`는 explicit Java handler를 `Tool`로 만드는 static factory다. `ToolSet`은 이름과 immutable
+tool collection을 가진 portable aggregate이며 MCP discovery와 annotation processor companion도
+같은 타입을 반환한다.
+
+```text
+AgentBuilder.tools(Tool...)
+AgentBuilder.tools(ToolSet...)
+AgentBuilder.tools(Collection<? extends Tool>)
+```
+
+각 overload는 이름 충돌을 검증하고 build 결과에 immutable snapshot을 저장한다. `ToolSet`을
+붙이는 것은 명시적이며 DI container나 classpath의 모든 tool을 자동 수집하지 않는다.
 
 ### 3.3 Values
 

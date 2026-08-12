@@ -36,6 +36,10 @@ port는 공개 API이지만 application 편의 API와 구분되는 `com.microsof
 package에 둔다. 초기에는 별도 SPI artifact를 만들지 않는다. API와 SPI 릴리스 주기가 실제로
 분리된 증거가 생기기 전 module을 나누면 consumer dependency만 늘어난다.
 
+일반 개발자는 SPI가 아니라 `AgentFactory`, `AgentBuilder`, `Agent`, `AgentRun`, `ToolSet`,
+`Workflow`, `Harness` facade를 사용한다. 상세 사용성 계약은
+[Developer experience](06-developer-experience.md)가 정의한다.
+
 ### 2.2 Application engine
 
 `agent-framework-engine`은 public API에만 의존한다.

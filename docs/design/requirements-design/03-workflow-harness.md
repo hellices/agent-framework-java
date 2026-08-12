@@ -76,8 +76,9 @@ metadata를 자동 요구하지 않는다.
 - latest checkpoint
 - resume/respond API
 
-engine/runner는 executor나 scheduler를 만들지 않는다. `WorkflowExecutionStrategy`와
-`WorkflowClock`을 host가 주입한다.
+application-facing `WorkflowRunner`가 definition을 실행하거나 Agent facade로 변환한다.
+runner는 host assembly가 생성하며 `WorkflowExecutionStrategy`, `WorkflowClock`, checkpoint
+store, codec registry를 주입받는다. engine/runner는 executor나 scheduler를 만들지 않는다.
 
 ### 4.1 Superstep
 

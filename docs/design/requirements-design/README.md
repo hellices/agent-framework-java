@@ -13,6 +13,7 @@
 | [03 Workflow and harness](03-workflow-harness.md) | `WF`, `HAR` |
 | [04 Hosting, operations, and providers](04-hosting-operations-providers.md) | `HOST`, `OPS`, `PRV` |
 | [05 Framework adapters](05-framework-adapters.md) | framework별 조립 패턴; canonical requirement는 소유하지 않음 |
+| [06 Developer experience](06-developer-experience.md) | progressive disclosure와 `agent.run()` 중심 facade |
 | [Requirements traceability matrix](requirements-traceability-matrix.md) | 244개 ID의 설계·목표 코드·현재 코드·검증 매핑 |
 
 한 요구사항은 정확히 한 문서가 canonical owner다. 여러 bounded context에 영향을 주는 경우 다른

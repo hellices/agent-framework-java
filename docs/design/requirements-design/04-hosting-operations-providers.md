@@ -224,8 +224,9 @@ framework와 provider가 같은 이름의 기능을 제공해도 한 실행 경�
 | exporter/provider lifecycle | host framework | core가 bootstrap하지 않음 |
 | request auth/tenant | host binder | 검증된 context만 core에 전달 |
 
-auto-configuration 후보가 둘 이상이면 classpath 순서로 임의 선택하지 않고 명시 설정 또는 user
-bean을 요구한다.
+하나만 선택돼야 하는 같은 concern의 adapter 후보가 둘 이상이면 classpath 순서로 임의 선택하지
+않고 명시 설정 또는 user bean을 요구한다. 여러 named model은 함께 등록할 수 있으며 default가
+없는 unqualified model 선택만 실패한다.
 
 ## 12. Tests
 

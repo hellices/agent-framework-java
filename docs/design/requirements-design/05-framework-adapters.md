@@ -29,11 +29,13 @@ lifecycle, reactive, telemetry 사용 경험을 책임지는 충분히 두꺼운
 ```text
 AgentFrameworkAssembly
   AgentEngine
+  AgentFactory
   model/provider ports
   session/history ports
   ordered interceptors
   execution strategy
   telemetry sink
+  optional WorkflowRunner
   optional hosting/protocol binders
 ```
 
@@ -68,6 +70,8 @@ starters/agent-framework-spring-boot-starter-responses (optional)
 - typed `@ConfigurationProperties`
 - `ObjectProvider<T>`로 optional ports 수집
 - ordered `AgentEngineCustomizer` chain
+- configured `AgentFactory` bean
+- workflow module과 필수 ports가 있을 때 `WorkflowRunner` bean
 - starter는 dependency aggregation만 수행
 
 user bean이 auto-configured default를 이긴다. auto-configuration은 server endpoint를 자동 열지
@@ -150,8 +154,9 @@ integrations/agent-framework-quarkus
 단순 CDI wiring만 있으면 runtime/deployment split은 금지한다. Quarkus pattern을 모방하기 위한
 빈 deployment module을 만들지 않는다.
 
-Quarkus facade는 endpoint 없이 `AgentEngine`과 configured `Agent`를 injectable CDI bean으로
-제공한다. REST endpoint는 protocol extension을 추가할 때만 등록한다.
+Quarkus facade는 endpoint 없이 `AgentEngine`, `AgentFactory`, 조건부 `WorkflowRunner`, configured
+`Agent`를 injectable CDI bean으로 제공한다. REST endpoint는 protocol extension을 추가할 때만
+등록한다.
 
 ## 6. Jakarta EE
 
@@ -167,8 +172,9 @@ integrations/agent-framework-jakarta
 core object가 `BeanManager`, `SecurityContext`, `ManagedExecutorService`를 직접 조회하지 않는다.
 producer가 framework-neutral port로 변환한다.
 
-Jakarta facade도 endpoint 없이 CDI injection을 먼저 제공한다. protocol-specific Jakarta REST
-binder는 별도 artifact이며 application의 JAX-RS/security 설정을 재정의하지 않는다.
+Jakarta facade도 endpoint 없이 `AgentEngine`, `AgentFactory`, 조건부 `WorkflowRunner` CDI
+injection을 먼저 제공한다. protocol-specific Jakarta REST binder는 별도 artifact이며
+application의 JAX-RS/security 설정을 재정의하지 않는다.
 
 ## 7. Plain Java
 
