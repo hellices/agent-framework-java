@@ -1,895 +1,932 @@
-# 09 워크플로와 오케스트레이션
+# 09 Workflows and orchestration
 
-**접두사** `WF` · **원본 기능** [14 workflow-graph](../upstream/snapshots/d0a4165f/features/14-workflow-graph.md),
+**Prefix** `WF` · **Upstream features** [14 workflow-graph](../upstream/snapshots/d0a4165f/features/14-workflow-graph.md),
 [15 workflow-runtime](../upstream/snapshots/d0a4165f/features/15-workflow-runtime.md),
 [16 workflow-checkpoint-hitl](../upstream/snapshots/d0a4165f/features/16-workflow-checkpoint-hitl.md),
 [17 workflow-composition](../upstream/snapshots/d0a4165f/features/17-workflow-composition.md),
 [18 orchestrations](../upstream/snapshots/d0a4165f/features/18-orchestrations.md),
 [19 declarative](../upstream/snapshots/d0a4165f/features/19-declarative.md)
 
-워크플로 하위 프로젝트의 그래프 정의, 런타임, 체크포인트, 사람 개입, 조합, 오케스트레이션,
-선언형 표면의 계약을 정의한다. 이 문서의 단계는 대부분 `Workflow`다. 하네스 조립과 호스팅
-프로토콜은 다른 문서가 소유한다.
+Defines the contracts of the workflow subproject for graph definition, the runtime, checkpoints,
+human intervention, composition, orchestration, and the declarative surface. The phase in this
+document is `Workflow` almost everywhere. Harness assembly and hosting protocols are owned by other
+documents.
 
-## 채택 범위
+## Adoption scope
 
-이 문서의 `등급`은 [README](README.md#requirement-grades) 정의대로 기능을 만들기로 했을 때의 강제력이고, 채택 여부는 [호환성 매트릭스](../upstream/snapshots/d0a4165f/compatibility-matrix.md)를 따른다.
+The `Grade` column in this document is, as [README](README.md#requirement-grades) defines it, how binding a requirement is once the decision to build the feature has been made; whether the feature is adopted at all follows the [compatibility matrix](../upstream/snapshots/d0a4165f/compatibility-matrix.md).
 
-- 워크플로 코어(`WF01`~`WF06`)는 채택 `필수`다.
-- 오케스트레이션(`ORC01`, `ORC02`)과 선언형 워크플로(`DEC01`)는 채택 `선택`이다.
+- The workflow core (`WF01`–`WF06`) has adoption `Required`.
+- Orchestration (`ORC01`, `ORC02`) and declarative workflows (`DEC01`) have adoption `Optional`.
 
-## 요약
+## Summary
 
-| ID | 요구사항 | 채택 | 등급 | 단계 |
+| ID | Requirement | Adoption | Grade | Phase |
 | --- | --- | --- | --- | --- |
-| WF-001 | 그래프 정의와 실행 런타임을 분리한다 | 필수 | 필수 | Workflow |
-| WF-002 | 실행자 라우트 등록은 annotation processor 경로를 우선한다 | 필수 | 권장 | Workflow |
-| WF-003 | 미바인딩 실행자가 남으면 빌드를 거부한다 | 필수 | 필수 | Workflow |
-| WF-004 | 시작점에서 도달할 수 없는 실행자가 있으면 빌드를 거부한다 | 필수 | 필수 | Workflow |
-| WF-005 | 출력 지정은 비어 있음, 중복, 겹침을 빌드 시점에 거부한다 | 필수 | 필수 | Workflow |
-| WF-006 | 런타임 edge kind는 `DIRECT`, `FAN_OUT`, `FAN_IN`으로 고정한다 | 필수 | 필수 | Workflow |
-| WF-007 | 엣지 실행 의미를 조건 drop과 fan-in barrier로 고정한다 | 필수 | 필수 | Workflow |
-| WF-008 | 직렬화된 callables는 명시적 재바인딩 없이는 복원하지 않는다 | 필수 | 필수 | Workflow |
-| WF-009 | 워크플로 실행은 1급 run handle로 제어한다 | 필수 | 필수 | Workflow |
-| WF-010 | 상태는 polling과 status event 둘 다로 노출한다 | 필수 | 권장 | Workflow |
-| WF-011 | superstep 수명주기와 체크포인트 순서를 고정한다 | 필수 | 필수 | Workflow |
-| WF-012 | 공유 상태는 scoped API와 pending/committed 버퍼를 함께 가진다 | 필수 | 필수 | Workflow |
-| WF-013 | 같은 상태 키의 다중 쓰기는 명시적 실패로 처리한다 | 필수 | 필수 | Workflow |
-| WF-014 | 메시지 송신은 trace context를 전파하고 예약 이벤트 스푸핑을 막는다 | 필수 | 필수 | Workflow |
-| WF-015 | 공개 cancel API와 stream 소비자 취소를 분리한다 | 필수 | 필수 | Workflow |
-| WF-016 | pending request가 남아 있으면 새 메시지를 기본 거부한다 | 필수 | 필수 | Workflow |
-| WF-017 | 실패 이벤트 순서는 실행자 실패 후 워크플로 실패다 | 필수 | 필수 | Workflow |
-| WF-018 | 체크포인트는 continuation에 필요한 전체 상태를 담는다 | 필수 | 필수 | Workflow |
-| WF-019 | restore는 시그니처를 검증하고 stale event를 먼저 비운다 | 필수 | 필수 | Workflow |
-| WF-020 | latest checkpoint 판정은 정렬 계약에 의존한다 | 필수 | 필수 | Workflow |
-| WF-021 | pending request는 restore 뒤 다시 발행하되 중복되지 않아야 한다 | 필수 | 필수 | Workflow |
-| WF-022 | 외부 응답은 request id와 port id를 함께 검증한다 | 필수 | 필수 | Workflow |
-| WF-023 | 승인 재개는 `original_request` payload를 진실 원천으로 삼는다 | 필수 | 필수 | Workflow |
-| WF-024 | 파일 체크포인트 저장은 경로와 역직렬화 안전장치를 기본 제공한다 | 필수 | 필수 | Workflow |
-| WF-025 | run handle은 재개와 pending request 조회 API를 제공한다 | 필수 | 권장 | Workflow |
-| WF-026 | 하위 워크플로 조합은 host executor 소유권 모델을 따른다 | 필수 | 필수 | Workflow |
-| WF-027 | 자식 출력, intermediate, request 전파 정책은 명시적으로 설정한다 | 필수 | 필수 | Workflow |
-| WF-028 | workflow-as-agent 세션은 continuation 상태를 함께 직렬화한다 | 필수 | 필수 | Workflow |
-| WF-029 | functional workflow는 별도 실험 API로 분리한다 | 필수 | 권장 | Workflow |
-| WF-030 | 오케스트레이션은 공통 output designation helper와 명시적 기본 정책을 가진다 | 선택 | 필수 | Workflow |
-| WF-031 | sequential·concurrent는 패턴별 계약과 request-info wrapper를 제공한다 | 선택 | 권장 | Workflow |
-| WF-032 | handoff는 mesh 기본값, 능력 검증, 필터링, pending-request 차단을 갖는다 | 선택 | 필수 | Workflow |
-| WF-033 | group-chat은 단일 orchestrator 계약과 no-self-echo 규칙을 갖는다 | 선택 | 필수 | Workflow |
-| WF-034 | magentic은 단일 manager 계약과 plan review·replan 흐름을 갖는다 | 선택 | 필수 | Workflow |
-| WF-035 | 선언형 워크플로는 분리된 모듈, 안전한 상태 경로, typed handler SPI를 가진다 | 선택 | 필수 | Workflow |
+| WF-001 | The graph definition and the execution runtime are separated | Required | Required | Workflow |
+| WF-002 | Executor route registration prefers the annotation processor path | Required | Recommended | Workflow |
+| WF-003 | The build is rejected when an unbound executor remains | Required | Required | Workflow |
+| WF-004 | The build is rejected when an executor is unreachable from the start point | Required | Required | Workflow |
+| WF-005 | Output designation rejects empty, duplicate, and overlapping sets at build time | Required | Required | Workflow |
+| WF-006 | The runtime edge kinds are fixed as `DIRECT`, `FAN_OUT`, and `FAN_IN` | Required | Required | Workflow |
+| WF-007 | Edge execution semantics are fixed as a conditional drop and a fan-in barrier | Required | Required | Workflow |
+| WF-008 | Serialized callables are not restored without explicit rebinding | Required | Required | Workflow |
+| WF-009 | Workflow execution is controlled through a first-class run handle | Required | Required | Workflow |
+| WF-010 | State is exposed both by polling and by status events | Required | Recommended | Workflow |
+| WF-011 | The superstep lifecycle and the checkpoint order are fixed | Required | Required | Workflow |
+| WF-012 | Shared state has both a scoped API and pending/committed buffers | Required | Required | Workflow |
+| WF-013 | Multiple writes to the same state key are treated as an explicit failure | Required | Required | Workflow |
+| WF-014 | Message sending propagates the trace context and blocks reserved event spoofing | Required | Required | Workflow |
+| WF-015 | The public cancel API and stream consumer cancellation are separated | Required | Required | Workflow |
+| WF-016 | A new message is rejected by default while a pending request remains | Required | Required | Workflow |
+| WF-017 | The failure event order is executor failure followed by workflow failure | Required | Required | Workflow |
+| WF-018 | A checkpoint carries the full state needed for continuation | Required | Required | Workflow |
+| WF-019 | Restore validates the signature and drains stale events first | Required | Required | Workflow |
+| WF-020 | Determining the latest checkpoint relies on an ordering contract | Required | Required | Workflow |
+| WF-021 | Pending requests are republished after restore without being duplicated | Required | Required | Workflow |
+| WF-022 | An external response is validated on both the request id and the port id | Required | Required | Workflow |
+| WF-023 | Approval resumption takes the `original_request` payload as the source of truth | Required | Required | Workflow |
+| WF-024 | The file checkpoint store provides path and deserialization safeguards by default | Required | Required | Workflow |
+| WF-025 | The run handle provides resume and pending request query APIs | Required | Recommended | Workflow |
+| WF-026 | Sub-workflow composition follows the host executor ownership model | Required | Required | Workflow |
+| WF-027 | Child output, intermediate, and request propagation policies are configured explicitly | Required | Required | Workflow |
+| WF-028 | The workflow-as-agent session serializes the continuation state as well | Required | Required | Workflow |
+| WF-029 | Functional workflows are split into a separate experimental API | Required | Recommended | Workflow |
+| WF-030 | Orchestration has a shared output designation helper and explicit default policies | Optional | Required | Workflow |
+| WF-031 | Sequential and concurrent provide per-pattern contracts and a request-info wrapper | Optional | Recommended | Workflow |
+| WF-032 | Handoff has a default mesh, capability validation, filtering, and pending-request blocking | Optional | Required | Workflow |
+| WF-033 | Group-chat has a single orchestrator contract and a no-self-echo rule | Optional | Required | Workflow |
+| WF-034 | Magentic has a single manager contract and a plan review and replan flow | Optional | Required | Workflow |
+| WF-035 | Declarative workflows have a separated module, safe state paths, and a typed handler SPI | Optional | Required | Workflow |
 
-### 그래프
-
----
-
-## WF-001 그래프 정의와 실행 런타임을 분리한다
-
-**요구사항.** Java 워크플로는 immutable graph definition과 mutable run/runtime을 서로 다른 타입으로
-분리해야 한다.
-
-**원본 비교**
-
-- .NET: `WorkflowBuilder`가 정의를 만들고 `Workflow`와 `Run`/`StreamingRun`이 실행을 맡는다.
-- Python: `WorkflowBuilder`가 `Workflow`를 만들고 runtime이 별도 runner/context로 실행한다.
-
-**판단.** 동일한 방향이다. 정의와 실행을 분리해야 checkpoint compatibility를 graph identity로 판단할 수
-있다. 정의 객체가 독립 identity를 가지면 restore, observability, reflection API를 단순화할 수 있다.
-
-**수용 기준**
-
-- build 결과 정의 객체만으로는 실행 중 메시지와 상태를 직접 보관하지 않는다.
-- 실행을 시작하면 별도 run handle 또는 runner 상태 객체가 만들어진다.
-- checkpoint compatibility 검사는 현재 runtime이 아니라 정의 시그니처를 기준으로 한다.
-
-**근거** [14 그래프](../upstream/snapshots/d0a4165f/features/14-workflow-graph.md), [15 런타임](../upstream/snapshots/d0a4165f/features/15-workflow-runtime.md)
+### Graph
 
 ---
 
-## WF-002 실행자 라우트 등록은 annotation processor 경로를 우선한다
+## WF-001 The graph definition and the execution runtime are separated
 
-**요구사항.** Java 실행자 라우트 등록의 주 경로는 runtime reflection이 아니라 annotation processor
-기반 생성 코드여야 한다.
+**Requirement.** Java workflows must separate the immutable graph definition and the mutable
+run/runtime into different types.
 
-**원본 비교**
+**Upstream comparison**
 
-- .NET: Roslyn generator가 route와 protocol 코드를 생성한다.
-- Python: `@handler` annotation을 runtime introspection으로 읽는다.
+- .NET: `WorkflowBuilder` creates the definition and `Workflow` plus `Run`/`StreamingRun` handle the execution.
+- Python: `WorkflowBuilder` creates a `Workflow` and the runtime executes it with a separate runner/context.
 
-**판단.** Java는 .NET 경로를 택한다. cold start, 검증 품질, AOT 친화성을 모두 고려하면 생성 코드가
-낫다. Python식 introspection은 편하지만 Java에서 reflection-only 경로를 표준으로 두기엔 비용이 크다.
+**Decision.** The direction is the same. Definition and execution must be separated so that
+checkpoint compatibility can be judged by graph identity. When the definition object has an
+independent identity, the restore, observability, and reflection APIs can be simplified.
 
-**수용 기준**
+**Acceptance criteria**
 
-- 공식 가이드는 annotation processor 등록 경로를 기본 경로로 문서화한다.
-- 생성 코드는 입력 타입, 출력 타입, route 등록을 포함한다.
-- reflection-only 경로가 있더라도 부가 경로로만 취급된다.
+- The definition object produced by the build does not itself hold the messages and state of a running execution.
+- Starting an execution creates a separate run handle or runner state object.
+- The checkpoint compatibility check is based on the definition signature, not on the current runtime.
 
-**근거** [14 Executor 프로토콜과 타입 시스템](../upstream/snapshots/d0a4165f/features/14-workflow-graph.md), [19 .NET generator / source generator와 Python 구현 차이](../upstream/snapshots/d0a4165f/features/19-declarative.md)
-
----
-
-## WF-003 미바인딩 실행자가 남으면 빌드를 거부한다
-
-**요구사항.** 그래프 정의에 concrete binding이 없는 실행자가 남아 있으면 build는 실패해야 한다.
-
-**원본 비교**
-
-- .NET: placeholder/unbound executor를 추적하고 `Build()`에서 거부한다.
-- Python: builder가 최종 `Workflow` 생성 전에 graph validator를 호출한다.
-
-**판단.** .NET 테스트가 더 직접적이므로 그 계약을 채택한다. 미바인딩 실행자를 허용하면 첫 메시지를
-받을 때까지 오류가 숨는다. build 단계에서 실패시키는 편이 명확하다.
-
-**수용 기준**
-
-- 미바인딩 실행자가 하나라도 남으면 build가 예외로 끝난다.
-- 실패한 정의 객체는 실행 시작점을 만들지 않는다.
-- 오류 메시지에 어떤 실행자가 바인딩되지 않았는지 식별자가 포함된다.
-
-**근거** [14 Graph validation](../upstream/snapshots/d0a4165f/features/14-workflow-graph.md)
+**Evidence** [14 graph](../upstream/snapshots/d0a4165f/features/14-workflow-graph.md), [15 runtime](../upstream/snapshots/d0a4165f/features/15-workflow-runtime.md)
 
 ---
 
-## WF-004 시작점에서 도달할 수 없는 실행자가 있으면 빌드를 거부한다
+## WF-002 Executor route registration prefers the annotation processor path
 
-**요구사항.** 시작 실행자에서 도달할 수 없는 실행자가 정의에 남아 있으면 build는 실패해야 한다.
+**Requirement.** The primary path for Java executor route registration must be annotation
+processor-generated code, not runtime reflection.
 
-**원본 비교**
+**Upstream comparison**
 
-- .NET: BFS 기반 reachability 검사로 unreachable executor를 거부한다.
-- Python: validator가 graph connectivity를 검사 대상으로 둔다.
+- .NET: A Roslyn generator generates the route and protocol code.
+- Python: Reads the `@handler` annotation through runtime introspection.
 
-**판단.** 동일하다. dead node를 남기면 output designation과 checkpoint state가 쓸데없이 복잡해진다.
-workflow는 연결된 그래프여야 한다.
+**Decision.** Java takes the .NET path. Considering cold start, validation quality, and AOT
+friendliness together, generated code is better. Python-style introspection is convenient, but
+making a reflection-only path the standard is expensive in Java.
 
-**수용 기준**
+**Acceptance criteria**
 
-- 시작점에서 닿지 않는 실행자가 있으면 build가 실패한다.
-- direct, fan-out, fan-in으로 연결된 모든 경로가 검사 대상이다.
-- 도달성 검사는 실행 전에 끝난다.
+- The official guide documents the annotation processor registration path as the default path.
+- The generated code includes the input type, the output type, and the route registration.
+- Even when a reflection-only path exists, it is treated only as a secondary path.
 
-**근거** [14 Graph validation](../upstream/snapshots/d0a4165f/features/14-workflow-graph.md)
-
----
-
-## WF-005 출력 지정은 비어 있음, 중복, 겹침을 빌드 시점에 거부한다
-
-**요구사항.** 명시적 output/intermediate designation은 비어 있거나 중복되거나 서로 겹치면 build 시점에
-실패해야 한다.
-
-**원본 비교**
-
-- .NET: 기본 designation은 builder가 정하지만 validation은 제한적이다.
-- Python: explicit output designation이 비어 있음, 중복, overlap일 때 build를 거부한다.
-
-**판단.** Python의 더 엄격한 검증을 채택한다. output visibility 계약이 모호하면 agent adapter와
-orchestration terminal/intermediate semantics가 즉시 깨진다.
-
-**수용 기준**
-
-- explicit output 집합이 비어 있으면 build가 실패한다.
-- 같은 실행자가 output과 intermediate 양쪽에 동시에 들어가면 build가 실패한다.
-- 중복 지정은 build가 실패한다.
-
-**근거** [14 Graph validation](../upstream/snapshots/d0a4165f/features/14-workflow-graph.md), [18 오케스트레이션](../upstream/snapshots/d0a4165f/features/18-orchestrations.md)
+**Evidence** [14 Executor protocol and type system](../upstream/snapshots/d0a4165f/features/14-workflow-graph.md), [19 differences between the .NET generator / source generator and the Python implementation](../upstream/snapshots/d0a4165f/features/19-declarative.md)
 
 ---
 
-## WF-006 런타임 edge kind는 `DIRECT`, `FAN_OUT`, `FAN_IN`으로 고정한다
+## WF-003 The build is rejected when an unbound executor remains
 
-**요구사항.** Java 런타임 edge model은 `DIRECT`, `FAN_OUT`, `FAN_IN` 세 종류만 공개하고,
-switch나 multi-selection은 builder lowering으로 처리해야 한다.
+**Requirement.** When an executor without a concrete binding remains in the graph definition, the
+build must fail.
 
-**원본 비교**
+**Upstream comparison**
 
-- .NET: 런타임 edge kind를 `Direct`, `FanOut`, `FanIn`으로 제한한다.
-- Python: `SwitchCaseEdgeGroup` 등 더 풍부한 코어 edge 계층을 가진다.
+- .NET: Tracks placeholder/unbound executors and rejects them in `Build()`.
+- Python: The builder calls the graph validator before creating the final `Workflow`.
 
-**판단.** Java는 .NET의 좁은 런타임 모델을 택한다. 런타임 상태와 관찰성은 단순할수록 좋다. DSL의
-풍부함은 builder가 낮추면 된다.
+**Decision.** The .NET tests are more direct, so that contract is adopted. Allowing an unbound
+executor hides the error until the first message arrives. Failing at the build stage is clearer.
 
-**수용 기준**
+**Acceptance criteria**
 
-- 공개 런타임 edge enum에 switch 전용 kind가 없다.
-- switch 또는 multi-selection builder API는 build 후 fan-out 계열 구조로 낮아진다.
-- checkpoint state는 세 edge kind만 가정하고 직렬화할 수 있다.
+- If even one unbound executor remains, the build ends with an exception.
+- A failed definition object does not create an execution start point.
+- The error message includes an identifier for which executor was not bound.
 
-**근거** [14 공개 API·타입](../upstream/snapshots/d0a4165f/features/14-workflow-graph.md), [14 Java 결정](../upstream/snapshots/d0a4165f/features/14-workflow-graph.md)
-
----
-
-## WF-007 엣지 실행 의미를 조건 drop과 fan-in barrier로 고정한다
-
-**요구사항.** direct edge의 조건이 거짓이면 메시지는 drop되지만 라우팅 오류로 보지 않고, fan-in은
-모든 source가 최소 한 번 메시지를 낸 뒤에만 sink를 실행해야 한다.
-
-**원본 비교**
-
-- .NET: direct edge false condition을 drop으로 처리하고 fan-in runner가 source별 버퍼를 유지한다.
-- Python: single edge false condition을 drop으로 처리하고 fan-in buffer가 준비 완료를 판단한다.
-
-**판단.** 동일하다. 조건 거짓은 정상 라우팅 결과이고, fan-in은 barrier semantics가 핵심이다. 둘을
-실패로 오해하면 workflow convergence와 checkpoint 재현성이 깨진다.
-
-**수용 기준**
-
-- direct edge 조건이 false면 downstream 전달은 생기지 않지만 workflow 실패도 생기지 않는다.
-- fan-in sink는 모든 source가 메시지를 낸 전에는 실행되지 않는다.
-- fan-in ready가 되면 sink는 source 집합당 한 번만 활성화된다.
-
-**근거** [14 Edge 그룹과 라우팅 실행](../upstream/snapshots/d0a4165f/features/14-workflow-graph.md)
+**Evidence** [14 Graph validation](../upstream/snapshots/d0a4165f/features/14-workflow-graph.md)
 
 ---
 
-## WF-008 직렬화된 callables는 명시적 재바인딩 없이는 복원하지 않는다
+## WF-004 The build is rejected when an executor is unreachable from the start point
 
-**요구사항.** edge와 workflow 정의를 직렬화할 때 live callable은 저장하지 않고, 복원 시에는 symbolic
-name을 명시적 registry에 다시 바인딩할 때만 사용해야 한다.
+**Requirement.** When an executor that cannot be reached from the start executor remains in the
+definition, the build must fail.
 
-**원본 비교**
+**Upstream comparison**
 
-- .NET: restore compatibility는 workflow signature를 검사하지만 callable 복원 표면은 좁다.
-- Python: callable 대신 이름만 저장하고, 복원 불가 시 fail-closed placeholder를 설치한다.
+- .NET: Rejects unreachable executors with a BFS-based reachability check.
+- Python: The validator takes graph connectivity as a validation target.
 
-**판단.** Python의 fail-closed 모델을 택한다. 직렬화된 정의가 조용히 다른 routing을 수행하는 것이
-가장 위험하다. registry rebinding이 없으면 명시적으로 실패해야 한다.
+**Decision.** Both upstreams agree. Leaving dead nodes makes output designation and checkpoint state
+needlessly complicated. A workflow must be a connected graph.
 
-**수용 기준**
+**Acceptance criteria**
 
-- 정의 직렬화 결과에 live lambda나 method reference가 그대로 저장되지 않는다.
-- 복원 후 필요한 callable을 찾지 못하면 첫 호출에서 명시적 예외가 난다.
-- 자동 fallback routing이나 무음 no-op 복원은 허용되지 않는다.
+- If an executor cannot be reached from the start point, the build fails.
+- Every path connected by direct, fan-out, and fan-in is a validation target.
+- The reachability check finishes before execution.
 
-**근거** [14 상태·영속화](../upstream/snapshots/d0a4165f/features/14-workflow-graph.md), [14 Java 결정](../upstream/snapshots/d0a4165f/features/14-workflow-graph.md)
-
-### 런타임
+**Evidence** [14 Graph validation](../upstream/snapshots/d0a4165f/features/14-workflow-graph.md)
 
 ---
 
-## WF-009 워크플로 실행은 1급 run handle로 제어한다
+## WF-005 Output designation rejects empty, duplicate, and overlapping sets at build time
 
-**요구사항.** Java 워크플로 실행은 스트림, 상태 조회, 응답 제출, 재개, 취소를 묶은 1급 run handle을
-공개해야 한다.
+**Requirement.** An explicit output/intermediate designation must fail at build time when it is
+empty, duplicated, or overlapping.
 
-**원본 비교**
+**Upstream comparison**
 
-- .NET: `Run`과 `StreamingRun`이 `GetStatusAsync`, `ResumeAsync`, `SendResponseAsync`, `CancelRunAsync`를 나눈다.
-- Python: `Workflow.run(...)` 하나가 streaming과 non-streaming, responses, checkpoint restore를 모두 받는다.
+- .NET: The builder decides the default designation, but validation is limited.
+- Python: Rejects the build when the explicit output designation is empty, duplicated, or overlapping.
 
-**판단.** Java는 .NET의 명시적 handle 구조를 택하되 control plane을 한 handle에 모은다. 운영 제어는
-명시적일수록 좋고, unified overload만으로는 재개와 응답 제출 계약이 흐려진다.
+**Decision.** Python's stricter validation is adopted. When the output visibility contract is
+ambiguous, the agent adapter and the orchestration terminal/intermediate semantics break
+immediately.
 
-**수용 기준**
+**Acceptance criteria**
 
-- 공개 API에 workflow run handle 타입이 존재한다.
-- handle은 상태 조회, 응답 제출, 취소, 스트림 소비 API를 가진다.
-- non-streaming helper가 있더라도 내부적으로 같은 handle 계약 위에 구현된다.
+- If the explicit output set is empty, the build fails.
+- If the same executor appears in both output and intermediate at once, the build fails.
+- A duplicate designation makes the build fail.
 
-**근거** [15 런타임](../upstream/snapshots/d0a4165f/features/15-workflow-runtime.md), [16 Java 결정](../upstream/snapshots/d0a4165f/features/16-workflow-checkpoint-hitl.md)
-
----
-
-## WF-010 상태는 polling과 status event 둘 다로 노출한다
-
-**요구사항.** Java는 run 상태를 polling API와 명시적 status event 두 경로로 모두 노출해야 한다.
-
-**원본 비교**
-
-- .NET: 상태는 `GetStatusAsync()` polling이 중심이다.
-- Python: `status` events와 `status_timeline()`이 중심이다.
-
-**판단.** 둘을 함께 제공하는 절충안이 가장 실용적이다. 운영 제어 plane은 polling이 편하고, audit와
-telemetry는 status event가 편하다.
-
-**수용 기준**
-
-- run handle에서 현재 상태를 동기적으로 확인할 수 있다.
-- 스트림 또는 결과 객체에 상태 전이 이벤트가 포함된다.
-- 최종 상태는 polling 결과와 status timeline에서 일치한다.
-
-**근거** [15 메시지, 이벤트, 상태 timeline](../upstream/snapshots/d0a4165f/features/15-workflow-runtime.md), [15 Java 결정](../upstream/snapshots/d0a4165f/features/15-workflow-runtime.md)
+**Evidence** [14 Graph validation](../upstream/snapshots/d0a4165f/features/14-workflow-graph.md), [18 orchestration](../upstream/snapshots/d0a4165f/features/18-orchestrations.md)
 
 ---
 
-## WF-011 superstep 수명주기와 체크포인트 순서를 고정한다
+## WF-006 The runtime edge kinds are fixed as `DIRECT`, `FAN_OUT`, and `FAN_IN`
 
-**요구사항.** 한 superstep의 공용 수명주기는 시작 이벤트, 메시지 전달과 joined work 실행, 상태 commit,
-체크포인트, 완료 이벤트 순서로 고정되어야 한다.
+**Requirement.** The Java runtime edge model must expose only the three kinds `DIRECT`, `FAN_OUT`,
+and `FAN_IN`, and must handle switch or multi-selection through builder lowering.
 
-**원본 비교**
+**Upstream comparison**
 
-- .NET: superstep 시작 후 deliveries와 joined subworkflow, checkpoint, complete event 순으로 진행한다.
-- Python: `superstep_started`, iteration 실행, state commit, checkpoint, `superstep_completed` 순으로 진행한다.
+- .NET: Limits the runtime edge kinds to `Direct`, `FanOut`, and `FanIn`.
+- Python: Has a richer core edge hierarchy, including `SwitchCaseEdgeGroup`.
 
-**판단.** 동일하다. 이 순서가 바뀌면 이벤트와 checkpoint가 서로 다른 현실을 가리키게 된다.
-resume 가능한 시스템에서는 특히 중요하다.
+**Decision.** Java takes .NET's narrow runtime model. The simpler the runtime state and
+observability are, the better. The richness of the DSL can be lowered by the builder.
 
-**수용 기준**
+**Acceptance criteria**
 
-- `superstep_started`가 `superstep_completed`보다 먼저 나온다.
-- 완료 이벤트가 나왔을 때 그 step의 상태 commit과 checkpoint가 이미 끝나 있다.
-- 같은 step의 checkpoint보다 늦은 started event가 같은 step 번호로 다시 나오지 않는다.
+- The public runtime edge enum has no switch-specific kind.
+- A switch or multi-selection builder API is lowered into a fan-out-family structure after the build.
+- Checkpoint state can be serialized assuming only the three edge kinds.
 
-**근거** [15 Superstep / Iteration 루프](../upstream/snapshots/d0a4165f/features/15-workflow-runtime.md)
-
----
-
-## WF-012 공유 상태는 scoped API와 pending/committed 버퍼를 함께 가진다
-
-**요구사항.** 공유 상태 API는 executor scope를 표현할 수 있어야 하고, 내부 구현은 pending과 committed
-버퍼를 분리해 superstep 경계에서만 commit해야 한다.
-
-**원본 비교**
-
-- .NET: scope 이름을 받는 state API와 staged update publish 모델을 가진다.
-- Python: flat key API지만 `_pending`과 `_committed` 두 층 버퍼를 가진다.
-
-**판단.** Java는 .NET의 scoped API와 Python의 두 층 버퍼 모델을 결합한다. scope가 있어야 multi-agent
-workflow의 충돌을 다룰 수 있고, pending/committed 분리가 있어야 superstep 원자성이 선다.
-
-**수용 기준**
-
-- 공개 상태 API가 최소한 executor 또는 scope 단위를 표현할 수 있다.
-- 같은 step 안에서 쓴 값은 commit 전까지 pending 버퍼에만 머문다.
-- 다음 superstep 시작 시 읽히는 값은 직전 commit 결과다.
-
-**근거** [15 Shared state와 run context](../upstream/snapshots/d0a4165f/features/15-workflow-runtime.md)
+**Evidence** [14 public API/types](../upstream/snapshots/d0a4165f/features/14-workflow-graph.md), [14 Java decisions](../upstream/snapshots/d0a4165f/features/14-workflow-graph.md)
 
 ---
 
-## WF-013 같은 상태 키의 다중 쓰기는 명시적 실패로 처리한다
+## WF-007 Edge execution semantics are fixed as a conditional drop and a fan-in barrier
 
-**요구사항.** 같은 superstep에서 충돌하는 다중 쓰기가 발생하면 Java는 last-write-wins로 조용히 덮지 말고
-명시적 런타임 실패를 보고해야 한다.
+**Requirement.** When the condition of a direct edge is false the message is dropped but this is not
+seen as a routing error, and fan-in must run the sink only after every source has emitted at least
+one message.
 
-**원본 비교**
+**Upstream comparison**
 
-- .NET: fan-out된 다중 writer conflict를 runtime error로 surface하는 테스트가 있다.
-- Python: flat state는 같은 step의 여러 쓰기를 last write wins로 설명한다.
+- .NET: Treats a false direct edge condition as a drop and the fan-in runner keeps a per-source buffer.
+- Python: Treats a false single edge condition as a drop and the fan-in buffer decides when it is ready.
 
-**판단.** 더 안전한 기본값을 택해 .NET 계약을 채택한다. last-write-wins는 병렬 fan-out에서 조용한
-손실을 만든다. 충돌은 실패로 드러내는 편이 낫다.
+**Decision.** Both upstreams agree. A false condition is a normal routing outcome, and barrier
+semantics are the heart of fan-in. Misreading either as a failure breaks workflow convergence and
+checkpoint reproducibility.
 
-**수용 기준**
+**Acceptance criteria**
 
-- 같은 키에 대한 충돌 쓰기가 발생하면 workflow는 명시적 오류를 낸다.
-- 충돌이 없을 때만 상태 commit이 성공한다.
-- 충돌 오류는 어느 key와 어느 writers가 충돌했는지 식별할 수 있다.
+- When a direct edge condition is false, no downstream delivery happens, but no workflow failure happens either.
+- The fan-in sink does not run before every source has emitted a message.
+- Once fan-in is ready, the sink is activated only once per source set.
 
-**근거** [14 오류·검증·보안](../upstream/snapshots/d0a4165f/features/14-workflow-graph.md), [15 .NET 테스트](../upstream/snapshots/d0a4165f/features/15-workflow-runtime.md)
-
----
-
-## WF-014 메시지 송신은 trace context를 전파하고 예약 이벤트 스푸핑을 막는다
-
-**요구사항.** runtime `send_message`는 trace context를 envelope에 넣어야 하고, executor가 `output`,
-`intermediate`, lifecycle 같은 예약 이벤트를 직접 스푸핑하면 framework가 이를 거부해야 한다.
-
-**원본 비교**
-
-- .NET: `SendMessageAsync`가 trace carrier를 주입한다.
-- Python: `send_message()`가 trace context를 주입하고 `add_event()`가 reserved event를 warning으로 바꾼다.
-
-**판단.** 두 계약을 함께 가져간다. trace 전파는 관찰성의 기본이고, 예약 이벤트 보호는 event channel
-무결성의 기본이다.
-
-**수용 기준**
-
-- executor가 보낸 메시지에 trace context가 없으면 observability 모드에서 검출 가능하다.
-- executor가 예약 이벤트 타입을 직접 넣으면 원 이벤트는 무시되거나 warning으로 대체된다.
-- framework가 생성한 output/intermediate 이벤트와 executor가 스푸핑한 이벤트를 구분할 수 있다.
-
-**근거** [14 오류·검증·보안](../upstream/snapshots/d0a4165f/features/14-workflow-graph.md), [15 메시지 송신과 trace context 전파](../upstream/snapshots/d0a4165f/features/15-workflow-runtime.md)
+**Evidence** [14 Edge groups and routing execution](../upstream/snapshots/d0a4165f/features/14-workflow-graph.md)
 
 ---
 
-## WF-015 공개 cancel API와 stream 소비자 취소를 분리한다
+## WF-008 Serialized callables are not restored without explicit rebinding
 
-**요구사항.** 워크플로를 실제로 중단하는 공개 `cancel()`과 스트림 소비를 멈추는 consumer cancellation은
-서로 다른 효과를 가져야 한다.
+**Requirement.** When edges and workflow definitions are serialized, live callables must not be
+stored, and on restore a symbolic name must be used only when it is rebound to an explicit registry.
 
-**원본 비교**
+**Upstream comparison**
 
-- .NET: `WatchStreamAsync()` 취소는 스트림만 끝내고 workflow 취소는 `CancelRunAsync()`가 맡는다.
-- Python: 공개 cancel API는 보이지 않고 internal cancellation 처리만 보인다.
+- .NET: Restore compatibility checks the workflow signature, but the callable restoration surface is narrow.
+- Python: Stores only the name instead of the callable and installs a fail-closed placeholder when restoration is impossible.
 
-**판단.** Java는 .NET 모델을 채택한다. 소비자와 실행 소유자의 권한을 분리해야 한다. 스트림 소비를
-끝냈다고 workflow까지 사라지면 hosting과 UI 통합이 어렵다.
+**Decision.** Python's fail-closed model is taken. The most dangerous outcome is a serialized
+definition quietly performing different routing. Without registry rebinding it must fail explicitly.
 
-**수용 기준**
+**Acceptance criteria**
 
-- 스트림 소비 토큰 취소만으로 workflow 상태가 `CANCELLED`나 종료로 바뀌지 않는다.
-- 공개 cancel API를 호출하면 이후 상태가 취소 또는 종료로 전이한다.
-- 취소된 run은 성공 상태로 보고되지 않는다.
+- A live lambda or method reference is not stored as such in the serialized definition.
+- If a needed callable cannot be found after restore, an explicit exception is raised on the first call.
+- Automatic fallback routing or a silent no-op restoration is not allowed.
 
-**근거** [15 동시성·스트리밍·취소](../upstream/snapshots/d0a4165f/features/15-workflow-runtime.md)
+**Evidence** [14 state/persistence](../upstream/snapshots/d0a4165f/features/14-workflow-graph.md), [14 Java decisions](../upstream/snapshots/d0a4165f/features/14-workflow-graph.md)
 
----
-
-## WF-016 pending request가 남아 있으면 새 메시지를 기본 거부한다
-
-**요구사항.** pending external request가 남아 있는 run에 새 메시지를 보내는 것은 기본적으로 거부하고,
-허용하려면 명시적 override나 resume token이 필요해야 한다.
-
-**원본 비교**
-
-- .NET: explicit resume/response 경로를 중심으로 설계한다.
-- Python: pending request가 있어도 fresh message를 warning과 함께 허용한다.
-
-**판단.** user가 강조한 겹침 정책에 따라 더 안전한 쪽을 택한다. Python 테스트가 보여 주듯 old response가
-moved-on state에 적용될 수 있다. 기본값으로는 허용하면 안 된다.
-
-**수용 기준**
-
-- pending request가 남은 run에 새 메시지를 보내면 기본 설정에서 즉시 실패한다.
-- override 모드를 켜지 않으면 old request response와 새 메시지를 같은 상태에서 섞지 않는다.
-- 허용 모드가 있어도 사용 여부가 호출 API에서 명시적으로 드러난다.
-
-**근거** [15 Java 결정](../upstream/snapshots/d0a4165f/features/15-workflow-runtime.md), [16 Java 결정](../upstream/snapshots/d0a4165f/features/16-workflow-checkpoint-hitl.md)
+### Runtime
 
 ---
 
-## WF-017 실패 이벤트 순서는 실행자 실패 후 워크플로 실패다
+## WF-009 Workflow execution is controlled through a first-class run handle
 
-**요구사항.** 실행자 실패가 발생하면 `executor_failed`가 먼저 관찰되고, 그 다음에 workflow-level 실패가
-승격되어야 한다.
+**Requirement.** Java workflow execution must expose a first-class run handle that bundles
+streaming, status queries, response submission, resumption, and cancellation.
 
-**원본 비교**
+**Upstream comparison**
 
-- .NET: workflow error event와 executor failure event를 모두 surface할 수 있다.
-- Python: tests가 `executor_failed`가 `failed`보다 먼저 나와야 함을 고정한다.
+- .NET: `Run` and `StreamingRun` split `GetStatusAsync`, `ResumeAsync`, `SendResponseAsync`, and `CancelRunAsync`.
+- Python: A single `Workflow.run(...)` takes streaming and non-streaming, responses, and checkpoint restore all together.
 
-**판단.** Python의 더 구체적인 이벤트 순서를 채택한다. 디버깅과 재시도 정책은 root cause executor를
-먼저 알아야 한다.
+**Decision.** Java takes .NET's explicit handle structure but gathers the control plane into one
+handle. The more explicit operational control is, the better, and a unified overload alone blurs the
+resumption and response submission contracts.
 
-**수용 기준**
+**Acceptance criteria**
 
-- 실패한 run의 이벤트 스트림에서 executor failure가 workflow failure보다 앞선다.
-- executor failure 이벤트에는 실패한 executor id가 포함된다.
-- workflow failure 이벤트는 같은 실패를 다시 요약하되 executor failure를 대체하지 않는다.
+- A workflow run handle type exists in the public API.
+- The handle has status query, response submission, cancellation, and stream consumption APIs.
+- Even when a non-streaming helper exists, it is implemented internally on the same handle contract.
 
-**근거** [14 구체 acceptance scenarios](../upstream/snapshots/d0a4165f/features/14-workflow-graph.md), [15 구체 acceptance scenarios](../upstream/snapshots/d0a4165f/features/15-workflow-runtime.md)
-
-### 체크포인트와 사람 개입
-
----
-
-## WF-018 체크포인트는 continuation에 필요한 전체 상태를 담는다
-
-**요구사항.** 체크포인트 payload는 workflow signature, runner queue, pending external requests,
-shared state, edge state, executor snapshot을 함께 담아야 한다.
-
-**원본 비교**
-
-- .NET: `Checkpoint`가 workflow info, runner state, state data, edge state, parent를 담는다.
-- Python: `WorkflowCheckpoint`가 signature hash, messages, state, pending requests, iteration, lineage를 담는다.
-
-**판단.** 동일한 continuation contract를 채택한다. checkpoint와 HITL을 따로 설계하면 restore 뒤 pending
-request를 제대로 재발행할 수 없다.
-
-**수용 기준**
-
-- 체크포인트 하나만으로 restore 후 pending request를 다시 보여 줄 수 있다.
-- shared state와 edge/executor 상태가 함께 복원된다.
-- lineage 또는 parent pointer가 있어 최신 checkpoint 체인을 추적할 수 있다.
-
-**근거** [16 체크포인트와 사람 개입](../upstream/snapshots/d0a4165f/features/16-workflow-checkpoint-hitl.md)
+**Evidence** [15 runtime](../upstream/snapshots/d0a4165f/features/15-workflow-runtime.md), [16 Java decisions](../upstream/snapshots/d0a4165f/features/16-workflow-checkpoint-hitl.md)
 
 ---
 
-## WF-019 restore는 시그니처를 검증하고 stale event를 먼저 비운다
+## WF-010 State is exposed both by polling and by status events
 
-**요구사항.** checkpoint restore는 현재 workflow 정의 시그니처를 먼저 검증하고, 기존 event buffer를
-비운 뒤 상태를 적용해야 한다.
+**Requirement.** Java must expose the run state through both a polling API and explicit status
+events.
 
-**원본 비교**
+**Upstream comparison**
 
-- .NET: restore 전에 event stream buffer를 비우고 workflow compatibility를 검사한다.
-- Python: `graph_signature_hash`가 다르면 restore를 거부한다.
+- .NET: State centers on `GetStatusAsync()` polling.
+- Python: `status` events and `status_timeline()` are central.
 
-**판단.** 두 구현의 안전 장치를 모두 채택한다. 정의가 바뀐 checkpoint를 복원하거나 stale event를 남기면
-caller가 서로 다른 타임라인을 보게 된다.
+**Decision.** The compromise of providing both together is the most practical. Polling is convenient
+for the operational control plane, and status events are convenient for auditing and telemetry.
 
-**수용 기준**
+**Acceptance criteria**
 
-- 현재 workflow signature와 checkpoint signature가 다르면 restore가 실패한다.
-- restore 직후 checkpoint 이후에 생성된 오래된 이벤트가 다시 흘러나오지 않는다.
-- restore는 상태 적용 전에 event buffer 초기화를 수행한다.
+- The current state can be checked synchronously from the run handle.
+- The stream or the result object includes state transition events.
+- The final state agrees between the polling result and the status timeline.
 
-**근거** [14 상태·영속화](../upstream/snapshots/d0a4165f/features/14-workflow-graph.md), [16 .NET 체크포인트 생성과 복원](../upstream/snapshots/d0a4165f/features/16-workflow-checkpoint-hitl.md)
-
----
-
-## WF-020 latest checkpoint 판정은 정렬 계약에 의존한다
-
-**요구사항.** checkpoint store는 인덱스를 oldest-first, newest-last 순서로 돌려줘야 하고, latest
-checkpoint 조회는 그 마지막 항목을 사용해야 한다.
-
-**원본 비교**
-
-- .NET: store ordering contract를 명시하고 마지막 항목을 latest로 취급한다.
-- Python: lineage와 timestamp를 갖지만 latest ordering을 public contract로 덜 강조한다.
-
-**판단.** .NET의 더 엄격한 저장소 계약을 채택한다. latest 판정이 구현체마다 다르면 restore API가
-결정적이지 않다.
-
-**수용 기준**
-
-- checkpoint store contract 문서에 oldest-first/newest-last가 명시된다.
-- `latestCheckpoint()`는 인덱스의 마지막 요소를 사용한다.
-- 정렬 계약을 깨는 store 구현은 테스트에서 실패한다.
-
-**근거** [16 .NET 체크포인트 생성과 복원](../upstream/snapshots/d0a4165f/features/16-workflow-checkpoint-hitl.md)
+**Evidence** [15 messages, events, and the state timeline](../upstream/snapshots/d0a4165f/features/15-workflow-runtime.md), [15 Java decisions](../upstream/snapshots/d0a4165f/features/15-workflow-runtime.md)
 
 ---
 
-## WF-021 pending request는 restore 뒤 다시 발행하되 중복되지 않아야 한다
+## WF-011 The superstep lifecycle and the checkpoint order are fixed
 
-**요구사항.** pending request가 있는 checkpoint에서 restore하면 request 정보가 다시 발행되어야 하고,
-이미 처리한 요청은 중복 발행되지 않아야 한다.
+**Requirement.** The common lifecycle of one superstep must be fixed in the order start event,
+message delivery and joined work execution, state commit, checkpoint, completion event.
 
-**원본 비교**
+**Upstream comparison**
 
-- .NET: resume 후 pending request를 republish하고 duplicate 없는 completion을 테스트로 고정한다.
-- Python: `responses + checkpoint_id` 경로에서 이미 응답한 request_info를 다시 내보내지 않는다.
+- .NET: After the superstep starts, it proceeds through deliveries and joined subworkflows, the checkpoint, and the complete event.
+- Python: Proceeds through `superstep_started`, iteration execution, state commit, checkpoint, and `superstep_completed`.
 
-**판단.** 동일하다. caller는 restore 뒤 다시 질문을 받아야 하지만, 같은 질문을 두 번 처리하게 하면 안
-된다.
+**Decision.** Both upstreams agree. If this order changes, the events and the checkpoint point at
+different realities. That matters especially in a resumable system.
 
-**수용 기준**
+**Acceptance criteria**
 
-- pending request가 있는 checkpoint를 restore하면 같은 request id가 다시 보인다.
-- restore 직후 상태는 pending request 상태를 반영한다.
-- 같은 request에 응답을 제공한 뒤에는 같은 request_info가 다시 중복 노출되지 않는다.
+- `superstep_started` comes before `superstep_completed`.
+- When the completion event has appeared, that step's state commit and checkpoint are already finished.
+- A started event later than the checkpoint of the same step does not appear again with the same step number.
 
-**근거** [16 pending request 재발행과 approval persistence](../upstream/snapshots/d0a4165f/features/16-workflow-checkpoint-hitl.md)
-
----
-
-## WF-022 외부 응답은 request id와 port id를 함께 검증한다
-
-**요구사항.** 외부 응답은 request id만이 아니라 원 요청의 port id까지 일치할 때만 수락해야 한다.
-
-**원본 비교**
-
-- .NET: forged response가 request id는 같아도 port id가 다르면 거부한다.
-- Python: pending request map과 response type을 검증하지만 port-level correlation surface는 더 얇다.
-
-**판단.** 더 엄격한 .NET 계약을 채택한다. request id만 확인하면 다른 실행 경로에 위조 응답이 들어갈 수
-있다.
-
-**수용 기준**
-
-- request id는 같고 port id가 다른 응답은 거부된다.
-- 위조 응답을 거부한 뒤에도 정당한 응답은 같은 request에 대해 나중에 수락될 수 있다.
-- unknown request id 응답도 거부된다.
-
-**근거** [15 오류·검증·보안](../upstream/snapshots/d0a4165f/features/15-workflow-runtime.md), [16 request-response 코어 흐름](../upstream/snapshots/d0a4165f/features/16-workflow-checkpoint-hitl.md)
+**Evidence** [15 Superstep / iteration loop](../upstream/snapshots/d0a4165f/features/15-workflow-runtime.md)
 
 ---
 
-## WF-023 승인 재개는 `original_request` payload를 진실 원천으로 삼는다
+## WF-012 Shared state has both a scoped API and pending/committed buffers
 
-**요구사항.** tool approval, MCP approval, agent approval의 재개는 mutable workflow state가 아니라
-응답 payload 안의 `original_request`를 유일한 진실 원천으로 사용해야 한다.
+**Requirement.** The shared state API must be able to express the executor scope, and the internal
+implementation must separate the pending and committed buffers and commit only at a superstep
+boundary.
 
-**원본 비교**
+**Upstream comparison**
 
-- .NET: function/MCP approval snapshot을 저장해 재개 시 그 snapshot을 사용한다.
-- Python: declarative approval tests가 `original_request` payload만 신뢰하고 stale state를 무시함을 고정한다.
+- .NET: Has a state API that takes a scope name and a staged update publish model.
+- Python: Has a flat key API but two buffer layers, `_pending` and `_committed`.
 
-**판단.** Python의 더 엄격한 회귀 계약을 명세로 채택한다. 승인 대기 중 상태가 바뀌어도 승인된 원 요청이
-바뀌면 안 된다. concurrent approvals의 swap도 막아야 한다.
+**Decision.** Java combines .NET's scoped API with Python's two-layer buffer model. A scope is needed
+to handle conflicts in a multi-agent workflow, and the pending/committed separation is what makes
+superstep atomicity hold.
 
-**수용 기준**
+**Acceptance criteria**
 
-- stale state에 다른 arguments가 있어도 재개 실행은 `original_request`의 arguments를 사용한다.
-- 동시에 두 승인 요청이 pending이어도 응답이 서로 뒤바뀌지 않는다.
-- 승인 거부 시 원 도구 호출은 실행되지 않는다.
+- The public state API can express at least an executor or scope unit.
+- A value written inside the same step stays only in the pending buffer until the commit.
+- The value read at the start of the next superstep is the result of the previous commit.
 
-**근거** [16 체크포인트와 사람 개입](../upstream/snapshots/d0a4165f/features/16-workflow-checkpoint-hitl.md), [19 선언형](../upstream/snapshots/d0a4165f/features/19-declarative.md)
-
----
-
-## WF-024 파일 체크포인트 저장은 경로와 역직렬화 안전장치를 기본 제공한다
-
-**요구사항.** 파일 체크포인트 저장소는 저장 루트 밖 경로를 거부하고, atomic write와 제한된
-역직렬화 타입 집합을 기본 내장해야 한다.
-
-**원본 비교**
-
-- .NET: 파일 이름 escape와 ordered index를 제공한다.
-- Python: `_validate_file_path`, atomic `os.replace`, restricted decode를 제공한다.
-
-**판단.** Java는 Python의 path validation과 restricted decode를 기본으로 채택하고, .NET처럼 파일 이름
-정규화도 함께 가져간다. 파일 저장소는 보안 경계다.
-
-**수용 기준**
-
-- checkpoint id가 루트 밖 파일로 해석되면 저장과 조회가 모두 실패한다.
-- 저장은 atomic replace 계열 동작으로 완료된다.
-- load는 허용된 타입 집합 밖의 객체를 역직렬화하지 않는다.
-
-**근거** [16 상태·영속화](../upstream/snapshots/d0a4165f/features/16-workflow-checkpoint-hitl.md)
+**Evidence** [15 Shared state and the run context](../upstream/snapshots/d0a4165f/features/15-workflow-runtime.md)
 
 ---
 
-## WF-025 run handle은 재개와 pending request 조회 API를 제공한다
+## WF-013 Multiple writes to the same state key are treated as an explicit failure
 
-**요구사항.** run handle은 `resumeFrom(checkpoint)`, `respond(requestId, payload)`, `listPendingRequests()`,
-`latestCheckpoint()`에 해당하는 운영 API를 제공해야 한다.
+**Requirement.** When conflicting multiple writes happen in the same superstep, Java must report an
+explicit runtime failure instead of quietly overwriting with last-write-wins.
 
-**원본 비교**
+**Upstream comparison**
 
-- .NET: checkpointable run이 checkpoints, last checkpoint, restore API를 직접 가진다.
-- Python: `Workflow.run(checkpoint_id=..., responses=...)` 조합으로 같은 일을 수행한다.
+- .NET: Has a test that surfaces a fanned-out multiple writer conflict as a runtime error.
+- Python: Describes several writes in the same step on flat state as last write wins.
 
-**판단.** Java는 handle 중심 제어 plane을 택한다. runtime 운영은 별도 parameter 조합보다 명시적 메서드가
-안전하다.
+**Decision.** The safer default is taken, so the .NET contract is adopted. Last-write-wins creates
+silent loss under parallel fan-out. It is better to surface a conflict as a failure.
 
-**수용 기준**
+**Acceptance criteria**
 
-- run handle에서 latest checkpoint 식별자를 조회할 수 있다.
-- pending request 목록을 request id와 타입 정보와 함께 조회할 수 있다.
-- checkpoint restore와 response 제출이 별도 메서드로 노출된다.
+- When a conflicting write to the same key happens, the workflow raises an explicit error.
+- The state commit succeeds only when there is no conflict.
+- The conflict error makes it possible to identify which key and which writers conflicted.
 
-**근거** [16 Java 결정](../upstream/snapshots/d0a4165f/features/16-workflow-checkpoint-hitl.md)
-
-### 조합
+**Evidence** [14 errors/validation/security](../upstream/snapshots/d0a4165f/features/14-workflow-graph.md), [15 .NET tests](../upstream/snapshots/d0a4165f/features/15-workflow-runtime.md)
 
 ---
 
-## WF-026 하위 워크플로 조합은 host executor 소유권 모델을 따른다
+## WF-014 Message sending propagates the trace context and blocks reserved event spoofing
 
-**요구사항.** 자식 워크플로를 부모 그래프에 삽입할 때는 shared child instance를 직접 재사용하지 말고,
-ownership token을 가진 host executor가 자식 lifecycle과 응답 포트 변환을 소유해야 한다.
+**Requirement.** The runtime `send_message` must put the trace context into the envelope, and when an
+executor directly spoofs a reserved event such as `output`, `intermediate`, or a lifecycle event, the
+framework must reject it.
 
-**원본 비교**
+**Upstream comparison**
 
-- .NET: `SubworkflowBinding`과 `WorkflowHostExecutor`가 ownership token과 qualified port를 사용한다.
-- Python: `WorkflowExecutor`가 child workflow를 executor처럼 감싸고 request/response를 재형식화한다.
+- .NET: `SendMessageAsync` injects a trace carrier.
+- Python: `send_message()` injects the trace context and `add_event()` turns a reserved event into a warning.
 
-**판단.** Java는 .NET의 ownership model을 채택한다. child workflow를 일반 executor처럼 공유하면 lifecycle,
-checkpoint, overlap 경계가 흐려진다.
+**Decision.** Both contracts are carried together. Trace propagation is basic to observability, and
+reserved event protection is basic to the integrity of the event channel.
 
-**수용 기준**
+**Acceptance criteria**
 
-- 부모가 child workflow instance를 직접 공유 실행하지 않는다.
-- 자식 외부 요청 포트는 부모 경계에서 qualified id로 변환된다.
-- restore 시 child run stack과 pending response 포트 상태도 함께 복원된다.
+- When a message sent by an executor has no trace context, it is detectable in observability mode.
+- When an executor puts a reserved event type in directly, the original event is ignored or replaced by a warning.
+- Output/intermediate events created by the framework can be distinguished from events spoofed by an executor.
 
-**근거** [17 조합](../upstream/snapshots/d0a4165f/features/17-workflow-composition.md), [16 subworkflow request-response](../upstream/snapshots/d0a4165f/features/16-workflow-checkpoint-hitl.md)
-
----
-
-## WF-027 자식 출력, intermediate, request 전파 정책은 명시적으로 설정한다
-
-**요구사항.** 하위 워크플로 조합은 child output을 parent message로 보낼지 direct output으로 yield할지,
-child intermediate를 어떻게 보일지, child request를 parent가 가로챌지 외부로 전파할지 명시적으로
-설정해야 한다.
-
-**원본 비교**
-
-- .NET: host executor 옵션이 child output을 message 또는 output으로 전달한다.
-- Python: `allow_direct_output`과 `propagate_request`가 이를 제어하고 intermediate를 별도로 재발행한다.
-
-**판단.** Python의 더 명시적 public knobs를 채택한다. 조합 경계에서 무엇이 terminal인지 숨으면 agent
-adapter와 parent workflow 관찰성이 불안정해진다.
-
-**수용 기준**
-
-- child output forwarding 정책이 공개 옵션으로 드러난다.
-- child intermediate output은 parent terminal policy와 독립적으로 intermediate로 유지할 수 있다.
-- child request는 parent interception 또는 external propagation 중 하나를 선택할 수 있다.
-
-**근거** [17 Python graph composition](../upstream/snapshots/d0a4165f/features/17-workflow-composition.md)
+**Evidence** [14 errors/validation/security](../upstream/snapshots/d0a4165f/features/14-workflow-graph.md), [15 message sending and trace context propagation](../upstream/snapshots/d0a4165f/features/15-workflow-runtime.md)
 
 ---
 
-## WF-028 workflow-as-agent 세션은 continuation 상태를 함께 직렬화한다
+## WF-015 The public cancel API and stream consumer cancellation are separated
 
-**요구사항.** workflow-as-agent 세션은 checkpoint pointer, pending request map, option flags를 함께
-직렬화해야 하며, 내부 hidden yields는 최종 agent response에 넣지 않아야 한다.
+**Requirement.** The public `cancel()` that actually stops the workflow and the consumer
+cancellation that stops stream consumption must have different effects.
 
-**원본 비교**
+**Upstream comparison**
 
-- .NET: `WorkflowSession`이 last checkpoint와 pending requests를 세션에 저장한다.
-- Python: `Workflow.as_agent()` tests가 hidden yields suppression과 intermediate forwarding을 고정한다.
+- .NET: Cancelling `WatchStreamAsync()` only ends the stream, while workflow cancellation is handled by `CancelRunAsync()`.
+- Python: No public cancel API is visible; only internal cancellation handling is visible.
 
-**판단.** 두 구현의 핵심을 합친다. agent session이 continuation 상태를 모르고 있으면 multi-turn resume이
-불가능하고, hidden yields를 노출하면 graph 내부 구현이 사용자 계약을 오염시킨다.
+**Decision.** Java adopts the .NET model. The authority of the consumer and of the execution owner
+must be separated. If the workflow disappears just because stream consumption ended, hosting and UI
+integration become difficult.
 
-**수용 기준**
+**Acceptance criteria**
 
-- 세션 직렬화 payload에 workflow checkpoint pointer와 pending request 정보가 포함된다.
-- hidden yield는 final agent response 본문에 포함되지 않는다.
-- 내부 agent id나 name이 안정적이지 않으면 checkpoint resume이 실패한다.
+- Cancelling the stream consumption token alone does not turn the workflow state into `CANCELLED` or terminated.
+- Calling the public cancel API transitions the subsequent state to cancelled or terminated.
+- A cancelled run is not reported as successful.
 
-**근거** [17 workflow-as-agent](../upstream/snapshots/d0a4165f/features/17-workflow-composition.md)
-
----
-
-## WF-029 functional workflow는 별도 실험 API로 분리한다
-
-**요구사항.** functional workflow는 graph workflow와 분리된 실험 API로 두고, deterministic step cache,
-`WorkflowInterrupted` 같은 비지역 제어 신호, code-shape signature hash를 기본 계약으로 가져야 한다.
-
-**원본 비교**
-
-- .NET: inspected 범위에 동등한 public functional API가 없다.
-- Python: `@workflow`, `@step`, `WorkflowInterrupted`, step cache, signature hash를 실험 기능으로 제공한다.
-
-**판단.** 안정도 차이가 커서 분리가 맞다. functional API를 core graph와 같은 안정도로 약속하면 checkpoint
-호환성과 streaming semantics를 과장하게 된다.
-
-**수용 기준**
-
-- functional workflow 패키지는 graph workflow와 다른 실험 안정도 표기를 가진다.
-- step cache key는 step name과 call index를 포함한다.
-- restore는 workflow signature hash가 다르면 실패한다.
-- `except Exception:`이 HITL interruption을 잡지 못한다.
-
-**근거** [17 Python functional workflow API](../upstream/snapshots/d0a4165f/features/17-workflow-composition.md)
-
-### 오케스트레이션
+**Evidence** [15 concurrency/streaming/cancellation](../upstream/snapshots/d0a4165f/features/15-workflow-runtime.md)
 
 ---
 
-## WF-030 오케스트레이션은 공통 output designation helper와 명시적 기본 정책을 가진다
+## WF-016 A new message is rejected by default while a pending request remains
 
-**요구사항.** 모든 orchestration builder는 공통 participant-output designation helper를 공유하고,
-각 패턴의 기본 terminal/intermediate 정책을 명시적 상수나 enum으로 고정해야 한다.
+**Requirement.** Sending a new message to a run that still has a pending external request must be
+rejected by default, and allowing it must require an explicit override or resume token.
 
-**원본 비교**
+**Upstream comparison**
 
-- .NET: `OrchestrationBuilderBase`와 패턴별 builder가 기본 designation을 암묵적으로 만든다.
-- Python: `_participant_output_config.py`가 공통 validation과 designation 계산을 담당한다.
+- .NET: Designs around explicit resume/response paths.
+- Python: Allows a fresh message with a warning even when a pending request exists.
 
-**판단.** Java는 공통 helper를 별도 shared module로 끌어내고, 기본 정책도 암묵 규칙이 아니라 명시적
-계약으로 둔다. 현재 원본 간 drift를 그대로 답습하면 parity가 깨진다.
+**Decision.** Following the overlap policy the user emphasized, the safer side is taken. As the
+Python tests show, an old response can be applied to a moved-on state. That must not be allowed by
+default.
 
-**수용 기준**
+**Acceptance criteria**
 
-- sequential, concurrent, handoff, group-chat, magentic이 같은 designation helper를 사용한다.
-- 각 builder는 자신의 default output policy를 코드에서 식별 가능한 상수나 enum으로 가진다.
-- unknown participant, overlap, invalid designation은 공통 규칙으로 실패한다.
+- Sending a new message to a run with a pending request fails immediately in the default configuration.
+- Unless the override mode is switched on, an old request response and a new message are not mixed in the same state.
+- Even when a permissive mode exists, its use is explicit in the calling API.
 
-**근거** [18 오케스트레이션](../upstream/snapshots/d0a4165f/features/18-orchestrations.md)
-
----
-
-## WF-031 sequential·concurrent는 패턴별 계약과 request-info wrapper를 제공한다
-
-**요구사항.** Sequential builder는 full-conversation 기본값과 chain-only 옵션을, Concurrent builder는
-병렬 fan-out과 aggregator 계약을 제공해야 하며, 둘 다 generic request-info wrapper를 노출해야 한다.
-
-**원본 비교**
-
-- .NET: sequential은 full conversation vs chain-only를, concurrent는 custom aggregator를 제공한다.
-- Python: sequential과 concurrent 모두 `with_request_info(...)`를 제공하고 concurrent callback aggregator를 지원한다.
-
-**판단.** Java는 두 패턴의 builder contract를 분리하되 request-info wrapper는 공통 사용자 경험으로 가져간다.
-이 wrapper가 있어야 specialized handoff/magentic과 역할 차이가 분명해진다.
-
-**수용 기준**
-
-- sequential 기본 모드에서 다음 participant는 이전 전체 대화를 받는다.
-- sequential chain-only 모드에서 다음 participant는 직전 agent 응답만 받는다.
-- concurrent는 participant들을 병렬로 실행하고 aggregator 출력 하나로 수렴한다.
-- sequential과 concurrent builder 모두 특정 participant subset에 request-info wrapper를 적용할 수 있다.
-
-**근거** [18 Sequential](../upstream/snapshots/d0a4165f/features/18-orchestrations.md), [18 Concurrent](../upstream/snapshots/d0a4165f/features/18-orchestrations.md)
+**Evidence** [15 Java decisions](../upstream/snapshots/d0a4165f/features/15-workflow-runtime.md), [16 Java decisions](../upstream/snapshots/d0a4165f/features/16-workflow-checkpoint-hitl.md)
 
 ---
 
-## WF-032 handoff는 mesh 기본값, 능력 검증, 필터링, pending-request 차단을 갖는다
+## WF-017 The failure event order is executor failure followed by workflow failure
 
-**요구사항.** Handoff builder는 explicit graph가 없으면 기본 mesh topology를 만들고, participant 능력을
-빌드 시점에 검증하며, handoff call artifacts를 필터링하고, pending request가 남은 동안 handoff를 막아야 한다.
+**Requirement.** When an executor failure happens, `executor_failed` must be observed first and the
+workflow-level failure must be promoted after it.
 
-**원본 비교**
+**Upstream comparison**
 
-- .NET: default mesh, handoff filtering, pending request blocks handoff를 구현한다.
-- Python: participants must be `Agent`이고 per-service-call history persistence를 요구하며 default mesh를 만든다.
+- .NET: Can surface both a workflow error event and an executor failure event.
+- Python: Tests fix that `executor_failed` must appear before `failed`.
 
-**판단.** 두 원본의 안전 장치를 합친다. handoff는 shared conversation과 continuation 상태를 많이 다루므로
-능력 검증과 artifact filtering이 필수다.
+**Decision.** Python's more concrete event order is adopted. Debugging and retry policies have to
+know the root cause executor first.
 
-**수용 기준**
+**Acceptance criteria**
 
-- explicit handoff graph가 없으면 모든 participant 사이의 기본 mesh가 생성된다.
-- handoff target은 원 사용자 문맥은 받되 source agent의 handoff tool/function artifacts는 받지 않는다.
-- participant 능력 제약을 만족하지 않으면 build가 실패한다.
-- pending request가 있는 상태에서는 handoff가 발생하지 않는다.
+- In the event stream of a failed run, the executor failure precedes the workflow failure.
+- The executor failure event includes the id of the failed executor.
+- The workflow failure event summarizes the same failure again but does not replace the executor failure.
 
-**근거** [18 Handoff](../upstream/snapshots/d0a4165f/features/18-orchestrations.md)
+**Evidence** [14 concrete acceptance scenarios](../upstream/snapshots/d0a4165f/features/14-workflow-graph.md), [15 concrete acceptance scenarios](../upstream/snapshots/d0a4165f/features/15-workflow-runtime.md)
 
----
-
-## WF-033 group-chat은 단일 orchestrator 계약과 no-self-echo 규칙을 갖는다
-
-**요구사항.** Group-chat builder는 정확히 하나의 orchestrator 또는 manager source를 요구하고, 현재
-speaker의 응답을 자기 자신에게 다시 broadcast하지 말아야 하며, 같은 speaker를 즉시 다시 고르면 종료해야 한다.
-
-**원본 비교**
-
-- .NET: `GroupChatHost`가 no-self-echo와 same-speaker termination guard를 구현한다.
-- Python: builder가 exactly-one orchestrator config와 participant uniqueness를 검증한다.
-
-**판단.** 두 원본의 계약을 합친다. group-chat의 핵심은 중앙 선택자다. orchestrator source가 둘 이상이면
-의미가 모호해지고, self-echo는 무한 루프와 토큰 낭비를 부른다.
-
-**수용 기준**
-
-- orchestrator/manager 구성은 정확히 하나만 허용된다.
-- 현재 speaker의 메시지는 다른 participant에게만 broadcast된다.
-- manager가 같은 speaker를 즉시 다시 선택하면 workflow는 종료 또는 fail-safe 경로로 전이한다.
-- 기본 terminal output 정책이 host/orchestrator 쪽에 고정된다.
-
-**근거** [18 Group-chat](../upstream/snapshots/d0a4165f/features/18-orchestrations.md)
+### Checkpoints and human intervention
 
 ---
 
-## WF-034 magentic은 단일 manager 계약과 plan review·replan 흐름을 갖는다
+## WF-018 A checkpoint carries the full state needed for continuation
 
-**요구사항.** Magentic builder는 manager source를 정확히 하나만 허용하고, plan review pause,
-progress ledger 기반 stall/loop 감지, reset+replan 경로를 공개 계약으로 가져야 한다.
+**Requirement.** The checkpoint payload must carry the workflow signature, the runner queue, the
+pending external requests, the shared state, the edge state, and the executor snapshot together.
 
-**원본 비교**
+**Upstream comparison**
 
-- .NET: `RequirePlanSignoff` 기본 true와 progress ledger failure recovery를 가진다.
-- Python: exactly-one manager source를 강제하고 plan review는 opt-in이다.
+- .NET: `Checkpoint` carries workflow info, runner state, state data, edge state, and the parent.
+- Python: `WorkflowCheckpoint` carries the signature hash, messages, state, pending requests, iteration, and lineage.
 
-**판단.** Java는 exactly-one manager source contract를 강하게 채택하고, plan review와 replan 흐름은
-명시적 정책으로 노출한다. planning-centric orchestration이므로 manager SPI가 핵심이다.
+**Decision.** The same continuation contract is adopted. Designing checkpoints and HITL separately
+makes it impossible to republish pending requests correctly after a restore.
 
-**수용 기준**
+**Acceptance criteria**
 
-- manager source는 instance, factory, manager-agent, manager-agent-factory 중 정확히 하나만 허용된다.
-- plan review가 켜져 있으면 initial plan 뒤 외부 review request가 발생한다.
-- progress ledger가 stall 또는 loop를 감지하면 reset+replan 경로로 전이한다.
-- 기본 terminal output 정책이 manager 전용으로 고정된다.
+- A single checkpoint is enough to show the pending requests again after a restore.
+- The shared state and the edge/executor state are restored together.
+- A lineage or parent pointer exists so that the latest checkpoint chain can be traced.
 
-**근거** [18 Magentic](../upstream/snapshots/d0a4165f/features/18-orchestrations.md)
-
-### 선언형
+**Evidence** [16 checkpoints and human intervention](../upstream/snapshots/d0a4165f/features/16-workflow-checkpoint-hitl.md)
 
 ---
 
-## WF-035 선언형 워크플로는 분리된 모듈, 안전한 상태 경로, typed handler SPI를 가진다
+## WF-019 Restore validates the signature and drains stale events first
 
-**요구사항.** 선언형 표면은 workflow declarative와 agent-assets declarative를 분리된 모듈로 두고,
-`schema AST → normalized model → graph lowering` 파이프라인, safe state path와 Env allowlist,
-typed HTTP/MCP/agent handler SPI, build-time handler 존재 검증, 승인 재개 시 secret redaction과
-`original_request` 기반 재실행을 함께 제공해야 한다.
+**Requirement.** A checkpoint restore must first validate the current workflow definition signature,
+and must apply the state after draining the existing event buffer.
 
-**원본 비교**
+**Upstream comparison**
 
-- .NET: workflow declarative가 typed handler interface와 source-generated JSON metadata를 중심에 둔다.
-- Python: workflow/agent asset을 분리하고 path safety, Env allowlist, handler 존재 검증, approval binding tests를 가진다.
+- .NET: Drains the event stream buffer before the restore and checks workflow compatibility.
+- Python: Rejects the restore when the `graph_signature_hash` differs.
 
-**판단.** 선언형은 하나의 기능이 아니라 여러 보안 경계의 묶음이다. user 지시대로 workflow 하위 프로젝트에
-포함하되, 모듈 분리와 보안 기본값을 강하게 둔다. 코드와 테스트가 문서보다 더 강한 근거이므로 안전한 기본값을
-선택한다.
+**Decision.** The safeguards of both implementations are adopted. Restoring a checkpoint whose
+definition has changed, or leaving stale events behind, makes the caller see two different
+timelines.
 
-**수용 기준**
+**Acceptance criteria**
 
-- workflow declarative와 agent-asset declarative가 다른 모듈 또는 안정도 표기를 가진다.
-- workflow YAML은 비어 있는 actions를 허용하지 않고, 필요한 HTTP/MCP handler가 없으면 build가 실패한다.
-- 상태 경로는 unsafe attribute traversal을 거부하고 `Env` 노출은 allowlist 또는 safe mode로 제어한다.
-- MCP approval surface는 secret header 값을 노출하지 않는다.
-- approval resume는 `original_request` payload의 함수명과 인자를 사용한다.
+- If the current workflow signature and the checkpoint signature differ, the restore fails.
+- Immediately after a restore, old events created after the checkpoint do not flow out again.
+- The restore clears the event buffer before applying the state.
 
-**근거** [19 Declarative](../upstream/snapshots/d0a4165f/features/19-declarative.md), [16 declarative approval/HITL 흐름](../upstream/snapshots/d0a4165f/features/16-workflow-checkpoint-hitl.md)
+**Evidence** [14 state/persistence](../upstream/snapshots/d0a4165f/features/14-workflow-graph.md), [16 .NET checkpoint creation and restoration](../upstream/snapshots/d0a4165f/features/16-workflow-checkpoint-hitl.md)
 
 ---
 
-## 이 문서가 다루지 않는 것
+## WF-020 Determining the latest checkpoint relies on an ordering contract
 
-| 주제 | 소유 문서 |
+**Requirement.** The checkpoint store must return its index in oldest-first, newest-last order, and
+a latest checkpoint query must use that last entry.
+
+**Upstream comparison**
+
+- .NET: States the store ordering contract and treats the last entry as the latest.
+- Python: Has lineage and timestamps but emphasizes latest ordering less as a public contract.
+
+**Decision.** .NET's stricter store contract is adopted. If the determination of the latest differs
+between implementations, the restore API is not deterministic.
+
+**Acceptance criteria**
+
+- The checkpoint store contract documentation states oldest-first/newest-last.
+- `latestCheckpoint()` uses the last element of the index.
+- A store implementation that breaks the ordering contract fails in tests.
+
+**Evidence** [16 .NET checkpoint creation and restoration](../upstream/snapshots/d0a4165f/features/16-workflow-checkpoint-hitl.md)
+
+---
+
+## WF-021 Pending requests are republished after restore without being duplicated
+
+**Requirement.** Restoring from a checkpoint that has pending requests must republish the request
+information, and a request that has already been handled must not be published again.
+
+**Upstream comparison**
+
+- .NET: Republishes pending requests after a resume and fixes duplicate-free completion with tests.
+- Python: Does not re-emit a request_info that has already been answered on the `responses + checkpoint_id` path.
+
+**Decision.** Both upstreams agree. The caller must be asked again after a restore, but must not be
+made to process the same question twice.
+
+**Acceptance criteria**
+
+- Restoring a checkpoint with pending requests shows the same request id again.
+- The state immediately after a restore reflects the pending request state.
+- After a response has been provided for the same request, the same request_info is not exposed again.
+
+**Evidence** [16 pending request republication and approval persistence](../upstream/snapshots/d0a4165f/features/16-workflow-checkpoint-hitl.md)
+
+---
+
+## WF-022 An external response is validated on both the request id and the port id
+
+**Requirement.** An external response must be accepted only when not just the request id but also the
+port id of the original request matches.
+
+**Upstream comparison**
+
+- .NET: Rejects a forged response whose request id is the same but whose port id differs.
+- Python: Validates the pending request map and the response type, but the port-level correlation surface is thinner.
+
+**Decision.** The stricter .NET contract is adopted. Checking only the request id lets a forged
+response enter a different execution path.
+
+**Acceptance criteria**
+
+- A response with the same request id but a different port id is rejected.
+- Even after a forged response has been rejected, a legitimate response can still be accepted later for the same request.
+- A response with an unknown request id is rejected too.
+
+**Evidence** [15 errors/validation/security](../upstream/snapshots/d0a4165f/features/15-workflow-runtime.md), [16 request-response core flow](../upstream/snapshots/d0a4165f/features/16-workflow-checkpoint-hitl.md)
+
+---
+
+## WF-023 Approval resumption takes the `original_request` payload as the source of truth
+
+**Requirement.** Resumption of tool approval, MCP approval, and agent approval must use
+`original_request` inside the response payload as the single source of truth, not the mutable
+workflow state.
+
+**Upstream comparison**
+
+- .NET: Stores a function/MCP approval snapshot and uses that snapshot on resumption.
+- Python: The declarative approval tests fix that only the `original_request` payload is trusted and stale state is ignored.
+
+**Decision.** Python's stricter regression contract is adopted as the specification. Even if the
+state changes while an approval is pending, the approved original request must not change. Swapping
+of concurrent approvals must be blocked too.
+
+**Acceptance criteria**
+
+- Even when stale state has different arguments, the resumed execution uses the arguments from `original_request`.
+- Even when two approval requests are pending at once, the responses are not swapped with each other.
+- When an approval is denied, the original tool call is not executed.
+
+**Evidence** [16 checkpoints and human intervention](../upstream/snapshots/d0a4165f/features/16-workflow-checkpoint-hitl.md), [19 declarative](../upstream/snapshots/d0a4165f/features/19-declarative.md)
+
+---
+
+## WF-024 The file checkpoint store provides path and deserialization safeguards by default
+
+**Requirement.** The file checkpoint store must reject paths outside the storage root, and must
+build in atomic writes and a restricted set of deserialization types by default.
+
+**Upstream comparison**
+
+- .NET: Provides file name escaping and an ordered index.
+- Python: Provides `_validate_file_path`, atomic `os.replace`, and restricted decoding.
+
+**Decision.** Java adopts Python's path validation and restricted decoding as the default and also
+carries over file name normalization as in .NET. A file store is a security boundary.
+
+**Acceptance criteria**
+
+- If a checkpoint id resolves to a file outside the root, both storing and querying fail.
+- Storing completes through an atomic replace-family operation.
+- Loading does not deserialize objects outside the allowed type set.
+
+**Evidence** [16 state/persistence](../upstream/snapshots/d0a4165f/features/16-workflow-checkpoint-hitl.md)
+
+---
+
+## WF-025 The run handle provides resume and pending request query APIs
+
+**Requirement.** The run handle must provide the operational APIs corresponding to
+`resumeFrom(checkpoint)`, `respond(requestId, payload)`, `listPendingRequests()`, and
+`latestCheckpoint()`.
+
+**Upstream comparison**
+
+- .NET: A checkpointable run has the checkpoints, last checkpoint, and restore APIs directly.
+- Python: Performs the same work through the `Workflow.run(checkpoint_id=..., responses=...)` combination.
+
+**Decision.** Java takes a handle-centred control plane. For runtime operations, explicit methods are
+safer than a combination of separate parameters.
+
+**Acceptance criteria**
+
+- The latest checkpoint identifier can be queried from the run handle.
+- The pending request list can be queried together with request ids and type information.
+- Checkpoint restore and response submission are exposed as separate methods.
+
+**Evidence** [16 Java decisions](../upstream/snapshots/d0a4165f/features/16-workflow-checkpoint-hitl.md)
+
+### Composition
+
+---
+
+## WF-026 Sub-workflow composition follows the host executor ownership model
+
+**Requirement.** When a child workflow is inserted into a parent graph, a shared child instance must
+not be reused directly; a host executor holding an ownership token must own the child lifecycle and
+the response port translation.
+
+**Upstream comparison**
+
+- .NET: `SubworkflowBinding` and `WorkflowHostExecutor` use an ownership token and qualified ports.
+- Python: `WorkflowExecutor` wraps a child workflow like an executor and reshapes requests/responses.
+
+**Decision.** Java adopts .NET's ownership model. Sharing a child workflow like an ordinary executor
+blurs the lifecycle, checkpoint, and overlap boundaries.
+
+**Acceptance criteria**
+
+- The parent does not directly share and run the child workflow instance.
+- The child's external request ports are translated into qualified ids at the parent boundary.
+- On restore, the child run stack and the pending response port state are restored as well.
+
+**Evidence** [17 composition](../upstream/snapshots/d0a4165f/features/17-workflow-composition.md), [16 subworkflow request-response](../upstream/snapshots/d0a4165f/features/16-workflow-checkpoint-hitl.md)
+
+---
+
+## WF-027 Child output, intermediate, and request propagation policies are configured explicitly
+
+**Requirement.** Sub-workflow composition must explicitly configure whether child output is sent as a
+parent message or yielded as direct output, how child intermediates are shown, and whether the
+parent intercepts child requests or propagates them outward.
+
+**Upstream comparison**
+
+- .NET: A host executor option forwards child output either as a message or as output.
+- Python: `allow_direct_output` and `propagate_request` control this and intermediates are republished separately.
+
+**Decision.** Python's more explicit public knobs are adopted. When what is terminal at the
+composition boundary is hidden, the observability of the agent adapter and the parent workflow
+becomes unstable.
+
+**Acceptance criteria**
+
+- The child output forwarding policy is surfaced as a public option.
+- Child intermediate output can be kept as intermediate independently of the parent terminal policy.
+- Child requests can choose between parent interception and external propagation.
+
+**Evidence** [17 Python graph composition](../upstream/snapshots/d0a4165f/features/17-workflow-composition.md)
+
+---
+
+## WF-028 The workflow-as-agent session serializes the continuation state as well
+
+**Requirement.** The workflow-as-agent session must serialize the checkpoint pointer, the pending
+request map, and the option flags together, and must not put internal hidden yields into the final
+agent response.
+
+**Upstream comparison**
+
+- .NET: `WorkflowSession` stores the last checkpoint and pending requests in the session.
+- Python: The `Workflow.as_agent()` tests fix hidden yields suppression and intermediate forwarding.
+
+**Decision.** The essentials of both implementations are combined. If the agent session does not know
+the continuation state, multi-turn resumption is impossible, and exposing hidden yields lets the
+internal graph implementation contaminate the user contract.
+
+**Acceptance criteria**
+
+- The session serialization payload includes the workflow checkpoint pointer and the pending request information.
+- Hidden yields are not included in the body of the final agent response.
+- If the internal agent id or name is not stable, checkpoint resumption fails.
+
+**Evidence** [17 workflow-as-agent](../upstream/snapshots/d0a4165f/features/17-workflow-composition.md)
+
+---
+
+## WF-029 Functional workflows are split into a separate experimental API
+
+**Requirement.** Functional workflows must be kept as an experimental API separate from graph
+workflows, and must have a deterministic step cache, non-local control signals such as
+`WorkflowInterrupted`, and a code-shape signature hash as their default contract.
+
+**Upstream comparison**
+
+- .NET: There is no equivalent public functional API in the inspected scope.
+- Python: Provides `@workflow`, `@step`, `WorkflowInterrupted`, the step cache, and the signature hash as experimental features.
+
+**Decision.** The difference in stability is large, so separation is right. Promising the functional
+API at the same stability as the core graph would overstate checkpoint compatibility and streaming
+semantics.
+
+**Acceptance criteria**
+
+- The functional workflow package carries a different experimental stability marker from graph workflows.
+- The step cache key includes the step name and the call index.
+- A restore fails when the workflow signature hash differs.
+- `except Exception:` does not catch a HITL interruption.
+
+**Evidence** [17 Python functional workflow API](../upstream/snapshots/d0a4165f/features/17-workflow-composition.md)
+
+### Orchestration
+
+---
+
+## WF-030 Orchestration has a shared output designation helper and explicit default policies
+
+**Requirement.** Every orchestration builder must share a common participant-output designation
+helper, and must fix the default terminal/intermediate policy of each pattern as an explicit
+constant or enum.
+
+**Upstream comparison**
+
+- .NET: `OrchestrationBuilderBase` and the per-pattern builders create the default designation implicitly.
+- Python: `_participant_output_config.py` is responsible for the shared validation and designation computation.
+
+**Decision.** Java pulls the shared helper out into a separate shared module and keeps the default
+policy as an explicit contract rather than an implicit rule. Copying the current drift between the
+upstreams as is would break parity.
+
+**Acceptance criteria**
+
+- Sequential, concurrent, handoff, group-chat, and magentic use the same designation helper.
+- Each builder holds its own default output policy as a constant or enum identifiable in code.
+- An unknown participant, an overlap, and an invalid designation fail through the shared rules.
+
+**Evidence** [18 orchestration](../upstream/snapshots/d0a4165f/features/18-orchestrations.md)
+
+---
+
+## WF-031 Sequential and concurrent provide per-pattern contracts and a request-info wrapper
+
+**Requirement.** The Sequential builder must provide a full-conversation default and a chain-only
+option, the Concurrent builder must provide parallel fan-out and an aggregator contract, and both
+must expose a generic request-info wrapper.
+
+**Upstream comparison**
+
+- .NET: Sequential provides full conversation versus chain-only, and concurrent provides a custom aggregator.
+- Python: Both sequential and concurrent provide `with_request_info(...)` and support a concurrent callback aggregator.
+
+**Decision.** Java separates the builder contracts of the two patterns but carries the request-info
+wrapper over as a shared user experience. This wrapper is what makes the role difference from the
+specialized handoff/magentic clear.
+
+**Acceptance criteria**
+
+- In the sequential default mode, the next participant receives the whole previous conversation.
+- In the sequential chain-only mode, the next participant receives only the immediately preceding agent response.
+- Concurrent runs the participants in parallel and converges on a single aggregator output.
+- Both the sequential and the concurrent builder can apply the request-info wrapper to a particular participant subset.
+
+**Evidence** [18 Sequential](../upstream/snapshots/d0a4165f/features/18-orchestrations.md), [18 Concurrent](../upstream/snapshots/d0a4165f/features/18-orchestrations.md)
+
+---
+
+## WF-032 Handoff has a default mesh, capability validation, filtering, and pending-request blocking
+
+**Requirement.** The Handoff builder must create a default mesh topology when there is no explicit
+graph, must validate participant capabilities at build time, must filter handoff call artifacts, and
+must block handoff while a pending request remains.
+
+**Upstream comparison**
+
+- .NET: Implements the default mesh, handoff filtering, and pending request blocks handoff.
+- Python: Requires participants to be `Agent`, requires per-service-call history persistence, and creates a default mesh.
+
+**Decision.** The safeguards of the two upstreams are combined. Handoff deals with a lot of shared
+conversation and continuation state, so capability validation and artifact filtering are essential.
+
+**Acceptance criteria**
+
+- When there is no explicit handoff graph, a default mesh between all participants is created.
+- A handoff target receives the original user context but not the handoff tool/function artifacts of the source agent.
+- If the participant capability constraints are not satisfied, the build fails.
+- No handoff happens while a pending request exists.
+
+**Evidence** [18 Handoff](../upstream/snapshots/d0a4165f/features/18-orchestrations.md)
+
+---
+
+## WF-033 Group-chat has a single orchestrator contract and a no-self-echo rule
+
+**Requirement.** The Group-chat builder must require exactly one orchestrator or manager source, must
+not broadcast the current speaker's response back to itself, and must terminate when the same
+speaker is picked again immediately.
+
+**Upstream comparison**
+
+- .NET: `GroupChatHost` implements the no-self-echo and same-speaker termination guards.
+- Python: The builder validates the exactly-one orchestrator configuration and participant uniqueness.
+
+**Decision.** The contracts of the two upstreams are combined. The heart of group-chat is the central
+selector. More than one orchestrator source makes the meaning ambiguous, and self-echo invites
+infinite loops and wasted tokens.
+
+**Acceptance criteria**
+
+- Exactly one orchestrator/manager configuration is allowed.
+- The current speaker's message is broadcast only to the other participants.
+- If the manager immediately picks the same speaker again, the workflow transitions to termination or to a fail-safe path.
+- The default terminal output policy is fixed on the host/orchestrator side.
+
+**Evidence** [18 Group-chat](../upstream/snapshots/d0a4165f/features/18-orchestrations.md)
+
+---
+
+## WF-034 Magentic has a single manager contract and a plan review and replan flow
+
+**Requirement.** The Magentic builder must allow exactly one manager source, and must have the plan
+review pause, progress ledger-based stall/loop detection, and the reset+replan path as a public
+contract.
+
+**Upstream comparison**
+
+- .NET: Has `RequirePlanSignoff` defaulting to true and progress ledger failure recovery.
+- Python: Enforces exactly one manager source and plan review is opt-in.
+
+**Decision.** Java adopts the exactly-one manager source contract strongly and exposes the plan review
+and replan flow as an explicit policy. Because this is planning-centric orchestration, the manager
+SPI is the heart of it.
+
+**Acceptance criteria**
+
+- Exactly one of instance, factory, manager-agent, and manager-agent-factory is allowed as the manager source.
+- When plan review is switched on, an external review request occurs after the initial plan.
+- When the progress ledger detects a stall or a loop, it transitions to the reset+replan path.
+- The default terminal output policy is fixed to the manager only.
+
+**Evidence** [18 Magentic](../upstream/snapshots/d0a4165f/features/18-orchestrations.md)
+
+### Declarative
+
+---
+
+## WF-035 Declarative workflows have a separated module, safe state paths, and a typed handler SPI
+
+**Requirement.** The declarative surface must keep the workflow declarative and the agent-assets
+declarative as separate modules, and must provide together the
+`schema AST → normalized model → graph lowering` pipeline, safe state paths and an Env allowlist, a
+typed HTTP/MCP/agent handler SPI, build-time validation that the handlers exist, and secret
+redaction plus `original_request`-based re-execution on approval resumption.
+
+**Upstream comparison**
+
+- .NET: The workflow declarative centres on typed handler interfaces and source-generated JSON metadata.
+- Python: Separates workflow/agent assets and has path safety, an Env allowlist, handler existence validation, and approval binding tests.
+
+**Decision.** Declarative is not one feature but a bundle of several security boundaries. As
+instructed by the user, it is included in the workflow subproject, but with strong module separation
+and strong security defaults. Code and tests are stronger evidence than documentation, so the safe
+defaults are chosen.
+
+**Acceptance criteria**
+
+- The workflow declarative and the agent-asset declarative have different modules or stability markers.
+- The workflow YAML does not allow empty actions, and the build fails when a required HTTP/MCP handler is missing.
+- State paths reject unsafe attribute traversal and `Env` exposure is controlled by an allowlist or safe mode.
+- The MCP approval surface does not expose secret header values.
+- Approval resumption uses the function name and arguments from the `original_request` payload.
+
+**Evidence** [19 Declarative](../upstream/snapshots/d0a4165f/features/19-declarative.md), [16 declarative approval/HITL flow](../upstream/snapshots/d0a4165f/features/16-workflow-checkpoint-hitl.md)
+
+---
+
+## What this document does not cover
+
+| Topic | Owning document |
 | --- | --- |
-| 단일 에이전트 실행과 모델 호출 | [01 에이전트 실행과 모델 호출](01-agent-execution.md) |
-| 일반 도구 호출 루프와 하네스 승인 계층 | [04 도구 정의와 실행 루프](04-tools.md), [08 하네스 기능](08-harness.md) |
-| 세션 저장소와 대화 이력 | [06 세션과 대화 상태](06-sessions.md) |
-| 호스팅 프로토콜과 원격 실행 어댑터 | [10 호스팅과 프로토콜](10-hosting.md) |
-| 운영 관찰성, 배포, 보안 운영 | [11 운영 품질](11-operations.md) |
+| Single agent execution and model calls | [01 Agent execution and model calls](01-agent-execution.md) |
+| The general tool call loop and the harness approval layer | [04 Tool definitions and the tool call loop](04-tools.md), [08 Harness features](08-harness.md) |
+| Session stores and conversation history | [06 Sessions and conversation state](06-sessions.md) |
+| Hosting protocols and remote execution adapters | [10 Hosting and protocols](10-hosting.md) |
+| Operational observability, deployment, security operations | [11 Operational quality](11-operations.md) |
