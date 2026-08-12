@@ -9,6 +9,8 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.Set;
 import java.util.function.Predicate;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.Assumptions;
@@ -74,23 +76,20 @@ class SigningContractTest {
   }
 
   private static boolean isMainJarSignature(Path signature) {
-    // Accept only a jar with no classifier. Excluding a list of known classifiers would still count
-    // `-tests`, `-all`, or a native classifier as the main jar, and this assertion exists precisely
-    // to name the artifact a consumer downloads.
-    //
-    // A snapshot expands the version in the filename but not in the directory, so the version
-    // cannot be compared directly; the classifier is whatever follows it.
     return classifierOf(signature).isEmpty();
   }
 
   /**
    * Returns the classifier of a signed jar, or an empty string when it has none.
    *
-   * <p>A Maven filename is {@code <artifactId>-<version>[-<classifier>].jar}. The artifact id is
-   * known from the directory, so whatever remains after it and the version is the classifier. The
-   * version itself is not known for a snapshot, so it is matched as the leading segments that are
-   * not a classifier: everything up to the last hyphen group that is non-numeric and not a
-   * timestamp.
+   * <p>A Maven filename is {@code <artifactId>-<version>[-<classifier>].jar}. Both parts are known
+   * rather than guessed: the artifact id comes from the directory and the version from the build.
+   * Inferring the version from the filename instead would read a pre-release qualifier as a
+   * classifier, so a correctly signed {@code 1.2.3-RC1} main jar would be reported as unsigned.
+   *
+   * <p>A snapshot is the one case where the filename does not carry the declared version: Maven
+   * expands {@code 0.1.0-SNAPSHOT} into {@code 0.1.0-<timestamp>-<buildNumber>}. That expansion is
+   * matched explicitly.
    */
   private static String classifierOf(Path signature) {
     String name = fileNameOf(signature);
@@ -102,16 +101,44 @@ class SigningContractTest {
     }
 
     String versionAndClassifier = withoutSuffix.substring(prefix.length());
-    int lastSeparator = versionAndClassifier.lastIndexOf('-');
-    if (lastSeparator < 0) {
+    String version = declaredVersion();
+    String expanded = expandedSnapshotVersion(versionAndClassifier, version);
+    String matched = versionAndClassifier.startsWith(version) ? version : expanded;
+
+    if (matched == null || !versionAndClassifier.startsWith(matched)) {
       return "";
     }
 
-    String tail = versionAndClassifier.substring(lastSeparator + 1);
-    // A snapshot's build number is the trailing `-1`; a release version has no trailing segment
-    // that is purely digits. Either way a digits-only tail is part of the version, not a
-    // classifier.
-    return tail.chars().allMatch(Character::isDigit) ? "" : tail;
+    String remainder = versionAndClassifier.substring(matched.length());
+    return remainder.startsWith("-") ? remainder.substring(1) : "";
+  }
+
+  /**
+   * Matches the timestamped form Maven writes for a snapshot, or returns null when it does not
+   * apply.
+   *
+   * <p>{@code 0.1.0-SNAPSHOT} becomes {@code 0.1.0-20260812.043112-1}, so the declared version's
+   * base is followed by a timestamp and a build number.
+   */
+  private static String expandedSnapshotVersion(String candidate, String version) {
+    if (!version.endsWith("-SNAPSHOT")) {
+      return null;
+    }
+
+    String base = version.substring(0, version.length() - "-SNAPSHOT".length());
+    Matcher matcher =
+        Pattern.compile("^" + Pattern.quote(base) + "-\\d{8}\\.\\d{6}-\\d+").matcher(candidate);
+    return matcher.find() ? matcher.group() : null;
+  }
+
+  private static String declaredVersion() {
+    String version = System.getProperty("agentframework.version");
+    if (version == null || version.isBlank()) {
+      throw new IllegalStateException(
+          "The build must pass -Dagentframework.version so this test can separate a version from a"
+              + " classifier instead of guessing from the filename.");
+    }
+    return version;
   }
 
   @Test
