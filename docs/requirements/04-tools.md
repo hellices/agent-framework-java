@@ -506,8 +506,8 @@ arguments as equivalent.
 - .NET: uses only `ToolName` and exact serialized `Arguments` as the rule key.
 - Python: matches rules including `tool_name`, exact `arguments`, and `server_label`.
 
-**Decision.** The Python approach is chosen, and host boundary is kept as a mandatory optional
-field. Tools with the same name may reside on different MCP servers. Widening empty arguments into a
+**Decision.** The Python approach is chosen, and the host boundary remains an optional field. Tools
+with the same name may reside on different MCP servers. Widening empty arguments into a
 wildcard creates approval leakage.
 
 **Acceptance criteria**

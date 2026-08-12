@@ -704,7 +704,7 @@ The Java compaction MVP and follow-up design is better off including the followi
    ([.NET reducer bridge](https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI/Compaction/ChatStrategyExtensions.cs#L19-L57))
 
 ### 18.3 Recommended default choices
-- grouping semantics: **tool-call/result atomicity is mandatory**
+- grouping semantics: **tool-call/result atomicity is required**
 - sliding semantics: **provide turn-based and group-based as two separate strategies**
 - token estimator default: **a 4 chars/token heuristic plus prevention of non-ASCII inflation**
 - summarization failure semantics: **restore originals + return false**

@@ -342,7 +342,7 @@ Furthermore, the snapshot builder of `AgentFrameworkWorkflow` compactly stores r
 
 5. **identity boundary enforcement**
    - .NET: `ThreadId` untrusted + isolation-scoped session store recommended
-   - Python: `snapshot_scope_resolver` mandatory when persistence active  
+   - Python: `snapshot_scope_resolver` is required when persistence is active  
    (Source: [.NET trust model](https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI.Hosting.AGUI.AspNetCore/AGUIEndpointRouteBuilderExtensions.cs#L79-L103), [Python snapshot scope requirement](https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/ag-ui/agent_framework_ag_ui/_endpoint.py#L54-L74))
 
 ---

@@ -254,7 +254,7 @@ reject final paths that escape the store root.
 - Python: Implements safe filename stem and resolved-path containment checks, along with symlink escape rejection.
 
 **Decision.** Both upstreams agree. Since session IDs can be external input, they must not be used
-directly as filenames. Root containment checking is a mandatory security rule for the Java file
+directly as filenames. Root containment checking is a required security rule for the Java file
 store.
 
 **Acceptance criteria**
@@ -545,7 +545,7 @@ blur.
 
 - The hosting module stores sessions under a per-user partition.
 - Resuming the same session under a different user context fails explicitly.
-- The core session type does not require a host user ID field as mandatory.
+- The core session type does not make a host user ID field required.
 
 **Evidence** [08 detailed execution flow](../upstream/snapshots/d0a4165f/features/08-sessions.md),
 [08 errors/validation/security](../upstream/snapshots/d0a4165f/features/08-sessions.md),

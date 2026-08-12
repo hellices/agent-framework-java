@@ -360,7 +360,7 @@ provider suite are recorded in the results.
 7. Single and consecutive tool calls are correctly linked to the results and the history.
 8. A streaming tool call has the same meaning.
 
-#### Mandatory Java engine extensions
+#### Required Java engine extensions
 
 9. After a session serialization round trip, the same history and state version are held.
 10. Tool failure, approval rejection, and the iteration limit propagate as a typed failure.
@@ -376,7 +376,7 @@ test is created for them now.
 
 A compatibility comparison separates the following.
 
-- mandatory invariants: role, message count and order, agent ID, tool pairing, finish reason, state change
+- required invariants: role, message count and order, agent ID, tool pairing, finish reason, state change
 - permitted variation: natural language wording, optional fields of provider usage, chunk boundaries
 - forbidden variation: inverted event order, duplicate tool execution, a commit after cancellation, a sensitive-data span
 
@@ -407,7 +407,7 @@ snapshot, the matrix, and the pin updated atomically.
 - An edge carries a verifiable artifact rather than the whole conversation.
 - Separate the read, write, verify, and release permissions.
 - A failure or missing evidence is not substituted with the shape of a success.
-- Abbreviate the graph according to the task's risk and size, but never bypass a mandatory gate.
+- Abbreviate the graph according to the task's risk and size, but never bypass a required gate.
 
 ### 8.2 Standard DAG
 
@@ -464,7 +464,7 @@ Only the schema, the fixtures, and the anonymized regression baseline live in th
 
 ### 8.4 Risk-based paths
 
-| Tier | Example | Mandatory path |
+| Tier | Example | Required path |
 | --- | --- | --- |
 | Low | Typos, links, non-behavioral documentation | context, targeted check, review |
 | Moderate | Internal implementation, tests, adapter changes | The full standard DAG |
@@ -680,12 +680,12 @@ the shared testkit expands to the full downstream set.
 ### 11.2 Fan-out and fan-in
 
 Independent build, static analysis, and conformance runs are executed in parallel. Fan-in passes
-only when every mandatory result exists and succeeded. `if: always()` may be used for report upload,
+only when every required result exists and succeeded. `if: always()` may be used for report upload,
 but it is not used to turn a failed verification into a success.
 
 ### 11.3 Budgets
 
-- PR: fast feedback and mandatory correctness
+- PR: fast feedback and required correctness
 - main and nightly: the broad matrix, mutation, and live conformance
 - release: the full matrix, reproducibility, API compatibility, and the supply chain
 
@@ -764,7 +764,7 @@ This harness must be able to demonstrate the following.
 4. The success, scope violations, cost, and time of an agent eval can be compared before and after an instruction change.
 5. An ordinary PR is verified without a privileged runner and without Azure credentials.
 6. A release artifact carries API compatibility, SBOM, provenance, and full matrix evidence.
-7. A developer can reproduce every mandatory CI command with the local Maven Wrapper.
+7. A developer can reproduce every required CI command with the local Maven Wrapper.
 
 ## 14. Explicit non-goals
 

@@ -837,7 +837,7 @@ That is, the backend defaults differ even though the name “Hyperlight” is th
 - **Excluded from the core MVP**, an optional module
 - A concrete backend-first strategy is recommended
 - The bundled approval model is kept
-- Symlink-safe staging/capture is mandatory from the first implementation  
+- Symlink-safe staging/capture is required from the first implementation  
   ([cross-SDK CodeAct decision](https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/docs/decisions/0024-codeact-integration.md#L159-L170), [Python approval resolution](https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/hyperlight/agent_framework_hyperlight/_execute_code_tool.py#L335-L346), [Python symlink hardening](https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/hyperlight/agent_framework_hyperlight/_execute_code_tool.py#L560-L590))
 
 ### 7.14 Acceptance scenarios

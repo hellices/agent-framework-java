@@ -339,9 +339,9 @@ rewrite content again after a verdict or after finalization.
 - .NET: Streaming middleware and logging/telemetry wrap cancellation and stream execution.
 - Python: `ResponseStream` provides hook registration and sealing rules, and a gated stream blocks rewrites after the verdict.
 
-**Decision.** Python's sealing rules are adopted as mandatory. Correcting a stream after it has been
-finalized makes the audit log and the user response diverge. Java must include the streaming
-boundary in the interceptor contract.
+**Decision.** Python's sealing rules are adopted as required behavior. Correcting a stream after it
+has been finalized makes the audit log and the user response diverge. Java must include the
+streaming boundary in the interceptor contract.
 
 **Acceptance criteria**
 
@@ -577,7 +577,7 @@ original excluded messages.
 - Python: `CompactionProvider` provides both `before_run` and `after_run`, and the after path leaves the excluded originals in storage.
 
 **Decision.** The two models are combined. A pre-run projection is needed in common. A post-store
-hook is not mandatory on every path, so it is kept optional. Still, when a path has to preserve the
+hook is not required on every path, so it is kept optional. Still, when a path has to preserve the
 originals, the core must support it.
 
 **Acceptance criteria**

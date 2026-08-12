@@ -609,7 +609,7 @@ which is an authorization boundary.
 - Python: Enforces snapshot_scope_resolver once snapshot persistence is switched on, and the workflow cache is keyed by scope together with thread.
 
 **Decision.** This matches the user's requirement exactly. Trusting the threadId alone allows another
-user's snapshot to be opened, so the scope resolver is kept as a mandatory boundary.
+user's snapshot to be opened, so the scope resolver is kept as a required boundary.
 
 **Acceptance criteria**
 
@@ -686,7 +686,7 @@ collapses the authorization boundary.
 
 **Acceptance criteria**
 
-- In hosted mode, a missing mandatory platform context raises an explicit protocol error.
+- In hosted mode, a missing required platform context value raises an explicit protocol error.
 - Local mode is activated only through a separate configuration or code path and is not promoted by raw hosted headers alone.
 
 **Evidence** [25 foundry-devui-channels](../upstream/snapshots/d0a4165f/features/25-foundry-devui-channels.md),
