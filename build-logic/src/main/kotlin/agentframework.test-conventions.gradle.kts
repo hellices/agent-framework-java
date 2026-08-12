@@ -16,6 +16,12 @@ dependencies {
 tasks.withType<Test>().configureEach {
     useJUnitPlatform()
     failFast = false
+
+    // Without an explicit heap the JVM sizes it from the host's memory, not from the container
+    // limit, so several test JVMs on a large node can together exceed the runner's cgroup and get
+    // the pod OOM-killed. The build then reports a cancelled step with no failure in the log.
+    maxHeapSize = "1g"
+
     systemProperty("java.awt.headless", "true")
     systemProperty("user.language", "en")
     systemProperty("file.encoding", "UTF-8")

@@ -68,6 +68,38 @@ The runner template therefore carries `karpenter.sh/do-not-disrupt: "true"`. Pre
 annotation whenever the release is reinstalled; a `helm upgrade` from stale values will silently
 drop it and the cancellations return.
 
+### Runners belong on the dedicated node pool
+
+The `runners` node pool is on-demand only and carries a `gha-runner` taint. A scale set without a
+matching `nodeSelector` and toleration still schedules — onto the general `default` pool, where it
+competes with other workloads and is a candidate for consolidation. The template pins runners with:
+
+```yaml
+nodeSelector:
+  workload: gha-runner
+tolerations:
+  - key: gha-runner
+    operator: Equal
+    value: "true"
+    effect: NoSchedule
+```
+
+Confirm placement with `kubectl get pods -n arc-runners-java -o wide`; the node name must start with
+`aks-runners-`.
+
+### A cancelled step can also mean the pod ran out of memory
+
+An OOM kill looks identical to an eviction from the GitHub side: the step is reported as cancelled
+and the log stops. Distinguish them by the event text.
+
+```
+Warning  Evicted  ...  The node was low on resource: memory. ... Container runner was using 2810464Ki
+```
+
+A JVM sizes its default heap from the host's memory rather than the container limit, so a large node
+makes several test JVMs claim far more than the runner's cgroup allows. Test tasks therefore set an
+explicit `maxHeapSize`, and the runner container requests 6Gi with a 10Gi limit.
+
 The workflow is intentionally not softened to `ubuntu-latest` to make a branch mergeable earlier.
 Doing that would delete the only executable evidence that the runner contract below is honoured, and
 the runner label allow list in `WorkflowPolicyTest` would then permit a trusted path on a hosted
