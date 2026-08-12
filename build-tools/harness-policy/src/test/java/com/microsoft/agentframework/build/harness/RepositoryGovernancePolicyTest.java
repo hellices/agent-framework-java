@@ -35,6 +35,7 @@ class RepositoryGovernancePolicyTest {
       List.of(
           "## Architecture boundaries",
           "## Standard workflow",
+          "## Review loop",
           "## Verification contract",
           "## Sensitive data",
           "## Prohibited changes");
@@ -76,6 +77,21 @@ class RepositoryGovernancePolicyTest {
     assertThat(text).contains("AGENTS.md");
     assertThat(text).doesNotContain("## Architecture boundaries");
     assertThat(text).doesNotContain("## Verification contract");
+  }
+
+  @Test
+  void canonicalInstructionsRequireAReviewAfterEveryPush() throws IOException {
+    String text = read("AGENTS.md");
+
+    // The heading assertion above would survive a rewrite that emptied this section, and the loop
+    // is the part that matters: request, wait, reply, resolve, repeat.
+    assertThat(text).contains("request a review from Copilot");
+    assertThat(text).contains("resolve the thread");
+    assertThat(text)
+        .withFailMessage(
+            "The review loop must state that a passing pipeline is not a substitute for a review."
+                + " Every defect found in this repository so far was found while checks were green.")
+        .contains("A green pipeline is not evidence that a review is unnecessary");
   }
 
   @Test
