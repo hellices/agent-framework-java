@@ -2204,6 +2204,12 @@ In `DocumentationLanguagePolicyTest.java`, delete these sixteen lines from `PEND
 Lower `PENDING_TRANSLATION_SIZE` from `16` to `0` in the same edit. The list is then empty and Task 8
 deletes it together with the frozen baseline. Remove the entries from `PENDING_TRANSLATION` only; `ORIGINAL_PENDING_TRANSLATION` is frozen and is never edited, so `pendingTranslationListOnlyHoldsOriginallyDeclaredDocuments` keeps rejecting a document that was swapped in rather than translated.
 
+An empty list leaves the `pendingTranslation()` method source with no arguments, which JUnit rejects
+with `Configuration error: You must configure at least one set of arguments for this
+@ParameterizedTest`. Add `allowZeroInvocations = true` to the `@ParameterizedTest` on
+`pendingTranslationEntryStillContainsKoreanText` in the same edit; the ratchet has reached its floor,
+and Task 8 deletes the test outright.
+
 - [ ] **Step 3: Run the tests to verify they fail**
 
 Run: `./gradlew :build-tools:harness-policy:test --tests '*DocumentationLanguagePolicyTest*'`
@@ -2612,7 +2618,7 @@ deliberately not resolved.
 
 **Coverage ledger row 25 (no ledger change now):**
 
-The ledger title cell for `25-foundry-devui-channels.md` already reads `25. Foundry hosting, DevUI, Aspire integration, ChatKit, Telegram, and other confirmed channel adapters` (English). The feature document H1 still contains Korean (`기타 확인된 channel adapters`). This temporary mismatch is intentional and is owned by Task 6 Step 5, which must translate the H1 to match the ledger cell and then run the mandatory executable verification.
+The ledger title cell for `25-foundry-devui-channels.md` already reads `25. Foundry hosting, DevUI, Aspire integration, ChatKit, Telegram, and other confirmed channel adapters` (English), while the feature document H1 still ended in a Korean phrase whose English rendering is `and other confirmed channel adapters`. That temporary mismatch was intentional and was owned by Task 6 Step 5, which translated the H1 to match the ledger cell and ran the mandatory executable verification. Task 6 closed it: the two values are now byte-identical and the ledger cell was never edited again.
 
 **Metrics (unchanged — content edits only, no structural changes):**
 

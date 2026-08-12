@@ -88,32 +88,17 @@ class DocumentationLanguagePolicyTest {
    * fails {@link #pendingTranslationListHasNotWidened()} instead of quietly exempting one more
    * document from the language scan.
    */
-  private static final int PENDING_TRANSLATION_SIZE = 16;
+  private static final int PENDING_TRANSLATION_SIZE = 0;
 
   /**
    * Documents that have not been translated yet. Every entry is removed by the task that translates
    * it, and {@link #pendingTranslationEntryStillContainsKoreanText(String)} fails once an entry no
    * longer needs migration, so this list can only shrink, and only towards {@link
-   * #ORIGINAL_PENDING_TRANSLATION}. It is deleted entirely by the final task.
+   * #ORIGINAL_PENDING_TRANSLATION}. The ratchet has now reached zero, which is why {@link
+   * #pendingTranslationEntryStillContainsKoreanText(String)} allows zero invocations; the list and
+   * its guards are deleted entirely by the final task.
    */
-  private static final Set<String> PENDING_TRANSLATION =
-      Set.of(
-          "docs/upstream/snapshots/d0a4165f/features/16-workflow-checkpoint-hitl.md",
-          "docs/upstream/snapshots/d0a4165f/features/17-workflow-composition.md",
-          "docs/upstream/snapshots/d0a4165f/features/18-orchestrations.md",
-          "docs/upstream/snapshots/d0a4165f/features/19-declarative.md",
-          "docs/upstream/snapshots/d0a4165f/features/20-hosting.md",
-          "docs/upstream/snapshots/d0a4165f/features/21-openai-responses-hosting.md",
-          "docs/upstream/snapshots/d0a4165f/features/22-a2a.md",
-          "docs/upstream/snapshots/d0a4165f/features/23-ag-ui.md",
-          "docs/upstream/snapshots/d0a4165f/features/24-mcp-hosting.md",
-          "docs/upstream/snapshots/d0a4165f/features/25-foundry-devui-channels.md",
-          "docs/upstream/snapshots/d0a4165f/features/26-identity-session-routing.md",
-          "docs/upstream/snapshots/d0a4165f/features/27-observability.md",
-          "docs/upstream/snapshots/d0a4165f/features/28-errors-resilience-security.md",
-          "docs/upstream/snapshots/d0a4165f/features/29-evaluation-testing.md",
-          "docs/upstream/snapshots/d0a4165f/features/30-packaging-compatibility.md",
-          "docs/upstream/snapshots/d0a4165f/features/31-provider-integrations.md");
+  private static final Set<String> PENDING_TRANSLATION = Set.of();
 
   private static final List<String> DIRECTORY_INDEXES =
       List.of(
@@ -147,7 +132,7 @@ class DocumentationLanguagePolicyTest {
         .isEmpty();
   }
 
-  @ParameterizedTest(name = "{0} still awaits translation")
+  @ParameterizedTest(name = "{0} still awaits translation", allowZeroInvocations = true)
   @MethodSource("pendingTranslation")
   void pendingTranslationEntryStillContainsKoreanText(String relativePath) throws IOException {
     Path document = RepositoryPaths.root().resolve(relativePath);

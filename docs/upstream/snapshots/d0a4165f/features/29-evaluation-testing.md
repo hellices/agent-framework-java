@@ -1,19 +1,19 @@
 # 29. Evaluation & Testing
 
-## 상태
+## State/snapshot
 
-- 문서 상태: upstream snapshot 분석 문서
-- 기준 스냅샷: `d0a4165f170193ba1d026a259af40d35bb7eaefe`
-- 분석 범위: evaluation API/converters/checks/scoring, agent/workflow evaluation, generated/provider evaluator integration, unit/integration/conformance test 조직, golden/trace-driven 테스트, coverage gate
-- 비범위:
-  - observability, feature telemetry, logging/sensitive data는 observability 문서 소유
-  - error taxonomy/timeout/security boundary는 errors-resilience-security 문서 소유
-  - packaging/release/compatibility 일반론은 packaging-compatibility 문서 소유이나, evaluation 기능의 사용 가능 runtime/coverage gate와 직접 연결된 범위만 본 문서에서 제한적으로 다룬다
+- Document status: upstream snapshot analysis document
+- Reference snapshot: `d0a4165f170193ba1d026a259af40d35bb7eaefe`
+- Analysis scope: evaluation API/converters/checks/scoring, agent/workflow evaluation, generated/provider evaluator integration, unit/integration/conformance test organization, golden/trace-driven testing, coverage gate
+- Out of scope:
+  - observability, feature telemetry, logging/sensitive data are owned by the observability document
+  - error taxonomy/timeout/security boundary are owned by the errors-resilience-security document
+  - general packaging/release/compatibility topics are owned by the packaging-compatibility document; only the scope directly connected to the available runtime/coverage gate of the evaluation feature is covered in limited fashion in this document
 
-## 스냅샷 요약
+## Snapshot summary
 
-이 스냅샷의 evaluation 체계는 양쪽 언어 모두 “provider-agnostic core + provider-specific evaluator integration”을 지향하지만 구현의 중심축은 다르다. `.NET`은 `IAgentEvaluator` 중심의 배치 평가 인터페이스, `AIAgent.EvaluateAsync(...)` 확장 메서드, `LocalEvaluator`, `EvalChecks`, `AgentEvaluationResults`를 통해 **agent response scoring**을 표준화한다. Python은 `agent_framework._evaluation`이 `EvalItem`, `EvalResults`, `LocalEvaluator`, `evaluate_agent`, `evaluate_workflow`, `@evaluator` wrapper, `AgentEvalConverter`까지 한 모듈에서 관리하고, 별도 `FoundryEvals`가 provider integration을 맡는다.  
-출처:  
+The evaluation framework in this snapshot targets “provider-agnostic core + provider-specific evaluator integration” in both languages, but the central axis of each implementation differs. `.NET` standardizes **agent response scoring** through a batch evaluation interface centered on `IAgentEvaluator`, the `AIAgent.EvaluateAsync(...)` extension method, `LocalEvaluator`, `EvalChecks`, and `AgentEvaluationResults`. Python's `agent_framework._evaluation` manages `EvalItem`, `EvalResults`, `LocalEvaluator`, `evaluate_agent`, `evaluate_workflow`, `@evaluator` wrapper, and `AgentEvalConverter` all within one module, while a separate `FoundryEvals` handles provider integration.  
+Source:  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI/Evaluation/IAgentEvaluator.cs#L9-L32  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI/Evaluation/AgentEvaluationExtensions.cs#L20-L60  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI/Evaluation/LocalEvaluator.cs#L10-L65  
@@ -23,8 +23,8 @@
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/core/agent_framework/_evaluation.py#L1834-L2025  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/foundry/agent_framework_foundry/_foundry_evals.py#L3-L24  
 
-Scoring surface도 다르다. `.NET`의 `LocalEvaluator`는 각 `EvalCheck` 결과를 `Microsoft.Extensions.AI.Evaluation`의 `BooleanMetric`으로 올리고, aggregate 결과는 `AgentEvaluationResults`가 `Passed`, `Failed`, `AllPassed`, `AssertAllPassed`, `AssertScoreAtLeast` 같은 quality gate API를 제공한다. Python은 `CheckResult`, `EvalScoreResult`, `EvalItemResult`, `EvalResults`를 자체적으로 정의하고, `raise_for_status()`, `assert_score_at_least()`, `assert_dimension_score_at_least()` 같은 gate를 제공한다. Python은 `@evaluator` wrapper를 통해 bool/float/dict/`CheckResult` 반환값을 모두 evaluation check로 승격할 수 있고, score가 숫자일 경우 기본 threshold `0.5` 규칙을 적용한다.  
-출처:  
+The scoring surface also differs. `.NET`'s `LocalEvaluator` reports each `EvalCheck` result as a `BooleanMetric` from `Microsoft.Extensions.AI.Evaluation`, and the aggregate result is surfaced through `AgentEvaluationResults`, which provides quality gate APIs such as `Passed`, `Failed`, `AllPassed`, `AssertAllPassed`, and `AssertScoreAtLeast`. Python defines its own `CheckResult`, `EvalScoreResult`, `EvalItemResult`, and `EvalResults`, and provides gates such as `raise_for_status()`, `assert_score_at_least()`, and `assert_dimension_score_at_least()`. Through the `@evaluator` wrapper, Python can promote bool/float/dict/`CheckResult` return values all to evaluation checks, and applies a default threshold `0.5` rule when the score is numeric.  
+Source:  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI/Evaluation/LocalEvaluator.cs#L30-L65  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI/Evaluation/AgentEvaluationResults.cs#L21-L70  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI/Evaluation/AgentEvaluationResults.cs#L71-L159  
@@ -34,16 +34,16 @@ Scoring surface도 다르다. `.NET`의 `LocalEvaluator`는 각 `EvalCheck` 결�
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/core/agent_framework/_evaluation.py#L1354-L1404  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/core/agent_framework/_evaluation.py#L1415-L1497  
 
-Workflow evaluation은 Python 쪽이 더 구체적이다. `evaluate_workflow()`는 workflow를 직접 실행하거나 기존 `WorkflowRunResult`를 받아, per-agent 결과와 overall 결과를 함께 계산하고 `sub_results`를 채운다. `.NET`에서는 `AgentEvaluationResults.SubResults`가 workflow evaluation을 위한 구조를 이미 갖고 있고 `AgentEvaluationExtensions`의 주석도 workflow runs를 언급하지만, 이번 snapshot에서 직접 확인된 public evaluation entrypoint는 agent/response 평가 메서드뿐이다. 따라서 Python은 **public workflow evaluation API가 명시적**이고, `.NET`은 **result model은 준비되어 있으나 이번 수집 근거 기준 explicit workflow evaluation public API는 직접 확인되지 않음**이 더 정확하다.  
-출처:  
+Workflow evaluation is more concrete on the Python side. `evaluate_workflow()` either runs the workflow directly or accepts an existing `WorkflowRunResult`, computes per-agent and overall results together, and populates `sub_results`. On the `.NET` side, `AgentEvaluationResults.SubResults` already provides a structure for workflow evaluation, and the comments in `AgentEvaluationExtensions` also mention workflow runs; however, the only public evaluation entrypoints directly confirmed in this snapshot are the agent/response evaluation methods. Therefore it is more accurate to say that Python has an **explicit public workflow evaluation API**, while `.NET` has a **result model that is ready but for which an explicit workflow evaluation public API has not been directly confirmed in the collected evidence of this snapshot**.  
+Source:  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/core/agent_framework/_evaluation.py#L1834-L2025  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/core/agent_framework/_evaluation.py#L2033-L2055  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI/Evaluation/AgentEvaluationResults.cs#L59-L69  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI/Evaluation/AgentEvaluationExtensions.cs#L13-L15  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI/Evaluation/AgentEvaluationExtensions.cs#L20-L210  
 
-Testing 조직도 비대칭적이다. `.NET`은 project 이름 suffix 기반으로 `*UnitTests*`, `*IntegrationTests*`를 분리해 filtered solution을 생성하고, OpenAI hosting 영역에서는 `ConformanceTraces`를 golden corpus처럼 복사해서 disk-based trace-driven conformance tests를 실행한다. Python은 `packages/**/tests`를 중심으로 aggregate pytest를 돌리고, integration workflow를 provider 별 job으로 쪼개며, coverage workflow에서 85% threshold를 별도로 enforce한다. golden/trace-driven conformance evidence는 이번 수집 기준 `.NET` 쪽이 훨씬 명확하고, Python은 더 강한 package/provider test matrix와 coverage discipline을 보여준다.  
-출처:  
+Testing organization is also asymmetric. `.NET` uses project name suffixes to generate a filtered solution separating `*UnitTests*` and `*IntegrationTests*`, and in the OpenAI hosting area copies `ConformanceTraces` as a golden corpus to run disk-based trace-driven conformance tests. Python runs aggregate pytest centered on `packages/**/tests`, splits integration workflows into per-provider jobs, and enforces an 85% threshold separately in a coverage workflow. Golden/trace-driven conformance evidence is far clearer on the `.NET` side based on this collection, while Python demonstrates a stronger package/provider test matrix and coverage discipline.  
+Source:  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/.github/workflows/dotnet-build-and-test.yml#L223-L337  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/tests/Microsoft.Agents.AI.Hosting.OpenAI.UnitTests/Microsoft.Agents.AI.Hosting.OpenAI.UnitTests.csproj#L25-L29  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/tests/Microsoft.Agents.AI.Hosting.OpenAI.UnitTests/ConformanceTestBase.cs#L21-L76  
@@ -53,299 +53,299 @@ Testing 조직도 비대칭적이다. `.NET`은 project 이름 suffix 기반으�
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/.github/workflows/python-integration-tests.yml#L68-L101  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/.github/workflows/python-test-coverage.yml#L15-L46  
 
-## 원본 기능 목적과 경계
+## Original feature purpose and boundary
 
-### 1. Evaluation API의 목적
+### 1. Purpose of the Evaluation API
 
-Evaluation API의 기본 목적은 “agent나 workflow가 좋은 답을 냈는가”를 provider-neutral 한 형태로 표현하는 것이다. 이를 위해 `.NET`은 `EvalItem`과 `IAgentEvaluator`를 통해 query/response/conversation/tool/context/expected output을 evaluator가 소비할 수 있는 배치 입력으로 만든다. Python도 동일하게 `EvalItem`, `EvalResults`, `EvalItemResult`, `EvalScoreResult`를 제공해 provider별 결과를 공통 형태로 수용한다.  
-출처:  
+The fundamental purpose of the Evaluation API is to express “whether an agent or workflow produced a good answer” in a provider-neutral form. To this end, `.NET` uses `EvalItem` and `IAgentEvaluator` to assemble query/response/conversation/tool/context/expected output into batch input that an evaluator can consume. Python equivalently provides `EvalItem`, `EvalResults`, `EvalItemResult`, and `EvalScoreResult` to accept per-provider results in a common form.  
+Source:  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI/Evaluation/IAgentEvaluator.cs#L9-L32  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI/Evaluation/EvalItem.cs#L9-L153  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/core/agent_framework/_evaluation.py#L181-L260  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/core/agent_framework/_evaluation.py#L304-L354  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/core/agent_framework/_evaluation.py#L372-L543  
 
-### 2. Converter의 목적
+### 2. Purpose of the Converter
 
-Converter의 목적은 runtime message/response/tool 구조를 evaluator-friendly schema로 손실을 통제하며 변환하는 것이다. Python의 `AgentEvalConverter`는 text, image-like content, function call, function result를 evaluator가 읽을 수 있는 typed content dict로 바꾸고, tool definitions도 agent/default options/MCP function surface에서 추출한다. `.NET`은 별도 named converter class 대신 `BuildEvalItem()`과 `BuildItemsFromResponses()`에서 minimal conversation과 tool definitions를 evaluator input으로 조립한다.  
-출처:  
+The purpose of the Converter is to transform runtime message/response/tool structures into an evaluator-friendly schema with controlled loss. Python's `AgentEvalConverter` converts text, image-like content, function calls, and function results into typed content dicts that an evaluator can read, and also extracts tool definitions from the agent/default options/MCP function surface. `.NET` assembles minimal conversation and tool definitions into evaluator input within `BuildEvalItem()` and `BuildItemsFromResponses()` rather than having a separate named converter class.  
+Source:  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/core/agent_framework/_evaluation.py#L742-L830  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/core/agent_framework/_evaluation.py#L847-L926  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI/Evaluation/AgentEvaluationExtensions.cs#L213-L269  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI/Evaluation/AgentEvaluationExtensions.cs#L335-L368  
 
-### 3. Check와 scoring의 목적
+### 3. Purpose of checks and scoring
 
-Local evaluation은 빠른 inner-loop 검증과 CI smoke gate를 위한 것이다. `.NET`은 `EvalCheck` delegate와 `EvalChecks` built-ins를 제공하고, Python은 `keyword_check`, `tool_called_check`, `tool_calls_present`, `tool_call_args_match`, `@evaluator` wrapper를 제공한다. Scoring은 단순 bool pass/fail 에서 끝나지 않고, provider eval 결과나 rubric 기반 generated evaluator score까지 포함해 threshold gate로 이어진다.  
-출처:  
+Local evaluation is intended for fast inner-loop verification and CI smoke gates. `.NET` provides the `EvalCheck` delegate and `EvalChecks` built-ins, while Python provides `keyword_check`, `tool_called_check`, `tool_calls_present`, `tool_call_args_match`, and the `@evaluator` wrapper. Scoring does not end at a simple bool pass/fail; it extends through threshold gates to include provider eval results and rubric-based generated evaluator scores.  
+Source:  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI/Evaluation/EvalCheck.cs#L5-L10  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI/Evaluation/EvalChecks.cs#L23-L105  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI/Evaluation/EvalChecks.cs#L126-L217  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/core/agent_framework/_evaluation.py#L1036-L1277  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/core/agent_framework/_evaluation.py#L1354-L1497  
 
-### 4. Agent / workflow evaluation의 목적
+### 4. Purpose of agent/workflow evaluation
 
-Agent evaluation은 query-response 수준의 품질과 tool usage correctness를 보려는 목적이고, workflow evaluation은 multi-agent orchestration 결과를 **per-agent + overall** 로 분리해 보려는 목적이다. Python은 `evaluate_workflow()` 에서 이것을 explicit 하게 구현하고, `.NET` 결과 타입은 workflow breakdown을 수용할 수 있도록 `SubResults`를 노출한다.  
-출처:  
+Agent evaluation is intended to examine quality at the query-response level and tool usage correctness, while workflow evaluation is intended to separate multi-agent orchestration results into **per-agent + overall** views. Python implements this explicitly in `evaluate_workflow()`, and the `.NET` result type exposes `SubResults` to accommodate workflow breakdown.  
+Source:  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/core/agent_framework/_evaluation.py#L1834-L2025  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/core/agent_framework/_evaluation.py#L2033-L2055  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI/Evaluation/AgentEvaluationResults.cs#L59-L69  
 
-### 5. Generated/provider evaluator integration의 목적
+### 5. Purpose of generated/provider evaluator integration
 
-Generated/provider evaluator integration의 목적은 local boolean checks를 넘어, cloud judge / rubric evaluator / built-in provider evaluator를 동일 evaluation pipeline에 연결하는 것이다. `.NET`은 `IEvaluator`를 `MeaiEvaluatorAdapter` 로 감싸는 overload를 통해 `Microsoft.Extensions.AI.Evaluation` 생태계와 연결하고, Python은 `FoundryEvals`가 built-in evaluator short name, conversation/tool/ground-truth 요구사항, generated rubric evaluator reference를 관리한다.  
-출처:  
+The purpose of generated/provider evaluator integration is to connect cloud judge / rubric evaluator / built-in provider evaluators into the same evaluation pipeline, going beyond local boolean checks. `.NET` connects to the `Microsoft.Extensions.AI.Evaluation` ecosystem through an overload that wraps `IEvaluator` with `MeaiEvaluatorAdapter`, while Python's `FoundryEvals` manages built-in evaluator short names, conversation/tool/ground-truth requirements, and generated rubric evaluator references.  
+Source:  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI/Evaluation/AgentEvaluationExtensions.cs#L63-L101  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI/Evaluation/GeneratedEvaluatorRef.cs#L6-L54  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/foundry/agent_framework_foundry/_foundry_evals.py#L62-L103  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/foundry/agent_framework_foundry/_foundry_evals.py#L105-L183  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/foundry/agent_framework_foundry/_foundry_evals.py#L220-L260  
 
-### 6. Test 조직의 목적
+### 6. Purpose of test organization
 
-이 스냅샷에서 test 조직의 목적은 세 가지다.
-1. 빠른 unit correctness 확인
-2. provider-backed integration confidence 확보
-3. wire-level conformance와 regression corpus 고정  
-`.NET`은 suffix-based project 분리와 trace-driven conformance suite가 강점이고, Python은 package-wide aggregate tests, provider-sharded integration jobs, separate coverage workflow가 강점이다.  
-출처:  
+The purpose of test organization in this snapshot is threefold.
+1. Fast unit correctness verification
+2. Establishing provider-backed integration confidence
+3. Fixing wire-level conformance and regression corpus  
+`.NET`'s strengths are suffix-based project separation and a trace-driven conformance suite, while Python's strengths are package-wide aggregate tests, provider-sharded integration jobs, and a separate coverage workflow.  
+Source:  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/.github/workflows/dotnet-build-and-test.yml#L223-L337  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/tests/Microsoft.Agents.AI.Hosting.OpenAI.UnitTests/ConformanceTestBase.cs#L21-L76  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/pyproject.toml#L179-L192  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/.github/workflows/python-tests.yml#L17-L60  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/.github/workflows/python-integration-tests.yml#L41-L67  
 
-### 7. Golden / trace-driven 테스트의 목적
+### 7. Purpose of golden/trace-driven testing
 
-Golden/trace-driven 테스트의 목적은 “실제 wire format과 framework output이 계속 맞는지”를 고정하는 것이다. `.NET` OpenAI hosting test project는 `ConformanceTraces/**`를 output으로 복사하고, test base가 disk에서 요청/응답 trace를 읽어 test server에 replay 한다. malformed request와 structured JSON output 같은 사례도 corpus 안에 포함된다.  
-출처:  
+The purpose of golden/trace-driven testing is to fix “whether the actual wire format and framework output continue to match.” The `.NET` OpenAI hosting test project copies `ConformanceTraces/**` to output, and the test base reads request/response traces from disk and replays them against a test server. Cases such as malformed requests and structured JSON output are also included in the corpus.  
+Source:  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/tests/Microsoft.Agents.AI.Hosting.OpenAI.UnitTests/Microsoft.Agents.AI.Hosting.OpenAI.UnitTests.csproj#L25-L29  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/tests/Microsoft.Agents.AI.Hosting.OpenAI.UnitTests/ConformanceTestBase.cs#L33-L76  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/tests/Microsoft.Agents.AI.Hosting.OpenAI.UnitTests/OpenAIResponsesConformanceTests.cs#L20-L120  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/tests/Microsoft.Agents.AI.Hosting.OpenAI.UnitTests/ConformanceTraces/Conversations/error_invalid_json/request.txt#L1-L6  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/tests/Microsoft.Agents.AI.Hosting.OpenAI.UnitTests/ConformanceTraces/Responses/json_output/response.json#L1-L90  
 
-## 공개 API
+## Public APIs
 
-### .NET 공개 API
+### .NET public API
 
 1. `IAgentEvaluator`  
    - batch-oriented evaluator interface  
    - `EvaluateAsync(IReadOnlyList<EvalItem> items, string evalName = ..., CancellationToken cancellationToken = default)`  
-   출처: https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI/Evaluation/IAgentEvaluator.cs#L17-L32
+   Source: https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI/Evaluation/IAgentEvaluator.cs#L17-L32
 
-2. `AIAgent.EvaluateAsync(...)` 확장 메서드들  
-   - queries를 직접 실행해 평가
-   - `IEvaluator`를 adapter로 감싸 평가
-   - 여러 evaluator를 순차 실행
-   - pre-existing `AgentResponse`를 재평가  
-   출처:  
+2. `AIAgent.EvaluateAsync(...)` extension methods  
+   - runs queries directly for evaluation
+   - wraps `IEvaluator` with an adapter for evaluation
+   - runs multiple evaluators sequentially
+   - re-evaluates a pre-existing `AgentResponse`  
+   Source:  
    - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI/Evaluation/AgentEvaluationExtensions.cs#L20-L60  
    - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI/Evaluation/AgentEvaluationExtensions.cs#L63-L101  
    - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI/Evaluation/AgentEvaluationExtensions.cs#L104-L149  
    - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI/Evaluation/AgentEvaluationExtensions.cs#L151-L210  
 
 3. `EvalItem`  
-   - query, response, conversation, tools, context, expected output, expected tool calls, splitter 보유  
-   - multimodal conversation과 per-turn splitting 지원  
-   출처: https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI/Evaluation/EvalItem.cs#L9-L170
+   - holds query, response, conversation, tools, context, expected output, expected tool calls, and splitter  
+   - supports multimodal conversation and per-turn splitting  
+   Source: https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI/Evaluation/EvalItem.cs#L9-L170
 
 4. `EvalCheck` / `EvalChecks`  
-   - `KeywordCheck`, `ToolCalledCheck`, `ToolCallsPresent`, `ToolCallArgsMatch`, `NonEmpty` 등 built-in local checks  
-   출처:  
+   - `KeywordCheck`, `ToolCalledCheck`, `ToolCallsPresent`, `ToolCallArgsMatch`, `NonEmpty` and other built-in local checks  
+   Source:  
    - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI/Evaluation/EvalCheck.cs#L5-L10  
    - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI/Evaluation/EvalChecks.cs#L23-L217  
 
 5. `LocalEvaluator`  
-   - local checks를 API call 없이 실행  
-   출처: https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI/Evaluation/LocalEvaluator.cs#L10-L65
+   - runs local checks without an API call  
+   Source: https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI/Evaluation/LocalEvaluator.cs#L10-L65
 
 6. `AgentEvaluationResults`  
    - provider metadata, item results, workflow `SubResults`, detailed item scores, gate helpers  
-   출처:  
+   Source:  
    - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI/Evaluation/AgentEvaluationResults.cs#L21-L70  
    - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI/Evaluation/AgentEvaluationResults.cs#L71-L159  
 
 7. `GeneratedEvaluatorRef`  
-   - provider registry에 이미 존재하는 generated rubric evaluator reference  
+   - reference to a generated rubric evaluator already present in the provider registry  
    - version pinning strongly recommended  
-   출처: https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI/Evaluation/GeneratedEvaluatorRef.cs#L6-L54
+   Source: https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI/Evaluation/GeneratedEvaluatorRef.cs#L6-L54
 
-### Python 공개 API
+### Python public API
 
 1. `evaluate_agent(...)`  
-   - queries를 실행하거나 pre-existing responses를 재평가  
-   - expected output / expected tool calls / repetitions / conversation split 지원  
-   출처: https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/core/agent_framework/_evaluation.py#L1630-L1831
+   - runs queries or re-evaluates pre-existing responses  
+   - supports expected output / expected tool calls / repetitions / conversation split  
+   Source: https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/core/agent_framework/_evaluation.py#L1630-L1831
 
 2. `evaluate_workflow(...)`  
-   - `workflow.run()` 결과 또는 기존 `WorkflowRunResult`를 대상으로 per-agent + overall evaluation 수행  
-   출처: https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/core/agent_framework/_evaluation.py#L1834-L2025
+   - performs per-agent + overall evaluation against the result of `workflow.run()` or an existing `WorkflowRunResult`  
+   Source: https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/core/agent_framework/_evaluation.py#L1834-L2025
 
 3. `LocalEvaluator`  
-   - sync/async check를 local provider로 실행  
-   출처: https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/core/agent_framework/_evaluation.py#L1518-L1622
+   - runs sync/async checks with a local provider  
+   Source: https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/core/agent_framework/_evaluation.py#L1518-L1622
 
 4. `keyword_check`, `tool_called_check`, `tool_calls_present`, `tool_call_args_match`, `@evaluator`  
-   - built-in checks와 function wrapper  
-   출처:  
+   - built-in checks and function wrapper  
+   Source:  
    - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/core/agent_framework/_evaluation.py#L1061-L1277  
    - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/core/agent_framework/_evaluation.py#L1354-L1497  
 
 5. `EvalItem`, `EvalResults`, `EvalItemResult`, `EvalScoreResult`, `ExpectedToolCall`, `ConversationSplit`  
    - provider-neutral evaluation data/score/result model  
-   출처:  
+   Source:  
    - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/core/agent_framework/_evaluation.py#L76-L178  
    - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/core/agent_framework/_evaluation.py#L181-L260  
    - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/core/agent_framework/_evaluation.py#L304-L543  
 
 6. `AgentEvalConverter`  
-   - message/response/tool definition을 evaluator item으로 변환  
-   출처: https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/core/agent_framework/_evaluation.py#L742-L926
+   - converts message/response/tool definitions into evaluator items  
+   Source: https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/core/agent_framework/_evaluation.py#L742-L926
 
 7. `FoundryEvals`, `GeneratedEvaluatorRef`, `evaluate_traces`, `evaluate_foundry_target`  
    - provider integration surface  
-   출처:  
+   Source:  
    - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/foundry/agent_framework_foundry/_foundry_evals.py#L3-L24  
    - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/foundry/agent_framework_foundry/_foundry_evals.py#L62-L103  
 
-## 상세 실행 흐름
+## Detailed execution flow
 
-### 1. .NET agent evaluation 실행 흐름
+### 1. .NET agent evaluation execution flow
 
-1. 호출자는 `AIAgent.EvaluateAsync(...)`에 queries/evaluator를 준다.  
-2. 내부 `RunAgentForEvalAsync()`가 repetition, expected output/tool call count를 검증한다.  
-3. 각 query에 대해 `agent.RunAsync(...)`를 실행한다.  
-4. `BuildEvalItem()`이 user query, response messages, raw response, tool definitions를 묶어 `EvalItem`을 만든다.  
-5. evaluator는 batch 단위로 `EvaluateAsync(items, evalName, cancellationToken)`를 수행한다.  
-출처:  
+1. The caller provides queries/evaluator to `AIAgent.EvaluateAsync(...)`.  
+2. The internal `RunAgentForEvalAsync()` validates repetition and expected output/tool call counts.  
+3. `agent.RunAsync(...)` is executed for each query.  
+4. `BuildEvalItem()` bundles the user query, response messages, raw response, and tool definitions to create an `EvalItem`.  
+5. The evaluator performs `EvaluateAsync(items, evalName, cancellationToken)` in batch.  
+Source:  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI/Evaluation/AgentEvaluationExtensions.cs#L20-L60  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI/Evaluation/AgentEvaluationExtensions.cs#L272-L333  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI/Evaluation/AgentEvaluationExtensions.cs#L335-L368  
 
-### 2. .NET pre-existing response 재평가 흐름
+### 2. .NET pre-existing response re-evaluation flow
 
-`.NET`은 기존 `AgentResponse`를 다시 평가할 수 있다. 이 경로는 agent를 다시 실행하지 않고 `BuildItemsFromResponses()`로 `EvalItem`을 재구성하며, query/response/expected-output/expected-tool-calls count mismatch는 즉시 `ArgumentException`으로 실패한다.  
-출처: https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI/Evaluation/AgentEvaluationExtensions.cs#L167-L210  
+`.NET` can re-evaluate an existing `AgentResponse`. This path reconstructs `EvalItem` via `BuildItemsFromResponses()` without re-running the agent, and a count mismatch in query/response/expected-output/expected-tool-calls fails immediately with `ArgumentException`.  
+Source: https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI/Evaluation/AgentEvaluationExtensions.cs#L167-L210  
 https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI/Evaluation/AgentEvaluationExtensions.cs#L220-L269
 
-### 3. .NET built-in check와 local scoring 흐름
+### 3. .NET built-in check and local scoring flow
 
-`.NET`의 `EvalChecks`는 string containment, tool-called presence, expected tool args subset match, non-empty response 같은 패턴을 `EvalCheck` delegate로 만든다. `LocalEvaluator`는 각 item마다 check를 수행해 `BooleanMetric`을 기록하고, 성공이면 `EvaluationRating.Good`, 실패면 `EvaluationRating.Unacceptable`를 붙인다. 이 결과는 `AgentEvaluationResults`로 aggregate 된다.  
-출처:  
+`.NET`'s `EvalChecks` creates patterns such as string containment, tool-called presence, expected tool args subset match, and non-empty response as `EvalCheck` delegates. `LocalEvaluator` performs each check per item and records a `BooleanMetric`, assigning `EvaluationRating.Good` on success and `EvaluationRating.Unacceptable` on failure. These results are aggregated into `AgentEvaluationResults`.  
+Source:  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI/Evaluation/EvalChecks.cs#L23-L105  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI/Evaluation/EvalChecks.cs#L126-L217  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI/Evaluation/LocalEvaluator.cs#L30-L65  
 
-### 4. .NET scoring / gate 흐름
+### 4. .NET scoring/gate flow
 
-`AgentEvaluationResults`는 단순 result container를 넘어서 quality gate API를 제공한다.
+`AgentEvaluationResults` provides a quality gate API beyond being a simple result container.
 - `AllPassed`
 - `AssertAllPassed()`
 - `AssertScoreAtLeast(...)`  
-또한 Foundry-style provider metadata (`ReportUrl`, `EvalId`, `RunId`, `Status`, `Error`) 와 workflow breakdown용 `SubResults`, per-evaluator summary, detailed item score를 보유할 수 있다.  
-출처:  
+It can also hold Foundry-style provider metadata (`ReportUrl`, `EvalId`, `RunId`, `Status`, `Error`), `SubResults` for workflow breakdown, per-evaluator summary, and detailed item scores.  
+Source:  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI/Evaluation/AgentEvaluationResults.cs#L31-L69  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI/Evaluation/AgentEvaluationResults.cs#L71-L159  
 
-### 5. .NET provider evaluator integration 흐름
+### 5. .NET provider evaluator integration flow
 
-`.NET`은 evaluator 자체를 두 방식으로 연결한다.
+`.NET` connects evaluators in two ways.
 1. AF-native `IAgentEvaluator`
-2. `Microsoft.Extensions.AI.Evaluation.IEvaluator`를 `MeaiEvaluatorAdapter`로 감싼 경로  
-이 구조 덕분에 local evaluator와 외부 judge evaluator가 같은 `EvaluateAsync(...)` 진입점 아래 놓인다.  
-출처: https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI/Evaluation/AgentEvaluationExtensions.cs#L63-L101
+2. the path that wraps `Microsoft.Extensions.AI.Evaluation.IEvaluator` with `MeaiEvaluatorAdapter`  
+This structure places local evaluators and external judge evaluators under the same `EvaluateAsync(...)` entry point.  
+Source: https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI/Evaluation/AgentEvaluationExtensions.cs#L63-L101
 
-### 6. Python AgentEvalConverter 흐름
+### 6. Python AgentEvalConverter flow
 
-Python의 converter는 evaluator용 serialization 경로를 별도로 둔다.
-- text content는 `{"type":"text","text":...}`
-- image/media content는 `input_image`
-- function call은 `tool_call`
-- function result는 `tool_result`  
-특히 function-call arguments가 string인데 JSON parse가 실패하면 `{"_raw_arguments":"[unparseable]"}` 로 sanitize 한다. 이는 외부 evaluation service에 raw/unparseable tool arguments를 그대로 흘리지 않으려는 방어적 변환이다. 이후 `to_eval_item()`은 input messages + response messages + typed tools를 `EvalItem`으로 조립한다.  
-출처:  
+Python's converter provides a separate serialization path for evaluators.
+- text content: `{"type":"text","text":...}`
+- image/media content: `input_image`
+- function call: `tool_call`
+- function result: `tool_result`  
+In particular, if function-call arguments are a string and JSON parsing fails, they are sanitized to `{"_raw_arguments":"[unparseable]"}`. This is a defensive transformation to avoid passing raw/unparseable tool arguments directly to an external evaluation service. Subsequently, `to_eval_item()` assembles input messages + response messages + typed tools into an `EvalItem`.  
+Source:  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/core/agent_framework/_evaluation.py#L768-L830  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/core/agent_framework/_evaluation.py#L847-L926  
 
-### 7. Python local check / score coercion 흐름
+### 7. Python local check/score coercion flow
 
-Python의 local evaluation은 두 단계다.
-1. check function이 `CheckResult | bool | float | dict | awaitable` 중 하나를 반환한다.
-2. `_coerce_result()`가 이를 `CheckResult`로 normalize 한다.  
-여기서 float score는 `>= 0.5`이면 pass로 본다. `dict`는 `score` 또는 `passed` key를 가질 수 있다. `@evaluator`는 function signature를 introspect 해서 `query`, `response`, `expected_output`, `expected_tool_calls`, `conversation`, `tools`, `context`를 자동 주입한다.  
-출처:  
+Python's local evaluation proceeds in two stages.
+1. The check function returns one of `CheckResult | bool | float | dict | awaitable`.
+2. `_coerce_result()` normalizes this to a `CheckResult`.  
+A float score of `>= 0.5` is treated as pass. A `dict` may have a `score` or `passed` key. `@evaluator` introspects the function signature and automatically injects `query`, `response`, `expected_output`, `expected_tool_calls`, `conversation`, `tools`, and `context`.  
+Source:  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/core/agent_framework/_evaluation.py#L1036-L1277  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/core/agent_framework/_evaluation.py#L1354-L1497  
 
-### 8. Python LocalEvaluator 실행 흐름
+### 8. Python LocalEvaluator execution flow
 
-1. `LocalEvaluator(*checks)`가 sync/async check 목록을 받는다.  
-2. 각 item마다 `asyncio.gather()`로 모든 check를 실행한다.  
-3. item은 “적어도 하나의 check가 실행되고, 모든 check가 pass” 해야 pass다. check가 전혀 없으면 pass로 보지 않는다.  
-4. 각 check는 `EvalScoreResult`로 1.0/0.0 score와 reason sample을 가진다.  
-5. aggregate 결과는 `EvalResults`의 `result_counts`, `per_evaluator`, `items`, `error`에 반영된다.  
-출처: https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/core/agent_framework/_evaluation.py#L1518-L1622
+1. `LocalEvaluator(*checks)` accepts a list of sync/async checks.  
+2. All checks are executed for each item via `asyncio.gather()`.  
+3. An item passes only if “at least one check was executed and all checks passed.” If there are no checks at all, the item is not considered a pass.  
+4. Each check has a 1.0/0.0 score and a reason sample in an `EvalScoreResult`.  
+5. The aggregate result is reflected in `result_counts`, `per_evaluator`, `items`, and `error` of `EvalResults`.  
+Source: https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/core/agent_framework/_evaluation.py#L1518-L1622
 
-### 9. Python evaluate_agent 실행 흐름
+### 9. Python evaluate_agent execution flow
 
-1. singular `queries`, `expected_output`, `responses`, flat `expected_tool_calls`를 list/nested list로 normalize 한다.  
-2. `num_repetitions` 와 길이 정합성을 `ValueError`로 먼저 검증한다.  
-3. `responses`가 주어지면 agent를 다시 실행하지 않고 converter를 사용해 item을 만든다.  
-4. `queries + agent` 조합이면 실제 agent를 반복 실행해 item을 만든다.  
-5. 이후 expected output/tool calls/split strategy를 stamp 하고 `_run_evaluators()`로 evaluator를 실행한다.  
-6. bare check callable은 `_resolve_evaluators()` 과정에서 `LocalEvaluator`로 auto-wrap 된다.  
-출처:  
+1. Singular `queries`, `expected_output`, `responses`, and flat `expected_tool_calls` are normalized to list/nested list form.  
+2. `num_repetitions` and length consistency are validated first with `ValueError`.  
+3. If `responses` are provided, items are created using the converter without re-running the agent.  
+4. If the combination is `queries + agent`, the actual agent is executed repeatedly to create items.  
+5. Expected output/tool calls/split strategy are then stamped, and evaluators are executed via `_run_evaluators()`.  
+6. Bare check callables are auto-wrapped into `LocalEvaluator` during `_resolve_evaluators()`.  
+Source:  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/core/agent_framework/_evaluation.py#L1630-L1831  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/core/agent_framework/_evaluation.py#L2058-L2065  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/core/agent_framework/_evaluation.py#L2090-L2116  
 
-### 10. Python evaluate_workflow 실행 흐름
+### 10. Python evaluate_workflow execution flow
 
-1. `workflow_result` 또는 `queries` 중 하나는 반드시 필요하다.  
-2. run mode에서는 `workflow.run(query)` 결과를 누적하고, post-hoc mode에서는 기존 `WorkflowRunResult`를 사용한다.  
-3. `_extract_agent_eval_data()`가 `executor_invoked` / `executor_completed` event를 pairing 하여 internal executor를 건너뛰고 agent-specific query/response를 추출한다.  
-4. executor id별로 `EvalItem` 목록을 만들고, evaluator마다 각 agent를 별도 평가한다.  
-5. `include_overall` 이면 final workflow output도 별도 `EvalItem`으로 평가한다.  
-6. 결과는 provider별 `EvalResults` 하나씩 반환되며, 그 안에 `sub_results`가 per-agent breakdown으로 채워진다.  
-출처:  
+1. Either `workflow_result` or `queries` is required.  
+2. In run mode, results of `workflow.run(query)` are accumulated; in post-hoc mode, an existing `WorkflowRunResult` is used.  
+3. `_extract_agent_eval_data()` pairs `executor_invoked` / `executor_completed` events, skips internal executors, and extracts agent-specific query/response.  
+4. A list of `EvalItem` is created per executor id, and each agent is evaluated separately per evaluator.  
+5. If `include_overall`, the final workflow output is also evaluated as a separate `EvalItem`.  
+6. Results are returned as one `EvalResults` per provider, with `sub_results` filled in as a per-agent breakdown.  
+Source:  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/core/agent_framework/_evaluation.py#L1834-L2025  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/core/agent_framework/_evaluation.py#L934-L1009  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/core/agent_framework/_evaluation.py#L1012-L1028  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/core/agent_framework/_evaluation.py#L2033-L2055  
 
-### 11. Python FoundryEvals provider integration 흐름
+### 11. Python FoundryEvals provider integration flow
 
-`FoundryEvals`는 built-in evaluator short name을 fully-qualified evaluator name으로 resolve 하고, agent/tool/ground-truth evaluator 집합을 관리한다. generated rubric evaluator는 `GeneratedEvaluatorRef`로 참조되며 version pinning이 강하게 권장된다. versionless ref는 실행 시점 latest를 가리키므로 reproducibility가 깨질 수 있어 warning 대상이다. 테스트 일관성은 `test_foundry_evals.py`에서 보강된다.  
-출처:  
+`FoundryEvals` resolves built-in evaluator short names to fully-qualified evaluator names and manages the agent/tool/ground-truth evaluator sets. Generated rubric evaluators are referenced via `GeneratedEvaluatorRef`, and version pinning is strongly recommended. A versionless ref points to the latest at runtime, which can break reproducibility and is therefore a warning target. Test consistency is reinforced by `test_foundry_evals.py`.  
+Source:  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/foundry/agent_framework_foundry/_foundry_evals.py#L62-L103  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/foundry/agent_framework_foundry/_foundry_evals.py#L105-L183  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/foundry/agent_framework_foundry/_foundry_evals.py#L185-L212  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/foundry/agent_framework_foundry/_foundry_evals.py#L220-L260  
 
-### 12. .NET unit/integration/conformance test 조직 흐름
+### 12. .NET unit/integration/conformance test organization flow
 
-`.NET` CI는 하나의 filtered solution에서 다시 `*UnitTests*` 와 `*IntegrationTests*` project 이름 필터로 분리된 solution을 생성한다. unit tests는 coverage와 함께 실행되고, integration tests는 PR 외 이벤트에서만 돌며 `FoundryHostedAgents` category는 별도 비용이 큰 job으로 분리된다.  
-출처:  
+`.NET` CI generates separate solutions from a single filtered solution using the `*UnitTests*` and `*IntegrationTests*` project name filters. Unit tests run with coverage, integration tests run only on non-PR events, and the `FoundryHostedAgents` category is separated into a distinct higher-cost job.  
+Source:  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/.github/workflows/dotnet-build-and-test.yml#L223-L337  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/tests/Foundry.Hosting.IntegrationTests/README.md#L151-L159  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/tests/Foundry.Hosting.IntegrationTests/README.md#L161-L203  
 
-### 13. .NET golden/trace-driven conformance 흐름
+### 13. .NET golden/trace-driven conformance flow
 
-OpenAI hosting unit test project는 `ConformanceTraces` 폴더를 build output으로 복사한다. `ConformanceTestBase`는 trace 파일을 로드해 test server를 띄우고, 실제 endpoint로 request를 보내고, response wire shape를 검사한다. 이 접근은 snapshot corpus를 golden data처럼 다룬다는 의미다. malformed request trace와 structured JSON response trace 모두 corpus의 일부다.  
-출처:  
+The OpenAI hosting unit test project copies the `ConformanceTraces` folder to build output. `ConformanceTestBase` loads trace files, starts a test server, sends requests to the actual endpoint, and inspects the response wire shape. This approach treats the snapshot corpus as golden data. Both malformed request traces and structured JSON response traces are part of the corpus.  
+Source:  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/tests/Microsoft.Agents.AI.Hosting.OpenAI.UnitTests/Microsoft.Agents.AI.Hosting.OpenAI.UnitTests.csproj#L25-L29  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/tests/Microsoft.Agents.AI.Hosting.OpenAI.UnitTests/ConformanceTestBase.cs#L33-L76  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/tests/Microsoft.Agents.AI.Hosting.OpenAI.UnitTests/OpenAIResponsesConformanceTests.cs#L20-L120  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/tests/Microsoft.Agents.AI.Hosting.OpenAI.UnitTests/ConformanceTraces/Conversations/error_invalid_json/request.txt#L1-L6  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/tests/Microsoft.Agents.AI.Hosting.OpenAI.UnitTests/ConformanceTraces/Responses/json_output/response.json#L1-L90  
 
-### 14. Python unit/integration/coverage 조직 흐름
+### 14. Python unit/integration/coverage organization flow
 
-Python은 `pyproject.toml` 에서 `packages/**/tests` 와 `packages/**/ag_ui_tests` 를 기본 test path로 선언하고, integration marker를 둔다. PR workflow는 aggregate pytest를 실행하고, integration workflow는 unit-only / OpenAI / Azure OpenAI / misc provider 등으로 job을 나눈다. coverage는 별도 workflow에서 aggregate test + coverage XML + threshold check를 수행한다.  
-출처:  
+Python declares `packages/**/tests` and `packages/**/ag_ui_tests` as default test paths in `pyproject.toml` and uses an integration marker. The PR workflow runs aggregate pytest, and the integration workflow splits jobs into unit-only / OpenAI / Azure OpenAI / misc provider, and so on. Coverage is computed in a separate workflow that performs aggregate testing, coverage XML generation, and threshold checking.  
+Source:  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/pyproject.toml#L179-L192  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/.github/workflows/python-tests.yml#L17-L60  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/.github/workflows/python-integration-tests.yml#L41-L67  
@@ -353,359 +353,359 @@ Python은 `pyproject.toml` 에서 `packages/**/tests` 와 `packages/**/ag_ui_tes
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/.github/workflows/python-integration-tests.yml#L165-L255  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/.github/workflows/python-test-coverage.yml#L19-L46  
 
-## 상태 및 구성
+## State and configuration
 
-### Evaluation 기능 성숙도와 사용 가능 범위
+### Evaluation feature maturity and available scope
 
-- Python의 `EVALS` feature는 package status 상 experimental 이다. root package 전체가 stable classifier를 가지더라도, eval feature surface는 별도로 experimental stage를 가진다.  
-  출처:  
+- Python's `EVALS` feature has experimental status at the package level. Even if the root package as a whole carries a stable classifier, the eval feature surface has a separate experimental stage.  
+  Source:  
   - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/PACKAGE_STATUS.md#L87-L93  
   - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/core/agent_framework/_evaluation.py#L68-L70  
 
-- `.NET` core package는 released 패키지이지만 evaluation support는 `net8.0+` 에서만 compile 된다. legacy TFM에서는 `Evaluation/**` source를 제거한다.  
-  출처: https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI/Microsoft.Agents.AI.csproj#L36-L42
+- The `.NET` core package is a released package, but evaluation support is compiled only for `net8.0+`. The `Evaluation/**` source is excluded for legacy TFMs.  
+  Source: https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI/Microsoft.Agents.AI.csproj#L36-L42
 
-### Test 조직 구성
+### Test organization configuration
 
-- Python test discovery는 `packages/**/tests` 중심이다.
-- Python integration은 `integration` marker 기준으로 나뉜다.
-- `.NET`은 solution filtering 기반으로 unit/integration이 분리된다.
-- 비용이 큰 Foundry hosted integration tests는 별도 job과 별도 infra prerequisite를 가진다.  
-출처:  
+- Python test discovery is centered on `packages/**/tests`.
+- Python integration is separated by the `integration` marker.
+- `.NET` separates unit/integration through solution filtering.
+- High-cost Foundry hosted integration tests have a separate job and separate infra prerequisites.  
+Source:  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/pyproject.toml#L179-L192  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/.github/workflows/dotnet-build-and-test.yml#L223-L337  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/tests/Foundry.Hosting.IntegrationTests/README.md#L34-L60  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/tests/Foundry.Hosting.IntegrationTests/README.md#L151-L203  
 
-### Coverage gate 구성
+### Coverage gate configuration
 
-- `.NET` workflow는 `COVERAGE_THRESHOLD: 80` 을 사용하고, coverage report를 생성한 뒤 PowerShell 스크립트로 threshold를 검사한다.  
-  출처:  
+- The `.NET` workflow uses `COVERAGE_THRESHOLD: 80`, generates a coverage report, and checks the threshold with a PowerShell script.  
+  Source:  
   - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/.github/workflows/dotnet-build-and-test.yml#L19-L21  
   - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/.github/workflows/dotnet-build-and-test.yml#L317-L336  
 
-- Python은 별도 coverage workflow에서 `COVERAGE_THRESHOLD: 85` 를 사용하고, DEV_SETUP 문서상 Beta/Production/Stable package에 blocking gate를 적용한다. Alpha는 non-blocking 이고 DevUI/Lab은 aggregate enforcement 대상에서 제외된다.  
-  출처:  
+- Python uses `COVERAGE_THRESHOLD: 85` in a separate coverage workflow and applies a blocking gate to Beta/Production/Stable packages as described in the DEV_SETUP document. Alpha is non-blocking, and DevUI/Lab are excluded from aggregate enforcement.  
+  Source:  
   - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/.github/workflows/python-test-coverage.yml#L15-L46  
   - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/DEV_SETUP.md#L176-L190  
 
-## 오류와 보안
+## Errors and security
 
-### 1. Evaluation failure와 quality gate failure의 구분
+### 1. Distinction between evaluation failure and quality gate failure
 
-이 스냅샷의 evaluation 결과 모델은 “평가 API가 성공적으로 실행되었는가”와 “품질 기준을 통과했는가”를 분리한다.
-- Python은 `EvalResults.status`, `error`, `items[*].status`, `raise_for_status()`를 제공한다.
-- `.NET`은 `AgentEvaluationResults.Status`, `Error`, `AssertAllPassed()`, `AssertScoreAtLeast()`를 제공한다.  
-즉 evaluator run 자체의 infra failure와 model quality failure를 분리해 다룬다.  
-출처:  
+The evaluation result model in this snapshot separates “whether the evaluation API executed successfully” from “whether the quality criteria were passed.”
+- Python provides `EvalResults.status`, `error`, `items[*].status`, and `raise_for_status()`.
+- `.NET` provides `AgentEvaluationResults.Status`, `Error`, `AssertAllPassed()`, and `AssertScoreAtLeast()`.  
+That is, infra failures in the evaluator run itself and model quality failures are treated separately.  
+Source:  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/core/agent_framework/_evaluation.py#L372-L543  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI/Evaluation/AgentEvaluationResults.cs#L34-L47  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI/Evaluation/AgentEvaluationResults.cs#L95-L159  
 
-### 2. Converter 경로의 민감 인자 보호
+### 2. Protection of sensitive arguments in the Converter path
 
-Python `AgentEvalConverter`는 function-call arguments가 JSON parse에 실패할 경우 raw string을 그대로 외부 evaluator에 전달하지 않고 `"[unparseable]"` placeholder로 sanitize 한다. 이는 evaluation converter가 단순 포맷터가 아니라, 외부 judge 서비스로 전달되는 payload의 정보량을 제한하는 경계라는 뜻이다.  
-출처: https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/core/agent_framework/_evaluation.py#L786-L795
+When function-call arguments fail JSON parsing, Python `AgentEvalConverter` sanitizes them to a `"[unparseable]"` placeholder rather than passing the raw string directly to the external evaluator. This means the evaluation converter is not a simple formatter but a boundary that limits the amount of information in the payload sent to the external judge service.  
+Source: https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/core/agent_framework/_evaluation.py#L786-L795
 
 ### 3. Validation boundary
 
-- Python `evaluate_agent()` 는 `queries`/`responses`/`expected_output`/`expected_tool_calls`/`num_repetitions` 정합성 오류를 `ValueError`로 처리한다.
-- `.NET` `RunAgentForEvalAsync()` 와 `BuildItemsFromResponses()` 는 count mismatch와 invalid repetition을 `ArgumentException`으로 처리한다.  
-이는 evaluation API가 사용자 입력 정합성 문제를 domain-specific eval exception으로 감싸지 않는다는 뜻이다.  
-출처:  
+- Python `evaluate_agent()` handles `queries`/`responses`/`expected_output`/`expected_tool_calls`/`num_repetitions` consistency errors with `ValueError`.
+- `.NET` `RunAgentForEvalAsync()` and `BuildItemsFromResponses()` handle count mismatches and invalid repetitions with `ArgumentException`.  
+This means the evaluation API does not wrap user input consistency problems in a domain-specific eval exception.  
+Source:  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/core/agent_framework/_evaluation.py#L1754-L1809  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/core/agent_framework/_evaluation.py#L1910-L1923  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI/Evaluation/AgentEvaluationExtensions.cs#L225-L240  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI/Evaluation/AgentEvaluationExtensions.cs#L281-L300  
 
-### 4. Conformance corpus의 테스트 데이터 성격
+### 4. Nature of test data in the conformance corpus
 
-`.NET`의 `ConformanceTraces`는 malformed request와 realistic response를 함께 포함하는 golden corpus다. 이 데이터는 product runtime이 아니라 test harness를 위한 것이지만, wire-level regression 고정이라는 의미에서 quality/security-sensitive validation asset으로 동작한다. 이 corpus가 실제 request validation failure 경로도 포괄한다는 점은 중요하다.  
-출처:  
+`.NET`'s `ConformanceTraces` is a golden corpus that contains both malformed requests and realistic responses. This data is for the test harness rather than the product runtime, but it functions as a quality/security-sensitive validation asset in the sense of fixing wire-level regression. It is notable that this corpus also covers actual request validation failure paths.  
+Source:  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/tests/Microsoft.Agents.AI.Hosting.OpenAI.UnitTests/ConformanceTraces/Conversations/error_invalid_json/request.txt#L1-L6  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/tests/Microsoft.Agents.AI.Hosting.OpenAI.UnitTests/OpenAIConversationsConformanceTests.cs#L1140-L1162  
 
-## .NET 구현
+## .NET implementation
 
-### 1. Agent 평가가 중심인 public surface
+### 1. Public surface centered on agent evaluation
 
-이번 snapshot에서 직접 확인된 `.NET` public evaluation surface는 agent query execution과 pre-existing response evaluation이 중심이다. `IAgentEvaluator` 는 batch contract를 제공하고, `AgentEvaluationExtensions` 는 single evaluator, MEAI adapter, multiple evaluators, pre-existing responses 경로를 모두 지원한다.  
-출처:  
+The `.NET` public evaluation surface directly confirmed in this snapshot is centered on agent query execution and pre-existing response evaluation. `IAgentEvaluator` provides a batch contract, and `AgentEvaluationExtensions` supports all of the single evaluator, MEAI adapter, multiple evaluators, and pre-existing responses paths.  
+Source:  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI/Evaluation/IAgentEvaluator.cs#L9-L32  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI/Evaluation/AgentEvaluationExtensions.cs#L20-L210  
 
-### 2. Built-in local checks와 score gate
+### 2. Built-in local checks and score gate
 
-`.NET`은 local evaluation을 `EvalChecks`와 `LocalEvaluator`로 해결한다. built-in checks는 keyword, tool-called, tool-args, non-empty 같은 범용 패턴이고, 결과는 `BooleanMetric` 기반으로 aggregate 된다. CI gate는 `AgentEvaluationResults.AssertAllPassed()` 또는 `AssertScoreAtLeast()` 같은 API로 구성할 수 있다.  
-출처:  
+`.NET` handles local evaluation with `EvalChecks` and `LocalEvaluator`. Built-in checks are general-purpose patterns such as keyword, tool-called, tool-args, and non-empty, and results are aggregated based on `BooleanMetric`. CI gates can be configured with APIs such as `AgentEvaluationResults.AssertAllPassed()` or `AssertScoreAtLeast()`.  
+Source:  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI/Evaluation/EvalChecks.cs#L23-L217  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI/Evaluation/LocalEvaluator.cs#L30-L65  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI/Evaluation/AgentEvaluationResults.cs#L95-L159  
 
 ### 3. Generated/provider evaluator integration
 
-`.NET`은 `GeneratedEvaluatorRef`를 통해 cloud-side rubric evaluator reference를 모델링하고, version pinning을 재현 가능성의 핵심으로 둔다. 또한 `IEvaluator` adapter overload로 `Microsoft.Extensions.AI.Evaluation` evaluator를 바로 연결할 수 있다.  
-출처:  
+`.NET` models cloud-side rubric evaluator references via `GeneratedEvaluatorRef` and treats version pinning as the key to reproducibility. It also supports connecting `Microsoft.Extensions.AI.Evaluation` evaluators directly through an `IEvaluator` adapter overload.  
+Source:  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI/Evaluation/GeneratedEvaluatorRef.cs#L16-L54  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI/Evaluation/AgentEvaluationExtensions.cs#L63-L101  
 
-### 4. Workflow evaluation 관련 구현 상태
+### 4. Implementation status related to workflow evaluation
 
-`AgentEvaluationResults.SubResults`는 workflow evaluation breakdown을 위한 구조를 제공하고, 클래스 주석도 workflow evaluations를 전제로 한 helper를 설명한다. 그러나 이번 수집 근거에서 `AgentEvaluationExtensions` 안의 explicit workflow evaluation public method는 직접 확인되지 않았다. 따라서 `.NET`은 결과 모델 차원에서는 workflow evaluation을 고려하지만, Python처럼 명시적 `evaluate_workflow()` 공개 API가 현재 snapshot source에서 직접 확인되지는 않는다.  
-출처:  
+`AgentEvaluationResults.SubResults` provides a structure for workflow evaluation breakdown, and class comments also describe helpers that presuppose workflow evaluations. However, an explicit workflow evaluation public method inside `AgentEvaluationExtensions` was not directly confirmed in the collected evidence of this snapshot. Therefore, while `.NET` accounts for workflow evaluation at the result model level, an explicit `evaluate_workflow()` public API comparable to Python's has not been directly confirmed in the current snapshot source.  
+Source:  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI/Evaluation/AgentEvaluationResults.cs#L59-L69  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI/Evaluation/AgentEvaluationExtensions.cs#L13-L15  
 
-### 5. Test 조직과 conformance
+### 5. Test organization and conformance
 
-`.NET`은 tests를 unit/integration/hosted-integration/conformance로 명확히 분리한다. 특히 OpenAI hosting conformance suite는 trace corpus를 replay하는 golden-style 접근을 쓰고, Foundry hosted integration tests는 별도 README에서 infra bootstrap과 scenario gating을 설명한다.  
-출처:  
+`.NET` clearly separates tests into unit/integration/hosted-integration/conformance. In particular, the OpenAI hosting conformance suite uses a golden-style approach that replays a trace corpus, and Foundry hosted integration tests are described in a separate README covering infra bootstrap and scenario gating.  
+Source:  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/.github/workflows/dotnet-build-and-test.yml#L223-L337  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/tests/Microsoft.Agents.AI.Hosting.OpenAI.UnitTests/ConformanceTestBase.cs#L21-L76  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/tests/Foundry.Hosting.IntegrationTests/README.md#L1-L33  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/tests/Foundry.Hosting.IntegrationTests/README.md#L151-L203  
 
-## Python 구현
+## Python implementation
 
-### 1. Provider-agnostic core 평가 프레임워크
+### 1. Provider-agnostic core evaluation framework
 
-Python은 `agent_framework._evaluation` 하나에 conversation split, expected tool calls, converter, local evaluator, workflow extraction, result gating, public orchestration function을 넣는다. 이 구조는 eval functionality를 매우 응집적으로 보여준다.  
-출처:  
+Python places conversation split, expected tool calls, converter, local evaluator, workflow extraction, result gating, and public orchestration functions all in `agent_framework._evaluation`. This structure demonstrates eval functionality in a highly cohesive manner.  
+Source:  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/core/agent_framework/_evaluation.py#L3-L33  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/core/agent_framework/_evaluation.py#L76-L178  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/core/agent_framework/_evaluation.py#L181-L260  
 
-### 2. Agent / workflow evaluation이 public API로 분리됨
+### 2. Agent/workflow evaluation exposed as a separate public API
 
-Python은 `evaluate_agent()` 와 `evaluate_workflow()` 를 별도 public API로 노출한다. workflow evaluation은 post-hoc mode와 run+evaluate mode를 모두 지원하고, per-agent sub-results를 standard result model 안에 싣는다.  
-출처:  
+Python exposes `evaluate_agent()` and `evaluate_workflow()` as separate public APIs. Workflow evaluation supports both post-hoc mode and run+evaluate mode, and carries per-agent sub-results within the standard result model.  
+Source:  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/core/agent_framework/_evaluation.py#L1630-L1831  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/core/agent_framework/_evaluation.py#L1834-L2025  
 
-### 3. Local checks와 function wrapper가 더 유연함
+### 3. Local checks and function wrapper are more flexible
 
-Python은 built-in helper뿐 아니라 임의 함수도 `@evaluator`로 wrapping 해서 evaluation check로 쓸 수 있다. bool/float/dict/`CheckResult`를 모두 허용하는 점은 `.NET`보다 유연하다.  
-출처:  
+Python allows not only built-in helpers but also arbitrary functions to be wrapped with `@evaluator` for use as evaluation checks. Accepting all of bool/float/dict/`CheckResult` makes it more flexible than `.NET`.  
+Source:  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/core/agent_framework/_evaluation.py#L1354-L1497  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/core/agent_framework/_evaluation.py#L1518-L1622  
 
-### 4. Provider integration이 더 명시적임
+### 4. Provider integration is more explicit
 
-Python `FoundryEvals`는 evaluator class와 관련 helper가 코드상 명확하며, built-in evaluator mapping, tool-aware evaluator set, ground-truth evaluator set, generated rubric evaluator reference를 모두 한곳에서 관리한다.  
-출처:  
+Python's `FoundryEvals` has a clearly defined evaluator class and related helpers in code, managing built-in evaluator mapping, tool-aware evaluator set, ground-truth evaluator set, and generated rubric evaluator references all in one place.  
+Source:  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/foundry/agent_framework_foundry/_foundry_evals.py#L105-L183  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/foundry/agent_framework_foundry/_foundry_evals.py#L220-L260  
 
-### 5. Test matrix와 coverage discipline이 강함
+### 5. Strong test matrix and coverage discipline
 
-Python은 eval feature가 experimental 임에도 불구하고 test infrastructure는 강하다. aggregate tests, provider-sharded integration, retry/timeouts, 별도 coverage workflow, maturity-aware threshold 문서화가 모두 존재한다.  
-출처:  
+Despite the eval feature being experimental, Python's test infrastructure is strong. Aggregate tests, provider-sharded integration, retry/timeouts, a separate coverage workflow, and maturity-aware threshold documentation all exist.  
+Source:  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/.github/workflows/python-tests.yml#L17-L60  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/.github/workflows/python-integration-tests.yml#L41-L67  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/.github/workflows/python-integration-tests.yml#L68-L101  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/.github/workflows/python-test-coverage.yml#L15-L46  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/DEV_SETUP.md#L176-L190  
 
-### 6. Python conformance harness 상태
+### 6. Python conformance harness status
 
-이번 수집 근거 기준으로는 Python 측에 `.NET OpenAI ConformanceTraces`와 동급의 explicit trace-driven wire conformance harness는 직접 확인되지 않았다. Python에서 확인된 것은 evaluation unit tests, package tests, integration workflows, coverage gates다. 따라서 “Python에 conformance가 없다”가 아니라, **이번 snapshot 근거로는 explicit golden-wire conformance harness 확인 불가**가 정확하다.  
-출처:  
+Based on the collected evidence of this snapshot, an explicit trace-driven wire conformance harness equivalent to `.NET OpenAI ConformanceTraces` was not directly confirmed on the Python side. What was confirmed in Python is evaluation unit tests, package tests, integration workflows, and coverage gates. Therefore, rather than “Python has no conformance,” the accurate statement is that **an explicit golden-wire conformance harness cannot be confirmed based on this snapshot's evidence**.  
+Source:  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/foundry/tests/test_foundry_evals.py#L96-L109  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/foundry/tests/test_foundry_evals.py#L116-L217  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/.github/workflows/python-tests.yml#L45-L47  
 
-## 테스트 근거
+## Test evidence
 
 ### 1. Python evaluation unit tests
 
-`test_foundry_evals.py` 는 `_resolve_evaluator()` short-name mapping, `AgentEvalConverter.convert_message()` 의 text/tool_call/tool_result 변환, structured object tool result 보존 등을 검증한다. 즉 provider integration과 converter correctness가 unit-level에서 꽤 폭넓게 고정되어 있다.  
-출처:  
+`test_foundry_evals.py` verifies `_resolve_evaluator()` short-name mapping, `AgentEvalConverter.convert_message()` transformations for text/tool_call/tool_result, structured object tool result preservation, and so on. That is, provider integration and converter correctness are pinned fairly broadly at the unit level.  
+Source:  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/foundry/tests/test_foundry_evals.py#L96-L109  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/foundry/tests/test_foundry_evals.py#L116-L217  
 
 ### 2. .NET agent contract integration tests
 
-`AgentConformance.IntegrationTests` 의 `RunTests` 와 `RunStreamingTests` 는 no-message, string input, `ChatMessage`, multi-message, session history preservation을 generic fixture 위에서 검사한다. 이는 provider-specific behavior보다 **agent contract** 자체를 고정하는 층이다.  
-출처:  
+`RunTests` and `RunStreamingTests` in `AgentConformance.IntegrationTests` check no-message, string input, `ChatMessage`, multi-message, and session history preservation on top of a generic fixture. This is the layer that pins the **agent contract** itself rather than provider-specific behavior.  
+Source:  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/tests/AgentConformance.IntegrationTests/RunTests.cs#L20-L122  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/tests/AgentConformance.IntegrationTests/RunStreamingTests.cs#L20-L117  
 
 ### 3. .NET trace-driven conformance tests
 
-`OpenAIResponsesConformanceTests` 는 request trace에서 expected text를 읽고 test server에 요청을 보내고, response의 field presence/object/type/token accounting/wire shape를 검증한다. 이는 단순 snapshot 비교가 아니라 trace-driven structural conformance 검사다.  
-출처:  
+`OpenAIResponsesConformanceTests` reads expected text from a request trace, sends a request to a test server, and verifies field presence/object/type/token accounting/wire shape of the response. This is a trace-driven structural conformance check rather than a simple snapshot comparison.  
+Source:  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/tests/Microsoft.Agents.AI.Hosting.OpenAI.UnitTests/OpenAIResponsesConformanceTests.cs#L20-L120  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/tests/Microsoft.Agents.AI.Hosting.OpenAI.UnitTests/ConformanceTestBase.cs#L33-L76  
 
-### 4. Coverage gate 근거
+### 4. Coverage gate evidence
 
-- `.NET`: CI workflow environment에 `COVERAGE_THRESHOLD: 80` 이 선언되고 summary JSON을 사용해 gate 한다.  
-- Python: coverage workflow에 `COVERAGE_THRESHOLD: 85` 가 선언되며, DEV_SETUP 문서가 maturity별 enforcement 차이를 설명한다.  
-출처:  
+- `.NET`: `COVERAGE_THRESHOLD: 80` is declared in the CI workflow environment and gated using a summary JSON.  
+- Python: `COVERAGE_THRESHOLD: 85` is declared in the coverage workflow, and the DEV_SETUP document explains differences in enforcement by maturity.  
+Source:  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/.github/workflows/dotnet-build-and-test.yml#L19-L21  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/.github/workflows/dotnet-build-and-test.yml#L333-L336  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/.github/workflows/python-test-coverage.yml#L15-L46  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/DEV_SETUP.md#L187-L190  
 
-## 문서와 코드 차이
+## Differences between documentation and code
 
-### 1. .NET 평가 확장 문서와 실제 공개 메서드 표면 차이
+### 1. Difference between .NET evaluation extension documentation and actual public method surface
 
-`AgentEvaluationExtensions` 클래스 주석은 “agents, responses, and workflow runs” 평가를 말한다. 그러나 이번 snapshot에서 직접 확인된 메서드 범위는 agent queries와 pre-existing responses 경로이며, explicit workflow evaluation public method는 확인되지 않았다. 반면 결과 타입 `SubResults`는 workflow evaluation을 예상한다. 따라서 문서 설명이 implementation evidence보다 약간 넓다.  
-출처:  
+The `AgentEvaluationExtensions` class comment mentions evaluation of “agents, responses, and workflow runs.” However, the method scope directly confirmed in this snapshot is limited to agent queries and pre-existing responses paths, and no explicit workflow evaluation public method was confirmed. By contrast, the result type `SubResults` anticipates workflow evaluation. Therefore the documentation description is slightly broader than the implementation evidence.  
+Source:  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI/Evaluation/AgentEvaluationExtensions.cs#L13-L15  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI/Evaluation/AgentEvaluationExtensions.cs#L20-L210  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI/Evaluation/AgentEvaluationResults.cs#L59-L69  
 
-### 2. 저장소 FAQ의 “.NET과 Python 모두 conformance testing” 일반론과 수집 근거의 비대칭
+### 2. Asymmetry between the repository FAQ's general claim of “conformance testing in both .NET and Python” and the collected evidence
 
-FAQ는 framework가 `.NET`과 Python 구현 전반에서 conformance testing을 수행한다고 말한다. 이번 snapshot 수집 근거는 `.NET`에 대해서는 explicit `ConformanceTraces` 기반 test suite로 이를 강하게 뒷받침한다. Python 쪽은 unit/integration/coverage workflow는 풍부하지만 같은 수준의 explicit trace-driven conformance harness는 이번 수집 범위에서 직접 확인되지 않았다. 따라서 code evidence 기준으로는 `.NET` 쪽 conformance 가시성이 더 높다.  
-출처:  
+The FAQ states that the framework performs conformance testing across both `.NET` and Python implementations. The collected evidence of this snapshot strongly supports this for `.NET` with an explicit `ConformanceTraces`-based test suite. On the Python side, unit/integration/coverage workflows are abundant, but an explicit trace-driven conformance harness of the same level was not directly confirmed within this collection's scope. Therefore, based on code evidence, `.NET` conformance visibility is higher.  
+Source:  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/TRANSPARENCY_FAQ.md#L26-L28  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/tests/Microsoft.Agents.AI.Hosting.OpenAI.UnitTests/ConformanceTestBase.cs#L21-L76  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/foundry/tests/test_foundry_evals.py#L96-L109  
 
-### 3. Python package 안정성 분류와 eval feature stage의 차이
+### 3. Difference between Python package stability classification and eval feature stage
 
-Python root/package 다수는 released/stable 상태이지만, `EVALS` feature는 package status 문서와 코드 decorator 양쪽에서 experimental 로 표시된다. 즉 패키지 안정성과 feature 안정성은 동일하지 않다. 이 차이를 문서화하지 않으면 “stable package == stable evaluation API”로 오해할 수 있다.  
-출처:  
+Many Python root/packages are in a released/stable state, but the `EVALS` feature is marked as experimental in both the package status document and code decorators. That is, package stability and feature stability are not the same. Without documenting this difference, one might mistakenly assume “stable package == stable evaluation API.”  
+Source:  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/PACKAGE_STATUS.md#L17-L18  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/PACKAGE_STATUS.md#L87-L93  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/core/agent_framework/_evaluation.py#L68-L70  
 
-## Java 설계 결정
+## Java design decisions
 
-### 결정 1. 배치 기반 evaluator SPI를 도입한다
+### Decision 1. Introduce a batch-based evaluator SPI
 
-Java는 `.NET IAgentEvaluator` 와 Python `Evaluator` 모델을 따라, `List<EvalItem> -> EvalResults` 형태의 배치 evaluator SPI를 가져야 한다. item 단위 호출보다 cloud/provider evaluator와 score aggregation에 유리하다.  
-근거:  
+Java should follow the `.NET IAgentEvaluator` and Python `Evaluator` models and have a batch evaluator SPI of the form `List<EvalItem> -> EvalResults`. This is more advantageous than per-item calls for cloud/provider evaluators and score aggregation.  
+Evidence:  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI/Evaluation/IAgentEvaluator.cs#L13-L15  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/core/agent_framework/_evaluation.py#L687-L718
 
-### 결정 2. Converter를 first-class API로 둔다
+### Decision 2. Treat the Converter as a first-class API
 
-Java는 Python `AgentEvalConverter`처럼 runtime `Message`/tool definition을 evaluator schema로 바꾸는 전용 converter layer를 가져야 한다. 이 converter는 단순 포맷터가 아니라, tool-call argument sanitization 같은 outbound data minimization 책임도 져야 한다.  
-근거:  
+Java should have a dedicated converter layer, like Python's `AgentEvalConverter`, that transforms runtime `Message`/tool definitions into an evaluator schema. This converter should not be a simple formatter; it should also bear responsibility for outbound data minimization such as tool-call argument sanitization.  
+Evidence:  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/core/agent_framework/_evaluation.py#L786-L795  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/core/agent_framework/_evaluation.py#L847-L926  
 
-### 결정 3. Local evaluator와 function-style check를 둘 다 지원한다
+### Decision 3. Support both a local evaluator and function-style checks
 
-Java는 `.NET`처럼 built-in check library를 제공하되, Python `@evaluator`처럼 plain function/lambda scorer를 쉽게 연결할 수 있는 wrapper를 추가하는 편이 좋다. 그래야 CI smoke gate와 실험적 custom judge를 같은 파이프라인에서 사용하기 쉽다.  
-근거:  
+Java should provide a built-in check library like `.NET`, and additionally add a wrapper that makes it easy to connect plain function/lambda scorers like Python's `@evaluator`. This makes it easier to use CI smoke gates and experimental custom judges in the same pipeline.  
+Evidence:  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI/Evaluation/EvalChecks.cs#L23-L217  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/core/agent_framework/_evaluation.py#L1354-L1497  
 
-### 결정 4. Workflow evaluation은 explicit public API로 설계한다
+### Decision 4. Design workflow evaluation as an explicit public API
 
-Java는 Python처럼 `evaluateWorkflow(...)` 를 별도 public API로 제공해야 한다. 결과는 `overall + subResults(per-agent)` 구조를 공식 지원해야 하며, event stream 또는 run result 에서 agent-level interaction extraction helper도 같이 설계해야 한다.  
-근거:  
+Java should provide `evaluateWorkflow(...)` as a separate public API, as Python does. The result must officially support an `overall + subResults(per-agent)` structure, and an agent-level interaction extraction helper from an event stream or run result should also be designed together.  
+Evidence:  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/core/agent_framework/_evaluation.py#L1834-L2025  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/core/agent_framework/_evaluation.py#L934-L1009  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI/Evaluation/AgentEvaluationResults.cs#L59-L69  
 
-### 결정 5. Generated evaluator는 version pinning을 기본 운영 원칙으로 한다
+### Decision 5. Treat version pinning as the default operational principle for generated evaluators
 
-Generated/provider rubric evaluator reference는 항상 version pinning을 권장하고, CI gate 문맥에서는 사실상 필수로 요구해야 한다. latest-floating evaluator는 replay reproducibility를 깨뜨린다.  
-근거:  
+Version pinning is always recommended for generated/provider rubric evaluator references, and in a CI gate context it should be treated as effectively required. A latest-floating evaluator breaks replay reproducibility.  
+Evidence:  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI/Evaluation/GeneratedEvaluatorRef.cs#L16-L30  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/foundry/agent_framework_foundry/_foundry_evals.py#L73-L78  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/foundry/agent_framework_foundry/_foundry_evals.py#L249-L257  
 
-### 결정 6. Trace-driven conformance corpus를 유지한다
+### Decision 6. Maintain a trace-driven conformance corpus
 
-Java hosting/protocol layer가 생기면 `.NET ConformanceTraces`와 같은 golden/trace-driven corpus를 유지해야 한다. wire-format regression은 mock-only unit test보다 trace corpus replay가 훨씬 강하다.  
-근거:  
+When a Java hosting/protocol layer is introduced, a golden/trace-driven corpus equivalent to `.NET ConformanceTraces` must be maintained. Trace corpus replay is far stronger than mock-only unit tests for wire-format regression.  
+Evidence:  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/tests/Microsoft.Agents.AI.Hosting.OpenAI.UnitTests/Microsoft.Agents.AI.Hosting.OpenAI.UnitTests.csproj#L25-L29  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/tests/Microsoft.Agents.AI.Hosting.OpenAI.UnitTests/ConformanceTestBase.cs#L33-L76  
 
-### 결정 7. Coverage gate는 package maturity와 연결한다
+### Decision 7. Link coverage gate to package maturity
 
-Python처럼 package maturity에 따라 coverage enforcement 강도를 조절하는 정책이 유용하다. Java도 snapshot/stable surface는 blocking gate, alpha/experimental surface는 softer gate 또는 보고-only gate를 둘 수 있다.  
-근거:  
+A policy that adjusts the strength of coverage enforcement by package maturity, as Python does, is useful. Java can also apply a blocking gate to snapshot/stable surfaces and a softer gate or reporting-only gate to alpha/experimental surfaces.  
+Evidence:  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/DEV_SETUP.md#L187-L190  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/.github/workflows/python-test-coverage.yml#L15-L46  
 
-### 결정 8. Public API는 “평가 실행”과 “품질 게이트”를 분리한다
+### Decision 8. Public API separates “evaluation execution” from “quality gate”
 
-Java 결과 모델은 Python `raise_for_status()` / `.NET AssertAllPassed()` 처럼 quality gate helper를 제공하되, raw result access와 분리해야 한다. 이렇게 하면 UI/reporting과 CI gating이 같은 result object를 공유할 수 있다.  
-근거:  
+The Java result model should provide quality gate helpers like Python's `raise_for_status()` / `.NET AssertAllPassed()`, but separated from raw result access. This allows UI/reporting and CI gating to share the same result object.  
+Evidence:  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/core/agent_framework/_evaluation.py#L470-L543  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI/Evaluation/AgentEvaluationResults.cs#L95-L159  
 
-## 구체적인 acceptance scenarios
+## Concrete acceptance scenarios
 
-### Scenario 1. .NET agent evaluation은 query count 불일치를 즉시 거부한다
+### Scenario 1. .NET agent evaluation immediately rejects a query count mismatch
 
-- Given: pre-existing response 2개와 query 1개
-- When: `.NET` `EvaluateAsync(responses, queries, ...)` 경로가 item을 구성한다
-- Then: `ArgumentException` 으로 실패해야 한다.  
-출처: https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI/Evaluation/AgentEvaluationExtensions.cs#L225-L240
+- Given: 2 pre-existing responses and 1 query
+- When: the `.NET` `EvaluateAsync(responses, queries, ...)` path assembles items
+- Then: it must fail with `ArgumentException`.  
+Source: https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI/Evaluation/AgentEvaluationExtensions.cs#L225-L240
 
-### Scenario 2. .NET local evaluation은 check가 없으면 item을 pass로 보지 않는다
+### Scenario 2. .NET local evaluation does not treat an item as passed when there are no checks
 
-- Given: `.NET LocalEvaluator`와 item
-- When: item에 대해 check 목록이 비어 있다
-- Then: “pass evidence 없음”으로 간주되어 자동 pass가 되지 않아야 한다는 설계와 동등한 Java contract를 가져야 한다.  
-실제 Python 구현은 check가 없으면 `item_passed = bool(check_results)` 때문에 false가 된다. `.NET` LocalEvaluator는 생성 시 checks 배열을 받으며 item마다 metrics를 생성한다.  
-출처:  
+- Given: `.NET LocalEvaluator` and an item
+- When: the check list for the item is empty
+- Then: Java must have a contract equivalent to the design that no automatic pass occurs, being treated as “no pass evidence.”  
+The actual Python implementation results in false when there are no checks due to `item_passed = bool(check_results)`. `.NET` LocalEvaluator accepts an array of checks at construction and generates metrics per item.  
+Source:  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/core/agent_framework/_evaluation.py#L1562-L1580  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI/Evaluation/LocalEvaluator.cs#L35-L64  
 
-### Scenario 3. Python function evaluator는 float score를 pass/fail로 coercion 한다
+### Scenario 3. Python function evaluator coerces a float score to pass/fail
 
-- Given: `@evaluator` 로 감싼 함수가 `0.7` 을 반환한다
-- When: `_coerce_result()` 가 결과를 normalize 한다
-- Then: threshold `0.5` 기준으로 pass가 되어야 한다.  
-출처: https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/core/agent_framework/_evaluation.py#L1357-L1373
+- Given: a function wrapped with `@evaluator` returns `0.7`
+- When: `_coerce_result()` normalizes the result
+- Then: it must be a pass based on the threshold `0.5`.  
+Source: https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/core/agent_framework/_evaluation.py#L1357-L1373
 
-### Scenario 4. Python converter는 unparseable tool arguments를 그대로 내보내지 않는다
+### Scenario 4. Python converter does not pass through unparseable tool arguments as-is
 
-- Given: function_call content의 arguments가 JSON parse 불가능한 string
-- When: `AgentEvalConverter.convert_message()` 가 evaluator message로 변환한다
-- Then: raw arguments 대신 `{"_raw_arguments":"[unparseable]"}` 를 사용해야 한다.  
-출처: https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/core/agent_framework/_evaluation.py#L786-L795
+- Given: the arguments in function_call content are a JSON-unparseable string
+- When: `AgentEvalConverter.convert_message()` converts to an evaluator message
+- Then: it must use `{"_raw_arguments":"[unparseable]"}` instead of the raw arguments.  
+Source: https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/core/agent_framework/_evaluation.py#L786-L795
 
-### Scenario 5. Python evaluate_agent는 responses-only 평가를 허용하지만 queries가 필요하다
+### Scenario 5. Python evaluate_agent supports responses-only evaluation but requires queries
 
-- Given: pre-existing `responses` 를 평가하려 한다
-- When: `queries` 없이 `evaluate_agent(responses=...)` 를 호출한다
-- Then: query가 필요하다는 `ValueError` 가 발생해야 한다.  
-출처: https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/core/agent_framework/_evaluation.py#L1766-L1789
+- Given: pre-existing `responses` are to be evaluated
+- When: `evaluate_agent(responses=...)` is called without `queries`
+- Then: a `ValueError` indicating that queries are required must be raised.  
+Source: https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/core/agent_framework/_evaluation.py#L1766-L1789
 
-### Scenario 6. Python workflow evaluation은 per-agent sub_results를 만든다
+### Scenario 6. Python workflow evaluation produces per-agent sub_results
 
-- Given: workflow run result에 여러 `AgentExecutor` 이벤트가 있다
-- When: `evaluate_workflow(include_per_agent=True, include_overall=True)` 를 호출한다
-- Then: provider별 `EvalResults` 안에 executor id keyed `sub_results` 가 포함되어야 한다.  
-출처:  
+- Given: the workflow run result has multiple `AgentExecutor` events
+- When: `evaluate_workflow(include_per_agent=True, include_overall=True)` is called
+- Then: executor id-keyed `sub_results` must be included in the `EvalResults` per provider.  
+Source:  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/core/agent_framework/_evaluation.py#L1956-L2025  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/core/agent_framework/_evaluation.py#L390-L392  
 
-### Scenario 7. Generated evaluator는 pinned version이 권장된다
+### Scenario 7. A pinned version is recommended for generated evaluators
 
-- Given: provider registry의 generated rubric evaluator
-- When: versionless reference를 사용한다
-- Then: 실행은 가능하더라도 reproducibility warning 대상이어야 하며, CI에서는 pinned version을 쓰는 것이 계약상 더 안전하다.  
-출처:  
+- Given: a generated rubric evaluator in the provider registry
+- When: a versionless reference is used
+- Then: even if execution succeeds, it must be subject to a reproducibility warning, and using a pinned version is contractually safer in CI.  
+Source:  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI/Evaluation/GeneratedEvaluatorRef.cs#L16-L30  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/foundry/agent_framework_foundry/_foundry_evals.py#L249-L257  
 
-### Scenario 8. .NET OpenAI hosting conformance suite는 disk trace를 replay 한다
+### Scenario 8. .NET OpenAI hosting conformance suite replays a disk trace
 
 - Given: `ConformanceTraces/Responses/basic/request.json`
-- When: conformance test가 test server에 request를 보낸다
-- Then: response object shape, output content, token fields 등 OpenAI wire contract를 구조적으로 검증해야 한다.  
-출처:  
+- When: a conformance test sends a request to the test server
+- Then: it must structurally verify the OpenAI wire contract, including response object shape, output content, token fields, and so on.  
+Source:  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/tests/Microsoft.Agents.AI.Hosting.OpenAI.UnitTests/ConformanceTestBase.cs#L33-L76  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/tests/Microsoft.Agents.AI.Hosting.OpenAI.UnitTests/OpenAIResponsesConformanceTests.cs#L20-L120  
 
-### Scenario 9. Coverage gate는 CI에서 blocking threshold를 가진다
+### Scenario 9. Coverage gate has a blocking threshold in CI
 
-- Given: `.NET` test coverage summary 또는 Python aggregate coverage XML
-- When: threshold 이하 coverage가 계산된다
-- Then: `.NET`은 80%, Python은 85% 기준으로 gate가 실패해야 한다.  
-출처:  
+- Given: a `.NET` test coverage summary or a Python aggregate coverage XML
+- When: coverage below the threshold is computed
+- Then: the gate must fail at 80% for `.NET` and at 85% for Python.  
+Source:  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/.github/workflows/dotnet-build-and-test.yml#L19-L21  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/.github/workflows/dotnet-build-and-test.yml#L333-L336  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/.github/workflows/python-test-coverage.yml#L15-L46  
