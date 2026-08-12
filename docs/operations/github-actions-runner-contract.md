@@ -1,26 +1,128 @@
 # GitHub Actions Runner Contract
 
-## Merge gate: do not merge before `arc-java-build` exists
-
-**This branch must not be merged into `main` until the `arc-java-build` scale set is live.**
+## Runner availability: `arc-java-build` is scoped to a repository
 
 `.github/workflows/ci.yml` schedules `trusted-quality` and `trusted-compatibility` on
-`runs-on: arc-java-build`. That label is created by the Java ARC platform work in the sibling
-repository `agent-framework-java-platform`. Until the scale set is registered and accepting jobs:
+`runs-on: arc-java-build`. That label comes from an Actions Runner Controller scale set deployed by
+the sibling repository `agent-framework-java-platform`. A scale set is registered against a specific
+GitHub owner and repository, so the label does not follow the code.
 
-- every trusted job stays queued and eventually times out;
-- `verify-result` sees `trusted-quality=failure`/`cancelled` and fails, because a path that is
-  neither wholly successful nor wholly skipped is never reported as green;
-- `main` pushes therefore fail, not silently pass.
+**When this repository moves to a different owner, the scale set must be re-registered against the
+new location before trusted CI can run.** Verify with:
 
-The workflow is intentionally not softened to `ubuntu-latest` to make the branch mergeable earlier.
+```bash
+gh api repos/<owner>/<repo>/actions/runners --jq '.total_count'
+```
+
+A count of zero means every trusted job queues until it times out. The observable symptoms are:
+
+- trusted jobs stay `queued` indefinitely rather than failing fast;
+- `verify-result` fails once they time out, because a path that is neither wholly successful nor
+  wholly skipped is never reported as green;
+- `main` pushes therefore fail rather than silently pass.
+
+### Re-registration requires reinstalling the release
+
+Editing `githubConfigUrl` on the existing release is not sufficient. The scale set id assigned by
+the previous repository is cached in the `runner-scale-set-id` annotation on the
+`AutoscalingRunnerSet`, and a listener that keeps it crashes on every start:
+
+```text
+No runner scale set found with identifier 1
+```
+
+The listener then restarts in a loop, so the symptom looks like a pod problem rather than a stale
+identifier. Uninstall and reinstall the release so the controller registers a fresh scale set:
+
+```bash
+helm get values arc-java-build -n arc-runners-java -o yaml > values.yaml
+# point githubConfigUrl at the new repository
+helm uninstall arc-java-build -n arc-runners-java
+helm install arc-java-build \
+  oci://ghcr.io/actions/actions-runner-controller-charts/gha-runner-scale-set \
+  --version 0.14.2 --namespace arc-runners-java -f values.yaml
+```
+
+Capture `kubectl get autoscalingrunnerset -A` before and after. Only `arc-java-build` in
+`arc-runners-java` may change; the pre-existing scale sets in `arc-runners` are never touched. The
+existing `gha-token` secret is reused, so no step creates, reads, or prints a credential.
+
+### Runner pods must be exempt from node consolidation
+
+Karpenter consolidates underutilised nodes, and a runner pod in the middle of a job looks
+underutilised to it. When that happens the job is reported as `cancelled` mid-step, with no error in
+the build output:
+
+```
+Normal  Evicted  pod/arc-java-build-...-runner-...  Evicted pod: Underutilized
+```
+
+This is easy to misread as a flaky build, because the failing step differs from run to run and the
+log simply stops. Check for it with:
+
+```bash
+kubectl get events -n arc-runners-java --sort-by=.lastTimestamp | grep Evicted
+```
+
+The runner template therefore carries `karpenter.sh/do-not-disrupt: "true"`. Preserve that
+annotation whenever the release is reinstalled; a `helm upgrade` from stale values will silently
+drop it and the cancellations return.
+
+### Runners belong on the dedicated node pool
+
+The `runners` node pool is on-demand only and carries a `gha-runner` taint. A scale set without a
+matching `nodeSelector` and toleration still schedules — onto the general `default` pool, where it
+competes with other workloads and is a candidate for consolidation. The template pins runners with:
+
+```yaml
+nodeSelector:
+  workload: gha-runner
+tolerations:
+  - key: gha-runner
+    operator: Equal
+    value: "true"
+    effect: NoSchedule
+```
+
+Confirm placement with `kubectl get pods -n arc-runners-java -o wide`; the node name must start with
+`aks-runners-`.
+
+### A cancelled step can also mean the pod ran out of memory
+
+An OOM kill looks identical to an eviction from the GitHub side: the step is reported as cancelled
+and the log stops. Distinguish them by the event text.
+
+```
+Warning  Evicted  ...  The node was low on resource: memory. ... Container runner was using 2810464Ki
+```
+
+A modern JVM sizes its heap from the cgroup limit rather than host memory, so a single test JVM is
+not the hazard. Several are: the compatibility tasks can run concurrently, and each sizes itself
+against the whole container without accounting for its siblings, so their defaults add up past the
+runner's limit. Test tasks therefore set an explicit `maxHeapSize`, and the runner container
+requests 6Gi with a 10Gi limit.
+
+The workflow is intentionally not softened to `ubuntu-latest` to make a branch mergeable earlier.
 Doing that would delete the only executable evidence that the runner contract below is honoured, and
 the runner label allow list in `WorkflowPolicyTest` would then permit a trusted path on a hosted
-runner. Merge order is fixed:
+runner.
 
-1. `agent-framework-java-platform` deploys `arc-java-build` and its smoke workflow passes.
+While the scale set is unavailable, verify locally and record the result in the pull request:
+
+```bash
+./gradlew policyCheck quality testJava17 buildLogicTest
+./gradlew publishAllPublicationsToBuildDirectoryRepository
+```
+
+This covers everything except the Java 21 and 25 compatibility matrix, which needs those toolchains
+installed locally or a working runner.
+
+Order of operations when standing up or moving the runner:
+
+1. `agent-framework-java-platform` deploys `arc-java-build` for the target repository and its smoke
+   workflow passes.
 2. A trusted run of this repository's `ci.yml` completes on `arc-java-build`.
-3. Only then is this branch merged and `verify-result` made a required status check.
+3. Only then is `verify-result` made a required status check.
 
 ## Application repository contract
 

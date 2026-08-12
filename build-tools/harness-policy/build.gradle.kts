@@ -32,6 +32,48 @@ tasks.withType<Test>().configureEach {
     inputs.files(repositoryPolicySources)
         .withPropertyName("repositoryPolicySources")
         .withPathSensitivity(PathSensitivity.RELATIVE)
+
+    // The published-BOM and signing policies read artifacts under `build/maven-repository`, which
+    // the tree above excludes along with every other build directory. Without declaring it,
+    // republishing changed artifacts leaves this task UP-TO-DATE and the checks silently do not
+    // run. CI passes `--rerun-tasks` and would not notice; a local run or another workflow would.
+    //
+    // The directory is absent until something publishes, so it is declared through a provider that
+    // yields nothing in that case rather than a path Gradle would demand exist.
+    val publishedArtifacts =
+        rootProject.layout.buildDirectory.dir("maven-repository").map { directory ->
+            if (directory.asFile.isDirectory) files(directory) else files()
+        }
+    inputs.files(publishedArtifacts)
+        .withPropertyName("publishedArtifacts")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+
+    // The published-BOM policy must read the pom this build produced, not whichever filename sorts
+    // highest in a directory that accumulates across versions. Passing the version removes the
+    // guesswork.
+    systemProperty("agentframework.version", project.version.toString())
+
+    // Locally the published output may legitimately be absent, and the policy skips. CI publishes
+    // first and then sets these, turning absence into a failure so the contracts are unconditional.
+    //
+    // Both flags are normalised here so a bare `-Pagentframework.requireSignatures` means "yes",
+    // matching `agentframework.release`. Left to `Boolean.parseBoolean` they would mean "no": asking
+    // for enforcement would silently switch the suite to skipping, and the build would still pass.
+    listOf("agentframework.requirePublishedBom", "agentframework.requireSignatures").forEach { flag ->
+        providers.gradleProperty(flag).orNull?.let { raw ->
+            val enabled =
+                when (raw.trim().lowercase()) {
+                    "", "true" -> true
+                    "false" -> false
+                    else ->
+                        throw GradleException(
+                            "$flag must be true or false, but was '$raw'. An unrecognised value " +
+                                "would otherwise turn the check off without any signal."
+                        )
+                }
+            systemProperty(flag, enabled.toString())
+        }
+    }
 }
 
 tasks.register("policyCheck") {

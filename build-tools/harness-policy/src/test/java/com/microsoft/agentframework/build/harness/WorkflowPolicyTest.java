@@ -278,12 +278,26 @@ class WorkflowPolicyTest {
   }
 
   @Test
-  void runnerContractBlocksMergingBeforeTheTrustedScaleSetExists() throws IOException {
+  void runnerContractExplainsTrustedRunnerAvailability() throws IOException {
     String contract = readRunnerContract();
 
-    assertThat(contract).contains("## Merge gate: do not merge before `arc-java-build` exists");
+    // The contract must keep explaining where the trusted label comes from, what an unavailable
+    // scale set looks like, and why that blocks a green result. The heading text is deliberately
+    // not asserted so the document can describe registration and relocation, not just first setup.
+    assertThat(contract).contains("`arc-java-build`");
     assertThat(contract).contains("agent-framework-java-platform");
     assertThat(contract).contains("verify-result");
+    assertThat(contract).contains("queued");
+
+    // These carry the failures that cost the most time. Changing the URL alone leaves the scale set
+    // id from the previous repository cached, and the listener then crash-loops. Karpenter evicting
+    // a busy runner reports the job as cancelled with no error in the build log, which reads as a
+    // flaky build. Generic words above would survive a rewrite that dropped either procedure, so
+    // assert the tokens only they use.
+    assertThat(contract).contains("runner-scale-set-id");
+    assertThat(contract).contains("helm uninstall");
+    assertThat(contract).contains("karpenter.sh/do-not-disrupt");
+    assertThat(contract).contains("Evicted");
   }
 
   @Test
