@@ -113,6 +113,7 @@ jobs:
         run: >-
           ./gradlew --no-daemon :build-tools:harness-policy:test
           --tests '*PublishedBomContractTest*' --rerun-tasks
+          -Pagentframework.requirePublishedBom=true
 
       - name: Upload verification reports
         if: always()

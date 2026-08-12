@@ -53,17 +53,36 @@ publishing {
 }
 
 // Maven Central rejects an upload whose artifacts carry no PGP signature, so signing belongs to the
-// publishing contract rather than to a release script. Without a key the build must still work for
-// a contributor and for a fork, so signing activates only when credentials are present; that keeps
-// the local publish path, which CI exercises on every pull request, credential free.
-signing {
-    val signingKey = providers.environmentVariable("SIGNING_KEY").orNull
-    val signingPassword = providers.environmentVariable("SIGNING_PASSWORD").orNull
+// publishing contract rather than to a release script.
+//
+// A contributor and a fork must still be able to publish locally, so signing stays optional by
+// default. A release build passes `-Pagentframework.release=true`, which makes a missing key fail
+// the build immediately instead of at the upload step, where the failure would surface after the
+// release is already in motion.
+val signingKey = providers.environmentVariable("SIGNING_KEY").orNull
+val signingPassword = providers.environmentVariable("SIGNING_PASSWORD").orNull
+val releaseBuild = providers.gradleProperty("agentframework.release").isPresent
 
-    isRequired = signingKey != null
+if (signingKey == null && releaseBuild) {
+    throw GradleException(
+        "A release build must sign its artifacts, but SIGNING_KEY is absent. " +
+            "Maven Central rejects unsigned uploads, so this fails now rather than after " +
+            "the release has started."
+    )
+}
 
-    if (signingKey != null) {
-        useInMemoryPgpKeys(signingKey, signingPassword)
-        sign(publishing.publications)
+if (signingKey != null) {
+    signing {
+        isRequired = releaseBuild
+
+        // `useInMemoryPgpKeys` builds no signatory when the password is null, which surfaces later
+        // as "No configured signatory" on the signing task rather than here. An unprotected key is
+        // a legitimate CI setup, so an absent password means an empty one.
+        useInMemoryPgpKeys(signingKey, signingPassword ?: "")
+
+        // Each module creates its publication after this convention is applied, so the collection
+        // is empty right now. Reacting to publications as they appear keeps the signatory attached
+        // to every signing task.
+        publishing.publications.configureEach { sign(this) }
     }
 }

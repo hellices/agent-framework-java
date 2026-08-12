@@ -171,6 +171,53 @@ class ModuleCompositionPolicyTest {
   }
 
   @Test
+  void signingAttachesToPublicationsCreatedAfterTheConvention() throws IOException {
+    String convention = publishingConventionText();
+
+    // Both faults below cost a release rather than a build: they only appear once a real key is
+    // present, which no pull request exercises.
+    //
+    // `sign(publishing.publications)` reads the collection while it is still empty, because each
+    // module creates its publication after this convention is applied. The signing task is then
+    // registered without a signatory and fails at release time.
+    assertThat(convention)
+        .withFailMessage(
+            "Signing must react to publications as they are created. Passing the publication"
+                + " collection directly evaluates it while empty and fails the release with"
+                + " \"No configured signatory\".")
+        .doesNotContain("sign(publishing.publications)");
+
+    // `useInMemoryPgpKeys` silently builds no signatory when the password is null, so an
+    // unprotected key must be passed with an empty password rather than a null one.
+    assertThat(convention)
+        .withFailMessage(
+            "An unprotected signing key must be passed with an empty password. `useInMemoryPgpKeys`"
+                + " creates no signatory for a null password, and the release then fails with"
+                + " \"No configured signatory\".")
+        .doesNotContain("useInMemoryPgpKeys(signingKey, signingPassword)");
+  }
+
+  @Test
+  void releaseBuildRefusesToPublishUnsignedArtifacts() throws IOException {
+    // The design document promises a release fails early rather than at upload. Without this the
+    // convention could drift back to skipping signing whenever a secret is missing, and the first
+    // signal would be a rejected Central upload.
+    assertThat(publishingConventionText())
+        .withFailMessage(
+            "A release build must fail when SIGNING_KEY is absent. Maven Central rejects unsigned"
+                + " uploads, so the check belongs in the publishing convention.")
+        .contains("agentframework.release");
+  }
+
+  private static String publishingConventionText() throws IOException {
+    return Files.readString(
+        RepositoryPaths.root()
+            .resolve(
+                "build-logic/src/main/kotlin/agentframework.publishing-conventions.gradle.kts"),
+        StandardCharsets.UTF_8);
+  }
+
+  @Test
   void repositoryDeclaresASingleGroupAndVersion() throws IOException {
     String text =
         Files.readString(

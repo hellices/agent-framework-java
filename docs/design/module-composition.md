@@ -121,13 +121,20 @@ credentials. Release repositories are configured by the release workflow, never 
 plugin.
 
 Central also rejects unsigned artifacts, so the publishing convention applies PGP signing. Signing
-activates only when `SIGNING_KEY` is present in the environment, which keeps the local and fork
-publish path credential free while making a release fail early rather than at upload time.
+stays optional by default, which keeps the local and fork publish path credential free. A release
+build passes `-Pagentframework.release=true`, and a missing `SIGNING_KEY` then fails the build
+immediately rather than at the upload step, where the failure would surface after the release is
+already in motion.
 
 The BOM must manage versions without forcing dependencies. `PublishedBomContractTest` parses the
 published POM and fails when any `<dependencies>` block appears outside `<dependencyManagement>`,
 because reading the build file alone cannot tell a constraint from a plain declaration sitting
-beside it.
+beside it. The POM is located by the version the build declares rather than by sorting filenames,
+since the publish directory accumulates across versions and `0.9.0` sorts above `0.10.0`.
+
+Locally the test skips when nothing has been published, so it never reports a contract it did not
+check. CI publishes first and passes `-Pagentframework.requirePublishedBom=true`, which turns a
+missing artifact into a failure.
 
 ## Adding a project
 

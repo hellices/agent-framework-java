@@ -11,6 +11,7 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
 import java.util.stream.Stream;
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -20,9 +21,15 @@ import org.junit.jupiter.api.Test;
  * block and still publish forced dependencies if a plain declaration sits beside it, so this test
  * asserts on the artifact a consumer actually resolves.
  *
- * <p>The test reads whatever {@code publishAllPublicationsToBuildDirectoryRepository} last wrote.
- * It reports the command to run when that output is missing rather than invoking Gradle from a
- * test, because a nested build would deadlock on the same lock this build already holds.
+ * <p>The pom is located by the version this build declares, not by sorting filenames. The publish
+ * directory accumulates across versions and is never cleaned, and a lexicographic maximum would
+ * pick {@code 0.9.0} over {@code 0.10.0}; the test would then pass while inspecting an artifact
+ * nobody ships.
+ *
+ * <p>When no published pom exists the test skips rather than passes, so a local run stays
+ * convenient without the result looking verified. CI publishes first and sets {@code
+ * agentframework.requirePublishedBom}, which turns absence into a failure. That is what keeps this
+ * contract from evaporating if the publish step breaks or the repository path moves.
  */
 class PublishedBomContractTest {
 
@@ -34,31 +41,21 @@ class PublishedBomContractTest {
 
   @Test
   void publishedBomManagesEveryLibraryVersion() {
-    Optional<String> pom = latestPublishedBomPom();
-    if (pom.isEmpty()) {
-      return;
-    }
-
-    String dependencyManagement = sectionOf(pom.get(), "dependencyManagement");
+    String dependencyManagement = sectionOf(requirePublishedBomPom(), "dependencyManagement");
 
     for (String artifact : MANAGED_ARTIFACTS) {
       assertThat(dependencyManagement)
           .withFailMessage(
-              "The published BOM does not manage %s. Run `%s` and check the platform"
-                  + " constraints.",
-              artifact, PUBLISH_COMMAND)
+              "The published BOM does not manage %s. Every library must be listed in the platform"
+                  + " constraints, otherwise a consumer importing the BOM gets no version for it.",
+              artifact)
           .contains("<artifactId>" + artifact + "</artifactId>");
     }
   }
 
   @Test
   void publishedBomForcesNoDependencyOnConsumers() {
-    Optional<String> pom = latestPublishedBomPom();
-    if (pom.isEmpty()) {
-      return;
-    }
-
-    String withoutManagement = removeSection(pom.get(), "dependencyManagement");
+    String withoutManagement = removeSection(requirePublishedBomPom(), "dependencyManagement");
 
     assertThat(withoutManagement)
         .withFailMessage(
@@ -70,48 +67,103 @@ class PublishedBomContractTest {
   }
 
   @Test
-  void publishOutputIsPresentAfterPublishing() {
-    // Guards the two tests above from silently passing forever: if the publish task stops writing a
-    // BOM pom, their skip path would hide it. Running the command must always produce one.
-    Path repository = publishedRepository();
-    if (!Files.isDirectory(repository)) {
-      return;
-    }
-
-    assertThat(latestPublishedBomPom())
+  void publishedBomCarriesTheVersionThisBuildDeclares() {
+    // Without this the assertions above could inspect a stale artifact from an earlier version and
+    // report a contract the current build never satisfied.
+    assertThat(requirePublishedBomPom())
         .withFailMessage(
-            "%s exists but holds no BOM pom. Re-run `%s`.", repository, PUBLISH_COMMAND)
-        .isPresent();
+            "The published BOM pom found for version %s does not declare it. Re-run `%s`.",
+            declaredVersion(), PUBLISH_COMMAND)
+        .contains("<version>" + declaredVersion() + "</version>");
   }
 
-  private static Optional<String> latestPublishedBomPom() {
-    Path repository = publishedRepository();
-    if (!Files.isDirectory(repository)) {
+  /**
+   * Returns the published pom, or aborts the calling test when publishing has not run.
+   *
+   * <p>Aborting registers as skipped, which is visible in a report. Returning normally would let a
+   * broken publish path masquerade as a satisfied contract.
+   */
+  private static String requirePublishedBomPom() {
+    Optional<String> pom = publishedBomPom();
+
+    if (publishingIsRequired()) {
+      assertThat(pom)
+          .withFailMessage(
+              "No published BOM pom for version %s under %s. This build requires one because"
+                  + " `agentframework.requirePublishedBom` is set, so the publish step that should"
+                  + " precede this check did not produce the expected artifact.",
+              declaredVersion(), publishedRepository())
+          .isPresent();
+    } else {
+      Assumptions.assumeTrue(
+          pom.isPresent(),
+          "Skipped: no published BOM pom for version "
+              + declaredVersion()
+              + ". Run `"
+              + PUBLISH_COMMAND
+              + "` first to verify the published artifact.");
+    }
+
+    return pom.orElseThrow();
+  }
+
+  private static boolean publishingIsRequired() {
+    return Boolean.parseBoolean(System.getProperty("agentframework.requirePublishedBom", "false"));
+  }
+
+  private static String declaredVersion() {
+    String version = System.getProperty("agentframework.version");
+    if (version == null || version.isBlank()) {
+      throw new IllegalStateException(
+          "The build must pass -Dagentframework.version so this test can identify the pom it"
+              + " produced instead of guessing from filenames.");
+    }
+    return version;
+  }
+
+  /**
+   * Finds the pom for the declared version.
+   *
+   * <p>A snapshot publish expands the version into a timestamped filename, so an exact name match
+   * is not possible. The search is scoped to the version directory and, among the files there,
+   * picks the most recently written one.
+   */
+  private static Optional<String> publishedBomPom() {
+    Path versionDirectory =
+        publishedRepository()
+            .resolve("com/microsoft/agentframework/agent-framework-bom")
+            .resolve(declaredVersion());
+
+    if (!Files.isDirectory(versionDirectory)) {
       return Optional.empty();
     }
 
-    try (Stream<Path> files = Files.walk(repository)) {
+    try (Stream<Path> files = Files.list(versionDirectory)) {
       return files
           .filter(Files::isRegularFile)
-          .map(path -> new NamedFile(path, fileNameOf(path)))
-          .filter(file -> file.name().startsWith("agent-framework-bom-"))
-          .filter(file -> file.name().endsWith(".pom"))
-          .max(Comparator.comparing(NamedFile::name))
-          .map(file -> read(file.path()));
+          .filter(path -> fileNameOf(path).endsWith(".pom"))
+          .max(Comparator.comparingLong(PublishedBomContractTest::lastModified))
+          .map(PublishedBomContractTest::read);
     } catch (IOException cause) {
-      throw new UncheckedIOException("Cannot scan " + repository, cause);
+      throw new UncheckedIOException("Cannot scan " + versionDirectory, cause);
     }
+  }
+
+  private static long lastModified(Path path) {
+    try {
+      return Files.getLastModifiedTime(path).toMillis();
+    } catch (IOException cause) {
+      throw new UncheckedIOException("Cannot read the timestamp of " + path, cause);
+    }
+  }
+
+  private static Path publishedRepository() {
+    return RepositoryPaths.root().resolve("build/maven-repository");
   }
 
   private static String fileNameOf(Path path) {
     Path name = path.getFileName();
     return name == null ? "" : name.toString();
-  }
-
-  private record NamedFile(Path path, String name) {}
-
-  private static Path publishedRepository() {
-    return RepositoryPaths.root().resolve("build/maven-repository");
   }
 
   private static String sectionOf(String pom, String element) {
