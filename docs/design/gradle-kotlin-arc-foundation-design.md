@@ -32,7 +32,7 @@ platform contract.
 ### 2.2 A per-JDK image and scale set
 
 Keep an image and an ARC scale set for each of JDK 17, 21, and 25. The isolation is clear, but the
-images, Helm releases, security policies, and autoscaling targets to operate triple in number.
+images, Helm releases, security policies, and autoscaling targets triple in number.
 
 ### 2.3 A single Java image with the Gradle Wrapper
 
@@ -242,7 +242,7 @@ A Kubernetes Secret is namespace-scoped, so the `gha-token` of `arc-runners` can
 is from `arc-runners-java`. The cluster operator copies it with
 `scripts/copy-github-config-secret.sh`, and that script reads the secret as JSON but handles it only
 inside a single pipeline that ends with `kubectl apply --namespace "$ARC_NAMESPACE" -f -`. The whole
-document is never printed to a terminal, a log, or a file; only the key names are shown. The values
+Secret document is never printed to a terminal, a log, or a file; only the key names are shown. The values
 are never created, decoded, or committed.
 
 The NetworkPolicy denies by default and then permits only DNS, the GitHub Actions endpoints, the

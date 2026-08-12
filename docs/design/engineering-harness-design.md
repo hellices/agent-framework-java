@@ -355,7 +355,7 @@ provider suite are recorded in the results.
 2. The response to a string input and the agent ID are correct.
 3. A message input and a multiple-message input keep the same meaning.
 4. After two turns, the session history holds four user and assistant messages in order.
-5. Concatenating the streaming results of the scenarios above contains the expected text.
+5. The concatenated streaming results of the scenarios above contain the expected text.
 6. Execution is possible with agent instructions alone.
 7. Single and consecutive tool calls are correctly linked to the results and the history.
 8. A streaming tool call has the same meaning.
@@ -557,7 +557,7 @@ cost.
 
 ### 9.4 Flakes and canaries
 
-- The permitted flake rate of a deterministic suite is zero.
+- The permitted flake count of a deterministic suite is zero.
 - A live agent or provider suite runs the same conditions several times and records a Wilson interval or a
   minimum-sample pass rate.
 - Failures are not hidden by retries; first-attempt and eventual-pass results are kept separate.
@@ -644,7 +644,7 @@ is designed separately when an actual Azure deployment target appears.
 - Only the permissions a job needs are elevated.
 - Every action is pinned to a full commit SHA and updated by Dependabot.
 - Checkout credential persistence is disabled when it is not needed.
-- Azure access and artifact attestation use GitHub OIDC.
+- Azure and artifact attestation use GitHub OIDC.
 - A release uses GitHub Environment reviewers and branch and tag restrictions.
 - A stale PR run is cancelled by a concurrency group, but a release run is not cancelled.
 - Credentials, Maven settings secrets, and build output are not stored in the cache.

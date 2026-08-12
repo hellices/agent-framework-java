@@ -1580,7 +1580,7 @@ Translate every Korean sentence, heading, list item, and table cell into technic
 this file:
 
 - Translate the whole document. Do not summarize, drop, merge, or reorder a single paragraph, bullet, table row, or numbered decision.
-- Render the metadata bullets at the top with the labels used by `docs/design/documentation-language-policy.md`: `- Status: approved`, `- Date: 2026-08-10`, `- Scope: ...`.
+- Render the metadata bullets at the top preserving the source label: `- Status: approved`, `- Approval date: 2026-08-10`, `- Scope: ...`.
 - Keep the numbered section structure (`## 1. ...` through the last section) and the exact number of headings shown in Step 1.
 - Keep every symbol, type, package, artifact, and command exactly as written: `AgentEngine`, `ChatModel`, `ChatClient`, `ToolCallback`, `ChatMemory`, `ToolCallingAdvisor`, `agent-framework-api`, `./gradlew check`, and every module and directory name.
 - Keep all seven URLs and both fenced blocks pairs (four fence markers) byte-identical.
@@ -2551,6 +2551,40 @@ git commit -m "docs: enforce the English documentation policy without a migratio
 State, in this order: the commands run and their outcomes; any check that could not run and why; the
 final counts from Step 6; the list of documents translated per task; and every ambiguity found but
 deliberately not resolved.
+
+---
+
+## Task 2 review — minor fixes report
+
+**Commands run and outcomes:**
+
+1. `./gradlew :build-tools:harness-policy:test --tests '*DocumentationLanguagePolicyTest*' --tests '*MarkdownLinkPolicyTest*'` — PASS
+2. `./gradlew policyCheck` — PASS
+
+**Checks that could not run:** `testJava21` and `testJava25` require Temurin 21 and 25 toolchains; not verified locally.
+
+**Six minor fixes applied (one commit):**
+
+| # | File | Change |
+| --- | --- | --- |
+| 1 | `docs/design/gradle-kotlin-arc-foundation-design.md` | Fixed fragment verb: "to operate triple in number" → "triple in number" |
+| 2 | `docs/design/gradle-kotlin-arc-foundation-design.md` | Clarified object: "The whole document" → "The whole Secret document" |
+| 3 | `docs/design/engineering-harness-design.md` | Fixed subject-verb in golden scenario 5: "Concatenating…contains" → "The concatenated streaming results…contain" |
+| 4 | `docs/design/engineering-harness-design.md` | Restored source wording: removed spurious "access" from "Azure access and artifact attestation use GitHub OIDC" |
+| 5 | `docs/design/engineering-harness-design.md` | Changed "permitted flake rate" → "permitted flake count" |
+| 6 | `docs/design/foundation-design.md` | Preserved metadata distinction: `Date:` → `Approval date:` |
+
+**Metrics (HEAD vs WORK — identical for all three files):**
+
+| File | ids | urls | pin | fence | rows | seps | h2 | h3 | bullets |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `docs/design/foundation-design.md` | 0 | 7 | 0 | 4 | 9 | 1 | 11 | 18 | 81 |
+| `docs/design/engineering-harness-design.md` | 0 | 32 | 2 | 2 | 36 | 4 | 15 | 45 | 276 |
+| `docs/design/gradle-kotlin-arc-foundation-design.md` | 0 | 8 | 0 | 10 | 12 | 1 | 14 | 15 | 84 |
+
+**Plan update:** Step 4 instruction updated to reflect `Approval date:` for `foundation-design.md`.
+
+**Ambiguities:** none.
 
 ---
 

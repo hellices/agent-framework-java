@@ -1,7 +1,7 @@
 # Agent Framework for Java Foundation Design
 
 - Status: approved
-- Date: 2026-08-10
+- Approval date: 2026-08-10
 - Scope: the architectural direction of the project, its module boundaries, and the initial development order
 
 ## 1. Goal
