@@ -88,7 +88,7 @@ class DocumentationLanguagePolicyTest {
    * fails {@link #pendingTranslationListHasNotWidened()} instead of quietly exempting one more
    * document from the language scan.
    */
-  private static final int PENDING_TRANSLATION_SIZE = 49;
+  private static final int PENDING_TRANSLATION_SIZE = 42;
 
   /**
    * Documents that have not been translated yet. Every entry is removed by the task that translates
@@ -98,13 +98,6 @@ class DocumentationLanguagePolicyTest {
    */
   private static final Set<String> PENDING_TRANSLATION =
       Set.of(
-          "docs/requirements/README.md",
-          "docs/requirements/01-agent-execution.md",
-          "docs/requirements/02-message-content.md",
-          "docs/requirements/03-structured-output.md",
-          "docs/requirements/04-tools.md",
-          "docs/requirements/05-mcp.md",
-          "docs/requirements/06-sessions.md",
           "docs/requirements/07-interceptors.md",
           "docs/requirements/08-harness.md",
           "docs/requirements/09-workflows.md",

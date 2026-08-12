@@ -10,7 +10,7 @@
 
 ## 채택 범위
 
-이 문서의 `등급`은 [README](README.md#요구사항-등급) 정의대로 기능을 만들기로 했을 때의 강제력이고, 채택 여부는 [호환성 매트릭스](../upstream/snapshots/d0a4165f/compatibility-matrix.md)를 따른다.
+이 문서의 `등급`은 [README](README.md#requirement-grades) 정의대로 기능을 만들기로 했을 때의 강제력이고, 채택 여부는 [호환성 매트릭스](../upstream/snapshots/d0a4165f/compatibility-matrix.md)를 따른다.
 
 - 인터셉터 seam(`MID01`)은 채택 `필수`다.
 - 컴팩션 기능군(`CMP01`~`CMP03`)에 대응하는 `INT-014`~`INT-021`은 채택 `선택`이다.

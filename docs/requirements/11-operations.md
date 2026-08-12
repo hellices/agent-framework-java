@@ -9,7 +9,7 @@
 
 ## 채택 범위
 
-이 문서의 `등급`은 [README](README.md#요구사항-등급) 정의대로 기능을 만들기로 했을 때의 강제력이고, 채택 여부는 [호환성 매트릭스](../upstream/snapshots/d0a4165f/compatibility-matrix.md)를 따른다.
+이 문서의 `등급`은 [README](README.md#requirement-grades) 정의대로 기능을 만들기로 했을 때의 강제력이고, 채택 여부는 [호환성 매트릭스](../upstream/snapshots/d0a4165f/compatibility-matrix.md)를 따른다.
 
 - 기본 운영 품질(`OBS01`, `ERR01`, `SEC01`, `TEST01`, `PKG01`)은 채택 `필수`다.
 - 선택 관찰성 확장(`OBS02`)과 평가 기능(`EVAL01`)은 채택 `선택`이다.

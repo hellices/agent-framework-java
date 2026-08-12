@@ -13,7 +13,7 @@
 
 ## 채택 범위
 
-이 문서의 `등급`은 [README](README.md#요구사항-등급) 정의대로 기능을 만들기로 했을 때의 강제력이고, 채택 여부는 [호환성 매트릭스](../upstream/snapshots/d0a4165f/compatibility-matrix.md)를 따른다.
+이 문서의 `등급`은 [README](README.md#requirement-grades) 정의대로 기능을 만들기로 했을 때의 강제력이고, 채택 여부는 [호환성 매트릭스](../upstream/snapshots/d0a4165f/compatibility-matrix.md)를 따른다.
 
 - 워크플로 코어(`WF01`~`WF06`)는 채택 `필수`다.
 - 오케스트레이션(`ORC01`, `ORC02`)과 선언형 워크플로(`DEC01`)는 채택 `선택`이다.

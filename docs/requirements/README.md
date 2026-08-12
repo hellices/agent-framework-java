@@ -1,106 +1,115 @@
-# Agent Framework for Java 요구사항
+# Agent Framework for Java requirements
 
-이 디렉터리는 Java 구현이 **무엇을 만들어야 하는지**를 정의한다.
+This directory defines **what** the Java implementation has to build.
 
-원본 분석 문서(`docs/upstream/snapshots/d0a4165f/`)는 Microsoft Agent Framework가
-**어떻게 되어 있는지**를 기록한 조사 자료다. 이 요구사항 문서는 그 조사를 입력으로
-삼아 Java의 결정을 확정한 산출물이다. 둘의 역할은 다르다.
+The upstream analysis documents (`docs/upstream/snapshots/d0a4165f/`) are research records of
+**how** Microsoft Agent Framework is built. These requirement documents take that research as
+input and are the artifact that settles the Java decisions. The two have different roles.
 
-| 문서 | 질문 | 성격 |
+| Document | Question | Nature |
 | --- | --- | --- |
-| `docs/upstream/snapshots/d0a4165f/` | 원본은 어떻게 동작하는가 | 조사 기록 |
-| `docs/requirements/` | Java는 무엇을 만들어야 하는가 | 구현 계약 |
+| `docs/upstream/snapshots/d0a4165f/` | How does upstream work | Research record |
+| `docs/requirements/` | What does Java have to build | Implementation contract |
 
-## 요구사항 목록
+## Requirement documents
 
-| 문서 | 접두사 | 범위 | 요구사항 | 원본 기능 |
+| Document | Prefix | Scope | Requirements | Upstream features |
 | --- | --- | --- | ---: | --- |
-| [01 에이전트 실행과 모델 호출](01-agent-execution.md) | `AGT` | 에이전트 수명주기, 실행 진입점, 모델 호출, 스트리밍 | 16 | 01, 03 |
-| [02 메시지와 콘텐츠 모델](02-message-content.md) | `MSG` | 역할, 콘텐츠 종류, 응답, 사용량, 종료 사유 | 13 | 02 |
-| [03 구조화 출력](03-structured-output.md) | `OUT` | 스키마 요청, 네이티브·폴백 경로, 파싱 실패 | 12 | 04 |
-| [04 도구 정의와 실행 루프](04-tools.md) | `TOOL` | 도구 스키마, 호출 루프, 예산, 승인 | 21 | 05, 06 |
-| [05 MCP 연동](05-mcp.md) | `MCP` | MCP 클라이언트 도구, 서버 호스팅 | 19 | 07, 24 |
-| [06 세션과 대화 상태](06-sessions.md) | `SES` | 세션 식별, 직렬화, 저장소, 이력, 컨텍스트 | 20 | 08, 09 |
-| [07 인터셉터와 컨텍스트 관리](07-interceptors.md) | `INT` | 실행 인터셉터, 컴팩션 | 22 | 10, 11 |
-| [08 하네스 기능](08-harness.md) | `HAR` | 하네스 조립, 제공자, 스킬, 코드 실행 | 21 | 12, 13 |
-| [09 워크플로와 오케스트레이션](09-workflows.md) | `WF` | 그래프, 런타임, 체크포인트, 조합, 선언형 | 35 | 14, 15, 16, 17, 18, 19 |
-| [10 호스팅과 프로토콜](10-hosting.md) | `HOST` | 호스팅 코어, Responses, A2A, AG-UI, 식별 | 29 | 20, 21, 22, 23, 25, 26 |
-| [11 운영 품질](11-operations.md) | `OPS` | 관찰성, 오류, 보안, 평가, 패키징 | 26 | 27, 28, 29, 30 |
-| [12 공급자 통합](12-providers.md) | `PRV` | 모델 공급자, 인프라 어댑터 | 10 | 31 |
+| [01 Agent execution and model calls](01-agent-execution.md) | `AGT` | Agent lifecycle, run entry points, model calls, streaming | 16 | 01, 03 |
+| [02 Messages and the content model](02-message-content.md) | `MSG` | Roles, content kinds, responses, usage, finish reasons | 13 | 02 |
+| [03 Structured output](03-structured-output.md) | `OUT` | Schema requests, native and fallback paths, parse failures | 12 | 04 |
+| [04 Tool definitions and the tool call loop](04-tools.md) | `TOOL` | Tool schemas, the call loop, budgets, approvals | 21 | 05, 06 |
+| [05 MCP integration](05-mcp.md) | `MCP` | MCP client tools, server hosting | 19 | 07, 24 |
+| [06 Sessions and conversation state](06-sessions.md) | `SES` | Session identity, serialization, stores, history, context | 20 | 08, 09 |
+| [07 Interceptors and context management](07-interceptors.md) | `INT` | Run interceptors, compaction | 22 | 10, 11 |
+| [08 Harness features](08-harness.md) | `HAR` | Harness assembly, providers, skills, code execution | 21 | 12, 13 |
+| [09 Workflows and orchestration](09-workflows.md) | `WF` | Graphs, runtime, checkpoints, composition, declarative form | 35 | 14, 15, 16, 17, 18, 19 |
+| [10 Hosting and protocols](10-hosting.md) | `HOST` | Hosting core, Responses, A2A, AG-UI, identity | 29 | 20, 21, 22, 23, 25, 26 |
+| [11 Operational quality](11-operations.md) | `OPS` | Observability, errors, security, evaluation, packaging | 26 | 27, 28, 29, 30 |
+| [12 Provider integrations](12-providers.md) | `PRV` | Model providers, infrastructure adapters | 10 | 31 |
 
-전체 244개 요구사항이 31개 원본 기능을 모두 덮는다. 문서 수와 기능 수는 일치할 필요가
-없다. 하나의 요구사항 문서가 여러 기능을 다룰 수 있고, 하나의 기능이 여러 요구사항을
-만들 수 있다.
+All 244 requirements together cover all 31 upstream features. The number of documents and the
+number of features do not have to match. One requirement document can cover several features, and
+one feature can produce several requirements.
 
-## 요구사항 ID
+## Requirement ids
 
-각 요구사항은 `<접두사>-<3자리>` 형식의 고정 ID를 가진다. 예: `AGT-001`.
+Every requirement has a fixed id in the form `<prefix>-<three digits>`, for example `AGT-001`.
 
-- ID는 재사용하지 않는다. 요구사항을 폐기하면 ID는 `폐기` 상태로 남긴다.
-- 테스트, 커밋, 계획 문서는 ID로 요구사항을 참조한다.
-- 새 요구사항은 해당 문서의 마지막 번호 다음을 사용한다.
+- Ids are never reused. When a requirement is retired, its id stays behind in the `retired` state.
+- Tests, commits, and planning documents refer to a requirement by its id.
+- A new requirement uses the number after the last one in its document.
 
-## 요구사항 등급
+## Requirement grades
 
-| 등급 | 뜻 |
+| Grade | Meaning |
 | --- | --- |
-| 필수 | 이 요구사항 없이는 해당 기능을 릴리스하지 않는다. |
-| 권장 | 합리적 근거를 기록하면 다르게 구현할 수 있다. |
-| 선택 | 필요할 때 구현한다. 없어도 릴리스한다. |
+| Required | The feature is not released without this requirement. |
+| Recommended | It may be implemented differently when the reasoning is recorded. |
+| Optional | Implement it when it is needed. The release ships without it. |
 
-등급은 **그 기능을 구현하기로 했을 때의 강제력**을 뜻하며, 그 기능을 반드시 구현해야
-한다는 뜻이 아니다. 기능 자체를 만들지 말지는 아래 릴리스 단계가 정한다.
+A grade states **how binding the requirement is once the feature has been chosen for
+implementation**; it does not state that the feature has to be implemented at all. Whether the
+feature itself gets built is decided by the release phases below.
 
-두 축을 섞으면 범위가 조용히 커진다. 예를 들어 컴팩션은
-[호환성 매트릭스](../upstream/snapshots/d0a4165f/compatibility-matrix.md)에서 `선택`으로
-판정한 기능이므로 만들지 않아도 릴리스할 수 있다. 다만 만들기로 했다면 도구 호출과 결과의
-원자성을 깨뜨리지 않아야 하며, 그 조건은 `필수`다.
+Mixing the two axes lets scope grow silently. Compaction, for example, is a feature the
+[compatibility matrix](../upstream/snapshots/d0a4165f/compatibility-matrix.md) judged `Optional`,
+so a release can ship without it. But once it is built, it must not break the atomicity of a tool
+call and its result, and that condition is `Required`.
 
-각 문서의 요약 표에는 다음을 함께 적는다.
+The summary table in each document records both of the following.
 
-- **채택** — 그 기능군을 Java가 만들 것인지. 매트릭스의 `필수`/`선택`/`보류`를 따른다.
-- **등급** — 만들기로 했을 때 이 요구사항의 강제력.
+- **Adoption** — whether Java is going to build that feature group. It follows
+  `Required`/`Optional`/`Deferred` in the matrix.
+- **Grade** — how binding this requirement is once the decision to build it has been made.
 
-매트릭스가 `선택` 또는 `보류`로 판정한 기능군을 채택 `필수`로 올리려면 그 이유를 문서에
-적어야 한다.
+Raising a feature group the matrix judged `Optional` or `Deferred` to adoption `Required` requires
+the reason to be written down in the document.
 
-## 릴리스 단계
+## Release phases
 
-| 단계 | 범위 |
+| Phase | Scope |
 | --- | --- |
-| `MVP` | 단일 에이전트 실행에 필요한 최소 계약 |
-| `Core+` | MVP 안정화 후 코어에 추가 |
-| `Workflow` | 워크플로 하위 프로젝트 |
-| `Hosting` | 호스팅과 프로토콜 어댑터 |
-| `Optional` | 독립 아티팩트로 분리 가능한 범위 |
+| `MVP` | The minimum contract needed to run a single agent |
+| `Core+` | Added to the core once the MVP is stable |
+| `Workflow` | The workflow subproject |
+| `Hosting` | Hosting and protocol adapters |
+| `Optional` | Scope that can be split out into an independent artifact |
 
-## 각 요구사항의 형식
+## The shape of a requirement
 
-모든 요구사항은 다음 다섯 가지를 가진다.
+Every requirement has the following five parts.
 
-1. **요구사항** — Java가 무엇을 해야 하는지 한 문장. `해야 한다`, `하지 않는다`처럼 단정한다.
-2. **원본 비교** — .NET과 Python이 각각 어떻게 하는지 한 줄씩. 차이가 없으면 `동일`.
-3. **판단** — 왜 그 결정을 했는지. 두 원본이 다를 때 어느 쪽을 왜 택했는지.
-4. **수용 기준** — 통과 여부를 기계적으로 판정할 수 있는 조건.
-5. **근거** — 원본 분석 문서 링크. 원본 소스 permalink는 분석 문서가 이미 보관하므로
-   여기서는 반복하지 않는다.
+1. **Requirement** — one sentence on what Java has to do. It is stated definitively, as `must`
+   or `does not`.
+2. **Upstream comparison** — one line each on what .NET and Python do. `Same` when there is no
+   difference.
+3. **Decision** — why the decision was made. When the two upstreams differ, which side was chosen
+   and why.
+4. **Acceptance criteria** — conditions whose pass or fail can be judged mechanically.
+5. **Evidence** — links to the upstream analysis documents. Permalinks into upstream sources are
+   already kept by the analysis documents, so they are not repeated here.
 
-## 판단 원칙
+## Decision rules
 
-두 원본 구현이 다를 때 다음 순서로 판단한다.
+When the two upstream implementations differ, the decision follows this order.
 
-1. **코드가 문서를 이긴다.** 문서에만 있는 기능은 요구사항으로 만들지 않는다.
-2. **테스트로 고정된 동작이 우선한다.** 양쪽 모두 테스트가 있으면 더 엄격한 쪽을 택한다.
-3. **더 안전한 기본값을 택한다.** 민감정보 노출, 무한 반복, 조용한 실패를 막는 쪽이다.
-4. **Java 생태계 관습을 따른다.** 원본 API 이름보다 관찰 가능한 동작의 호환을 우선한다.
-5. **경계를 흐리지 않는다.** `AgentEngine`이 호스트 런타임의 책임을 가져오지 않는다.
+1. **Code beats documentation.** A feature that exists only in documentation does not become a
+   requirement.
+2. **Behavior pinned by a test wins.** When both sides have tests, the stricter side is chosen.
+3. **Choose the safer default.** The side that prevents leaking sensitive data, unbounded loops,
+   and silent failures.
+4. **Follow Java ecosystem conventions.** Compatibility of observable behavior comes before
+   upstream API names.
+5. **Do not blur boundaries.** `AgentEngine` does not take over the responsibilities of the host
+   runtime.
 
-두 원본이 모두 제공하지 않는 기능은 요구사항으로 만들지 않는다. 필요하면 별도 설계로
-제안한다.
+A feature neither upstream provides does not become a requirement. When it is needed, it is
+proposed as a separate design.
 
-## 관련 문서
+## Related documents
 
-- [기초 설계와 로드맵](../design/foundation-design.md)
-- [원본 스냅샷 분석](../upstream/snapshots/d0a4165f/README.md)
-- [기능별 호환성 매트릭스](../upstream/snapshots/d0a4165f/compatibility-matrix.md)
-- [문서 인덱스](../README.md)
+- [Foundation design and roadmap](../design/foundation-design.md)
+- [Upstream snapshot analysis](../upstream/snapshots/d0a4165f/README.md)
+- [Per-feature compatibility matrix](../upstream/snapshots/d0a4165f/compatibility-matrix.md)
+- [Documentation index](../README.md)

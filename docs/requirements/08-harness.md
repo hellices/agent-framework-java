@@ -10,7 +10,7 @@
 
 ## 채택 범위
 
-이 문서의 `등급`은 [README](README.md#요구사항-등급) 정의대로 기능을 만들기로 했을 때의 강제력이고, 채택 여부는 [호환성 매트릭스](../upstream/snapshots/d0a4165f/compatibility-matrix.md)를 따른다.
+이 문서의 `등급`은 [README](README.md#requirement-grades) 정의대로 기능을 만들기로 했을 때의 강제력이고, 채택 여부는 [호환성 매트릭스](../upstream/snapshots/d0a4165f/compatibility-matrix.md)를 따른다.
 
 - 하네스(`HAR01`, `HAR02`), 스킬(`SKL01`), 백그라운드(`BKG01`)는 모두 채택 `보류`다.
 - 따라서 이 문서 전체는 MVP 이후에만 검토하는 보류 범위다.

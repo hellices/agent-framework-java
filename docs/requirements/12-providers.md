@@ -6,7 +6,7 @@
 
 ## 채택 범위
 
-이 문서의 `등급`은 [README](README.md#요구사항-등급) 정의대로 기능을 만들기로 했을 때의 강제력이고, 채택 여부는 [호환성 매트릭스](../upstream/snapshots/d0a4165f/compatibility-matrix.md)를 따른다.
+이 문서의 `등급`은 [README](README.md#requirement-grades) 정의대로 기능을 만들기로 했을 때의 강제력이고, 채택 여부는 [호환성 매트릭스](../upstream/snapshots/d0a4165f/compatibility-matrix.md)를 따른다.
 
 - OpenAI-compatible 첫 vertical slice와 공통 provider 경계는 채택 `필수`다.
 - 호스팅·프로토콜 분리와 provider-owned continuation 경계는 선택 어댑터 범주에 맞춰 채택 `선택`이다.

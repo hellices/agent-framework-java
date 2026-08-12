@@ -11,7 +11,7 @@
 
 ## 채택 범위
 
-이 문서의 `등급`은 [README](README.md#요구사항-등급) 정의대로 기능을 만들기로 했을 때의 강제력이고, 채택 여부는 [호환성 매트릭스](../upstream/snapshots/d0a4165f/compatibility-matrix.md)를 따른다.
+이 문서의 `등급`은 [README](README.md#requirement-grades) 정의대로 기능을 만들기로 했을 때의 강제력이고, 채택 여부는 [호환성 매트릭스](../upstream/snapshots/d0a4165f/compatibility-matrix.md)를 따른다.
 
 - 호스팅 코어와 식별 경계(`HOST01`, `ID01`)는 채택 `필수`다.
 - Responses(`RESP01`), A2A(`A2A01`), AG-UI(`AGUI01`), Foundry(`FND01`)와 DevUI·채널 어댑터는 호스팅 코어와 분리된 채택 `선택` 범위다.
