@@ -158,7 +158,7 @@ The local path falls back to an in-memory store/provider. The README also descri
 ### .NET
 - In a hosted env, if `x-agent-foundry-call-id` is absent, protocol 1.0.0 mismatch results in `501 unsupported_container_protocol_version`
 - In a hosted env, if the user id context is absent, the request is rejected
-- Toolbox egress includes a fresh bearer token, the required `Foundry-Features` header, trace context, and retry.  
+- Toolbox egress includes a fresh bearer token, the required `Foundry-Features`, trace context, and retry.
   (Source: [.NET HostedProtocolCompatibility](https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI.Foundry.Hosting/HostedProtocolCompatibility.cs#L8-L74), [.NET missing user id handling](https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI.Foundry.Hosting/AgentFrameworkResponseHandler.cs#L97-L115), [.NET toolbox bearer token handler](https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI.Foundry.Hosting/FoundryToolboxBearerTokenHandler.cs#L14-L21), [.NET call-id forwarding and retry](https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI.Foundry.Hosting/FoundryToolboxBearerTokenHandler.cs#L45-L95), [.NET trace propagation](https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI.Foundry.Hosting/FoundryToolboxBearerTokenHandler.cs#L123-L168))
 
 ### Python

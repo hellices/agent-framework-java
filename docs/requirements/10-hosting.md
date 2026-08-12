@@ -686,7 +686,7 @@ collapses the authorization boundary.
 
 **Acceptance criteria**
 
-- In hosted mode, a missing required platform context value raises an explicit protocol error.
+- In hosted mode, a missing required platform context raises an explicit protocol error.
 - Local mode is activated only through a separate configuration or code path and is not promoted by raw hosted headers alone.
 
 **Evidence** [25 foundry-devui-channels](../upstream/snapshots/d0a4165f/features/25-foundry-devui-channels.md),
