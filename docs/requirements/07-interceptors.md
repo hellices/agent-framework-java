@@ -91,7 +91,7 @@ pulls in host responsibilities, the testable contract collapses.
 
 - The interceptor API does not expose methods dedicated to transaction propagation or authorization decisions.
 - Host security information enters only as session or hosting context input and is never created by an interceptor itself.
-- The documentation states that Spring AOP or a `BeanPostProcessor` must not reinterpret the execution order.
+- The documentation states that Spring AOP or a BeanPostProcessor must not reinterpret the execution order.
 
 **Evidence** [10 purpose/boundaries](../upstream/snapshots/d0a4165f/features/10-middleware.md),
 [10 Java typed interceptor decision and the Spring integration boundary](../upstream/snapshots/d0a4165f/features/10-middleware.md)
