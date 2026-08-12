@@ -145,7 +145,11 @@ since the publish directory accumulates across versions and `0.9.0` sorts above 
 
 Locally the test skips when nothing has been published, so it never reports a contract it did not
 check. CI publishes first and passes `-Pagentframework.requirePublishedBom=true`, which turns a
-missing artifact into a failure.
+missing artifact into a failure. `-Pagentframework.requireSignatures` does the same for signing.
+
+Every one of these flags follows one rule: bare or `=true` enables it, `=false` disables it, and any
+other value is rejected. A flag that decides whether a check runs must not fail open, because asking
+for enforcement and silently getting a skip looks identical to a passing build.
 
 ## Adding a project
 

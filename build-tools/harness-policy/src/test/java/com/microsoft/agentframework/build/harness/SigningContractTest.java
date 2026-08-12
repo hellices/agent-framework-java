@@ -74,8 +74,44 @@ class SigningContractTest {
   }
 
   private static boolean isMainJarSignature(Path signature) {
+    // Accept only a jar with no classifier. Excluding a list of known classifiers would still count
+    // `-tests`, `-all`, or a native classifier as the main jar, and this assertion exists precisely
+    // to name the artifact a consumer downloads.
+    //
+    // A snapshot expands the version in the filename but not in the directory, so the version
+    // cannot be compared directly; the classifier is whatever follows it.
+    return classifierOf(signature).isEmpty();
+  }
+
+  /**
+   * Returns the classifier of a signed jar, or an empty string when it has none.
+   *
+   * <p>A Maven filename is {@code <artifactId>-<version>[-<classifier>].jar}. The artifact id is
+   * known from the directory, so whatever remains after it and the version is the classifier. The
+   * version itself is not known for a snapshot, so it is matched as the leading segments that are
+   * not a classifier: everything up to the last hyphen group that is non-numeric and not a
+   * timestamp.
+   */
+  private static String classifierOf(Path signature) {
     String name = fileNameOf(signature);
-    return !name.endsWith("-sources.jar.asc") && !name.endsWith("-javadoc.jar.asc");
+    String withoutSuffix = name.substring(0, Math.max(0, name.length() - ".jar.asc".length()));
+    String prefix = owningArtifact(signature) + "-";
+
+    if (!withoutSuffix.startsWith(prefix)) {
+      return "";
+    }
+
+    String versionAndClassifier = withoutSuffix.substring(prefix.length());
+    int lastSeparator = versionAndClassifier.lastIndexOf('-');
+    if (lastSeparator < 0) {
+      return "";
+    }
+
+    String tail = versionAndClassifier.substring(lastSeparator + 1);
+    // A snapshot's build number is the trailing `-1`; a release version has no trailing segment
+    // that is purely digits. Either way a digits-only tail is part of the version, not a
+    // classifier.
+    return tail.chars().allMatch(Character::isDigit) ? "" : tail;
   }
 
   @Test

@@ -54,15 +54,25 @@ tasks.withType<Test>().configureEach {
     systemProperty("agentframework.version", project.version.toString())
 
     // Locally the published output may legitimately be absent, and the policy skips. CI publishes
-    // first and then sets this, turning absence into a failure so the contract is unconditional.
-    providers.gradleProperty("agentframework.requirePublishedBom").orNull?.let {
-        systemProperty("agentframework.requirePublishedBom", it)
-    }
-
-    // Same contract for signatures. Signing cannot be exercised without a key, so the workflow
-    // publishes with a throwaway one and then requires the `.asc` files to exist.
-    providers.gradleProperty("agentframework.requireSignatures").orNull?.let {
-        systemProperty("agentframework.requireSignatures", it)
+    // first and then sets these, turning absence into a failure so the contracts are unconditional.
+    //
+    // Both flags are normalised here so a bare `-Pagentframework.requireSignatures` means "yes",
+    // matching `agentframework.release`. Left to `Boolean.parseBoolean` they would mean "no": asking
+    // for enforcement would silently switch the suite to skipping, and the build would still pass.
+    listOf("agentframework.requirePublishedBom", "agentframework.requireSignatures").forEach { flag ->
+        providers.gradleProperty(flag).orNull?.let { raw ->
+            val enabled =
+                when (raw.trim().lowercase()) {
+                    "", "true" -> true
+                    "false" -> false
+                    else ->
+                        throw GradleException(
+                            "$flag must be true or false, but was '$raw'. An unrecognised value " +
+                                "would otherwise turn the check off without any signal."
+                        )
+                }
+            systemProperty(flag, enabled.toString())
+        }
     }
 }
 
