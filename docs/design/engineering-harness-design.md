@@ -1,403 +1,415 @@
-# Agent Framework for Java 엔지니어링 하네스 설계
+# Agent Framework for Java Engineering Harness Design
 
-- 상태: 검토 대기
-- 작성일: 2026-08-10
-- 적용 기준: Microsoft Agent Framework upstream
+- Status: pending review
+- Date: 2026-08-10
+- Baseline: Microsoft Agent Framework upstream
   `d0a4165f170193ba1d026a259af40d35bb7eaefe`
-- 범위: 저장소 지침, Java 품질 게이트, 호환성 하네스, 에이전트 작업 그래프,
-  하네스 회귀, GitHub Actions와 AKS ARC 운영 경계
+- Scope: repository instructions, the Java quality gate, the compatibility harness, the agent task graph,
+  harness regression, and the GitHub Actions and AKS ARC operational boundary
 
-> **후속 결정:** build tool과 ARC runner 구성은
-> [Gradle Kotlin DSL 및 Java ARC Foundation 설계](./gradle-kotlin-arc-foundation-design.md)가
-> 대체한다. Maven 및 범용 `aks-runners` 관련 내용은 구현 기준으로 사용하지 않는다.
+> **Subsequent decision:** the build tool and ARC runner configuration are superseded by the
+> [Gradle Kotlin DSL and Java ARC Foundation design](./gradle-kotlin-arc-foundation-design.md).
+> The Maven and general-purpose `aks-runners` content is not used as an implementation baseline.
 
-## 1. 목적
+## 1. Goal
 
-이 저장소는 Microsoft Agent Framework(MAF)의 관찰 가능한 실행 의미론을 Java로
-구현한다. 코어는 Spring Boot, Quarkus, Jakarta EE, Micronaut 또는 특정 DI 컨테이너에
-종속되지 않아야 하며, 각 프레임워크는 호스트 또는 선택적 통합 모듈로만 참여한다.
+This repository implements the observable execution semantics of the Microsoft Agent Framework (MAF)
+in Java. The core must not be tied to Spring Boot, Quarkus, Jakarta EE, Micronaut, or any particular
+DI container; each framework participates only as a host or as an optional integration module.
 
-엔지니어링 하네스의 목적은 다음 네 가지다.
+The engineering harness has the following four goals.
 
-1. 사람과 코딩 에이전트가 같은 아키텍처·품질·검증 규칙을 사용한다.
-2. Java 코어와 각 프레임워크 통합의 경계를 자동으로 검증한다.
-3. 고정된 MAF upstream의 동작과 Java 구현의 차이를 재현 가능하게 추적한다.
-4. 하네스 자체의 지시문, 작업 그래프와 평가 결과가 퇴행하지 않게 한다.
+1. People and coding agents use the same architecture, quality, and verification rules.
+2. The boundary between the Java core and each framework integration is verified automatically.
+3. Differences between the behavior of the pinned MAF upstream and the Java implementation are tracked reproducibly.
+4. The harness's own instructions, task graph, and evaluation results do not regress.
 
-하네스는 제품 런타임의 일부가 아니다. 제품 artifact에는 코딩 에이전트, CI runner,
-평가 서비스 또는 특정 벤더의 agent SDK가 포함되지 않는다.
+The harness is not part of the product runtime. A product artifact contains no coding agent, no CI
+runner, no evaluation service, and no vendor-specific agent SDK.
 
-## 2. 전제와 잠정 결정
+## 2. Premises and provisional decisions
 
-현재 저장소에는 승인된 기초 설계와 upstream snapshot 문서만 존재한다. Maven 프로젝트,
-Java 소스, GitHub Actions와 Git 메타데이터는 아직 없다.
+The repository currently holds only the approved foundation design and the upstream snapshot
+documents. There is no Maven project, no Java source, no GitHub Actions, and no Git metadata yet.
 
-다음 결정을 이 설계의 기본값으로 사용한다.
+The following decisions are used as the defaults of this design.
 
-- 최소 지원 Java는 17이다.
-- CI는 Eclipse Temurin JDK 17, 21, 25에서 검증한다.
-- Java 17을 지원하는 동안 테스트 기반은 JUnit 5 계열을 사용한다. Java 21이 필요한
-  JUnit 6은 채택하지 않는다.
-- Maven 3.9 계열과 Maven Wrapper를 사용한다. Maven 4는 GA와 플러그인 호환성이 확인된
-  뒤 별도 결정으로 다룬다.
-- `AGENTS.md`를 저장소의 벤더 중립 지침 원본으로 사용한다.
-- 일반 Java 빌드는 비특권 ARC runner에서 실행한다. Docker가 필요한 작업만 별도
-  privileged runner로 격리한다.
-- 정확한 플러그인 버전은 구현 시 Maven Central과 공식 릴리스를 다시 확인하고 하나의
-  버전 카탈로그 역할을 하는 root POM 속성에 고정한다.
+- The minimum supported Java is 17.
+- CI verifies on Eclipse Temurin JDK 17, 21, and 25.
+- While Java 17 is supported, the test foundation uses the JUnit 5 line. JUnit 6, which requires Java 21,
+  is not adopted.
+- The Maven 3.9 line and the Maven Wrapper are used. Maven 4 is handled as a separate decision after its GA
+  and plugin compatibility are confirmed.
+- `AGENTS.md` is used as the repository's vendor-neutral instruction source.
+- Ordinary Java builds run on unprivileged ARC runners. Only work that requires Docker is isolated onto a separate
+  privileged runner.
+- Exact plugin versions are re-checked against Maven Central and the official releases at implementation time and pinned
+  in the root POM properties, which act as the single version catalog.
 
-## 3. 검토한 접근법
+## 3. Considered approaches
 
-### 3.1 저장소 단일형
+### 3.1 Repository-monolithic
 
-모든 agent 설정, 평가 실행기, ARC Helm values, Kubernetes 정책과 CI를 이 저장소에서
-관리한다.
+Every agent setting, evaluation runner, ARC Helm values file, Kubernetes policy, and CI definition is
+managed in this repository.
 
-장점은 한 저장소만으로 전체 구성을 발견할 수 있다는 것이다. 단점은 애플리케이션
-변경과 cluster 운영 권한이 결합되고, ARC credential과 runner 보안 변경이 제품 PR의
-영향 범위에 들어오며, 다른 저장소에서 재사용하기 어렵다는 것이다.
+The advantage is that the entire configuration is discoverable from a single repository. The
+disadvantages are that application changes and cluster operational permissions become coupled, that
+ARC credential and runner security changes fall inside the blast radius of a product PR, and that
+reuse from another repository is difficult.
 
-### 3.2 조직 플랫폼 중앙형
+### 3.2 Organization-platform-centralized
 
-품질과 agent workflow 대부분을 조직 공용 reusable workflow 또는 별도 플랫폼 저장소에
-둔다.
+Most of the quality and agent workflows live in organization-wide reusable workflows or in a
+separate platform repository.
 
-장점은 여러 저장소에서 일관성을 유지하기 쉽다는 것이다. 단점은 현재 저장소만 checkout한
-개발자가 실제 규칙과 실행 경로를 이해하거나 재현하기 어렵고, 중앙 변경이 이 저장소의
-검증을 예고 없이 바꿀 수 있다는 것이다.
+The advantage is that consistency across several repositories is easy to maintain. The disadvantages
+are that a developer who has checked out only this repository has difficulty understanding or
+reproducing the real rules and execution paths, and that a central change can alter this
+repository's verification without notice.
 
-### 3.3 계층형 이식 가능 하네스
+### 3.3 Layered portable harness
 
-제품 계약, 검증 설정과 workflow entry point는 저장소에 둔다. 개인 설정은 로컬에,
-runner와 cluster 보안은 플랫폼 영역에 둔다. 중앙 reusable workflow를 사용하더라도
-호출 버전을 고정하고 로컬에서 같은 Maven 명령을 실행할 수 있게 한다.
+The product contract, the verification configuration, and the workflow entry points live in the
+repository. Personal settings live locally, and runner and cluster security live in the platform
+domain. Even when a central reusable workflow is used, the invoked version is pinned and the same
+Maven command can be run locally.
 
-**결정:** 3.3을 채택한다. 저장소 재현성과 운영 분리를 함께 만족하며, 향후 조직 공용
-workflow로 승격할 때도 제품 규칙을 잃지 않는다.
+**Decision:** adopt 3.3. It satisfies repository reproducibility and operational separation
+together, and it does not lose the product rules when the workflows are later promoted to
+organization-wide ones.
 
-## 4. 소유권 경계
+## 4. Ownership boundaries
 
-### 4.1 저장소에서 관리
+### 4.1 Managed in the repository
 
-다음 자산은 제품 변경과 함께 review되어야 하므로 저장소에 포함한다.
+The following assets must be reviewed together with product changes and are therefore kept in the
+repository.
 
-- `AGENTS.md`와 벤더별 얇은 지침 adapter
-- Maven Wrapper, root parent POM과 BOM
-- `.editorconfig`, `.gitattributes`, formatter와 lint 설정
-- compiler, Enforcer, dependency, static analysis와 architecture 규칙
-- unit, property, contract, integration과 conformance tests
-- MAF test vector의 provenance와 upstream pin
-- agent harness artifact schema와 deterministic eval fixture
-- GitHub Actions workflow, composite action과 Dependabot 설정
-- CODEOWNERS, dependency review, CodeQL과 OpenSSF Scorecard 설정
-- 공개 API 호환성 예외와 보안 suppression
-- 릴리스 SBOM과 provenance 생성 규칙
+- `AGENTS.md` and the thin per-vendor instruction adapters
+- the Maven Wrapper, the root parent POM, and the BOM
+- `.editorconfig`, `.gitattributes`, and the formatter and lint configuration
+- the compiler, Enforcer, dependency, static analysis, and architecture rules
+- the unit, property, contract, integration, and conformance tests
+- the provenance of MAF test vectors and the upstream pin
+- the agent harness artifact schema and the deterministic eval fixtures
+- the GitHub Actions workflows, composite actions, and Dependabot configuration
+- the CODEOWNERS, dependency review, CodeQL, and OpenSSF Scorecard configuration
+- public API compatibility exceptions and security suppressions
+- the release SBOM and provenance generation rules
 
-모든 suppression은 규칙 ID, 이유, 범위와 제거 조건을 기록한다. 날짜 없는 전역
-suppression은 허용하지 않는다.
+Every suppression records the rule ID, the reason, the scope, and the removal condition. An undated
+global suppression is not permitted.
 
-### 4.2 로컬에서 관리
+### 4.2 Managed locally
 
-다음 자산은 개인 환경, credential 또는 실행 비용과 연관되므로 커밋하지 않는다.
+The following assets are tied to a personal environment, to credentials, or to execution cost and
+are therefore not committed.
 
-- 개인 agent 권한과 모델 선택
-- API key, GitHub token, Azure credential
-- IDE별 사용자 설정
-- 로컬 Maven repository와 build cache
-- agent 실행 trace 원본과 임시 worktree
-- 로컬 OpenTelemetry Collector endpoint
-- 개인별 비용·turn 제한과 실험 모델 canary
+- personal agent permissions and model selection
+- API keys, GitHub tokens, and Azure credentials
+- per-IDE user settings
+- the local Maven repository and build cache
+- raw agent execution traces and temporary worktrees
+- the local OpenTelemetry Collector endpoint
+- per-person cost and turn limits and experimental model canaries
 
-저장소에는 비밀이 없는 예제 파일만 둘 수 있다. 실제 파일 이름은 `.gitignore`에
-명시하고, 누락 시 secret scanning이 실패시켜야 한다.
+The repository may hold only example files that contain no secrets. The real file names are listed
+in `.gitignore`, and secret scanning must fail when one is missing.
 
-### 4.3 플랫폼 또는 별도 인프라 저장소에서 관리
+### 4.3 Managed in the platform or in a separate infrastructure repository
 
-다음 자산은 애플리케이션 저장소에 포함하지 않는다.
+The following assets are not kept in the application repository.
 
-- ARC controller와 runner scale set의 Helm release 및 values
-- ARC GitHub App private key와 Kubernetes Secret
-- runner image build와 image admission 정책
-- AKS namespace, RBAC, Pod Security Admission과 NetworkPolicy
-- CI 전용 node pool, cluster autoscaler와 Spot 정책
-- Azure Monitor 또는 Prometheus 수집 설정
-- GitHub runner group과 organization action policy
-- Entra federated identity credential과 Azure role assignment
+- the Helm releases and values for the ARC controller and the runner scale sets
+- the ARC GitHub App private key and the Kubernetes Secret
+- runner image builds and the image admission policy
+- the AKS namespace, RBAC, Pod Security Admission, and NetworkPolicy
+- the CI-only node pool, the cluster autoscaler, and the Spot policy
+- the Azure Monitor or Prometheus collection configuration
+- the GitHub runner group and the organization action policy
+- the Entra federated identity credential and the Azure role assignments
 
-애플리케이션 workflow는 runner label이라는 안정된 계약만 참조한다. runner의 pod spec,
-credential과 cluster 권한을 추론하거나 생성하지 않는다.
+An application workflow references only the stable contract of a runner label. It does not infer or
+create a runner's pod spec, credentials, or cluster permissions.
 
-## 5. `AGENTS.md` 설계
+## 5. `AGENTS.md` design
 
-### 5.1 역할
+### 5.1 Role
 
-`AGENTS.md`는 긴 개발 교과서가 아니라 이 저장소에서 작업하기 위한 실행 계약이다. 사람도
-검토할 수 있고 서로 다른 agent 제품에서도 같은 의미를 유지해야 한다.
+`AGENTS.md` is not a long development textbook but the execution contract for working in this
+repository. It must be reviewable by people and must keep the same meaning across different agent
+products.
 
-다음 내용을 포함한다.
+It contains the following.
 
-1. 저장소 목적과 현재 구현 단계
-2. authoritative design 및 upstream snapshot 링크
-3. 모듈 책임과 금지 의존성
-4. Java·Maven 기준과 표준 명령
-5. 변경 전 탐색, 테스트 우선과 검증 절차
-6. task 위험 등급과 승인 조건
-7. MAF conformance 및 provenance 규칙
-8. 보안, 민감정보와 telemetry 규칙
-9. 문서와 공개 API 변경 규칙
-10. 완료 증거 형식
+1. the repository's purpose and current implementation stage
+2. links to the authoritative design and the upstream snapshot
+3. module responsibilities and forbidden dependencies
+4. the Java and Maven baselines and the standard commands
+5. the pre-change exploration, test-first, and verification procedure
+6. task risk tiers and approval conditions
+7. the MAF conformance and provenance rules
+8. the security, sensitive data, and telemetry rules
+9. the documentation and public API change rules
+10. the completion evidence format
 
-특정 agent 제품의 도구 이름, 모델 이름, 토큰 가격 또는 사용자 홈 경로는 넣지 않는다.
+The tool names, model names, token prices, or user home paths of a particular agent product are not
+included.
 
-### 5.2 핵심 지침 초안
+### 5.2 Draft of the core instructions
 
-최종 `AGENTS.md`는 다음 규칙을 명시한다.
+The final `AGENTS.md` states the following rules.
 
-#### 저장소 정체성
+#### Repository identity
 
-- 이 프로젝트는 특정 서버 프레임워크가 아니라 임베드 가능한 `AgentEngine`을 제공한다.
-- API 이름의 직역보다 고정 upstream의 관찰 가능한 실행 의미론을 우선한다.
-- 코어는 DI container, HTTP server, executor, scheduler 또는 shutdown hook을 소유하지
-  않는다.
+- This project provides an embeddable `AgentEngine`, not a particular server framework.
+- The observable execution semantics of the pinned upstream take precedence over a literal port of API names.
+- The core does not own a DI container, an HTTP server, an executor, a scheduler, or a shutdown
+  hook.
 
-#### 의존성 규칙
+#### Dependency rules
 
-- API는 Spring, Quarkus, Jakarta EE, Micronaut와 provider SDK에 의존하지 않는다.
-- Engine은 API와 명시적으로 승인된 최소 공통 라이브러리에만 의존한다.
-- Adapter는 공개 port만 구현하며 engine internal package를 참조하지 않는다.
-- Host integration은 조립만 담당하고 core가 host를 역참조하지 않는다.
-- Sample과 testkit은 제품 artifact의 의존 대상이 아니다.
+- The API does not depend on Spring, Quarkus, Jakarta EE, Micronaut, or a provider SDK.
+- The engine depends only on the API and on explicitly approved minimal common libraries.
+- An adapter implements only public ports and does not reference an engine internal package.
+- A host integration is responsible only for composition, and the core never references a host in return.
+- Samples and the testkit are not dependency targets of a product artifact.
 
-#### 작업 절차
+#### Working procedure
 
-- 변경 전 관련 설계, public contract, 사용처와 인접 테스트를 읽는다.
-- 동작 변경은 재현 테스트 또는 실패하는 contract test를 먼저 만든다.
-- 기존 helper와 fixture를 검색한 뒤 재사용 또는 공용화한다.
-- 변경 범위를 affected module로 제한한다.
-- 좁은 검증에서 시작하고 변경 위험에 따라 matrix와 deep 검증으로 확장한다.
-- 테스트를 삭제하거나 `@Disabled`로 바꾸어 실패를 숨기지 않는다.
+- Before a change, read the related design, the public contract, the usages, and the neighboring tests.
+- A behavior change starts with a reproduction test or a failing contract test.
+- Search for an existing helper and fixture, then reuse it or make it shared.
+- Limit the change scope to the affected modules.
+- Start from narrow verification and expand to matrix and deep verification according to the change risk.
+- Do not hide a failure by deleting a test or turning it into `@Disabled`.
 
-#### 완료 기준
+#### Completion criteria
 
-- 요청한 동작이 공개 API 또는 관찰 가능한 event/state로 검증되었다.
-- formatter, compiler, unit, architecture와 affected contract test가 통과했다.
-- 공개 API, dependency, upstream conformance 또는 instruction 변경이면 해당 전용
-  gate도 통과했다.
-- 실행한 명령, 결과와 실행하지 못한 검증을 최종 응답에 명시한다.
+- The requested behavior is verified through the public API or through observable events and state.
+- The formatter, compiler, unit, architecture, and affected contract tests passed.
+- For a public API, dependency, upstream conformance, or instruction change, the dedicated
+  gate also passed.
+- The commands run, their results, and the verification that could not be run are stated in the final response.
 
-#### 금지 사항
+#### Prohibitions
 
-- 비밀, prompt 본문, tool argument 또는 model response를 기본 telemetry에 기록하지 않는다.
-- 실패를 성공 형태로 바꾸는 broad catch 또는 silent fallback을 추가하지 않는다.
-- upstream `main`의 현재 상태를 pin된 snapshot과 혼합하지 않는다.
-- provider 전용 동작을 검증 없이 core 공통 계약으로 승격하지 않는다.
-- agent가 release, force push, infrastructure 변경 또는 suppression 확대를 자동 승인하지
-  않는다.
+- Do not record secrets, prompt bodies, tool arguments, or model responses in default telemetry.
+- Do not add a broad catch or a silent fallback that turns a failure into the shape of a success.
+- Do not mix the current state of upstream `main` with the pinned snapshot.
+- Do not promote provider-specific behavior to a common core contract without verification.
+- Do not let an agent automatically approve a release, a force push, an infrastructure change, or a widened
+  suppression.
 
-### 5.3 벤더별 adapter
+### 5.3 Per-vendor adapters
 
-벤더별 파일은 `AGENTS.md`를 복제하지 않는다.
+A per-vendor file does not duplicate `AGENTS.md`.
 
-- `CLAUDE.md`: `AGENTS.md`를 우선 읽으라는 짧은 연결과 Claude 전용 로컬 파일 이름만 기록
-- `GEMINI.md`: 같은 방식의 연결
-- `.github/copilot-instructions.md`: 같은 방식의 연결
+- `CLAUDE.md`: a short link telling the reader to read `AGENTS.md` first, plus only the Claude-specific local file names
+- `GEMINI.md`: a link in the same style
+- `.github/copilot-instructions.md`: a link in the same style
 
-도구별 지침 차이는 최소화한다. symlink는 Windows checkout과 일부 agent loader에서
-동작이 다를 수 있으므로 작은 일반 파일을 사용한다.
+Per-tool instruction differences are minimized. A symlink can behave differently on a Windows
+checkout and in some agent loaders, so a small ordinary file is used.
 
-## 6. Java 품질 하네스
+## 6. Java quality harness
 
-### 6.1 빌드 기준
+### 6.1 Build baseline
 
-- Maven Wrapper와 wrapper distribution checksum을 커밋한다.
-- 모든 dependency와 plugin version을 root POM에서 관리한다.
-- compiler는 `--release 17`, UTF-8과 합리적인 `-Xlint`를 사용한다.
-- warning-as-error는 처음부터 전역 적용하지 않는다. 새 코드에서 신호가 안정된 category부터
-  승격한다.
-- `project.build.outputTimestamp`와 reproducible archive 설정을 사용한다.
-- Enforcer로 Java/Maven 범위, plugin version, release dependency와 bytecode level을
-  검증한다.
-- dependency convergence는 프레임워크 BOM 조합에서 오탐이 생길 수 있으므로 module별
-  의도와 함께 적용한다.
+- Commit the Maven Wrapper and the wrapper distribution checksum.
+- Manage every dependency and plugin version in the root POM.
+- The compiler uses `--release 17`, UTF-8, and a reasonable `-Xlint`.
+- Warning-as-error is not applied globally from the start. It is promoted starting with the categories whose signal
+  is stable in new code.
+- Use `project.build.outputTimestamp` and the reproducible archive settings.
+- Use Enforcer to verify the Java and Maven ranges, plugin versions, release dependencies, and the bytecode
+  level.
+- Dependency convergence can produce false positives in a framework BOM combination, so it is applied per module
+  together with the intent.
 
-`.mvn/jvm.config`에는 실제로 필요한 옵션만 둔다. 테스트 도구를 위해 근거 없이
-`--add-opens`, attach 허용 또는 javac internal export를 전역 추가하지 않는다.
+`.mvn/jvm.config` holds only the options that are actually needed. Do not globally add `--add-opens`,
+attach permission, or a javac internal export without justification for the sake of a test tool.
 
-### 6.2 품질 도구의 역할
+### 6.2 The role of each quality tool
 
-| 도구 | 역할 | 초기 적용 |
+| Tool | Role | Initial application |
 | --- | --- | --- |
-| Spotless | 결정적 Java/POM/기타 텍스트 포맷 | PR 필수 |
-| Checkstyle | 공개 API Javadoc, naming, import와 금지 패턴 | 좁은 규칙으로 PR 필수 |
-| Maven Enforcer | toolchain, dependency와 plugin 정책 | PR 필수 |
-| Maven Dependency Plugin | 미선언·미사용 dependency | PR 필수, 명시적 예외 허용 |
-| PMD | source-level bug pattern과 복잡도 | baseline 생성 후 PR 필수 |
-| SpotBugs | bytecode-level 결함 | baseline 생성 후 PR 필수 |
-| ArchUnit | framework 중립성과 module dependency | 첫 코드부터 PR 필수 |
-| JaCoCo | coverage 관찰과 ratchet | 보고부터 시작해 diff ratchet |
-| Revapi | 공개 API binary/source compatibility | 첫 릴리스 이후 필수 |
-| PIT | state machine test의 결함 검출력 | main/scheduled 및 release |
-| CycloneDX | aggregate SBOM | package/release |
-| CodeQL/dependency review | SAST와 신규 dependency 위험 | GitHub PR/schedule |
+| Spotless | Deterministic Java, POM, and other text formatting | Required on a PR |
+| Checkstyle | Public API Javadoc, naming, imports, and forbidden patterns | Required on a PR with narrow rules |
+| Maven Enforcer | Toolchain, dependency, and plugin policy | Required on a PR |
+| Maven Dependency Plugin | Undeclared and unused dependencies | Required on a PR, explicit exceptions allowed |
+| PMD | Source-level bug patterns and complexity | Required on a PR after a baseline is generated |
+| SpotBugs | Bytecode-level defects | Required on a PR after a baseline is generated |
+| ArchUnit | Framework neutrality and module dependency | Required on a PR from the first code |
+| JaCoCo | Coverage observation and ratchet | Start from reporting, then a diff ratchet |
+| Revapi | Public API binary and source compatibility | Required after the first release |
+| PIT | Defect detection power of the state machine tests | main and scheduled, plus release |
+| CycloneDX | Aggregate SBOM | package and release |
+| CodeQL/dependency review | SAST and new dependency risk | GitHub PR and schedule |
 
-Error Prone과 NullAway는 높은 신호를 제공하지만 JDK별 javac internal access와 annotation
-processor 조합을 복잡하게 한다. Java 17·21·25 matrix에서 안정성과 false positive를
-측정한 뒤 선택적으로 승격한다. Nullness annotation을 공개 API에 도입할 때는 JSpecify와
-각 프레임워크의 nullness 해석 호환성을 별도 결정한다.
+Error Prone and NullAway provide a high signal, but they complicate the combination of per-JDK javac
+internal access and annotation processors. They are promoted optionally after their stability and
+false positive rate are measured on the Java 17, 21, and 25 matrix. When nullness annotations are
+introduced into the public API, the compatibility of JSpecify with each framework's nullness
+interpretation is decided separately.
 
-OWASP Dependency-Check는 NVD API와 CPE matching의 운영 부담이 크므로 모든 로컬
-`verify`에 결합하지 않는다. GitHub dependency review와 CodeQL을 PR 기본선으로 사용하고,
-Dependency-Check 또는 Trivy SBOM scan은 scheduled/release에서 운영한 뒤 신호 품질에
-따라 승격한다.
+OWASP Dependency-Check carries a heavy operational burden from the NVD API and CPE matching, so it
+is not bound to every local `verify`. GitHub dependency review and CodeQL are used as the PR
+baseline, and Dependency-Check or a Trivy SBOM scan is operated on the scheduled and release paths
+first and promoted according to its signal quality.
 
-### 6.3 테스트 계층
+### 6.3 Test layers
 
 #### Unit
 
-- JUnit 5 계열과 AssertJ를 사용한다.
-- core 상태 전이는 deterministic fake model/tool/session으로 검증한다.
-- Mockito는 외부 adapter 경계에서만 제한적으로 사용한다.
-- 시간, ID, scheduler와 random source는 주입한다.
+- Use the JUnit 5 line and AssertJ.
+- Verify core state transitions with deterministic fake model, tool, and session implementations.
+- Use Mockito only in a limited way at external adapter boundaries.
+- Inject time, IDs, the scheduler, and the random source.
 
 #### Property
 
-jqwik으로 다음 불변식을 검증한다.
+Verify the following invariants with jqwik.
 
-- session serialize/deserialize round-trip
-- tool call/result pairing 보존
-- 취소 이후 추가 state commit 금지
-- 동일 scripted provider 입력의 event sequence 결정성
-- workflow graph가 추가되면 fan-in, checkpoint와 resume 불변식
+- the session serialize and deserialize round trip
+- preservation of tool call and result pairing
+- the prohibition of an additional state commit after cancellation
+- the determinism of the event sequence for the same scripted provider input
+- once the workflow graph is added, the fan-in, checkpoint, and resume invariants
 
-seed와 축소된 counterexample을 CI artifact에 기록한다.
+Record the seed and the shrunk counterexample in a CI artifact.
 
 #### Architecture
 
-ArchUnit과 Maven module graph 검증으로 다음을 막는다.
+Prevent the following with ArchUnit and Maven module graph verification.
 
-- core에서 framework/provider package 참조
-- adapter에서 engine internal package 참조
-- 제품에서 sample/testkit 참조
-- core에서 executor, server, DI container 생성
-- 공개 API에 framework type 노출
+- a reference from the core to a framework or provider package
+- a reference from an adapter to an engine internal package
+- a reference from the product to a sample or the testkit
+- the creation of an executor, a server, or a DI container in the core
+- the exposure of a framework type in the public API
 
-단순 package 이름 휴리스틱만 사용하지 않고 module dependency와 bytecode import를 함께
-검증한다.
+Do not use a simple package name heuristic alone; verify the module dependencies and the bytecode
+imports together.
 
 #### Integration
 
-- Maven Failsafe와 별도 integration-test module을 사용한다.
-- Spring Boot, Quarkus, Jakarta EE/MicroProfile와 Micronaut adapter는 실제 container 또는
-  framework test harness로 조립과 lifecycle 위임을 검증한다.
-- 외부 저장소가 필요한 session adapter만 Testcontainers를 사용한다.
-- container가 필요 없는 테스트를 privileged runner로 보내지 않는다.
+- Use Maven Failsafe and a separate integration-test module.
+- The Spring Boot, Quarkus, Jakarta EE/MicroProfile, and Micronaut adapters verify composition and lifecycle
+  delegation with a real container or framework test harness.
+- Use Testcontainers only for the session adapters that need an external store.
+- Do not send a test that needs no container to a privileged runner.
 
 #### Compatibility
 
-지원 범위를 모든 버전의 cartesian product로 만들지 않는다.
+Do not turn the support range into the cartesian product of all versions.
 
 - core: JDK 17, 21, 25
-- 각 framework adapter: 문서화한 최소 지원선과 현재 지원선
-- provider: 공용 provider contract suite
-- session store: 공용 persistence contract suite
-- sample: Maven Invoker 또는 독립 sample build
+- each framework adapter: the documented minimum supported line and the current supported line
+- provider: the shared provider contract suite
+- session store: the shared persistence contract suite
+- sample: Maven Invoker or a standalone sample build
 
-framework BOM 업데이트는 최소선과 현재선 모두 통과해야 한다.
+A framework BOM update must pass on both the minimum line and the current line.
 
-### 6.4 Maven 검증 profile
+### 6.4 Maven verification profiles
 
-| Profile/명령 | 목적 | 실행 시점 |
+| Profile/command | Purpose | When it runs |
 | --- | --- | --- |
-| `fast` | format check, compile, unit, ArchUnit | 로컬 반복 |
-| 기본 `verify` | static analysis, unit/property/contract, coverage | 모든 trusted PR |
-| `compat` | JDK와 framework 지원 matrix | 영향 PR, main, schedule |
+| `fast` | Format check, compile, unit, ArchUnit | Local iteration |
+| Default `verify` | Static analysis, unit/property/contract, coverage | Every trusted PR |
+| `compat` | The JDK and framework support matrix | Affected PRs, main, schedule |
 | `deep` | Testcontainers, MAF conformance, reproducibility | main, nightly |
-| `mutation` | engine 핵심 상태 전이 PIT | engine 변경, nightly |
-| `release` | Revapi, full matrix, SBOM, source/javadoc, signing | release |
+| `mutation` | PIT on the engine's core state transitions | Engine changes, nightly |
+| `release` | Revapi, full matrix, SBOM, source/javadoc, signing | Release |
 
-명령의 실제 형태는 구현 계획에서 확정한다. 모든 CI job은 로컬에서 실행 가능한 Maven
-명령을 호출하며 CI에만 존재하는 품질 로직을 만들지 않는다.
+The actual shape of the commands is settled in the implementation plan. Every CI job invokes a Maven
+command that can be run locally, and no quality logic exists only in CI.
 
-## 7. MAF 호환성 하네스
+## 7. MAF compatibility harness
 
-### 7.1 기준
+### 7.1 Baseline
 
-MAF upstream은 commit SHA로 고정한다. 문서보다 production source와 conformance test를
-우선한다. 현재 .NET의 `AgentConformance.IntegrationTests`는 provider 구현이 상속하는
-abstract conformance suite 구조를 제공한다.
+MAF upstream is pinned by commit SHA. Production source and conformance tests take precedence over
+documentation. The current .NET `AgentConformance.IntegrationTests` provides an abstract conformance
+suite structure that provider implementations inherit.
 
-Java testkit도 같은 패턴을 사용한다.
+The Java testkit uses the same pattern.
 
-- 공용 abstract contract suite
-- adapter가 구현하는 fixture interface
-- deterministic fake fixture
-- 실제 provider integration fixture
-- test vector와 upstream provenance metadata
+- a shared abstract contract suite
+- a fixture interface that adapters implement
+- deterministic fake fixtures
+- real provider integration fixtures
+- test vectors and upstream provenance metadata
 
-실제 provider test의 재시도 성공과 deterministic test의 안정성을 혼동하지 않는다.
-deterministic suite는 retry 없이 통과해야 한다. live provider suite의 retry 횟수와 첫
-실패는 결과에 기록한다.
+Do not confuse a retried success of a real provider test with the stability of a deterministic test.
+The deterministic suite must pass without retries. The retry count and the first failure of a live
+provider suite are recorded in the results.
 
-### 7.2 초기 golden scenario
+### 7.2 Initial golden scenarios
 
-#### Upstream 동등 시나리오
+#### Upstream-equivalent scenarios
 
-1. 입력 없는 run이 실패하지 않는다.
-2. 문자열 입력 응답과 agent ID가 올바르다.
-3. message 입력과 복수 message 입력이 같은 의미를 유지한다.
-4. 두 turn 후 session history가 user/assistant 네 message를 순서대로 가진다.
-5. 위 시나리오의 streaming 결과를 이어 붙이면 기대 텍스트를 포함한다.
-6. agent instruction만으로 실행할 수 있다.
-7. 단일 및 연속 tool 호출이 결과와 history에 올바르게 연결된다.
-8. streaming tool 호출이 동일 의미를 가진다.
+1. A run with no input does not fail.
+2. The response to a string input and the agent ID are correct.
+3. A message input and a multiple-message input keep the same meaning.
+4. After two turns, the session history holds four user and assistant messages in order.
+5. Concatenating the streaming results of the scenarios above contains the expected text.
+6. Execution is possible with agent instructions alone.
+7. Single and consecutive tool calls are correctly linked to the results and the history.
+8. A streaming tool call has the same meaning.
 
-#### Java 엔진 필수 확장
+#### Mandatory Java engine extensions
 
-9. session serialization round-trip 후 같은 history와 state version을 가진다.
-10. tool 실패, 승인 거절과 반복 제한이 typed failure로 전파된다.
-11. streaming cancellation 후 event와 session commit 경계가 일관된다.
-12. backpressure 또는 느린 subscriber가 event ordering을 깨지 않는다.
-13. 동일 idempotency key 재실행이 중복 tool side effect를 만들지 않는다.
-14. telemetry에서 span parentage가 올바르고 민감정보는 기본 비활성화된다.
+9. After a session serialization round trip, the same history and state version are held.
+10. Tool failure, approval rejection, and the iteration limit propagate as a typed failure.
+11. After streaming cancellation, the event and session commit boundaries are consistent.
+12. Backpressure or a slow subscriber does not break event ordering.
+13. Re-running with the same idempotency key does not create duplicate tool side effects.
+14. In telemetry, span parentage is correct and sensitive data is disabled by default.
 
-workflow는 MVP 이후 독립 설계이므로 지금 빈 module이나 통과하는 placeholder test를
-만들지 않는다.
+Workflows are an independent design after the MVP, so no empty module and no passing placeholder
+test is created for them now.
 
-### 7.3 정규화와 provenance
+### 7.3 Normalization and provenance
 
-호환성 비교는 다음을 분리한다.
+A compatibility comparison separates the following.
 
-- 필수 invariant: role, message 수와 순서, agent ID, tool pairing, finish reason, state change
-- 허용 변동: 자연어 문구, provider usage의 선택 필드, chunk boundary
-- 금지 변동: event 순서 역전, 중복 tool 실행, 취소 후 commit, 민감정보 span
+- mandatory invariants: role, message count and order, agent ID, tool pairing, finish reason, state change
+- permitted variation: natural language wording, optional fields of provider usage, chunk boundaries
+- forbidden variation: inverted event order, duplicate tool execution, a commit after cancellation, a sensitive-data span
 
-각 vector는 upstream repository, commit, path, test 이름, derivation method와 확인일을
-기록한다. MIT source를 직접 번역할 때는 license notice 의무를 지킨다. 가능하면 test
-본문을 복사하지 않고 관찰 가능한 요구사항에서 Java 관용 test를 독립 작성한다.
+Each vector records the upstream repository, commit, path, test name, derivation method, and the
+date it was checked. When MIT source is translated directly, the license notice obligation is
+honored. Where possible, the test body is not copied; an idiomatic Java test is written
+independently from the observable requirements.
 
-### 7.4 upstream delta
+### 7.4 Upstream delta
 
-주간 workflow는 현재 pin과 upstream 후보 SHA 사이에서 다음 경로의 변경을 탐지한다.
+A weekly workflow detects changes on the following paths between the current pin and a candidate
+upstream SHA.
 
-- .NET abstraction과 conformance tests
-- Python core public type와 conformance/evaluation tests
-- 공식 specification과 decision 문서
+- the .NET abstractions and conformance tests
+- the Python core public types and conformance/evaluation tests
+- the official specification and decision documents
 
-변경 발견은 자동 구현이나 pin 이동이 아니라 issue 또는 review artifact를 만든다.
-사람이 동작 차이와 Java 영향을 승인한 뒤 snapshot, matrix와 pin을 원자적으로 갱신한다.
+A detected change produces an issue or a review artifact, not an automatic implementation or a
+moved pin. A person approves the behavioral difference and its Java impact, and only then are the
+snapshot, the matrix, and the pin updated atomically.
 
-## 8. 에이전트 작업 그래프
+## 8. Agent task graph
 
-### 8.1 원칙
+### 8.1 Principles
 
-- 무제한 self-loop가 아니라 명시적 DAG를 사용한다.
-- node는 하나의 책임과 작은 입출력 계약을 가진다.
-- edge는 대화 전체가 아니라 검증 가능한 artifact를 전달한다.
-- 읽기, 쓰기, 검증과 release 권한을 분리한다.
-- 실패 또는 누락된 evidence는 성공 형태로 대체하지 않는다.
-- 작업 위험과 크기에 따라 그래프를 축약하되 필수 gate는 우회하지 않는다.
+- Use an explicit DAG rather than an unbounded self-loop.
+- A node has one responsibility and a small input and output contract.
+- An edge carries a verifiable artifact rather than the whole conversation.
+- Separate the read, write, verify, and release permissions.
+- A failure or missing evidence is not substituted with the shape of a success.
+- Abbreviate the graph according to the task's risk and size, but never bypass a mandatory gate.
 
-### 8.2 표준 DAG
+### 8.2 Standard DAG
 
 ```text
 intake
@@ -434,343 +446,347 @@ risk-and-scope
                  human-gate              PR/complete
 ```
 
-### 8.3 Artifact 계약
+### 8.3 Artifact contracts
 
-저장소에는 JSON Schema 또는 동등한 portable schema를 둔다.
+The repository holds JSON Schema or an equivalent portable schema.
 
-- `TaskIntent`: 요청, 비목표, success criteria
-- `ChangeContext`: 관련 설계, module, symbol과 기존 test
-- `ImpactSet`: 변경 가능 경로, 영향 module과 risk tier
-- `TestPlan`: 먼저 실패해야 하는 test와 이후 검증 명령
-- `ChangeSummary`: 변경 파일, 공개 계약과 migration 영향
-- `VerificationResult`: 명령, exit code, duration과 artifact link
-- `ReviewResult`: correctness/security finding과 disposition
-- `RunScore`: 결과, scope 준수, 비용·시간과 flake 정보
+- `TaskIntent`: the request, the non-goals, and the success criteria
+- `ChangeContext`: the related design, modules, symbols, and existing tests
+- `ImpactSet`: the paths that may change, the affected modules, and the risk tier
+- `TestPlan`: the tests that must fail first and the verification commands that follow
+- `ChangeSummary`: the changed files, the public contract, and the migration impact
+- `VerificationResult`: the command, the exit code, the duration, and the artifact link
+- `ReviewResult`: correctness and security findings and their disposition
+- `RunScore`: the outcome, scope compliance, cost and time, and flake information
 
-run별 artifact 원본은 session/local 또는 CI artifact storage에 두고 커밋하지 않는다.
-schema, fixture와 익명화된 regression baseline만 저장소에 둔다.
+The raw per-run artifacts live in session/local or in CI artifact storage and are not committed.
+Only the schema, the fixtures, and the anonymized regression baseline live in the repository.
 
-### 8.4 위험 기반 경로
+### 8.4 Risk-based paths
 
-| 등급 | 예 | 필수 경로 |
+| Tier | Example | Mandatory path |
 | --- | --- | --- |
-| 낮음 | 오탈자, 링크, 비동작 문서 | context, targeted check, review |
-| 보통 | 내부 구현, test, adapter 변경 | 전체 표준 DAG |
-| 높음 | 공개 API, engine state, session format, dependency | 전체 DAG + compatibility + human gate |
-| 치명 | release, credential, workflow 권한, ARC/infra | 자동 실행 금지 또는 별도 승인 workflow |
+| Low | Typos, links, non-behavioral documentation | context, targeted check, review |
+| Moderate | Internal implementation, tests, adapter changes | The full standard DAG |
+| High | Public API, engine state, session format, dependencies | The full DAG plus compatibility plus a human gate |
+| Critical | Release, credentials, workflow permissions, ARC/infra | Automatic execution forbidden, or a separate approval workflow |
 
-POM 변경 자체를 모두 치명으로 보지 않는다. dependency 범위, build plugin 실행 권한,
-release credential 접근 여부로 위험을 분류한다.
+A POM change is not treated as critical in itself. The risk is classified by the dependency scope,
+the execution permissions of a build plugin, and whether release credentials are accessed.
 
-### 8.5 권한과 실패 복구
+### 8.5 Permissions and failure recovery
 
-- context/impact/review node는 read-only다.
-- implement node는 `ImpactSet` 범위만 수정한다.
-- verify node는 source를 수정하지 않는다.
-- commit, push, release와 infrastructure 변경은 별도 권한이며 기본 비활성화한다.
-- build 실패는 원인 evidence와 함께 implement로 한 번 돌아갈 수 있다.
-- 같은 실패를 반복하거나 scope가 커지면 중단하고 사람에게 escalation한다.
-- resume은 대화 메모리가 아니라 검증된 artifact와 repository state를 기준으로 한다.
+- The context, impact, and review nodes are read-only.
+- The implement node modifies only what is inside the `ImpactSet` scope.
+- The verify node does not modify source.
+- Commit, push, release, and infrastructure changes are a separate permission and are disabled by default.
+- A build failure may return to implement once, together with the evidence of its cause.
+- If the same failure repeats or the scope grows, stop and escalate to a person.
+- Resume is based on the verified artifacts and the repository state, not on conversation memory.
 
-## 9. 하네스 회귀 전략
+## 9. Harness regression strategy
 
-### 9.1 세 계층
+### 9.1 Three layers
 
-#### 계층 A: 결정적 저장소 fixture
+#### Layer A: deterministic repository fixtures
 
-LLM과 외부 network 없이 동작한다.
+These work without an LLM and without an external network.
 
-- 아키텍처 위반 탐지
-- 잘못된 module 영향 분석
-- 금지 파일 수정 차단
-- verification evidence 누락 탐지
-- deterministic fake 기반 MAF scenario
+- detecting architecture violations
+- incorrect module impact analysis
+- blocking modification of forbidden files
+- detecting missing verification evidence
+- MAF scenarios based on deterministic fakes
 
-모든 PR에서 실행하며 재시도하지 않는다.
+They run on every PR and are not retried.
 
-#### 계층 B: pin된 upstream conformance
+#### Layer B: pinned upstream conformance
 
-MAF snapshot의 invariant를 Java fixture와 adapter에 적용한다. upstream pin, Java harness
-version과 vector provenance를 결과에 포함한다.
+The invariants of the MAF snapshot are applied to the Java fixtures and adapters. The upstream pin,
+the Java harness version, and the vector provenance are included in the results.
 
-engine, API, provider, session 또는 conformance vector 변경 시 실행한다.
+This runs when the engine, the API, a provider, a session, or a conformance vector changes.
 
-#### 계층 C: agent instruction과 tool-use eval
+#### Layer C: agent instruction and tool-use eval
 
-작은 임시 저장소 fixture에서 실제 agent가 다음 작업을 수행하게 한다.
+In a small temporary repository fixture, a real agent is asked to perform the following tasks.
 
-- framework type을 core에 추가하라는 잘못된 요청 거절
-- engine bug 재현 test와 수정
-- provider adapter 추가 시 contract suite 재사용
-- POM dependency 변경의 영향 및 검증 선택
-- 실패하는 CI의 원인 분리
-- upstream delta를 구현 변경 없이 보고
+- rejecting an incorrect request to add a framework type to the core
+- a reproduction test and a fix for an engine bug
+- reusing the contract suite when a provider adapter is added
+- selecting the impact and the verification of a POM dependency change
+- isolating the cause of a failing CI run
+- reporting an upstream delta without an implementation change
 
-외부 agent 호출은 trusted trigger, schedule 또는 수동 dispatch에서만 실행한다. fork PR은
-credential이 필요한 eval을 실행하지 않는다.
+An external agent invocation runs only on a trusted trigger, on a schedule, or by manual dispatch. A
+fork PR does not run an eval that needs credentials.
 
-### 9.2 grader
+### 9.2 Graders
 
-hard gate는 가능한 한 결정적이어야 한다.
+A hard gate must be as deterministic as possible.
 
-- build/test exit code
-- 수정 파일이 `ImpactSet` 안에 있는지
-- 금지 dependency 또는 tool 사용이 없는지
-- 요구된 test와 evidence가 존재하는지
-- 공개 동작과 MAF invariant가 맞는지
-- secret 또는 민감 prompt가 artifact에 없는지
+- the build and test exit codes
+- whether the modified files are inside the `ImpactSet`
+- whether a forbidden dependency or tool was used
+- whether the required tests and evidence exist
+- whether the public behavior and the MAF invariants hold
+- whether a secret or a sensitive prompt is absent from the artifacts
 
-LLM grader는 설명 품질처럼 결정적으로 검증하기 어려운 항목의 보조 신호로만 사용한다.
-LLM grader 단독으로 merge를 차단하지 않는다.
+An LLM grader is used only as an auxiliary signal for items that are hard to verify
+deterministically, such as explanation quality. An LLM grader alone does not block a merge.
 
-정확한 자연어, 완전 동일한 diff 또는 exact tool-call sequence는 hard gate로 사용하지 않는다.
-허용 도구 집합, 위험한 도구의 부재와 검증 결과를 평가한다.
+Exact natural language, a fully identical diff, or an exact tool-call sequence is not used as a hard gate.
+The permitted tool set, the absence of dangerous tools, and the verification results are evaluated.
 
-### 9.3 baseline과 차등 평가
+### 9.3 Baseline and differential evaluation
 
-baseline key는 다음을 포함한다.
+The baseline key contains the following.
 
-- `AGENTS.md` hash
-- harness schema/version
-- eval fixture version
-- model/provider/version
-- tool runtime version
-- JDK/Maven version
-- upstream MAF SHA
+- the `AGENTS.md` hash
+- the harness schema and version
+- the eval fixture version
+- the model, provider, and version
+- the tool runtime version
+- the JDK and Maven version
+- the upstream MAF SHA
 
-지시문, graph, grader, model 또는 toolchain 변경은 같은 fixture를 old/new 구성으로 실행해
-차이를 비교한다. 비교 지표는 pass rate뿐 아니라 scope violation, unsafe action, duration,
-turn/tool count와 비용을 포함한다.
+A change to the instructions, the graph, a grader, the model, or the toolchain runs the same fixture
+in the old and new configurations and compares the difference. The comparison metrics include not
+only the pass rate but also scope violations, unsafe actions, duration, turn and tool counts, and
+cost.
 
-### 9.4 flake와 canary
+### 9.4 Flakes and canaries
 
-- deterministic suite의 허용 flake는 0이다.
-- live agent/provider suite는 동일 조건을 여러 번 실행하고 Wilson interval 또는 최소
-  표본 기반 pass-rate를 기록한다.
-- 실패를 retry로 숨기지 않고 first-attempt와 eventual-pass를 분리한다.
-- 새 model, instruction 또는 graph는 대표 suite canary 후 전체 suite로 확장한다.
-- 기존 안정 suite의 pass rate 하락, scope violation 발생 또는 비용의 큰 증가는 승격을
-  막는다.
-- 개인별 절대 비용 숫자는 커밋하지 않고 CI budget policy와 추세 기준을 분리한다.
+- The permitted flake rate of a deterministic suite is zero.
+- A live agent or provider suite runs the same conditions several times and records a Wilson interval or a
+  minimum-sample pass rate.
+- Failures are not hidden by retries; first-attempt and eventual-pass results are kept separate.
+- A new model, instruction set, or graph is canaried on a representative suite before it is expanded to the full suite.
+- A drop in the pass rate of an existing stable suite, the appearance of a scope violation, or a large increase in cost
+  blocks promotion.
+- Per-person absolute cost figures are not committed, and the CI budget policy is kept separate from the trend baseline.
 
-### 9.5 scorecard와 보존
+### 9.5 Scorecard and retention
 
-각 run은 다음 최소 지표를 남긴다.
+Each run leaves at least the following metrics.
 
-- suite와 fixture version
-- pass/fail 및 grader별 결과
-- first-attempt와 retry 결과
-- changed file/module
-- forbidden-action count
-- duration, turn/tool count와 선택적 비용
-- model/toolchain/upstream identity
-- redacted trace 위치
+- the suite and fixture version
+- the pass/fail outcome and the per-grader results
+- the first-attempt and the retry results
+- the changed files and modules
+- the forbidden-action count
+- the duration, the turn and tool counts, and optionally the cost
+- the model, toolchain, and upstream identity
+- the location of the redacted trace
 
-trace에는 source diff와 credential이 포함될 수 있으므로 접근 권한, 보존 기간과 redaction을
-적용한다. 공개 artifact에는 prompt/model response 원문을 기본 포함하지 않는다.
+A trace can contain a source diff and credentials, so access permissions, a retention period, and
+redaction are applied. A public artifact does not contain raw prompts or model responses by default.
 
-## 10. GitHub Actions와 AKS ARC
+## 10. GitHub Actions and AKS ARC
 
-### 10.1 workflow 구성
+### 10.1 Workflow composition
 
-저장소에는 다음 workflow entry point를 둔다.
+The repository holds the following workflow entry points.
 
-| Workflow | Trigger | 역할 |
+| Workflow | Trigger | Role |
 | --- | --- | --- |
 | `ci.yml` | pull request, push | fast/default verify |
-| `compatibility.yml` | 영향 PR, main, schedule, dispatch | JDK/framework matrix |
+| `compatibility.yml` | Affected PRs, main, schedule, dispatch | The JDK and framework matrix |
 | `security.yml` | PR, main, schedule | dependency review, CodeQL, SBOM scan |
-| `harness-regression.yml` | harness/instruction 변경, schedule | 계층 A-C eval |
-| `upstream-watch.yml` | schedule, dispatch | pin 대비 MAF delta 보고 |
-| `release.yml` | tag 또는 protected dispatch | full gate, publish, attest |
+| `harness-regression.yml` | Harness/instruction changes, schedule | Layer A through C eval |
+| `upstream-watch.yml` | schedule, dispatch | Reporting the MAF delta against the pin |
+| `release.yml` | A tag or a protected dispatch | Full gate, publish, attest |
 
-중복 step은 repository composite action 또는 SHA로 pin된 reusable workflow로 추출한다.
-reusable workflow를 외부 저장소에서 호출하면 commit SHA를 고정한다.
+Duplicated steps are extracted into a repository composite action or into a reusable workflow pinned
+by SHA. When a reusable workflow is called from an external repository, its commit SHA is pinned.
 
-### 10.2 runner 분리
+### 10.2 Runner separation
 
 #### `arc-java-build`
 
-- 일반 Maven build와 non-container test
-- ephemeral, non-privileged
-- read-only root filesystem과 최소 service account 검토
-- internal service 접근 기본 차단
-- `minRunners: 0`에서 시작하고 queue latency로 조정
+- ordinary Maven builds and non-container tests
+- ephemeral and non-privileged
+- review of a read-only root filesystem and a minimal service account
+- internal service access blocked by default
+- starting at `minRunners: 0` and tuned by queue latency
 
 #### `arc-java-dind`
 
-- Testcontainers와 불가피한 image build만 실행
-- 별도 namespace, runner group과 node pool
-- privileged Pod Security 범위 최소화
-- metadata endpoint와 Kubernetes API 접근 차단
-- trusted branch/approved PR만 허용
+- running only Testcontainers and unavoidable image builds
+- a separate namespace, runner group, and node pool
+- the privileged Pod Security scope minimized
+- the metadata endpoint and Kubernetes API access blocked
+- only trusted branches and approved PRs permitted
 - `minRunners: 0`
 
 #### `arc-java-release`
 
-- protected environment와 repository만 접근
-- 일반 PR job을 받지 않음
-- OIDC와 short-lived credential만 사용
-- artifact publish 이외의 cluster 권한 없음
+- access to the protected environment and repository only
+- accepts no ordinary PR job
+- uses OIDC and short-lived credentials only
+- no cluster permission beyond artifact publishing
 
-현재 제품은 Java library이므로 deploy runner를 미리 만들 필요가 없다. 실제 Azure 배포
-대상이 생길 때 별도 설계한다.
+The current product is a Java library, so a deploy runner does not need to be created in advance. It
+is designed separately when an actual Azure deployment target appears.
 
-### 10.3 fork와 신뢰 경계
+### 10.3 Forks and the trust boundary
 
-- 외부 fork code를 privileged 또는 internal-network ARC runner에서 실행하지 않는다.
-- 공개 저장소라면 fork PR의 최소 검증은 GitHub-hosted runner로 실행하거나 maintainer
-  승인 후 제한된 quarantine runner를 사용한다.
-- `pull_request_target`에서 PR head를 checkout하고 build하지 않는다.
-- low-trust job의 artifact와 cache를 trusted job에서 실행 파일로 사용하지 않는다.
-- agent eval과 live provider test는 fork PR에서 실행하지 않는다.
+- Do not run external fork code on a privileged or internal-network ARC runner.
+- If the repository is public, the minimal verification of a fork PR runs on a GitHub-hosted runner, or a restricted
+  quarantine runner is used after maintainer approval.
+- Do not check out and build the PR head under `pull_request_target`.
+- Do not use an artifact or cache from a low-trust job as an executable in a trusted job.
+- Do not run agent evals and live provider tests on a fork PR.
 
-### 10.4 workflow 보안
+### 10.4 Workflow security
 
-- workflow-level `GITHUB_TOKEN`은 `contents: read`로 시작한다.
-- job에 필요한 permission만 승격한다.
-- 모든 action은 full commit SHA에 고정하고 Dependabot으로 갱신한다.
-- checkout credential persistence를 필요하지 않으면 비활성화한다.
-- Azure와 artifact attestation은 GitHub OIDC를 사용한다.
-- release는 GitHub Environment reviewer와 branch/tag 제한을 사용한다.
-- stale PR run은 concurrency group으로 취소하되 release run은 취소하지 않는다.
-- cache에는 credential, Maven settings secret 또는 build output을 저장하지 않는다.
+- The workflow-level `GITHUB_TOKEN` starts at `contents: read`.
+- Only the permissions a job needs are elevated.
+- Every action is pinned to a full commit SHA and updated by Dependabot.
+- Checkout credential persistence is disabled when it is not needed.
+- Azure access and artifact attestation use GitHub OIDC.
+- A release uses GitHub Environment reviewers and branch and tag restrictions.
+- A stale PR run is cancelled by a concurrency group, but a release run is not cancelled.
+- Credentials, Maven settings secrets, and build output are not stored in the cache.
 
-### 10.5 cache와 artifact
+### 10.5 Cache and artifacts
 
-- Maven dependency cache는 GitHub cache service를 사용한다.
-- cache key는 OS, JDK, root POM과 module POM hash를 포함한다.
-- framework compatibility job은 framework line을 key에 포함한다.
-- build artifact, test report, SBOM, mutation report와 scorecard는 retention을 구분한다.
-- release JAR와 SBOM은 provenance attestation을 생성한다.
-- 임시 runner pod 로그는 pod 삭제 전에 Azure Monitor 또는 동등 수집기로 전송한다.
+- The Maven dependency cache uses the GitHub cache service.
+- The cache key includes the OS, the JDK, and the hash of the root POM and the module POMs.
+- A framework compatibility job includes the framework line in the key.
+- Build artifacts, test reports, the SBOM, mutation reports, and scorecards have distinct retention.
+- Release JARs and the SBOM produce a provenance attestation.
+- Ephemeral runner pod logs are shipped to Azure Monitor or an equivalent collector before the pod is deleted.
 
-## 11. Graph engineering 운영 규칙
+## 11. Graph engineering operational rules
 
-그래프 최적화 목표는 node 수가 아니라 실패를 일찍, 싸고 설명 가능하게 발견하는 것이다.
+The goal of graph optimization is not the node count but discovering failures early, cheaply, and
+explainably.
 
-### 11.1 변경 영향 선택
+### 11.1 Change impact selection
 
-module dependency graph와 변경 경로로 검증을 선택한다.
+Verification is selected from the module dependency graph and the changed paths.
 
-- 문서만 변경: link/format/instruction 관련 검사
-- API 변경: 모든 downstream adapter compile, Revapi와 public contract
-- Engine 변경: 전체 golden scenario, property, mutation 대상
-- Provider 변경: provider contract와 공용 golden scenario
-- Session 변경: serialization, concurrency와 migration
-- Build/harness/instruction 변경: 전체 deterministic harness와 대표 live canary
+- documentation-only change: the link, format, and instruction related checks
+- API change: compilation of every downstream adapter, Revapi, and the public contract
+- engine change: all golden scenarios, property tests, and the mutation targets
+- provider change: the provider contract and the shared golden scenarios
+- session change: serialization, concurrency, and migration
+- build, harness, or instruction change: the full deterministic harness and a representative live canary
 
-path filter만으로 안전을 판단하지 않는다. root POM, BOM, public API와 shared testkit 변경은
-전체 downstream을 확장한다.
+Safety is not judged by a path filter alone. A change to the root POM, the BOM, the public API, or
+the shared testkit expands to the full downstream set.
 
-### 11.2 fan-out과 fan-in
+### 11.2 Fan-out and fan-in
 
-독립적인 build, static analysis와 conformance는 병렬 실행한다. fan-in은 모든 필수 결과가
-존재하고 성공해야 통과한다. `if: always()`는 report upload에는 사용할 수 있지만 실패한
-검증을 성공으로 바꾸는 데 사용하지 않는다.
+Independent build, static analysis, and conformance runs are executed in parallel. Fan-in passes
+only when every mandatory result exists and succeeded. `if: always()` may be used for report upload,
+but it is not used to turn a failed verification into a success.
 
-### 11.3 예산
+### 11.3 Budgets
 
-- PR: 빠른 feedback과 필수 correctness
-- main/nightly: broad matrix, mutation과 live conformance
-- release: full matrix, reproducibility, API compatibility와 supply chain
+- PR: fast feedback and mandatory correctness
+- main and nightly: the broad matrix, mutation, and live conformance
+- release: the full matrix, reproducibility, API compatibility, and the supply chain
 
-시간과 비용 예산을 넘기면 검사 삭제보다 change-impact selection, cache, test split과
-deterministic fake 비율을 먼저 개선한다.
+When the time and cost budget is exceeded, change-impact selection, caching, test splitting, and the
+proportion of deterministic fakes are improved before any check is deleted.
 
-## 12. 단계별 도입
+## 12. Staged adoption
 
-### 단계 0: 저장소와 계약
+### Stage 0: repository and contracts
 
-- Git 저장소 초기화 및 기본 branch/protection 준비
-- `AGENTS.md`, license, contribution와 security policy
-- Maven Wrapper, Java 17 baseline, root parent/BOM
-- formatter, Enforcer, reproducible build
-- CI의 non-privileged `arc-java-build` smoke test
+- initializing the Git repository and preparing the default branch and its protection
+- `AGENTS.md`, the license, and the contribution and security policies
+- the Maven Wrapper, the Java 17 baseline, and the root parent and BOM
+- the formatter, Enforcer, and reproducible builds
+- a non-privileged `arc-java-build` smoke test in CI
 
-종료 조건은 로컬과 ARC에서 동일한 wrapper 명령이 재현되는 것이다.
+The exit condition is that the same wrapper command reproduces locally and on ARC.
 
-### 단계 1: 첫 vertical slice 품질
+### Stage 1: quality of the first vertical slice
 
-- API, engine과 testkit 최소 module
-- JUnit/AssertJ, deterministic fake와 upstream golden scenario 일부
-- ArchUnit 경계와 Spotless
-- PMD/SpotBugs는 report mode로 baseline 수집
-- JaCoCo report와 diff ratchet 기반선
+- the minimal API, engine, and testkit modules
+- JUnit/AssertJ, deterministic fakes, and part of the upstream golden scenarios
+- the ArchUnit boundaries and Spotless
+- PMD and SpotBugs collecting a baseline in report mode
+- the JaCoCo report and the diff ratchet baseline
 
-종료 조건은 일반 응답과 단일 tool loop가 Java 17·21·25에서 결정적으로 통과하는 것이다.
+The exit condition is that an ordinary response and the single tool loop pass deterministically on
+Java 17, 21, and 25.
 
-### 단계 2: contract와 matrix
+### Stage 2: contracts and the matrix
 
-- provider 및 session store contract suite
-- property tests와 streaming cancellation
-- Spring Boot/Quarkus/Jakarta EE/Micronaut integration skeleton은 실제 구현되는 순서에만 추가
-- 최소·현재 framework version matrix
-- PMD/SpotBugs의 신규 위반 차단
+- the provider and session store contract suites
+- property tests and streaming cancellation
+- the Spring Boot, Quarkus, Jakarta EE, and Micronaut integration skeletons, added only in the order they are actually implemented
+- the minimum and current framework version matrix
+- blocking new PMD and SpotBugs violations
 
-종료 조건은 core 변경이 모든 구현된 adapter에 대해 같은 public contract를 검증하는 것이다.
+The exit condition is that a core change verifies the same public contract against every implemented adapter.
 
-### 단계 3: compatibility와 agent harness
+### Stage 3: compatibility and the agent harness
 
-- 전체 초기 MAF conformance vector와 provenance
-- agent graph artifact schema와 deterministic eval fixture
-- `harness-regression` 및 `upstream-watch`
-- instruction baseline과 scorecard
+- the full initial set of MAF conformance vectors and their provenance
+- the agent graph artifact schema and the deterministic eval fixtures
+- `harness-regression` and `upstream-watch`
+- the instruction baseline and the scorecard
 
-종료 조건은 `AGENTS.md` 또는 graph 변경의 안전성·성공률 차이를 재현할 수 있는 것이다.
+The exit condition is being able to reproduce the safety and success-rate difference of an
+`AGENTS.md` or graph change.
 
-### 단계 4: 공급망과 release
+### Stage 4: supply chain and release
 
-- Revapi와 SemVer policy
-- CycloneDX SBOM, dependency review, CodeQL과 Scorecard
-- reproducible build 비교
-- protected release, OIDC, signing과 artifact attestation
-- engine 대상 PIT threshold
+- Revapi and the SemVer policy
+- the CycloneDX SBOM, dependency review, CodeQL, and Scorecard
+- reproducible build comparison
+- protected releases, OIDC, signing, and artifact attestation
+- the PIT threshold for the engine
 
-종료 조건은 release artifact의 source, dependency, API와 build provenance를 확인할 수 있는
-것이다.
+The exit condition is being able to confirm the source, dependencies, API, and build provenance of a
+release artifact.
 
-### 단계 5: 최적화
+### Stage 5: optimization
 
-- 실제 duration과 queue latency 기반 job split
-- ARC node pool과 cache tuning
-- Error Prone/NullAway pilot 결과에 따른 승격 결정
-- live agent eval canary와 flake budget 조정
-- 중앙 reusable workflow로 옮길 공통 부분 선별
+- job splitting based on actual duration and queue latency
+- ARC node pool and cache tuning
+- the promotion decision based on the Error Prone and NullAway pilot results
+- live agent eval canaries and flake budget tuning
+- selecting the common parts to move into central reusable workflows
 
-## 13. 성공 기준
+## 13. Success criteria
 
-이 하네스는 다음을 증명할 수 있어야 한다.
+This harness must be able to demonstrate the following.
 
-1. core에 framework dependency를 추가한 test change가 PR에서 실패한다.
-2. 같은 agent scenario가 standalone과 구현된 host adapter에서 같은 invariant를 만족한다.
-3. pin된 MAF conformance 변경은 자동 구현되지 않고 review 가능한 delta로 나타난다.
-4. instruction 변경 전후 agent eval의 성공, 범위 위반, 비용과 시간을 비교할 수 있다.
-5. 일반 PR은 privileged runner나 Azure credential 없이 검증된다.
-6. release artifact는 API compatibility, SBOM, provenance와 full matrix 증거를 가진다.
-7. 모든 필수 CI 명령을 개발자가 로컬 Maven Wrapper로 재현할 수 있다.
+1. A test change that adds a framework dependency to the core fails on a PR.
+2. The same agent scenario satisfies the same invariants standalone and on an implemented host adapter.
+3. A change in the pinned MAF conformance is not implemented automatically but appears as a reviewable delta.
+4. The success, scope violations, cost, and time of an agent eval can be compared before and after an instruction change.
+5. An ordinary PR is verified without a privileged runner and without Azure credentials.
+6. A release artifact carries API compatibility, SBOM, provenance, and full matrix evidence.
+7. A developer can reproduce every mandatory CI command with the local Maven Wrapper.
 
-## 14. 명시적 비목표
+## 14. Explicit non-goals
 
-- 모든 framework adapter를 첫 단계에 빈 module로 생성
-- 모든 정적 분석 도구를 첫 PR부터 zero-warning hard gate로 적용
-- live LLM 결과를 unit test의 기준으로 사용
-- 특정 coding-agent 벤더의 SDK를 제품 build에 추가
-- agent가 release 또는 cluster 운영을 무승인 수행
-- application repo에서 ARC controller 또는 AKS 보안 정책을 관리
-- exact prompt text 또는 exact tool sequence를 장기 호환 계약으로 사용
+- creating every framework adapter as an empty module in the first stage
+- applying every static analysis tool as a zero-warning hard gate from the first PR
+- using a live LLM result as the baseline of a unit test
+- adding a particular coding-agent vendor's SDK to the product build
+- letting an agent perform a release or cluster operation without approval
+- managing the ARC controller or the AKS security policy from the application repository
+- using exact prompt text or an exact tool sequence as a long-term compatibility contract
 
-## 15. 참고 자료
+## 15. References
 
-### 프로젝트와 MAF
+### The project and MAF
 
-- [기초 설계](./foundation-design.md)
-- [저장소 upstream 기준](../upstream/README.md)
+- [Foundation design](./foundation-design.md)
+- [Repository upstream baseline](../upstream/README.md)
 - [MAF pinned RunTests.cs](https://raw.githubusercontent.com/microsoft/agent-framework/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/tests/AgentConformance.IntegrationTests/RunTests.cs)
 - [Microsoft Agent Framework workflows](https://learn.microsoft.com/en-us/agent-framework/workflows/)
 - [Microsoft Agent Framework repository](https://github.com/microsoft/agent-framework)
 
-### Java와 Maven
+### Java and Maven
 
 - [Java SE support roadmap](https://www.oracle.com/java/technologies/java-se-support-roadmap.html)
 - [Maven version history](https://maven.apache.org/docs/history.html)
@@ -791,7 +807,7 @@ deterministic fake 비율을 먼저 개선한다.
 - [Revapi](https://revapi.org/)
 - [CycloneDX Maven plugin](https://github.com/CycloneDX/cyclonedx-maven-plugin)
 
-### GitHub Actions와 ARC
+### GitHub Actions and ARC
 
 - [About Actions Runner Controller](https://docs.github.com/en/actions/concepts/runners/actions-runner-controller)
 - [Deploying runner scale sets](https://docs.github.com/en/actions/how-tos/manage-runners/use-actions-runner-controller/deploy-runner-scale-sets)
@@ -800,7 +816,7 @@ deterministic fake 비율을 먼저 개선한다.
 - [AKS Workload Identity](https://learn.microsoft.com/en-us/azure/aks/workload-identity-overview)
 - [Kubernetes Pod Security Admission](https://kubernetes.io/docs/concepts/security/pod-security-admission/)
 
-### Agent graph와 평가
+### Agent graph and evaluation
 
 - [Anthropic agent loop](https://platform.claude.com/docs/en/agent-sdk/agent-loop)
 - [Anthropic subagents](https://platform.claude.com/docs/en/agent-sdk/subagents)
