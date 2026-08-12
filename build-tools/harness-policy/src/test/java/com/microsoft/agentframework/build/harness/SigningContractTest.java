@@ -38,21 +38,9 @@ class SigningContractTest {
 
   @Test
   void everyPublishedArtifactCarriesADetachedSignature() {
-    Set<String> signedArtifacts = artifactsWithSignatures();
+    requireSignedPublishOutput();
 
-    if (signaturesAreRequired()) {
-      assertThat(signedArtifacts)
-          .withFailMessage(
-              "No signatures found under %s. This build requires them because"
-                  + " `agentframework.requireSignatures` is set, so signing did not attach to any"
-                  + " publication.",
-              publishedRepository())
-          .isNotEmpty();
-    } else {
-      Assumptions.assumeTrue(
-          !signedArtifacts.isEmpty(),
-          "Skipped: no signed publish output. Publish with SIGNING_KEY set to verify signing.");
-    }
+    Set<String> signedArtifacts = signatureTargets(".asc");
 
     for (String artifact : PUBLISHED_ARTIFACTS) {
       assertThat(signedArtifacts)
@@ -68,15 +56,9 @@ class SigningContractTest {
   void everyMainJarIsSignedRatherThanOnlyTheMetadata() {
     // A signature on the pom alone would satisfy a file count while leaving the jar unsigned, which
     // Central rejects. Assert on the artifact consumers download.
-    Set<String> signedJars = signatureTargets(".jar.asc");
+    requireSignedPublishOutput();
 
-    if (signaturesAreRequired()) {
-      assertThat(signedJars)
-          .withFailMessage("No signed jars under %s.", publishedRepository())
-          .isNotEmpty();
-    } else {
-      Assumptions.assumeTrue(!signedJars.isEmpty(), "Skipped: no signed publish output.");
-    }
+    Set<String> signedJars = signatureTargets(".jar.asc");
 
     for (String artifact : PUBLISHED_ARTIFACTS) {
       if (artifact.endsWith("-bom")) {
@@ -94,12 +76,12 @@ class SigningContractTest {
     // Publishing twice in one job leaves the earlier snapshot jars behind, unsigned. A check that
     // stops at "some signature exists" passes while an unsigned artifact sits in the repository, so
     // require every main jar to have its own.
-    List<Path> unsigned = mainJarsWithoutSignature();
+    //
+    // The presence check comes first: with no publish output at all this assertion has nothing to
+    // examine and would otherwise report success on an empty list.
+    requireSignedPublishOutput();
 
-    if (!signaturesAreRequired()) {
-      Assumptions.assumeTrue(
-          !signatureTargets(".jar.asc").isEmpty(), "Skipped: no signed publish output.");
-    }
+    List<Path> unsigned = mainJarsWithoutSignature();
 
     assertThat(unsigned)
         .withFailMessage(
@@ -107,6 +89,30 @@ class SigningContractTest {
                 + " unsigned artifact even when its siblings are signed.",
             unsigned)
         .isEmpty();
+  }
+
+  /**
+   * Fails when signatures are required but none were published, and skips when they are optional.
+   *
+   * <p>Every assertion in this class is vacuous without publish output, so each one calls this
+   * first. A test that inspects an empty directory must not report success.
+   */
+  private static void requireSignedPublishOutput() {
+    Set<String> signed = signatureTargets(".asc");
+
+    if (signaturesAreRequired()) {
+      assertThat(signed)
+          .withFailMessage(
+              "No signatures found under %s. This build requires them because"
+                  + " `agentframework.requireSignatures` is set, so signing did not attach to any"
+                  + " publication.",
+              publishedRepository())
+          .isNotEmpty();
+    } else {
+      Assumptions.assumeTrue(
+          !signed.isEmpty(),
+          "Skipped: no signed publish output. Publish with a signing key set to verify signing.");
+    }
   }
 
   private static List<Path> mainJarsWithoutSignature() {
@@ -130,10 +136,6 @@ class SigningContractTest {
 
   private static boolean signaturesAreRequired() {
     return Boolean.parseBoolean(System.getProperty("agentframework.requireSignatures", "false"));
-  }
-
-  private static Set<String> artifactsWithSignatures() {
-    return signatureTargets(".asc");
   }
 
   /** Returns the artifact directory names that own at least one signature with the given suffix. */
