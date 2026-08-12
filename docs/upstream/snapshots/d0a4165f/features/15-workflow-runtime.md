@@ -192,16 +192,16 @@
 3. **Pending request state transition**  
    When an executor requests external input, Python must show an `IN_PROGRESS_PENDING_REQUESTS` and then an `IDLE_WITH_PENDING_REQUESTS` status timeline, and the .NET resumed handle must return `RunStatus.PendingRequests`. ([Python pending request status test](https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/core/tests/workflow/test_workflow_states.py#L137-L149), [.NET PendingRequests after resume](https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/tests/Microsoft.Agents.AI.Workflows.UnitTests/CheckpointResumeTests.cs#L124-L138))
 
-4. **Executor failure ordering**  
+4. **executor failure ordering**  
    When there is a failing executor, Python must emit `executor_failed` before `failed`, and it must be framework origin. ([Python failure ordering test](https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/core/tests/workflow/test_workflow_states.py#L31-L61))
 
-5. **Fresh message while pending request**  
+5. **fresh message while pending request**  
    In Python a fresh message run is allowed with a warning while a pending request remains, but a later response to the old request can then be applied to moved-on state. This risk must be pinned by a test. ([Python overlap test](https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/core/tests/workflow/test_workflow.py#L113-L143))
 
 6. **Response port correlation protection**  
    In .NET, when the response's `PortId` differs from the port of the origin request it must throw. ([.NET correlation check](https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI.Workflows/InProc/InProcessRunnerContext.cs#L162-L173))
 
-7. **State persistence across executors**  
+7. **state persistence across executors**  
    .NET state must be maintained across supersteps regardless of checkpointing, and a validation executor must be able to read the value a writer executor wrote. ([.NET state persistence no checkpoint](https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/tests/Microsoft.Agents.AI.Workflows.UnitTests/InProcessStateTests.cs#L81-L110), [.NET state persistence checkpointed](https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/tests/Microsoft.Agents.AI.Workflows.UnitTests/InProcessStateTests.cs#L112-L143))
 
 8. **Separation of stream consumer cancellation and workflow cancellation**  
