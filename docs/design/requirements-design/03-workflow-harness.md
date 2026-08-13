@@ -23,8 +23,17 @@ workflow/agent-framework-workflow-processor
 workflow/agent-framework-workflow-orchestration
   sequential, concurrent, handoff, group chat, magentic
 
+workflow/agent-framework-workflow-functional-experimental
+  experimental functional steps, caching, signatures, interruption
+
+workflow/agent-framework-declarative-spi
+  typed HTTP/MCP/agent handler contracts
+
 workflow/agent-framework-workflow-declarative
-  optional safe declarative loading/generation
+  safe workflow schema/normalize/lowering pipeline
+
+workflow/agent-framework-agent-assets-declarative
+  separately versioned agent asset definitions
 
 integrations/agent-framework-harness
   harness builder, loop, todo/mode/approval providers
@@ -115,6 +124,13 @@ event taxonomy는 framework-owned closed hierarchy이지만 payload extension en
 user message가 reserved lifecycle event를 spoof할 수 없도록 source/discriminator를 runner가
 생성한다.
 
+executor runtime send도 runner-owned gate를 통한다.
+
+- missing trace context는 current workflow context에서 주입
+- executor가 reserved lifecycle event discriminator를 보내면 거부하거나 user event로
+  안전하게 치환하고 observability warning을 남김
+- framework lifecycle event는 runner만 생성
+
 실패 ordering:
 
 ```text
@@ -129,6 +145,8 @@ stream close와 run cancel은 별도다. subscription 해제가 durable workflow
 
 checkpoint envelope:
 
+- checkpoint id
+- previous/parent checkpoint id
 - workflow signature/schema version
 - superstep and event cursor
 - executor snapshots
@@ -144,14 +162,26 @@ restore:
 1. workflow signature 검증
 2. stale queued events 제거
 3. state/request registry 복원
-4. pending request 한 번 재발행
-5. 새 input 또는 response 적용
+4. supplied response를 request id + port id로 correlate하고 적용
+5. 아직 pending인 request가 있으면 새 input을 거부하고 request만 한 번 재발행
+6. pending request가 없을 때만 새 input 적용
 
 callable은 symbolic name만 저장하고 `WorkflowRestoreOptions`의 immutable registry에 재바인딩한다.
 global registry와 silent no-op fallback은 없다.
 
-외부 response는 request id와 port id를 함께 검증한다. approval은 checkpoint의
-`originalRequest`를 진실 원천으로 사용한다.
+외부 response는 request id와 port id를 checkpoint pending entry와 함께 검증한다. approval
+실행 인자는 response payload의 immutable `originalRequest`만 진실 원천으로 사용하며 mutable
+checkpoint copy의 arguments를 실행하지 않는다.
+
+### 6.1 File checkpoint store
+
+`FileCheckpointStore` contract:
+
+- configured root 밖 path와 symlink/real-path escape 거부
+- temp file write + atomic move/replace
+- stable checkpoint id/index ordering
+- allowlisted codec registry만 사용하고 Java native serialization/class-name loading 금지
+- decode corruption과 workflow signature/schema mismatch를 구분
 
 ## 7. Composition
 
@@ -159,8 +189,10 @@ global registry와 silent no-op fallback은 없다.
 
 subworkflow는 inheritance보다 composition으로 실행한다.
 
-- parent가 child definition/run lifecycle을 소유
-- child output을 parent message로 변환
+- 각 child binding의 `WorkflowHostExecutor`가 ownership token, qualified response port,
+  child run/checkpoint lifecycle을 소유하고 parent는 binding을 composition
+- `SubworkflowBindingOptions`가 child final-output projection, intermediate-output propagation,
+  pending-request propagation을 각각 명시
 - checkpoint signature에 child signature 포함
 
 ### 7.2 Workflow as Agent
@@ -171,7 +203,16 @@ subworkflow는 inheritance보다 composition으로 실행한다.
 - agent run/stream contract로 events/output projection
 - continuation state를 session codec로 보존
 
-### 7.3 Orchestration
+### 7.3 Functional workflow
+
+`agent-framework-workflow-functional-experimental`이 별도 stability surface를 소유한다.
+
+- `FunctionalWorkflowBuilder`, typed `Step<I,O>`, immutable step signature
+- step result cache는 injected cache port와 signature를 함께 사용
+- interruption/pending request는 core `WorkflowRun` semantics로 lowering
+- experimental API가 graph/runtime core의 public compatibility를 약화시키지 않음
+
+### 7.4 Orchestration
 
 pattern builder가 공통 participant/output helper를 사용한다.
 
@@ -184,13 +225,19 @@ pattern builder가 공통 participant/output helper를 사용한다.
 participant source는 instance/factory variants를 public union으로 늘리지 않고 resolver adapter로
 통일한다.
 
-### 7.4 Declarative
+### 7.5 Declarative
 
-optional module이다.
+세 module 경계를 가진 optional surface다.
 
-- safe type/handler registry
+- `agent-framework-declarative-spi`: typed HTTP/MCP/agent handler와 handler id
+- `agent-framework-workflow-declarative`: schema AST → normalized model → graph lowering
+- `agent-framework-agent-assets-declarative`: agent/model/tool asset definitions; 별도 stability
+- safe instance-scoped type/handler registry
 - no arbitrary class loading
 - generated/explicit binding
+- build-time processor가 referenced handler 존재를 검증
+- state path traversal 차단과 Env allowlist
+- MCP secret redaction과 approval `originalRequest` 재실행
 - declarative document가 filesystem/network/code execution capability를 암묵 획득하지 않음
 
 ## 8. Harness
@@ -217,7 +264,8 @@ harness loop는 core model/tool loop와 별도다.
 - each iteration gets fresh run context
 - pending approval에서 즉시 정지
 - predicate가 continuation을 결정
-- iteration/approval budget 공유
+- outer harness iteration cap은 독립적으로 계산
+- approval re-entry는 core tool/request invocation budget을 공유
 
 ### 8.2 Providers
 
@@ -256,6 +304,7 @@ denylist는 security boundary가 아니라 guardrail이다. host OS/container po
 ### Runtime
 
 - superstep event order
+- executor send trace injection and reserved-event spoof rejection
 - state conflict and discard on failure
 - cancellation vs stream unsubscribe
 - executor failure ordering
@@ -263,17 +312,21 @@ denylist는 security boundary가 아니라 guardrail이다. host OS/container po
 ### Checkpoint/HITL
 
 - signature mismatch
+- checkpoint identity and parent lineage
 - stale event drain
 - latest checkpoint deterministic sort
-- pending request de-duplication
+- supplied response applied before remaining request re-publication
 - dual-key response validation
-- approval original request restoration
+- approval response `originalRequest` as execution truth source
+- child binding host-executor ownership
 - malicious type/path rejection
+- file root confinement, atomic replace, restricted decode
 
 ### Harness/orchestration
 
 - conservative defaults
 - approval pause and budget
+- independent harness iteration cap and shared core approval budget
 - provider session isolation
 - pattern-specific builder validation
 - background `LOST`, skill/file/shell boundaries

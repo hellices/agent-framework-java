@@ -134,9 +134,10 @@ Spring AI는 필수 의존성이 아니다. 코어 계약이 안정된 뒤 다�
 Spring AI conversation ID는 session의 내부 metadata일 뿐 권한 경계나 외부 식별자로
 사용하지 않는다.
 
-Session 저장소 구현은 낙관적 동시성 제어, tenant 및 사용자 소유권, 만료와 직렬화 버전을
-다룰 수 있어야 한다. 저장 기술과 트랜잭션은 호스트 및 infrastructure adapter가
-결정한다.
+Session 저장소 구현은 자신의 concurrency semantics, tenant 및 사용자 소유권, 만료와 직렬화
+버전을 명시해야 한다. 파일 저장소는 atomic replace + last-writer-wins를 유지하고, database
+저장소는 capability로 optimistic compare-and-save를 제공할 수 있다. 저장 기술과 트랜잭션은
+호스트 및 infrastructure adapter가 결정한다.
 
 ### 4.5 관찰성
 

@@ -265,8 +265,9 @@ constructor로 사용해야 한다.
 
 **판단.** .NET의 별도 host seam 구조를 취하되 특정 Java container를 표준으로 만들지 않는다.
 Spring Boot는 auto-configuration/starter, Jakarta EE는 CDI producer/portable extension,
-Quarkus는 runtime bean을 기본 패턴으로 쓴다. Quarkus deployment artifact는 실제 build-time
-augmentation이나 native-image metadata 생성이 필요할 때만 추가한다.
+Quarkus는 first-class extension 관습에 맞춰 stable runtime과 deployment artifact를 함께
+제공한다. runtime artifact가 extension descriptor와 consumer API를 소유하고 deployment는
+build steps와 native/build-time integration을 소유한다.
 
 **수용 기준**
 
@@ -276,6 +277,8 @@ augmentation이나 native-image metadata 생성이 필요할 때만 추가한다
   transaction lifecycle을 core로 넘겨주지 않는다.
 - Reactor와 Mutiny 타입은 adapter에서 `Flow.Publisher` 또는 동등한 core streaming port로
   변환되고 core API에 노출되지 않는다.
+- Quarkus runtime/deployment sibling과 extension descriptor가 첫 릴리스부터 존재해 CLI와
+  platform tooling에서 extension으로 인식된다.
 
 **근거** [20 hosting](../upstream/snapshots/d0a4165f/features/20-hosting.md),
 [22 a2a](../upstream/snapshots/d0a4165f/features/22-a2a.md),
@@ -476,7 +479,9 @@ augmentation이나 native-image metadata 생성이 필요할 때만 추가한다
 
 ## HOST-020 A2A 호스트는 message·task·artifact 수명주기를 구분한다
 
-**요구사항.** A2A 호스트는 immediate message, in-progress task, artifact updates를 서로 다른 수명주기로 표면화해야 한다.
+**요구사항.** A2A 호스트는 immediate message, in-progress task, artifact updates를 서로 다른
+수명주기로 표면화하고 protocol/local cancellation을 terminal `CANCELED` task state로 보존해야
+한다.
 
 **원본 비교**
 
@@ -489,6 +494,8 @@ augmentation이나 native-image metadata 생성이 필요할 때만 추가한다
 
 - 즉시 완료 응답은 message surface로 끝낼 수 있고 진행 중 작업은 task state와 continuation 정보를 노출한다.
 - 같은 논리 응답의 streaming chunk는 stable artifact id 아래 append 의미를 유지한다.
+- A2A cancel request와 local cancellation은 ordinary failure가 아니라 task `CANCELED`로 끝난다.
+- `CANCELED` terminal state 뒤에는 새 event나 artifact update를 발행하지 않는다.
 
 **근거** [22 a2a](../upstream/snapshots/d0a4165f/features/22-a2a.md)
 
@@ -689,7 +696,7 @@ augmentation이나 native-image metadata 생성이 필요할 때만 추가한다
 
 | 주제 | 소유 문서 |
 | --- | --- |
-| Agent와 ChatClient의 실행 계약 | [01 에이전트 실행과 모델 호출](01-agent-execution.md) |
+| Agent와 ModelClient의 실행 계약 | [01 에이전트 실행과 모델 호출](01-agent-execution.md) |
 | 세션 직렬화 형식과 저장소 내부 구조 | [06 세션과 대화 상태](06-sessions.md) |
 | 워크플로 그래프와 체크포인트 의미 | [09 워크플로와 오케스트레이션](09-workflows.md) |
 | 관찰성, 오류 taxonomy, 패키징 정책 | [11 운영 품질](11-operations.md) |

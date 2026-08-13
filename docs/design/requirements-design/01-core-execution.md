@@ -18,36 +18,37 @@ session persistence와 interceptor pipeline은
 ### 2.1 API
 
 ```text
-com.microsoft.agentframework.api.agent
+io.github.hellices.agentframework.api.agent
   Agent, AgentId, AgentRunRequest, AgentRunOptions, AgentResponse, AgentResponseUpdate
   AgentFactory, AgentBuilder, AgentRun, AgentStreamingRun, CancellationSignal
 
-com.microsoft.agentframework.api.message
+io.github.hellices.agentframework.api.message
   Message, Role, Content, TextContent, MediaContent, ToolCallContent, ToolResultContent
   ProviderExtensionContent, Usage, FinishReason, MessageAttribution
 
-com.microsoft.agentframework.api.tool
+io.github.hellices.agentframework.api.tool
   Tools, Tool, ToolSet, ToolDefinition, ToolHandler, ToolArguments, ToolResult, ToolMode
   ToolExecutionOptions, ToolApprovalRequest, ToolApprovalResponse
 
-com.microsoft.agentframework.api.structured
+io.github.hellices.agentframework.api.structured
   StructuredOutputRequest<T>, StructuredType<T>, StructuredValue<T>
   JsonSchema, StructuredOutputException
 
-com.microsoft.agentframework.spi.model
-  ChatClient, ChatRequest, ChatResponse, ChatResponseUpdate
+io.github.hellices.agentframework.spi.model
+  ModelClient, ModelRequest, ModelResponse, ModelResponseUpdate
   ModelCatalog, ModelCapability<T>, ModelOptions
 
-com.microsoft.agentframework.spi.tool
+io.github.hellices.agentframework.spi.tool
   ToolSchemaGenerator, ToolArgumentValidator, ToolResultMapper, ExecutionStrategy
 ```
 
-`ChatClient`는 공급자 SDK 타입을 노출하지 않는다. `ToolHandler`는 모델이 만든 JSON-safe
+`ModelClient`는 공급자 SDK 타입을 노출하지 않는다. Spring AI `ChatClient`와 simple name이
+충돌하지 않도록 이름을 분리한다. `ToolHandler`는 모델이 만든 JSON-safe
 arguments와 `ToolContext`를 별도 인자로 받으며, context가 schema에 들어가지 않는다.
 
 `ModelCatalog`는 host assembly가 만드는 instance-scoped immutable model index다.
 
-- stable model name → `ChatClient`
+- stable model name → `ModelClient`
 - optional default model name
 - duplicate name rejection
 - no static/global discovery
@@ -55,20 +56,20 @@ arguments와 `ToolContext`를 별도 인자로 받으며, context가 schema에 �
 ### 2.2 Engine
 
 ```text
-com.microsoft.agentframework.engine
+io.github.hellices.agentframework.engine
   AgentEngine, AgentEngineBuilder
 
-com.microsoft.agentframework.engine.internal.run
+io.github.hellices.agentframework.engine.internal.run
   RunStateMachine, RunState, RunFinalizer
 
-com.microsoft.agentframework.engine.internal.model
+io.github.hellices.agentframework.engine.internal.model
   ModelCallCoordinator, OptionsMerger, ResponseCoalescer
 
-com.microsoft.agentframework.engine.internal.tool
+io.github.hellices.agentframework.engine.internal.tool
   ToolLoop, ToolBatchPlanner, ToolInvocationCoordinator
   ToolBudget, ApprovalCoordinator, ToolResultNormalizer
 
-com.microsoft.agentframework.engine.internal.structured
+io.github.hellices.agentframework.engine.internal.structured
   StructuredOutputCoordinator, SchemaWrapper, StructuredValueParser
 ```
 
@@ -85,9 +86,9 @@ Agent.run(request)            -> AgentRun(final completion + cancel)
 Agent.runStreaming(request)   -> AgentStreamingRun(updates + final completion + cancel)
 ```
 
-정확한 completion/stream 타입은 async ADR에서 결정한다. 기본 후보는
-`CompletionStage<AgentResponse>`와 `Flow.Publisher<AgentResponseUpdate>`이며 둘 다 run handle
-안에 있다. 두 handle의 `cancel()`은 request에 전달된 동일 `CancellationSignal`을 발동한다.
+`AgentRun.response()`는 `CompletionStage<AgentResponse>`,
+`AgentStreamingRun.updates()`는 `Flow.Publisher<AgentResponseUpdate>`를 제공한다. 두 handle의
+`cancel()`은 request에 전달된 동일 `CancellationSignal`을 발동한다.
 
 `AgentRunRequest`는 non-null immutable value다.
 
@@ -108,7 +109,7 @@ framework adapter와 standalone assembly는 port 조립을 끝낸 factory를 제
 
 - `builder()`: catalog default model 사용; default가 없으면 actionable failure
 - `builder(name)`: named model resolve
-- `builder(ChatClient)`: explicit model
+- `builder(ModelClient)`: explicit model
 
 ### 3.2 AgentEngine
 
@@ -125,7 +126,7 @@ builder는 지원하지 않는 interceptor seam, 누락된 mandatory port, 상�
 시점에 거부한다.
 
 engine은 특정 model에 bind되지 않는다. `AgentFactory`가 `ModelCatalog`에서 model을 선택해
-immutable Agent definition에 `ChatClient`를 결합하고, engine은 그 definition으로 run을
+immutable Agent definition에 `ModelClient`를 결합하고, engine은 그 definition으로 run을
 실행한다. run-level model override도 같은 public port를 사용한다.
 
 ### 3.3 Tool facade
@@ -138,10 +139,13 @@ tool collection을 가진 portable aggregate이며 MCP discovery와 annotation p
 AgentBuilder.tools(Tool...)
 AgentBuilder.tools(ToolSet...)
 AgentBuilder.tools(Collection<? extends Tool>)
+AgentBuilder.declaredTools(ToolDefinition...)
 ```
 
 각 overload는 이름 충돌을 검증하고 build 결과에 immutable snapshot을 저장한다. `ToolSet`을
 붙이는 것은 명시적이며 DI container나 classpath의 모든 tool을 자동 수집하지 않는다.
+`declaredTools`는 model에 노출하지만 local handler를 등록하지 않으며 core가 가짜 tool result를
+만들지 않는다.
 
 ### 3.3 Values
 
@@ -159,14 +163,24 @@ JSON-safe extension value만 본다.
 VALIDATE
   -> LOAD_SESSION
   -> BUILD_CONTEXT
+  -> RESOLVE_PENDING_APPROVAL_QUEUE
+       -> while head response exists: EXECUTE_OR_REJECT_HEAD
+       -> APPEND_HEAD_TOOL_RESULT
+       -> if unanswered head remains: WAIT_APPROVAL and stop
+  -> PREPARE_MODEL_INPUT
+       -> DRAIN_INJECTED_MESSAGES
   -> CALL_MODEL
   -> APPEND_MODEL_UPDATES
-  -> PLAN_TOOL_BATCH
-       -> WAIT_APPROVAL
-       -> INVOKE_TOOLS
-       -> APPEND_TOOL_RESULTS
-       -> CALL_MODEL
-  -> PARSE_STRUCTURED_OUTPUT
+  -> OPTIONAL_PERSIST_SERVICE_HISTORY
+  -> DECIDE_NEXT_ACTION
+       ├─ actionable tools: PLAN_TOOL_BATCH
+       │    -> if approval required: WAIT_APPROVAL and stop
+       │    -> INVOKE_TOOLS
+       │    -> APPEND_TOOL_RESULTS
+       │    -> PREPARE_MODEL_INPUT
+       ├─ no tools + injected queue non-empty: PREPARE_MODEL_INPUT
+       └─ no tools + queue empty: ATTACH_LAZY_STRUCTURED_VALUE
+  -> ATTACH_LAZY_STRUCTURED_VALUE
   -> FINALIZE_STREAM
   -> PERSIST_SESSION
   -> COMPLETE
@@ -177,13 +191,19 @@ VALIDATE
 - session compatibility는 model call 전에 검증한다.
 - model update만으로 final response를 결정적으로 복원할 수 있다.
 - non-streaming과 streaming은 같은 tool loop와 merge rule을 사용한다.
+- inbound approval response는 첫 model call 전에 원 요청과 검증하고 실행 또는 거부한다.
+- approval queue는 head부터 한 건씩 처리하고 queue가 완전히 비기 전에는 model을 호출하지 않는다.
+- session injection queue는 매 model iteration 전에 drain하고, tool-free response 뒤에도 queue가
+  남아 있으면 finalization 대신 새 internal model iteration을 시작한다.
+- per-service-call history 옵션은 각 model response 뒤에 persist하며 final session persist와 구분한다.
+- structured target binding은 final response에 lazy value를 붙이고 accessor 호출 전에는 parse하지 않는다.
 - tool batch의 input order와 result order가 같다.
 - approval 대기 상태에서 승인되지 않은 tool은 실행되지 않는다.
 - cancellation 뒤 success finalization과 session commit이 발생하지 않는다.
 
 ## 5. Model port와 options
 
-`ChatClient`는 최소 공통 기능만 가진다. web search, code interpreter, provider continuation은
+`ModelClient`는 최소 공통 기능만 가진다. web search, code interpreter, provider continuation은
 typed `ModelCapability<T>` 또는 adapter-specific API로 노출한다.
 
 `ModelOptions`는 typed immutable properties를 가진다.
@@ -225,6 +245,18 @@ HTTP disconnect / Future.cancel / Subscription.cancel / Thread.interrupt
 `AgentStreamingRun`은 같은 control surface와 `updates` subscription을 추가한다. 두 handle의
 cancel은 같은 request cancellation signal을 발동한다.
 
+`AgentStreamingRun<T>`는 raw publisher만 노출하지 않고 lifecycle-preserving transform을
+제공한다.
+
+```text
+updates(): Flow.Publisher<T>
+mapUpdates(Function<T,R>): AgentStreamingRun<R>
+flatMapUpdates(Function<T,Flow.Publisher<R>>): AgentStreamingRun<R>
+```
+
+변환된 run은 원본과 같은 final response completion, finalizer, result hook, cleanup hook,
+cancellation signal을 공유한다. wrapper를 여러 번 겹쳐도 hook는 원래 순서로 한 번만 실행된다.
+
 updates consumer가 final response를 요청하지 않아도 stream completion이 run finalization을
 완료한다. 중도 취소는 부분 response를 durable final response로 commit하지 않는다.
 
@@ -264,6 +296,22 @@ ToolHandler.invoke(ToolArguments, ToolContext) -> completion of ToolResult
 - typed handler의 `null`: implementation error
 - void convenience adapter: empty-string text content 하나
 - arbitrary object: default JSON-safe mapper; explicit mapper overrides
+
+### 7.4 Tool options and merge
+
+tool policy merge 순서:
+
+```text
+engine safe defaults
+  < agent ToolExecutionOptions
+  < run ToolExecutionOptions
+  < host-enforced restrictions
+```
+
+run-level 값이 agent default를 덮고 미지정 값은 유지한다. tool collections는 stable name으로
+병합한다. 같은 layer의 duplicate name은 실패하고, run layer의 same-name tool은 agent default를
+명시적으로 대체해 최종 목록에는 한 번만 나타난다. executable tool과 declaration-only definition
+충돌도 같은 규칙으로 검증한다.
 
 ## 8. Tool loop
 
@@ -318,7 +366,11 @@ approval request/response는 core `Content`다.
 provider native structured output는 best effort다. 유효 JSON text가 있으면 native 지원 여부와
 관계없이 fallback parser가 동작한다.
 
-parse는 `StructuredValue<T>.value()` 접근 시점까지 지연할 수 있다. 오류를 구분한다.
+parser source는 final response에서 마지막 non-empty assistant message를 찾고 그 message의 text
+content chunks만 순서대로 직접 이어 붙인다. 이전 assistant message와 뒤따른 tool message는
+대상에서 제외한다.
+
+parse는 `StructuredValue<T>.value()` 접근 시점까지 반드시 지연한다. 오류를 구분한다.
 
 - empty or JSON `null`
 - malformed JSON
@@ -350,13 +402,20 @@ protocol binder는 이 category를 HTTP/A2A/MCP 오류로 변환하며 message s
 - message normalization, content projection, custom role round-trip
 - immutable option merge and provider option rejection
 - response update coalescing
+- streaming map/flat-map preserves finalizer/result/cleanup hooks
+- approval response executes/rejects before any resumed model call
+- injected messages drain between tool results and the next model call
+- per-service-call history persistence runs only when enabled
 - schema inference fail-closed
+- structured parser selects the last non-empty assistant text only
+- structured binding remains lazy until final-response accessor
 - result normalization including void/null distinction
 - budget and approval matching
+- run-level tool options win and same-name tools deduplicate deterministically
 
 ### Contract
 
-- `ChatClientContract`
+- `ModelClientContract`
 - `ToolHandlerContract`
 - `ToolSchemaGeneratorContract`
 - `ExecutionStrategyContract`

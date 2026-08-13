@@ -34,9 +34,9 @@ Java API에 그대로 옮기지 않는다.
 
 ## 4. 비동기, 스트리밍, 취소
 
-- 단일 비동기 결과의 기본 후보는 `CompletionStage<T>`, backpressure가 필요한 다중 결과의
-  기본 후보는 `Flow.Publisher<T>`다. 상세 설계가 동등한 custom type을 선택하려면 두 표준
-  타입과 의미 손실 없이 상호 변환되는 contract test를 제공한다.
+- 단일 비동기 결과는 `CompletionStage<T>`, backpressure가 필요한 다중 결과는
+  `Flow.Publisher<T>`를 framework-neutral public contract로 사용한다. Reactor와 Mutiny,
+  Jakarta REST 비동기 타입은 adapter에서 변환한다.
 - Reactor `Mono`/`Flux`, Mutiny `Uni`/`Multi`, Jakarta REST 비동기 타입은 adapter에서 변환한다.
 - 취소는 명시적 실행 신호와 run handle로 전달하며 `Future.cancel`, thread interruption,
   HTTP client abort를 adapter에서 연결한다. agent execution stream은 계약에 따라
@@ -70,8 +70,9 @@ Java API에 그대로 옮기지 않는다.
 
 - Spring Boot는 auto-configuration과 starter를 분리하고 conditional bean 및 customizer 패턴으로
   조립한다. Spring AI는 선택적 model/tool adapter이며 core tool loop를 대체하지 않는다.
-- Quarkus는 runtime artifact를 기본으로 사용하고, recorder·generated metadata·native-image hint처럼
-  실제 build-time augmentation이 필요한 증거가 있을 때만 deployment artifact를 추가한다.
+- Quarkus first-class extension은 stable runtime과 deployment artifact를 함께 제공한다.
+  runtime artifact는 extension descriptor를, deployment artifact는 필요한
+  recorder·generated metadata·native-image build steps를 소유한다.
 - Jakarta EE는 CDI producer/portable extension과 container-owned scope를 사용한다. core가 CDI
   container나 request context를 조회하지 않는다.
 - 모든 adapter는 공개 port만 구현하며 engine internal package를 참조하지 않는다. adapter 제거 후에도

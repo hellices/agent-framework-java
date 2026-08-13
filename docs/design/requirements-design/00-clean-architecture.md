@@ -32,7 +32,7 @@ Immutable domain values and deterministic state transitions
 - provider·storage·telemetry가 구현하는 public port
 - typed interceptor와 lifecycle contract
 
-port는 공개 API이지만 application 편의 API와 구분되는 `com.microsoft.agentframework.spi.*`
+port는 공개 API이지만 application 편의 API와 구분되는 `io.github.hellices.agentframework.spi.*`
 package에 둔다. 초기에는 별도 SPI artifact를 만들지 않는다. API와 SPI 릴리스 주기가 실제로
 분리된 증거가 생기기 전 module을 나누면 consumer dependency만 늘어난다.
 
@@ -51,11 +51,12 @@ package에 둔다. 초기에는 별도 SPI artifact를 만들지 않는다. API�
 - stream finalization
 
 public entry는 `AgentEngine`과 builder/factory에 한정한다. 상태 기계 구현은
-`com.microsoft.agentframework.engine.internal.*`에 두고 adapter가 참조하지 못하게 한다.
+`io.github.hellices.agentframework.engine.internal.*`에 두고 adapter가 참조하지 못하게 한다.
 
 ### 2.3 Optional application subsystems
 
-- `workflow/agent-framework-workflow-core`: immutable graph, run state machine, checkpoint port
+- `workflow/agent-framework-workflow-api`: immutable graph, event, run, checkpoint contracts
+- `workflow/agent-framework-workflow-core`: graph validation and run/superstep state machine
 - `integrations/agent-framework-harness`: `Agent`를 조립하는 optional facade
 - `hosting/agent-framework-hosting-core`: target/session/checkpoint coordination only
 
@@ -84,6 +85,7 @@ api                 <- engine
 api                 <- provider/integration adapters
 api + engine        <- plain-Java assembly and host auto-configuration
 api                 <- workflow-core
+workflow-api        <- workflow-core
 api + workflow API  <- workflow adapters
 api + hosting API   <- protocol adapters and binders
 testkit             <- api
@@ -119,15 +121,15 @@ samples             <- published products (never reverse)
 
 ### 4.3 Async and streaming
 
-기본 설계 후보:
+framework-neutral public async contract:
 
 - 단일 비동기 결과: `CompletionStage<T>`
 - backpressure stream: `Flow.Publisher<T>`
 - 장기 실행 제어: `RunHandle`
 - 취소: 명시 `CancellationSignal`과 standard cancellation bridge
 
-최종 타입은 첫 vertical slice ADR에서 확정한다. custom stream을 선택하더라도
-`CompletionStage`/`Flow.Publisher` adapter contract test가 필요하다.
+framework adapter는 이 타입을 Reactor/Mutiny/Jakarta 비동기 타입으로 양방향 변환하고
+cancellation/backpressure contract test를 제공한다.
 
 engine은 executor/scheduler를 만들지 않는다. 병렬 tool execution은 host가 주입한
 `ExecutionStrategy` 또는 port가 반환한 비동기 결과를 조합한다.
@@ -153,7 +155,7 @@ AgentEngine.builder()
   -> build()
 
 AgentFactory(engine, modelCatalog)
-  -> builder() / builder(modelName) / builder(ChatClient)
+  -> builder() / builder(modelName) / builder(ModelClient)
 ```
 
 framework adapter가 제공하는 기능은 이 builder로도 표현 가능해야 한다.
@@ -178,15 +180,17 @@ protocol endpoint auto-configuration은 protocol별 starter가 명시적으로 �
 
 ### 5.3 Quarkus
 
-- 기본은 CDI bean을 제공하는 runtime artifact 하나
-- recorder, generated route metadata, reflection/native-image hint가 실제로 필요할 때만
-  deployment artifact 추가
+- first-class extension으로 `quarkus-agent-framework` runtime과
+  `quarkus-agent-framework-deployment`를 첫 릴리스부터 제공
+- runtime artifact가 `META-INF/quarkus-extension.*` descriptor와 consumer API를 소유
+- deployment artifact가 generated route/tool indexing, native-image hints, recorder/build steps를
+  소유
 - Mutiny `Uni`/`Multi`는 boundary에서 core async/stream contract로 변환
 - build item, recorder, Arc container type은 core API에 노출하지 않음
 
-runtime/deployment split이 필요하면 기존 `agent-framework-quarkus` runtime coordinate는
-유지하고 `agent-framework-quarkus-deployment` sibling project만 추가한다. repository directory
-nesting을 늘리지 않아도 Quarkus artifact 역할과 consumer coordinate를 모두 유지할 수 있다.
+두 artifact는 `integrations/` 아래 sibling project로 두고 runtime coordinate를 안정적으로
+유지한다. deployment build step가 아직 적어도 Quarkus CLI/platform extension contract는
+생략하지 않는다.
 
 ### 5.4 Jakarta EE
 
@@ -228,11 +232,38 @@ nesting을 늘리지 않아도 Quarkus artifact 역할과 consumer coordinate를
 exact natural language와 exact tool-call ordering은 long-term contract로 삼지 않는다. event ordering,
 state transition, budgets, result shape처럼 관찰 가능한 의미만 고정한다.
 
-## 9. 주요 ADR 후보
+## 9. 첫 vertical slice
+
+첫 end-to-end slice는 Spring AI나 LangChain4j 위의 wrapper로 만들지 않는다.
+
+```text
+standalone AgentFactory
+  -> AgentEngine
+    -> direct provider ModelClient
+    -> engine-owned tool loop
+    -> engine-owned session/interceptor/finalization
+```
+
+provider adapter는 provider request/response/stream/cancellation 변환만 소유한다. SDK의 automatic
+tool loop, memory, middleware, retry runtime을 실행 의미의 기준으로 사용하지 않는다.
+
+slice acceptance:
+
+- Spring/Quarkus/Jakarta 없이 standalone sample이 실행됨
+- direct provider adapter를 deterministic fake로 교체해 같은 scenario가 통과
+- model → tool → model 반복을 AgentEngine event로 관찰
+- session save/restore, cancellation, streaming finalization, interceptor order를 engine contract
+  test로 검증
+- provider SDK automatic tool execution은 비활성
+
+Spring AI와 향후 LangChain4j integration은 이 slice 이후 `ModelClient`, `Tool`, MCP, telemetry
+adapter로 추가한다. 동일 contract suite를 통과해야 하며 engine semantics를 대체하지 않는다.
+
+## 10. 주요 ADR 후보
 
 | ADR | 결정 |
 | --- | --- |
-| Async API | `CompletionStage`/`Flow.Publisher` 확정 여부와 cancellation bridge |
+| Async bridge | `CompletionStage`/`Flow.Publisher` cancellation과 framework reactive bridge |
 | API evolution | record/final class 기준과 binary compatibility baseline |
 | Extension values | typed key와 provider extension envelope |
 | Schema | framework-neutral type descriptor와 schema generator SPI |

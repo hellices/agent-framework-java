@@ -55,8 +55,8 @@
 
 ### 비동기와 스트리밍
 
-- 단일 비동기 결과는 `CompletionStage<T>`, backpressure stream은 `Flow.Publisher<T>`를 기본
-후보로 둔다.
+- 단일 비동기 결과는 `CompletionStage<T>`, backpressure stream은 `Flow.Publisher<T>`를
+framework-neutral public contract로 사용한다.
 - `CompletionStage` 자체를 취소 토큰으로 사용하지 않는다. 명시적 cancellation signal과
 run handle이 standard cancellation path를 bridge한다.
 - engine은 `ForkJoinPool.commonPool()`이나 자체 executor를 기본값으로 만들지 않는다.

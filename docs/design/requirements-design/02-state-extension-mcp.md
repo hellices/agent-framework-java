@@ -50,6 +50,7 @@ SessionSnapshot
   envelopeType
   schemaVersion
   sessionId
+  serviceSessionId / provider service handles
   revision
   createdAt
   state entries: stableTypeId + codecVersion + payload
@@ -74,12 +75,15 @@ snapshot은 immutable하다. 인메모리 store는 immutable 값, codec round-tr
 ```text
 SessionStore.load(SessionId)                 -> explicit absence or versioned snapshot
 SessionStore.create(...)
-SessionStore.save(snapshot, expectedVersion) -> new version
+SessionStore.save(snapshot)                  -> store-specific new version
+SessionStore.compareAndSave(snapshot, expectedVersion) -> optional optimistic capability
 SessionStore.delete(...)
 ```
 
 store가 transaction과 persistence technology를 소유한다. engine은 load→run→save ordering과
-optimistic conflict outcome만 정의한다.
+capability-specific conflict outcome만 정의한다. file store는 temp write + atomic replace의
+last-writer-wins를 사용하고, database store는 optional optimistic compare-and-save를 제공할 수
+있다.
 
 file store:
 
@@ -126,6 +130,13 @@ session-specific state를 숨기지 않는다.
 각 context는 immutable request snapshot과 controlled result replacement를 가진다. arbitrary
 setter와 `Map<String,Object>`는 없다.
 
+controlled mutation surface:
+
+- `stageToolsForNextIteration(ToolSet)`: 현재 batch가 아니라 다음 model iteration에 반영
+- `onBeforeFinalResponse(...)`: final response 생성 전 typed transform
+- `onStreamFinalize(...)`: result/cleanup hook; terminal signal 전 한 번
+- result replacement: 해당 seam의 post phase에서만 허용
+
 ordering:
 
 ```text
@@ -170,16 +181,23 @@ compaction은 optional strategy다.
 
 ```text
 CompactionStrategy
-  shouldStart(history, budget)
-  project(history, index)
-  afterPersist(snapshot) [optional]
+  trigger: CompactionCondition
+  target: CompactionCondition (optional; default = trigger.inverse())
+  shouldStart(CompactionContext, history, budget)
+  reachedTarget(CompactionContext, projectedHistory, budget)
+  project(CompactionContext, history, index)
+  afterPersist(CompactionContext, snapshot) [optional]
 ```
+
+`CompactionContext`는 run `CancellationSignal`과 typed attributes를 포함한다. summarization
+model call, projection, persistence는 모두 같은 signal을 adapter cancellation까지 전파한다.
 
 invariants:
 
 - tool call/result group atomicity
 - stable group id/count across incremental updates
 - start and stop criteria separated
+- token/message/turn/group/tool-call conditions compose into trigger and target
 - failed summarization restores original projection
 - summary result contains only replacement message; original group is removed by coordinator
 - internal index and trace metadata are explicit snapshot state
@@ -210,10 +228,12 @@ MCP transport/client는 교체 가능한 adapter다.
 - `integrations/agent-framework-spring-ai-mcp`: Spring AI가 관리하는 MCP connection을 감싸는
   borrowed-client adapter
 
-두 adapter를 동시에 활성화하지 않는다. host 조립 시 정확히 하나의 `McpClientPort`를
-선택하며 후보가 둘 이상이면 시작 단계에서 실패한다. transport/connect/auth는 선택된 adapter가
-소유하지만 discovery normalization, collision, sampling budget, task transition, cancellation과
-session/tool-loop 의미는 Agent Framework integration이 소유한다.
+direct와 borrowed adapter는 서로 다른 named server에서 함께 존재할 수 있다. 각 server/connection
+조립은 정확히 하나의 `McpClientPort` adapter를 선택하며 같은 server에 후보가 둘 이상이면 시작
+단계에서 실패한다. direct adapter만 transport/connect/auth와 open/close를 소유한다. borrowed
+Spring AI/connected-client adapter는 provider/host가 소유한 lifecycle, headers, auth를 사용하고
+client를 닫지 않는다. discovery normalization, collision, sampling budget, task transition,
+cancellation과 session/tool-loop 의미는 Agent Framework integration이 소유한다.
 
 ### 8.2 Discovery
 
@@ -223,7 +243,18 @@ session/tool-loop 의미는 Agent Framework integration이 소유한다.
 - immutable discovered tool definitions
 - reload publishes a new snapshot, not in-place mutation
 
-### 8.3 Invocation
+### 8.3 Prompts and resources
+
+- MCP prompt descriptor는 prefix/collision 규칙을 적용한 executable `Tool`로 변환한다.
+- prompt arguments는 JSON schema로 노출하고 invocation result는 core `Message`/`Content`로
+  정규화한다.
+- MCP resource는 실행 가능한 tool로 가장하지 않고 `McpResourceContent` 또는 동등한 typed
+  content payload로 변환한다.
+- resource payload는 URI, MIME type, text/blob discriminator, provider metadata를 보존한다.
+- prompt/resource pagination과 cancellation은 tool discovery/invocation과 같은 client lifecycle을
+  사용한다.
+
+### 8.4 Invocation
 
 - model arguments and MCP metadata separate
 - trace/header propagation only through explicit context
@@ -232,6 +263,24 @@ session/tool-loop 의미는 Agent Framework integration이 소유한다.
 - sampling denied without explicit callback and bounded by request/token budgets
 - task-required calls switch once to task lifecycle; original call not reissued
 - local cancel/timeout attempts best-effort remote cancel
+
+### 8.5 Task lifecycle
+
+```text
+required task metadata
+  -> callToolAsTask
+     -> plain inline result: normalize and complete
+     -> task id:
+          clamp server poll interval to configured min/max
+          poll tasks/get until terminal or maxTaskWait
+          completed -> tasks/result -> same ToolResult shape as inline call
+          failed/cancelled/input_required -> typed ToolExecutionException/outcome
+          malformed terminal/result payload -> explicit failure
+```
+
+task id를 받은 뒤 같은 logical call을 `tools/call`로 재발행하지 않는다. local cancellation과
+`maxTaskWait` 만료는 기본적으로 best-effort `tasks/cancel`을 시도하고 explicit compatibility
+option에서만 비활성화한다.
 
 ## 9. MCP hosting helper
 
@@ -263,6 +312,7 @@ instance. final MCP tool result is atomic even if the hosted run streamed intern
 - unregistered state and invalid codec output
 - cold-start restore and version mismatch
 - immutable/branch-independent in-memory snapshots
+- file last-writer-wins vs optional optimistic compare-and-save
 - file traversal, atomic replace, corruption recovery
 - optimistic conflict
 
@@ -270,6 +320,8 @@ instance. final MCP tool result is atomic even if the hosted run streamed intern
 
 - pre/post order and short-circuit
 - controlled result replacement
+- next-iteration tool staging and finalization hooks
+- compaction cancellation propagation
 - typed attribute collision
 - unsupported seam fail-fast
 - tool group atomicity, incremental index, summary rollback
@@ -279,9 +331,12 @@ instance. final MCP tool result is atomic even if the hosted run streamed intern
 - borrowed vs owned close contract
 - reconnect once and cache clearing
 - paginated discovery/collision
+- immutable per-call same-origin header snapshots
 - argument/metadata separation
+- prompt argument/result and embedded-resource conversion
 - sampling budget/default deny
 - task switch/no duplicate call
+- poll interval clamp, inline fallback, timeout/terminal/malformed task result
 - cancellation to remote
 - public API boundary of hosting helper
 

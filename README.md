@@ -3,6 +3,11 @@
 Bring the observable execution semantics of [Microsoft Agent Framework](https://github.com/microsoft/agent-framework)
 to Java.
 
+> **Community project:** This repository is not an official Microsoft product and is not endorsed by
+> Microsoft. It uses the community-owned Maven group and Java package
+> `io.github.hellices.agentframework` to avoid impersonating or colliding with a future official Java
+> SDK.
+
 This project does not build an application server or a dependency injection container. The
 deliverable is an embeddable `AgentEngine`. A host runtime such as Spring Boot keeps owning object
 lifecycle, execution resources, security, transactions, and observability configuration.

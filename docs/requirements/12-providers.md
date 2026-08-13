@@ -45,7 +45,7 @@
 **수용 기준**
 
 - core build classpath에 특정 provider SDK가 직접 들어가지 않는다.
-- provider adapter는 neutral ChatClient 또는 동등 SPI를 구현해 코어에 연결된다.
+- provider adapter는 neutral `ModelClient` 또는 동등 SPI를 구현해 코어에 연결된다.
 
 **근거** [31 provider-integrations](../upstream/snapshots/d0a4165f/features/31-provider-integrations.md)
 
@@ -173,7 +173,7 @@
 
 **수용 기준**
 
-- 공통 ChatClient 또는 Agent SPI는 특정 provider 전용 옵션 필드를 직접 요구하지 않는다.
+- 공통 `ModelClient` 또는 Agent SPI는 특정 provider 전용 옵션 필드를 직접 요구하지 않는다.
 - 전용 기능 사용 여부는 capability 조회나 adapter-specific type으로 명시된다.
 
 **근거** [31 provider-integrations](../upstream/snapshots/d0a4165f/features/31-provider-integrations.md)

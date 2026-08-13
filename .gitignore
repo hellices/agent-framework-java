@@ -2,7 +2,7 @@
 
 # Gradle writes outputs to a `build/` directory in every project. Match it only where a project
 # root can be, not anywhere in a path: the harness sources live under a
-# `com/microsoft/agentframework/build/harness` package, and a bare `build/` rule silently excludes
+# `io/github/hellices/agentframework/build/harness` package, and a bare `build/` rule silently excludes
 # every new file there.
 /build/
 /*/build/

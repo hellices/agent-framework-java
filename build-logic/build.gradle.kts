@@ -2,7 +2,7 @@ plugins {
     `kotlin-dsl`
 }
 
-group = "com.microsoft.agentframework.build"
+group = "io.github.hellices.agentframework.build"
 description = "Convention plugins shared by every Agent Framework for Java project."
 
 java {

@@ -94,6 +94,8 @@ framework 애플리케이션이 내부에서 agent를 사용하기 위해 protoc
 - structured service session id
 - continuation token + new user input 동시 사용 거부
 - message/task/artifact lifecycle 분리
+- remote/local cancellation과 A2A cancel request를 task `CANCELED` terminal state로 변환
+- canceled terminal event 뒤 추가 event/artifact emission 금지
 
 ### 4.3 AG-UI
 
@@ -103,9 +105,22 @@ framework 애플리케이션이 내부에서 agent를 사용하기 위해 protoc
 - thread id vs snapshot scope 분리
 - stream completion 뒤 persist
 
-### 4.4 Other hosting
+### 4.4 Foundry
 
-Foundry, DevUI, channels는 optional protocol/adapter artifact다. local/dev mode는 authenticated hosted
+Foundry는 wire surface를 두 artifact로 분리한다.
+
+- `protocols/agent-framework-foundry-responses`: Responses request/stream/final payload와
+  continuation mapping
+- `protocols/agent-framework-foundry-invocations`: platform invocation envelope, hosted context,
+  invocation status/result mapping
+
+두 surface는 hosting-core use case를 재사용하지만 wire DTO와 endpoint contract를 공유하거나
+자동 변환하지 않는다. hosted path는 platform context를 검증하고 local path는 explicit
+configuration으로만 활성화한다.
+
+### 4.5 Other hosting
+
+DevUI와 channels는 optional protocol/adapter artifact다. local/dev mode는 authenticated hosted
 header만으로 승격되지 않는다.
 
 ## 5. Observability
@@ -179,7 +194,7 @@ test levels:
 
 provider adapter public facade:
 
-- `ChatClient` implementation
+- `ModelClient` implementation
 - typed options/capabilities
 - conversion utilities where justified
 - maturity and compatibility metadata
@@ -236,6 +251,7 @@ framework와 provider가 같은 이름의 기능을 제공해도 한 실행 경�
 - untrusted session candidate never reaches store
 - protocol converter/wire golden tests
 - SSE terminal ordering and cancellation
+- A2A cancel request/local cancellation → `CANCELED` terminal task
 - telemetry redaction/origin/sticky/no-double-instrumentation
 - provider common contract and option rejection
 - BOM/maturity/installability policy

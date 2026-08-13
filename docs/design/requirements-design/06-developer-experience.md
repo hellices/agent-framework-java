@@ -22,7 +22,7 @@ AgentResponse response = agent.run("Hello").await();
 
 `await()`는 imperative convenience다. async 애플리케이션은 `AgentRun.response()` completion을
 사용하고, streaming 애플리케이션은 `agent.runStreaming(...)`이 반환한
-`AgentStreamingRun.updates()` publisher를 사용한다.
+`AgentStreamingRun.updates()`의 `Flow.Publisher<AgentResponseUpdate>`를 사용한다.
 
 ## 2. 공개 facade와 고급 SPI
 
@@ -42,7 +42,7 @@ AgentApplication
 ### integration 개발자 SPI
 
 ```text
-ChatClient
+ModelClient
 SessionStore
 ExecutionStrategy
 TargetResolver
@@ -64,7 +64,7 @@ mutable `AgentBuilder`를 singleton bean으로 공유하지 않는다. framework
 public interface AgentFactory {
     AgentBuilder builder();
     AgentBuilder builder(String modelName);
-    AgentBuilder builder(ChatClient model);
+    AgentBuilder builder(ModelClient model);
 }
 ```
 
@@ -80,7 +80,7 @@ public interface AgentFactory {
 ```java
 try (AgentApplication app =
         AgentFramework.standalone()
-            .model(OpenAI.model("gpt-5")
+            .ownedModel(() -> OpenAI.model("gpt-5")
                 .apiKey(System.getenv("OPENAI_API_KEY"))
                 .build())
             .build()) {
@@ -106,12 +106,21 @@ try (AgentApplication app =
 
 HTTP server, DI container, shutdown hook, global registry는 만들지 않는다.
 
+ownership은 method 이름으로 구분한다.
+
+- `model(ModelClient)`: caller-owned borrowed model; application이 닫지 않음
+- `ownedModel(Supplier<? extends ModelClient>)`: application이 생성하고 종료 시 닫음
+
+이미 생성한 closeable model을 `model(...)`로 넘긴 호출자는 별도로 close해야 한다.
+`AgentApplication.close()`는 idempotent다. 반복 호출은 성공하고 owned resource는 정확히 한 번
+닫으며 borrowed model/client/store/executor는 닫지 않는다.
+
 ## 5. Spring Boot
 
 기존 Spring AI 애플리케이션:
 
 ```kotlin
-implementation("com.microsoft.agentframework:agent-framework-spring-boot-starter-spring-ai")
+implementation("io.github.hellices.agentframework:agent-framework-spring-boot-starter-spring-ai")
 implementation("org.springframework.ai:spring-ai-starter-model-openai")
 ```
 
@@ -160,8 +169,8 @@ Agent assistant(AgentFactory agents, WeatherFunctions weather) {
 starter만으로 model을 발명할 수는 없다. 다음 중 하나가 있어야 한다.
 
 - Spring AI-specific Agent Framework starter + Spring AI model starter가 만든 model bean
-- direct provider adapter가 만든 `ChatClient`
-- user-defined `ChatClient`
+- direct provider adapter가 만든 `ModelClient`
+- user-defined `ModelClient`
 
 zero model이면 condition report가 missing dependency를 설명하고 `AgentFactory`/default Agent를
 만들지 않는다. 여러 model인데 default가 없으면 `AgentFactory`는 만들되 default Agent를
@@ -175,6 +184,7 @@ Agent 정의는 Spring과 동일하다. factory를 얻는 방법만 container-na
 @ApplicationScoped
 class Agents {
     @Produces
+    @ApplicationScoped
     Agent assistant(AgentFactory agents, WeatherFunctions weather) {
         return agents.builder()
             .name("assistant")
@@ -184,8 +194,8 @@ class Agents {
 }
 ```
 
-- Quarkus: CDI injection, ConfigMapping, Mutiny bridge
-- Jakarta EE: CDI producer, MicroProfile Config, Jakarta REST bridge
+- Quarkus: CDI injection, ConfigMapping, Mutiny bridge, `@Identifier`/custom qualifier for named models
+- Jakarta EE: CDI 4 producer/extension, optional MicroProfile Config bridge, Jakarta REST bridge
 
 Spring annotation이나 Reactor 타입을 공유 API 예제에 사용하지 않는다.
 
@@ -238,6 +248,7 @@ Spring configuration은 named MCP `ToolSet`을 만들 수 있다.
 agent:
   framework:
     mcp:
+      default-adapter: spring-ai
       servers:
         github:
           adapter: spring-ai
@@ -254,6 +265,9 @@ agent:
           adapter: direct
           url: https://example.com/mcp
 ```
+
+server별 `adapter`가 global `default-adapter`를 이긴다. 둘 다 없고 direct/Spring AI 후보가
+둘 이상이면 해당 server의 ToolSet 생성이 startup에서 실패한다.
 
 사용자가 `ToolSet`을 agent에 붙이는 행위는 명시적이다. MCP server가 발견됐다는 이유만으로
 모든 agent에 tool이 자동 노출되지 않는다.
@@ -354,3 +368,4 @@ provider × framework 조합별 artifact를 모두 만들지 않는다.
 - endpoint module absent → no route/server side effect
 - optional capability module absent → base Agent API unchanged
 - introductory sample contains no SPI or engine-internal type
+- repeated `AgentApplication.close()` succeeds, closes owned resources once, and never closes borrowed ones
