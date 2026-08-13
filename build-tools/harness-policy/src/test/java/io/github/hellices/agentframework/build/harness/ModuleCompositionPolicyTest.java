@@ -6,8 +6,11 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -21,6 +24,9 @@ import org.junit.jupiter.params.provider.MethodSource;
  * docs/design/module-composition.md} and this test together.
  */
 class ModuleCompositionPolicyTest {
+
+  private static final Pattern SOURCE_PACKAGE =
+      Pattern.compile("(?m)^package\\s+([A-Za-z0-9_.]+)\\s*;?\\s*$");
 
   private static final List<String> LIBRARY_PROJECTS =
       List.of(":agent-framework-api", ":agent-framework-engine", ":agent-framework-testkit");
@@ -300,39 +306,41 @@ class ModuleCompositionPolicyTest {
 
   @Test
   void communityBuildDoesNotPublishMicrosoftPackages() throws IOException {
-    try (Stream<Path> files = Files.walk(RepositoryPaths.root())) {
-      List<Path> sources =
-          files
-              .filter(Files::isRegularFile)
-              .filter(path -> containsSegment(path, "src"))
-              .filter(
-                  path -> fileNameOf(path).endsWith(".java") || fileNameOf(path).endsWith(".kt"))
-              .filter(path -> !containsSegment(path, "build"))
-              .filter(path -> !containsSegment(path, ".worktrees"))
-              .filter(path -> !containsSegment(path, ".git"))
-              .filter(path -> !containsSegment(path, ".gradle"))
-              .toList();
+    List<Path> projectDirectories =
+        new ArrayList<>(
+            ProjectLayout.includedProjects().stream()
+                .map(ProjectLayout::projectDirectory)
+                .toList());
+    projectDirectories.add(RepositoryPaths.root().resolve("build-logic"));
 
-      assertThat(sources).isNotEmpty();
-      for (Path source : sources) {
-        String text = Files.readString(source, StandardCharsets.UTF_8);
-        if (text.contains("package ")) {
-          assertThat(text)
-              .as("%s uses the community-owned Java namespace", source)
-              .contains("package io.github.hellices.agentframework")
-              .doesNotContain("package com.microsoft.");
+    List<Path> sources = new ArrayList<>();
+    for (Path projectDirectory : projectDirectories) {
+      for (String sourceSet :
+          List.of("src/main/java", "src/test/java", "src/main/kotlin", "src/test/kotlin")) {
+        Path sourceRoot = projectDirectory.resolve(sourceSet);
+        if (Files.isDirectory(sourceRoot)) {
+          try (Stream<Path> files = Files.walk(sourceRoot)) {
+            files
+                .filter(Files::isRegularFile)
+                .filter(
+                    path -> fileNameOf(path).endsWith(".java") || fileNameOf(path).endsWith(".kt"))
+                .forEach(sources::add);
+          }
         }
       }
     }
-  }
 
-  private static boolean containsSegment(Path path, String segment) {
-    for (Path part : path) {
-      if (segment.equals(part.toString())) {
-        return true;
+    assertThat(sources).isNotEmpty();
+    for (Path source : sources) {
+      String text = Files.readString(source, StandardCharsets.UTF_8);
+      Matcher packageDeclaration = SOURCE_PACKAGE.matcher(text);
+      if (packageDeclaration.find()) {
+        assertThat(packageDeclaration.group(1))
+            .as("%s uses the community-owned Java namespace", source)
+            .startsWith("io.github.hellices.agentframework")
+            .doesNotStartWith("com.microsoft.");
       }
     }
-    return false;
   }
 
   private static String fileNameOf(Path path) {
