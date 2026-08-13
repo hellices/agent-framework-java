@@ -158,6 +158,34 @@ class MarkdownLinkPolicyTest {
   }
 
   @Test
+  void linkExtractionKeepsInlineLinksWhoseLabelsContainInlineCode(@TempDir Path directory)
+      throws IOException {
+    Path document = directory.resolve("sample.md");
+    Files.writeString(
+        document,
+        "Read [`01-agent-lifecycle.md`](./features/01-agent-lifecycle.md).\n",
+        StandardCharsets.UTF_8);
+
+    assertThat(MarkdownDocuments.links(document))
+        .extracting(MarkdownDocuments.Link::line, MarkdownDocuments.Link::target)
+        .containsExactly(tuple(1, "./features/01-agent-lifecycle.md"));
+  }
+
+  @Test
+  void linkExtractionIgnoresInlineCodeThatOnlyLooksLikeALink(@TempDir Path directory)
+      throws IOException {
+    Path document = directory.resolve("sample.md");
+    Files.writeString(
+        document,
+        "`[not-a-link](missing.md)` and [real](docs/README.md)\n",
+        StandardCharsets.UTF_8);
+
+    assertThat(MarkdownDocuments.links(document))
+        .extracting(MarkdownDocuments.Link::line, MarkdownDocuments.Link::target)
+        .containsExactly(tuple(1, "docs/README.md"));
+  }
+
+  @Test
   void exactPathCaseIsIndependentOfFileSystemCaseSensitivity(@TempDir Path directory)
       throws IOException {
     Path target = directory.resolve("docs/Guide.md");

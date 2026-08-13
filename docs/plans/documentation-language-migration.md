@@ -990,8 +990,8 @@ Create
 with `@TempDir` cases that build a fake repository and assert `MarkdownDocuments.filesUnder(root)`
 returns exactly the canonical locations of policy section 8.1:
 
-- the six owned root documents, `.github/*.md`, and `docs/**/*.md` are returned, while
-  `LICENSE.md`, `.github/ISSUE_TEMPLATE/bug.md`, and Markdown inside a module are not;
+- every root `*.md`, `.github/**/*.md`, and `docs/**/*.md` is returned, while Markdown inside a
+  module is not;
 - untracked Markdown outside the owned locations — a root scratch file, a `notes/` directory,
   `.copilot/`, `.superpowers/`, `.worktrees/`, and `.harness/runs/` — is ignored;
 - Markdown under a `build`, `bin`, or `out` path segment **inside** `docs/` is returned, which is
@@ -999,8 +999,8 @@ returns exactly the canonical locations of policy section 8.1:
 - generated project output (`build/`, `*/*/build/`, `node_modules/`) is out of scope because it is
   not an owned location;
 - the result is sorted by root-relative path;
-- and, against the real repository, every scanned path is a root document, a direct `.github`
-  child, or a file under `docs/`.
+- and, against the real repository, every scanned path is a root `*.md`, a file anywhere under
+  `.github/`, or a file under `docs/`.
 
 - [x] **Step 4: Run the new tests and confirm they fail**
 

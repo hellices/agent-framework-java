@@ -248,7 +248,7 @@ final class MarkdownDocuments {
       candidates.sort(Comparator.comparingInt(LinkCandidate::start));
       List<LinkCandidate> accepted = new ArrayList<>();
       for (LinkCandidate candidate : candidates) {
-        if (codeSpans.stream().noneMatch(codeSpan -> overlaps(codeSpan, candidate))
+        if (codeSpans.stream().noneMatch(codeSpan -> contains(codeSpan, candidate.start()))
             && accepted.stream().noneMatch(existing -> overlaps(existing, candidate))) {
           accepted.add(candidate);
           links.add(new Link(file, index + 1, candidate.target()));
@@ -295,6 +295,10 @@ final class MarkdownDocuments {
 
   private static boolean overlaps(LinkCandidate first, LinkCandidate second) {
     return first.start() < second.end() && second.start() < first.end();
+  }
+
+  private static boolean contains(LinkCandidate span, int position) {
+    return span.start() <= position && position < span.end();
   }
 
   /**
