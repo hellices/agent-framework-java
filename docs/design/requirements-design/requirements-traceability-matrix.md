@@ -6,7 +6,9 @@
 ## 상태 해석
 
 - `absent`: 요구 행동 production code 없음
+- `bootstrap`: module/marker는 있지만 요구 행동은 없음
 - `partial`: 수용 기준 일부에 해당하는 build/policy code와 test가 있음
+- `implemented`: 수용 기준 전체가 production code와 executable test에 연결됨
 
 `ApiContract`와 `EngineContract` marker는 module bootstrap이지 기능 구현이 아니므로 각 기능 ID는
 `absent`다. 목표 code family는 package/module 계획이며 현재 파일 경로가 아니다.

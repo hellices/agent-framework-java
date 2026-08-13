@@ -147,7 +147,7 @@ AgentBuilder.declaredTools(ToolDefinition...)
 `declaredTools`는 model에 노출하지만 local handler를 등록하지 않으며 core가 가짜 tool result를
 만들지 않는다.
 
-### 3.3 Values
+### 3.4 Values
 
 - `Role`: 알려진 상수를 제공하는 immutable string value
 - `Content`: core-known value와 `ProviderExtensionContent` envelope
