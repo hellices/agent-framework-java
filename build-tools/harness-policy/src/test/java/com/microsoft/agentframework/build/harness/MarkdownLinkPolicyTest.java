@@ -47,6 +47,10 @@ class MarkdownLinkPolicyTest {
         unresolved.add(link.describe() + " (no such file)");
         continue;
       }
+      if (!MarkdownDocuments.hasExactPathCase(RepositoryPaths.root(), file)) {
+        unresolved.add(link.describe() + " (path case does not match the target)");
+        continue;
+      }
       String fragment = MarkdownDocuments.fragmentOf(link.target());
       if (fragment.isEmpty() || !file.toString().endsWith(".md")) {
         continue;
@@ -123,5 +127,45 @@ class MarkdownLinkPolicyTest {
             tuple(1, "https://example.com"),
             tuple(5, "docs/README.md"),
             tuple(5, "#current-state"));
+  }
+
+  @Test
+  void linkExtractionReadsReferenceStyleLinks(@TempDir Path directory) throws IOException {
+    Path document = directory.resolve("sample.md");
+    Files.writeString(
+        document,
+        String.join(
+            "\n",
+            "Read the [requirements][requirements].",
+            "",
+            "[requirements]: ../requirements/README.md \"Requirements\"",
+            ""),
+        StandardCharsets.UTF_8);
+
+    assertThat(MarkdownDocuments.links(document))
+        .extracting(MarkdownDocuments.Link::line, MarkdownDocuments.Link::target)
+        .containsExactly(tuple(1, "../requirements/README.md"));
+  }
+
+  @Test
+  void linkExtractionReadsRelativeAutolinks(@TempDir Path directory) throws IOException {
+    Path document = directory.resolve("sample.md");
+    Files.writeString(document, "Read <../requirements/README.md>.\n", StandardCharsets.UTF_8);
+
+    assertThat(MarkdownDocuments.links(document))
+        .extracting(MarkdownDocuments.Link::line, MarkdownDocuments.Link::target)
+        .containsExactly(tuple(1, "../requirements/README.md"));
+  }
+
+  @Test
+  void exactPathCaseIsIndependentOfFileSystemCaseSensitivity(@TempDir Path directory)
+      throws IOException {
+    Path target = directory.resolve("docs/Guide.md");
+    Files.createDirectories(directory.resolve("docs"));
+    Files.writeString(target, "# Guide\n", StandardCharsets.UTF_8);
+
+    assertThat(MarkdownDocuments.hasExactPathCase(directory, target)).isTrue();
+    assertThat(MarkdownDocuments.hasExactPathCase(directory, directory.resolve("docs/guide.md")))
+        .isFalse();
   }
 }

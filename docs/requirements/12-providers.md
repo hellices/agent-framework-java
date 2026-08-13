@@ -103,7 +103,7 @@ artifact exists, it must be an optional convenience.
 
 ---
 
-### Priorities
+### Priority
 
 ## PRV-004 The adapter porting priority is fixed from P0 to P4
 
@@ -225,7 +225,7 @@ understand a provider handle, the core shakes every time a new adapter arrives.
 
 ---
 
-### Priorities
+### Priority
 
 ## PRV-009 An integration that exists in only one language is kept in an optional tier
 

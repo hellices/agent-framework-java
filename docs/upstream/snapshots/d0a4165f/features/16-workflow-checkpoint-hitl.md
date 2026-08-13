@@ -86,7 +86,7 @@
   - package-exported `MCPToolApprovalRequest`, `DefaultHttpRequestHandler`, `DefaultMCPToolHandler`, `WorkflowFactory`  
   ([ToolApprovalRequest/Response](https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/declarative/agent_framework_declarative/_workflows/_executors_tools.py#L50-L83), [AgentExternalInputRequest/Response](https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/declarative/agent_framework_declarative/_workflows/_executors_agents.py#L259-L332), [declarative package exports](https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/declarative/agent_framework_declarative/__init__.py#L18-L71))
 
-## Detailed execution flows
+## Detailed execution flow
 
 ### 1. .NET checkpoint creation and restore
 

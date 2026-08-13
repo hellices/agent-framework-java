@@ -111,7 +111,7 @@ This document covers only the **session surface** of Agent Framework snapshot `d
 - `TestFileSessionStore` covers the cross-instance JSON roundtrip with version `1.0`, the MessagePack roundtrip with version `1.0`, subclass rejection, the unregistered compatibility path, unsupported durable state rejection, atomic replacement, corruption quarantine, version/schema/decoder failure preservation, quarantine race safety, safe filename encoding, and symlink rejection. [FileSessionStore tests part 1](https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/core/tests/core/test_sessions.py#L950-L1158) [FileSessionStore tests part 2](https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/core/tests/core/test_sessions.py#L1180-L1273)
 - A scenario treating `service_session_id` as an authorization boundary cannot be confirmed in the dedicated Python test evidence; that boundary is defined by the production docstring and ADR 0029. [AgentSession auth-boundary docstring](https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/core/agent_framework/_sessions.py#L1621-L1625) [ADR-0029 service-owned continuation semantics](https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/docs/decisions/0029-python-agent-session-identity.md#L14-L39)
 
-## Documentation-code differences
+## Differences between documentation and code
 
 ### 1. The Python session-store ADR is `proposed` but the code is already implemented
 

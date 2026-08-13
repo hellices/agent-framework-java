@@ -17,6 +17,7 @@ checked by `./gradlew policyCheck`.
 | What must Java build? | [Requirements index](requirements/README.md) |
 | Why is it built this way? | [Foundation design](design/foundation-design.md) |
 | Where is code allowed to live? | [Module composition](design/module-composition.md) |
+| How was the English documentation migration delivered? | [Migration plan](plans/documentation-language-migration.md) |
 | How does the upstream framework behave? | [Upstream snapshot index](upstream/snapshots/d0a4165f/README.md) |
 | Do you have a Korean guide? | [Korean companion](ko/README.md) |
 
@@ -28,7 +29,7 @@ checked by `./gradlew policyCheck`.
 | `docs/requirements/` | Stable behavioral requirements and acceptance criteria |
 | `docs/operations/` | Contributor, CI, runner, and repository operation guidance |
 | `docs/upstream/` | Pinned upstream provenance, evidence, feature analysis, and coverage |
-| `docs/plans/` | Implementation plans for in-flight work |
+| `docs/plans/` | Active implementation plans and completed execution records |
 | `docs/ko/README.md` | The only maintained Korean companion document |
 
 ## Design

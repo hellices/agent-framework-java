@@ -126,7 +126,7 @@ Source:
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/tests/Microsoft.Agents.AI.Hosting.OpenAI.UnitTests/ConformanceTraces/Conversations/error_invalid_json/request.txt#L1-L6  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/tests/Microsoft.Agents.AI.Hosting.OpenAI.UnitTests/ConformanceTraces/Responses/json_output/response.json#L1-L90  
 
-## Public APIs
+## Public API
 
 ### .NET public API
 

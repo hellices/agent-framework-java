@@ -16,19 +16,16 @@ import org.junit.jupiter.params.provider.MethodSource;
 
 class DocumentationLanguagePolicyTest {
 
-  private static final List<String> DIRECTORY_INDEXES =
-      List.of(
-          "docs/requirements/README.md",
-          "docs/upstream/README.md",
-          MarkdownDocuments.KOREAN_COMPANION);
-
   static Stream<String> canonicalDocuments() {
     return documentPaths().stream()
         .filter(path -> !MarkdownDocuments.KOREAN_COMPANION.equals(path));
   }
 
   static Stream<String> directoryIndexes() {
-    return DIRECTORY_INDEXES.stream();
+    return documentPaths().stream()
+        .filter(path -> path.startsWith("docs/"))
+        .filter(path -> path.endsWith("/README.md"))
+        .filter(path -> !MarkdownDocuments.DOCUMENTATION_INDEX.equals(path));
   }
 
   @ParameterizedTest(name = "{0} is written in English")

@@ -53,7 +53,7 @@ Source:
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI/LoggingAgent.cs#L16-L30  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/core/agent_framework/observability.py#L944-L1001  
 
-## Public APIs
+## Public API
 
 ### .NET public API
 

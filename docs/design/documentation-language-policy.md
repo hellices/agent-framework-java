@@ -69,6 +69,7 @@ docs/
 ├── design/
 ├── requirements/
 ├── operations/
+├── plans/
 └── upstream/
     └── snapshots/<revision>/
 ```
@@ -82,6 +83,7 @@ Responsibilities are:
 | `docs/design/` | Approved architecture and engineering decisions |
 | `docs/requirements/` | Stable behavioral requirements and acceptance criteria |
 | `docs/operations/` | Contributor, CI, runner, and repository operation guidance |
+| `docs/plans/` | Active implementation plans and completed execution records |
 | `docs/upstream/` | Pinned upstream provenance, evidence, feature analysis, and coverage |
 | `docs/ko/README.md` | The only maintained Korean companion document |
 
@@ -147,16 +149,18 @@ inbound links change in the same commit.
 
 Repository-owned Markdown under these paths must not contain Hangul characters:
 
-- root `README.md`, `AGENTS.md`, `CONTRIBUTING.md`, `SECURITY.md`, and vendor instruction adapters;
-- `.github/*.md`;
+- every root `*.md`, with no current exceptions;
+- `.github/**/*.md`;
 - `docs/**/*.md`, except `docs/ko/README.md`.
 
-These locations are an allowlist, not a filter. The scan collects Markdown from them and from
-nowhere else, and it excludes no location by directory name, so a `build`, `bin`, or `out` path
-segment inside an owned location stays in scope while generated build output, ignored session
-artifacts, nested worktrees, dependency notices, and untracked scratch files stay out of scope
-because the repository does not own them as documentation. The Korean companion is scanned for
-navigation and links but exempt from the language rule.
+These locations define ownership by path rather than by a list of current filenames. A newly added
+root Markdown document or nested GitHub template is therefore covered without a policy-code change.
+The scanner excludes no owned location by directory name, so a `build`, `bin`, or `out` path segment
+inside `.github` or `docs` stays in scope. Gradle removes generated `build` output from policy task
+inputs only when the containing directory is an actual Gradle project root; it never applies a
+blanket `build`-segment exclusion that could hide source paths. Generated output and local artifacts
+outside the owned locations remain out of scope. The Korean companion is scanned for navigation and
+links but exempt from the language rule.
 
 ### 8.2 Companion uniqueness
 
@@ -170,6 +174,8 @@ navigation and links but exempt from the language rule.
 Policy tests inspect the repository-owned Markdown files section 8.1 lists and verify that:
 
 - every relative file link resolves;
+- inline, reference-style, and relative autolinks receive the same local-target checks;
+- every local target uses the exact path case recorded in the repository;
 - fragments targeting Markdown headings resolve to a generated GitHub-style anchor;
 - absolute web URLs and code examples are not treated as local files;
 - links do not escape the repository root.

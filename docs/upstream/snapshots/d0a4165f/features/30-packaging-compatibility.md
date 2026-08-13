@@ -38,7 +38,7 @@ Source:
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/CHANGELOG.md#L29-L29  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/CHANGELOG.md#L109-L122  
 
-## Purpose and boundary of the original functionality
+## Original feature purpose and boundary
 
 ### 1. Purpose of package / project layout
 
@@ -116,7 +116,7 @@ Source:
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/CHANGELOG.md#L109-L122  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/PACKAGE_STATUS.md#L13-L58  
 
-## Public APIs
+## Public API
 
 The “public APIs” in this document refer not to runtime method APIs but to the **deployment/metadata/compatibility surface** on which external consumers and downstream maintainers depend.
 

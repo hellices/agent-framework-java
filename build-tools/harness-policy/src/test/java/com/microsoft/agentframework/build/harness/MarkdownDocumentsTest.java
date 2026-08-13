@@ -23,29 +23,31 @@ class MarkdownDocumentsTest {
     writeMarkdown(
         root,
         "README.md",
+        "LICENSE.md",
         "AGENTS.md",
         "CONTRIBUTING.md",
         "SECURITY.md",
         "CLAUDE.md",
         "GEMINI.md",
         ".github/copilot-instructions.md",
+        ".github/ISSUE_TEMPLATE/bug.md",
         "docs/README.md",
         "docs/ko/README.md",
         "docs/upstream/snapshots/d0a4165f/features/01-agent-lifecycle.md");
     writeMarkdown(
         root,
-        "LICENSE.md",
-        ".github/ISSUE_TEMPLATE/bug.md",
         "build-tools/harness-policy/README.md",
         "agent-framework-api/src/main/java/com/microsoft/agentframework/api/package.md");
 
     assertThat(scan(root))
         .containsExactly(
+            ".github/ISSUE_TEMPLATE/bug.md",
             ".github/copilot-instructions.md",
             "AGENTS.md",
             "CLAUDE.md",
             "CONTRIBUTING.md",
             "GEMINI.md",
+            "LICENSE.md",
             "README.md",
             "SECURITY.md",
             "docs/README.md",
@@ -54,11 +56,28 @@ class MarkdownDocumentsTest {
   }
 
   @Test
-  void untrackedMarkdownOutsideTheOwnedLocationsIsIgnored(@TempDir Path root) throws IOException {
+  void everyRootMarkdownDocumentIsOwnedWithoutUpdatingAFileNameAllowlist(@TempDir Path root)
+      throws IOException {
+    writeMarkdown(root, "README.md", "FUTURE-POLICY.md");
+
+    assertThat(scan(root)).containsExactly("FUTURE-POLICY.md", "README.md");
+  }
+
+  @Test
+  void githubMarkdownIsOwnedAtEveryDepth(@TempDir Path root) throws IOException {
+    writeMarkdown(
+        root, ".github/copilot-instructions.md", ".github/ISSUE_TEMPLATE/config/triage.md");
+
+    assertThat(scan(root))
+        .containsExactly(
+            ".github/ISSUE_TEMPLATE/config/triage.md", ".github/copilot-instructions.md");
+  }
+
+  @Test
+  void markdownOutsideTheOwnedLocationsIsIgnored(@TempDir Path root) throws IOException {
     writeMarkdown(root, "docs/README.md");
     writeMarkdown(
         root,
-        "scratch-notes.md",
         "notes/review-findings.md",
         ".copilot/session.md",
         ".superpowers/sdd/task-1-brief.md",
@@ -146,7 +165,7 @@ class MarkdownDocumentsTest {
       return true;
     }
     if (relativePath.startsWith(".github/")) {
-      return relativePath.indexOf('/', ".github/".length()) < 0;
+      return true;
     }
     return relativePath.indexOf('/') < 0;
   }

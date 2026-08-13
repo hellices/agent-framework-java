@@ -173,3 +173,5 @@ conditions are met.
 
 Java implementation planning is written only after this gate passes; before that, fixing the
 documentary evidence takes priority.
+
+- [Documentation index](../../../README.md)

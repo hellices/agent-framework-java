@@ -102,9 +102,9 @@ Source:
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI.Tools.Shell/ShellExecutor.cs#L75-L88  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI.Tools.Shell/LocalShellExecutor.cs#L32-L50  
 
-## Public APIs
+## Public API
 
-### .NET public APIs
+### .NET public API
 
 1. `DeclarativeWorkflowException`, `DeclarativeActionException`, `DeclarativeModelException`  
    - Separates declarative workflow/action/model errors.  
@@ -139,7 +139,7 @@ Source:
    - A result envelope with `ExitCode`, `Duration`, `Truncated`, and `TimedOut`.  
    Source: https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/dotnet/src/Microsoft.Agents.AI.Tools.Shell/ShellResult.cs#L8-L23
 
-### Python public APIs
+### Python public API
 
 1. `AgentFrameworkException` and branch hierarchy  
    - Includes `AgentException`, `ChatClientException`, `IntegrationException`, `ToolException`, `MiddlewareException`, `WorkflowException`, `SettingNotFoundError`, and others.  
@@ -173,7 +173,7 @@ Source:
    - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/packages/core/agent_framework/security.py#L43-L66  
    - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/python/PACKAGE_STATUS.md#L98-L103  
 
-## Detailed execution flows
+## Detailed execution flow
 
 ### 1. Python error taxonomy and validation boundary flow
 
@@ -499,7 +499,7 @@ Source:
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/.github/workflows/python-integration-tests.yml#L61-L67  
 - https://github.com/microsoft/agent-framework/blob/d0a4165f170193ba1d026a259af40d35bb7eaefe/.github/workflows/python-integration-tests.yml#L95-L101  
 
-## Documentation and code differences
+## Differences between documentation and code
 
 ### 1. Difference between the FAQ's general statements and the shell code's concrete boundaries
 

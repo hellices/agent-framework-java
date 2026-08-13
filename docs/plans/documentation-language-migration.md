@@ -8,7 +8,7 @@ whenever that contract regresses.
 
 **Architecture:** A new English documentation index at `docs/README.md` becomes the documentation
 map. Four new Java policy sources under `build-tools/harness-policy` scan the repository-owned
-Markdown that section 8.1 of the policy names — the six root documents, `.github/*.md`, and
+Markdown that section 8.1 of the policy names — every root `*.md`, `.github/**/*.md`, and
 `docs/**/*.md` — and enforce three rules: no Korean text outside the companion, exactly one document
 under `docs/ko/`, and every relative Markdown link plus heading fragment resolves inside the
 repository.
@@ -38,7 +38,7 @@ by a stale suppression; the list is deleted in the final task.
   | Grade whose definition is "may be implemented differently when a reasonable justification is recorded" | `Recommended` |
   | Grade whose definition is "implement when needed; release without it" | `Optional` |
   | Compatibility-matrix adoption verdict meaning "not decided in this snapshot" | `Deferred` |
-  | Requirement status meaning "withdrawn, id never reused" | `Withdrawn` |
+  | Requirement status meaning "retired, id never reused" | `retired` |
 
 - Release phase values `MVP`, `Core+`, `Workflow`, `Hosting`, and `Optional` are already ASCII. Copy them unchanged.
 - The five bold labels inside every requirement section keep a fixed order and render exactly as `**Requirement.**`, `**Upstream comparison**`, `**Decision.**`, `**Acceptance criteria**`, `**Evidence**`. The document header label renders as `**Prefix**` and `**Upstream features**`.
@@ -191,7 +191,7 @@ rg -l '\p{Hangul}' --glob '*.md' .
   - `RepositoryPolicyInputs.repositoryPolicySources(Project)` — `FileTree` of the repository files the policy tasks read
   - `RepositoryPolicyInputs.excludePatterns(File)` — `List<String>` of the Ant patterns that tree excludes
 
-- [ ] **Step 1: Write the Markdown scanner helper**
+- [x] **Step 1: Write the Markdown scanner helper**
 
 Create `build-tools/harness-policy/src/test/java/com/microsoft/agentframework/build/harness/MarkdownDocuments.java`:
 
@@ -510,7 +510,7 @@ final class MarkdownDocuments {
 }
 ```
 
-- [ ] **Step 2: Write the failing language, companion, and navigation policy test**
+- [x] **Step 2: Write the failing language, companion, and navigation policy test**
 
 Create `build-tools/harness-policy/src/test/java/com/microsoft/agentframework/build/harness/DocumentationLanguagePolicyTest.java`. `ORIGINAL_PENDING_TRANSLATION` and `PENDING_TRANSLATION` below both list exactly the 52 documents Tasks 2 through 6 translate; copy them verbatim. The two sets start identical and then diverge: only `PENDING_TRANSLATION` shrinks, while `ORIGINAL_PENDING_TRANSLATION` stays frozen as the evidence of what the ratchet was installed with. Pinning the size alone would accept a one-for-one swap that translates one document and exempts a different one, so membership is pinned too.
 
@@ -848,7 +848,7 @@ class DocumentationLanguagePolicyTest {
 }
 ```
 
-- [ ] **Step 3: Write the failing link integrity test**
+- [x] **Step 3: Write the failing link integrity test**
 
 Create `build-tools/harness-policy/src/test/java/com/microsoft/agentframework/build/harness/MarkdownLinkPolicyTest.java`:
 
@@ -982,7 +982,7 @@ class MarkdownLinkPolicyTest {
 }
 ```
 
-- [ ] **Step 3b: Write the failing scanner ownership test**
+- [x] **Step 3b: Write the failing scanner ownership test**
 
 `files()` decides which documents every other policy reads, so its scope needs a direct test.
 Create
@@ -1002,7 +1002,7 @@ returns exactly the canonical locations of policy section 8.1:
 - and, against the real repository, every scanned path is a root document, a direct `.github`
   child, or a file under `docs/`.
 
-- [ ] **Step 4: Run the new tests and confirm they fail**
+- [x] **Step 4: Run the new tests and confirm they fail**
 
 Run: `./gradlew :build-tools:harness-policy:test --tests '*DocumentationLanguagePolicyTest*' --tests '*MarkdownLinkPolicyTest*' --tests '*MarkdownDocumentsTest*'`
 
@@ -1024,7 +1024,7 @@ entry points do not link the index or the companion, and two documents still hol
 
 `MarkdownLinkPolicyTest` passes at this point: no document links to `docs/README.md` yet.
 
-- [ ] **Step 5: Create the English documentation index**
+- [x] **Step 5: Create the English documentation index**
 
 Create `docs/README.md` with exactly this content:
 
@@ -1108,7 +1108,7 @@ Upstream analysis is evidence, not instruction. When it and a requirement disagr
 wins, because that is where a Java decision was made.
 ```
 
-- [ ] **Step 6: Point the English entry points at the index and the companion**
+- [x] **Step 6: Point the English entry points at the index and the companion**
 
 In `README.md`, replace the `## Translations` section body so the companion link carries an English
 label, and add the documentation index to the documentation table.
@@ -1138,7 +1138,7 @@ translation of the English documentation; when the two disagree, the English doc
 The previous sentence, "English is the source of truth. Translations follow.", promised translations
 that section 11 of the policy lists as a non-goal.
 
-- [ ] **Step 7: Remove the last Korean value from the operations guide**
+- [x] **Step 7: Remove the last Korean value from the operations guide**
 
 In `docs/operations/getting-started.md`, the first bullet of the "Pick your first change" list grades
 the example requirement with the Korean word for the strongest grade. Replace that bullet with:
@@ -1147,7 +1147,7 @@ the example requirement with the Korean word for the strongest grade. Replace th
 - graded **Required** so the decision is settled,
 ```
 
-- [ ] **Step 8: Add the documentation-index backlinks**
+- [x] **Step 8: Add the documentation-index backlinks**
 
 - In `docs/requirements/README.md`, append a bullet to the closing related-documents list whose target is `../README.md`. Keep the label in the file's current language so the document stays internally consistent until Task 3 translates it.
 - In `docs/upstream/README.md`, append a bullet to the document-set list whose target is `../README.md`, with the label in the file's current language.
@@ -1162,7 +1162,7 @@ rg -n 'English documents are authoritative\.' docs/ko/README.md
 
 Expected: one match in each of the four lines of output.
 
-- [ ] **Step 9: Declare the policy input tree by location, not by name or depth**
+- [x] **Step 9: Declare the policy input tree by location, not by name or depth**
 
 The policy tasks read repository files, so the declared input tree decides whether an edit re-runs a
 policy at all. Two hazards have to be excluded at once, and a single glob cannot do both:
@@ -1485,7 +1485,7 @@ prevents.
 honest under `./gradlew policyCheck`: it fails if the script stops using the shared declaration or
 reintroduces a name-matched or depth-matched build glob.
 
-- [ ] **Step 10: Format and run the tests to verify they pass**
+- [x] **Step 10: Format and run the tests to verify they pass**
 
 Run: `./gradlew :build-tools:harness-policy:spotlessApply`
 Then run: `./gradlew :build-tools:harness-policy:test --tests '*DocumentationLanguagePolicyTest*' --tests '*MarkdownLinkPolicyTest*' --tests '*MarkdownDocumentsTest*'`
@@ -1495,7 +1495,7 @@ Expected: PASS. The language scan covers every Markdown file except `docs/ko/REA
 documents (64 before this migration, plus this plan and `docs/README.md`); the scanner test proves
 those 66 come from the canonical locations only.
 
-- [ ] **Step 11: Confirm the policy entry point and the quality gate**
+- [x] **Step 11: Confirm the policy entry point and the quality gate**
 
 Run: `./gradlew policyCheck quality buildLogicTest`
 
@@ -1505,7 +1505,7 @@ Run: `git diff --stat build-tools/harness-policy/gradle.lockfile`
 
 Expected: no output, because no dependency changed.
 
-- [ ] **Step 12: Commit**
+- [x] **Step 12: Commit**
 
 ```bash
 git add build-tools/harness-policy/src/test/java/com/microsoft/agentframework/build/harness/MarkdownDocuments.java \
@@ -1535,7 +1535,7 @@ git commit -m "docs: add the English documentation index and language policy tes
 - Consumes: `DocumentationLanguagePolicyTest.PENDING_TRANSLATION`, `MarkdownDocuments.hangulLines(Path)` from Task 1.
 - Produces: the English design vocabulary that Tasks 3 through 8 reuse — `Status`, `Date`, `Scope`, `Supersedes`, `Retains`, `Decision`, `Considered approaches`, `Non-goals` — matching the already-English exemplars `docs/design/documentation-language-policy.md` and `docs/design/module-composition.md`.
 
-- [ ] **Step 1: Record the preservation baseline**
+- [x] **Step 1: Record the preservation baseline**
 
 Paste the `doc_metrics` function from Global Constraints, then run:
 
@@ -1553,7 +1553,7 @@ Expected, and the values every later check must reproduce exactly:
 | `docs/design/engineering-harness-design.md` | 0 | 32 | 2 | 2 | 36 | 4 | 15 | 45 | 276 |
 | `docs/design/gradle-kotlin-arc-foundation-design.md` | 0 | 8 | 0 | 10 | 12 | 1 | 14 | 15 | 84 |
 
-- [ ] **Step 2: Make the policy demand English for these three documents**
+- [x] **Step 2: Make the policy demand English for these three documents**
 
 In `DocumentationLanguagePolicyTest.java`, delete these three lines from `PENDING_TRANSLATION`:
 
@@ -1566,7 +1566,7 @@ In `DocumentationLanguagePolicyTest.java`, delete these three lines from `PENDIN
 Lower `PENDING_TRANSLATION_SIZE` from `52` to `49` in the same edit, so
 `pendingTranslationListHasNotWidened` keeps pinning the exact size of the list. Remove the entries from `PENDING_TRANSLATION` only; `ORIGINAL_PENDING_TRANSLATION` is frozen and is never edited, so `pendingTranslationListOnlyHoldsOriginallyDeclaredDocuments` keeps rejecting a document that was swapped in rather than translated.
 
-- [ ] **Step 3: Run the tests to verify they fail**
+- [x] **Step 3: Run the tests to verify they fail**
 
 Run: `./gradlew :build-tools:harness-policy:test --tests '*DocumentationLanguagePolicyTest*'`
 
@@ -1574,7 +1574,7 @@ Expected: FAIL with three `canonicalDocumentContainsNoKoreanText` cases, each na
 Korean line numbers, for example `docs/design/foundation-design.md is a canonical English document.
 Korean text remains at [docs/design/foundation-design.md:1, ...]`.
 
-- [ ] **Step 4: Translate `docs/design/foundation-design.md`**
+- [x] **Step 4: Translate `docs/design/foundation-design.md`**
 
 Translate every Korean sentence, heading, list item, and table cell into technical English. Rules for
 this file:
@@ -1586,7 +1586,7 @@ this file:
 - Keep all seven URLs and both fenced blocks pairs (four fence markers) byte-identical.
 - Preserve the decision content: which approaches were considered, which one was chosen, and why. A translated decision that reads as a new decision is a defect.
 
-- [ ] **Step 5: Translate `docs/design/engineering-harness-design.md`**
+- [x] **Step 5: Translate `docs/design/engineering-harness-design.md`**
 
 Same rules, plus:
 
@@ -1595,7 +1595,7 @@ Same rules, plus:
 - Keep both mentions of `d0a4165f170193ba1d026a259af40d35bb7eaefe` and all 32 URLs.
 - Keep all four Markdown tables at 36 table rows with 4 separator rows, and keep every row's cell count.
 
-- [ ] **Step 6: Translate `docs/design/gradle-kotlin-arc-foundation-design.md`**
+- [x] **Step 6: Translate `docs/design/gradle-kotlin-arc-foundation-design.md`**
 
 Same rules, plus:
 
@@ -1603,7 +1603,7 @@ Same rules, plus:
 - Keep every Gradle task name, scale set name (`arc-java-build`, `aks-runners`), Helm value, Kubernetes noun, registry name, and branch name exactly as written.
 - Keep all ten fence markers and all eight URLs.
 
-- [ ] **Step 7: Verify preservation**
+- [x] **Step 7: Verify preservation**
 
 ```bash
 for f in docs/design/foundation-design.md docs/design/engineering-harness-design.md docs/design/gradle-kotlin-arc-foundation-design.md; do
@@ -1618,13 +1618,13 @@ Run: `rg -l '\p{Hangul}' docs/design`
 
 Expected: no output.
 
-- [ ] **Step 8: Run the tests to verify they pass**
+- [x] **Step 8: Run the tests to verify they pass**
 
 Run: `./gradlew :build-tools:harness-policy:test --tests '*DocumentationLanguagePolicyTest*' --tests '*MarkdownLinkPolicyTest*'`
 
 Expected: PASS.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add docs/design build-tools/harness-policy/src/test/java/com/microsoft/agentframework/build/harness/DocumentationLanguagePolicyTest.java
@@ -1656,7 +1656,7 @@ git commit -m "docs: translate the foundation, harness, and build design documen
   - the header labels `**Prefix**` and `**Upstream features**`
   - the grade values `Required`, `Recommended`, `Optional`
 
-- [ ] **Step 1: Record the preservation baseline**
+- [x] **Step 1: Record the preservation baseline**
 
 ```bash
 for f in docs/requirements/README.md docs/requirements/0[1-6]-*.md; do
@@ -1681,7 +1681,7 @@ Expected:
 The `cols` line prints the sorted value-count shape of the adoption, grade, and phase columns. Record
 the printed values; Step 7 requires the identical shape.
 
-- [ ] **Step 2: Make the policy demand English for these seven documents**
+- [x] **Step 2: Make the policy demand English for these seven documents**
 
 In `DocumentationLanguagePolicyTest.java`, delete these seven lines from `PENDING_TRANSLATION`:
 
@@ -1697,13 +1697,13 @@ In `DocumentationLanguagePolicyTest.java`, delete these seven lines from `PENDIN
 
 Lower `PENDING_TRANSLATION_SIZE` from `49` to `42` in the same edit. Remove the entries from `PENDING_TRANSLATION` only; `ORIGINAL_PENDING_TRANSLATION` is frozen and is never edited, so `pendingTranslationListOnlyHoldsOriginallyDeclaredDocuments` keeps rejecting a document that was swapped in rather than translated.
 
-- [ ] **Step 3: Run the tests to verify they fail**
+- [x] **Step 3: Run the tests to verify they fail**
 
 Run: `./gradlew :build-tools:harness-policy:test --tests '*DocumentationLanguagePolicyTest*'`
 
 Expected: FAIL with seven `canonicalDocumentContainsNoKoreanText` cases naming the seven files.
 
-- [ ] **Step 4: Translate `docs/requirements/README.md`**
+- [x] **Step 4: Translate `docs/requirements/README.md`**
 
 - Translate every sentence, heading, list item, and table cell. The document has 30 table rows across four tables; every row survives with the same cell count.
 - Use these headings so the produced anchor contract holds: `## Requirement documents`, `## Requirement ids`, `## Requirement grades`, `## Release phases`, `## The shape of a requirement`, `## Decision rules`, `## Related documents`.
@@ -1714,7 +1714,7 @@ Expected: FAIL with seven `canonicalDocumentContainsNoKoreanText` cases naming t
 - Keep the release phase table rows `MVP`, `Core+`, `Workflow`, `Hosting`, `Optional` with their scope text translated.
 - Keep the `../upstream/snapshots/d0a4165f/compatibility-matrix.md`, `../design/foundation-design.md`, `../upstream/snapshots/d0a4165f/README.md`, and `../README.md` link targets unchanged.
 
-- [ ] **Step 5: Translate `docs/requirements/01-agent-execution.md` through `docs/requirements/06-sessions.md`**
+- [x] **Step 5: Translate `docs/requirements/01-agent-execution.md` through `docs/requirements/06-sessions.md`**
 
 Translate one file at a time, in ascending order. For every file:
 
@@ -1729,7 +1729,7 @@ Translate one file at a time, in ascending order. For every file:
 - Keep the `---` separators between requirement sections.
 - In `01-agent-execution.md`, the prose that cross-references `AGT-001` uses a same-document fragment. After the `AGT-001` heading is translated, update that fragment to the new anchor. Find it with `rg -n '\]\(#' docs/requirements/01-agent-execution.md` and compute the anchor with the rule in `MarkdownDocuments.anchorOf`: lower case, punctuation and backticks dropped, spaces become hyphens.
 
-- [ ] **Step 6: Retarget the shared grade anchor in all twelve requirement documents**
+- [x] **Step 6: Retarget the shared grade anchor in all twelve requirement documents**
 
 The twelve requirement documents link to the grade section of the index with a Korean anchor. The
 index heading is now `## Requirement grades`, so every link must move in this commit, including the
@@ -1744,7 +1744,7 @@ rg --count-matches '\(README\.md#requirement-grades\)' docs/requirements/*.md --
 Expected: the first command reports one match in each of the twelve numbered documents; the last
 command prints `12`.
 
-- [ ] **Step 7: Verify preservation**
+- [x] **Step 7: Verify preservation**
 
 ```bash
 for f in docs/requirements/README.md docs/requirements/0[1-6]-*.md; do
@@ -1786,14 +1786,14 @@ rg -l '\p{Hangul}' docs/requirements/README.md docs/requirements/0[1-6]-*.md
 
 Expected: heading counts 16, 13, 12, 21, 19, 20; no output from the second command.
 
-- [ ] **Step 8: Run the tests to verify they pass**
+- [x] **Step 8: Run the tests to verify they pass**
 
 Run: `./gradlew :build-tools:harness-policy:test --tests '*DocumentationLanguagePolicyTest*' --tests '*MarkdownLinkPolicyTest*'`
 
 Expected: PASS. The link test proves the retargeted `README.md#requirement-grades` anchor resolves
 from all twelve documents.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add docs/requirements build-tools/harness-policy/src/test/java/com/microsoft/agentframework/build/harness/DocumentationLanguagePolicyTest.java
@@ -1818,7 +1818,7 @@ git commit -m "docs: translate the requirements index and requirements 01-06" -m
 - Consumes: from Task 3, the headings `## Requirement grades`, the link target `(README.md#requirement-grades)` already applied to these six files, the section labels `**Requirement.**`, `**Upstream comparison**`, `**Decision.**`, `**Acceptance criteria**`, `**Evidence**`, the header labels `**Prefix**` and `**Upstream features**`, and the grade values `Required`, `Recommended`, `Optional`.
 - Produces: the complete English requirement corpus, 244 ids across twelve documents, for Task 8's final count.
 
-- [ ] **Step 1: Record the preservation baseline**
+- [x] **Step 1: Record the preservation baseline**
 
 ```bash
 for f in docs/requirements/0[7-9]-*.md docs/requirements/1[0-2]-*.md; do
@@ -1839,7 +1839,7 @@ Expected:
 | `docs/requirements/11-operations.md` | 26 | 0 | 0 | 0 | 34 | 2 | 29 | 4 | 109 |
 | `docs/requirements/12-providers.md` | 10 | 0 | 0 | 0 | 18 | 2 | 13 | 4 | 44 |
 
-- [ ] **Step 2: Make the policy demand English for these six documents**
+- [x] **Step 2: Make the policy demand English for these six documents**
 
 In `DocumentationLanguagePolicyTest.java`, delete these six lines from `PENDING_TRANSLATION`:
 
@@ -1854,13 +1854,13 @@ In `DocumentationLanguagePolicyTest.java`, delete these six lines from `PENDING_
 
 Lower `PENDING_TRANSLATION_SIZE` from `42` to `36` in the same edit. Remove the entries from `PENDING_TRANSLATION` only; `ORIGINAL_PENDING_TRANSLATION` is frozen and is never edited, so `pendingTranslationListOnlyHoldsOriginallyDeclaredDocuments` keeps rejecting a document that was swapped in rather than translated.
 
-- [ ] **Step 3: Run the tests to verify they fail**
+- [x] **Step 3: Run the tests to verify they fail**
 
 Run: `./gradlew :build-tools:harness-policy:test --tests '*DocumentationLanguagePolicyTest*'`
 
 Expected: FAIL with six `canonicalDocumentContainsNoKoreanText` cases naming the six files.
 
-- [ ] **Step 4: Translate the six documents**
+- [x] **Step 4: Translate the six documents**
 
 Translate one file at a time, in ascending order, applying exactly the rules listed in Task 3 Step 5:
 
@@ -1883,7 +1883,7 @@ git add docs/requirements/07-interceptors.md docs/requirements/08-harness.md doc
 git commit -m "docs: translate requirements 07-09" -m "Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
 ```
 
-- [ ] **Step 5: Verify preservation**
+- [x] **Step 5: Verify preservation**
 
 ```bash
 BASE=$(git rev-list -1 --grep='docs: plan the English documentation migration' HEAD)
@@ -1923,13 +1923,13 @@ rg --count-matches '^\| *[A-Z]{2,6}-[0-9]{3} *\|' docs/requirements/*.md --no-fi
 Expected: every value drawn only from `Required`, `Recommended`, `Optional`, `Deferred`, `MVP`,
 `Core+`, `Workflow`, `Hosting`; no output from the Korean scan; the id total prints `244`.
 
-- [ ] **Step 6: Run the tests to verify they pass**
+- [x] **Step 6: Run the tests to verify they pass**
 
 Run: `./gradlew :build-tools:harness-policy:test --tests '*DocumentationLanguagePolicyTest*' --tests '*MarkdownLinkPolicyTest*'`
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add docs/requirements build-tools/harness-policy/src/test/java/com/microsoft/agentframework/build/harness/DocumentationLanguagePolicyTest.java
@@ -1957,7 +1957,7 @@ git commit -m "docs: translate requirements 10-12 and enforce English requiremen
   - the coverage ledger verification phrase `OK (H1 present, snapshot=d0a4165f)`
   - the coverage ledger title column, which must keep quoting each feature document's exact H1 text
 
-- [ ] **Step 1: Record the preservation baseline**
+- [x] **Step 1: Record the preservation baseline**
 
 ```bash
 for f in docs/upstream/README.md docs/upstream/snapshots/d0a4165f/*.md docs/upstream/snapshots/d0a4165f/features/0*.md docs/upstream/snapshots/d0a4165f/features/1[0-5]-*.md; do
@@ -1991,7 +1991,7 @@ Expected:
 | `features/14-workflow-graph.md` | 0 | 217 | 218 | 0 | 0 | 0 | 15 | 20 | 96 |
 | `features/15-workflow-runtime.md` | 0 | 202 | 202 | 0 | 0 | 0 | 14 | 23 | 114 |
 
-- [ ] **Step 2: Make the policy demand English for these twenty documents**
+- [x] **Step 2: Make the policy demand English for these twenty documents**
 
 In `DocumentationLanguagePolicyTest.java`, delete these twenty lines from `PENDING_TRANSLATION`:
 
@@ -2020,13 +2020,13 @@ In `DocumentationLanguagePolicyTest.java`, delete these twenty lines from `PENDI
 
 Lower `PENDING_TRANSLATION_SIZE` from `36` to `16` in the same edit. Remove the entries from `PENDING_TRANSLATION` only; `ORIGINAL_PENDING_TRANSLATION` is frozen and is never edited, so `pendingTranslationListOnlyHoldsOriginallyDeclaredDocuments` keeps rejecting a document that was swapped in rather than translated.
 
-- [ ] **Step 3: Run the tests to verify they fail**
+- [x] **Step 3: Run the tests to verify they fail**
 
 Run: `./gradlew :build-tools:harness-policy:test --tests '*DocumentationLanguagePolicyTest*'`
 
 Expected: FAIL with twenty `canonicalDocumentContainsNoKoreanText` cases naming the twenty files.
 
-- [ ] **Step 4: Translate the upstream policy document and the snapshot index**
+- [x] **Step 4: Translate the upstream policy document and the snapshot index**
 
 `docs/upstream/README.md`:
 
@@ -2042,7 +2042,7 @@ Expected: FAIL with twenty `canonicalDocumentContainsNoKoreanText` cases naming 
 - Name the feature map heading exactly `## Document map by feature group`, and update the same-document link that targets it to `(#document-map-by-feature-group)`. Find it with `rg -n '\]\(#' docs/upstream/snapshots/d0a4165f/README.md`.
 - Keep all relative link targets under `./features/`, `./coverage-ledger.md`, `./compatibility-matrix.md`, and `./snapshot-manifest.md` unchanged.
 
-- [ ] **Step 5: Translate the manifest, ledger, and matrix**
+- [x] **Step 5: Translate the manifest, ledger, and matrix**
 
 `docs/upstream/snapshots/d0a4165f/snapshot-manifest.md`:
 
@@ -2068,7 +2068,7 @@ git add docs/upstream/README.md docs/upstream/snapshots/d0a4165f/README.md docs/
 git commit -m "docs: translate the upstream indexes, manifest, ledger, and matrix" -m "Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
 ```
 
-- [ ] **Step 6: Translate features 01 to 08**
+- [x] **Step 6: Translate features 01 to 08**
 
 Translate `features/01-agent-lifecycle.md`, `02-message-content.md`, `03-model-execution.md`,
 `04-structured-output.md`, `05-function-tools.md`, `06-tool-approval.md`, `07-mcp-client-tools.md`,
@@ -2089,7 +2089,7 @@ git add docs/upstream/snapshots/d0a4165f/features
 git commit -m "docs: translate upstream features 01-08" -m "Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
 ```
 
-- [ ] **Step 7: Translate features 09 to 15**
+- [x] **Step 7: Translate features 09 to 15**
 
 Translate `features/09-history-context-memory.md`, `10-middleware.md`, `11-compaction.md`,
 `12-harness.md`, `13-skills-background-code.md`, `14-workflow-graph.md`, and
@@ -2099,7 +2099,7 @@ Translate `features/09-history-context-memory.md`, `10-middleware.md`, `11-compa
 carries 441 permalinks across 96 level-3 headings. Translate them section by section and re-check the
 counts after each one rather than at the end.
 
-- [ ] **Step 8: Verify preservation**
+- [x] **Step 8: Verify preservation**
 
 ```bash
 BASE=$(git rev-list -1 --grep='docs: plan the English documentation migration' HEAD)
@@ -2121,13 +2121,13 @@ rg --count-matches 'https://github\.com/microsoft/agent-framework/blob/d0a4165f1
 
 Expected: no output from the first command; the second prints `3493`.
 
-- [ ] **Step 9: Run the tests to verify they pass**
+- [x] **Step 9: Run the tests to verify they pass**
 
 Run: `./gradlew :build-tools:harness-policy:test --tests '*DocumentationLanguagePolicyTest*' --tests '*MarkdownLinkPolicyTest*'`
 
 Expected: PASS.
 
-- [ ] **Step 10: Commit**
+- [x] **Step 10: Commit**
 
 ```bash
 git add docs/upstream build-tools/harness-policy/src/test/java/com/microsoft/agentframework/build/harness/DocumentationLanguagePolicyTest.java
@@ -2148,7 +2148,7 @@ git commit -m "docs: translate upstream features 09-15" -m "Co-authored-by: Copi
 - Consumes: the feature-document translation rules and the coverage ledger title contract from Task 5.
 - Produces: the last untranslated canonical documents, leaving `docs/ko/README.md` as the only entry left in `PENDING_TRANSLATION` handling for Task 7 and Task 8.
 
-- [ ] **Step 1: Record the preservation baseline**
+- [x] **Step 1: Record the preservation baseline**
 
 ```bash
 for f in docs/upstream/snapshots/d0a4165f/features/1[6-9]-*.md docs/upstream/snapshots/d0a4165f/features/2*.md docs/upstream/snapshots/d0a4165f/features/3*.md; do
@@ -2178,7 +2178,7 @@ Expected:
 | `features/30-packaging-compatibility.md` | 0 | 216 | 217 | 0 | 0 | 0 | 14 | 61 | 317 |
 | `features/31-provider-integrations.md` | 0 | 377 | 378 | 0 | 135 | 11 | 12 | 16 | 55 |
 
-- [ ] **Step 2: Make the policy demand English for these sixteen documents**
+- [x] **Step 2: Make the policy demand English for these sixteen documents**
 
 In `DocumentationLanguagePolicyTest.java`, delete these sixteen lines from `PENDING_TRANSLATION`:
 
@@ -2210,13 +2210,13 @@ with `Configuration error: You must configure at least one set of arguments for 
 `pendingTranslationEntryStillContainsKoreanText` in the same edit; the ratchet has reached its floor,
 and Task 8 deletes the test outright.
 
-- [ ] **Step 3: Run the tests to verify they fail**
+- [x] **Step 3: Run the tests to verify they fail**
 
 Run: `./gradlew :build-tools:harness-policy:test --tests '*DocumentationLanguagePolicyTest*'`
 
 Expected: FAIL with sixteen `canonicalDocumentContainsNoKoreanText` cases naming the sixteen files.
 
-- [ ] **Step 4: Translate features 16 to 23**
+- [x] **Step 4: Translate features 16 to 23**
 
 Translate `16-workflow-checkpoint-hitl.md`, `17-workflow-composition.md`, `18-orchestrations.md`,
 `19-declarative.md`, `20-hosting.md`, `21-openai-responses-hosting.md`, `22-a2a.md`, and
@@ -2238,7 +2238,7 @@ git add docs/upstream/snapshots/d0a4165f/features
 git commit -m "docs: translate upstream features 16-23" -m "Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
 ```
 
-- [ ] **Step 5: Translate features 24 to 31 and resynchronize the coverage ledger**
+- [x] **Step 5: Translate features 24 to 31 and resynchronize the coverage ledger**
 
 Translate `24-mcp-hosting.md`, `25-foundry-devui-channels.md`, `26-identity-session-routing.md`,
 `27-observability.md`, `28-errors-resilience-security.md`, `29-evaluation-testing.md`,
@@ -2262,7 +2262,7 @@ fi
 
 Expected: `PASS: ledger title matches H1: 25. Foundry hosting, DevUI, Aspire integration, ChatKit, Telegram, and other confirmed channel adapters`
 
-- [ ] **Step 6: Verify preservation**
+- [x] **Step 6: Verify preservation**
 
 ```bash
 BASE=$(git rev-list -1 --grep='docs: plan the English documentation migration' HEAD)
@@ -2280,14 +2280,14 @@ rg --count-matches 'https://github\.com/microsoft/agent-framework/blob/d0a4165f1
 Expected: `BASE` equals `WORK` and `NFB` equals `NFW` for every file and matches the table in Step 1;
 the Korean scan prints only `docs/ko/README.md`; the two permalink totals print `7286` and `3575`.
 
-- [ ] **Step 7: Run the tests to verify they pass**
+- [x] **Step 7: Run the tests to verify they pass**
 
 Run: `./gradlew :build-tools:harness-policy:test --tests '*DocumentationLanguagePolicyTest*' --tests '*MarkdownLinkPolicyTest*'`
 
 Expected: PASS, with `PENDING_TRANSLATION` now empty of feature documents and every remaining
 canonical document scanned.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add docs/upstream build-tools/harness-policy/src/test/java/com/microsoft/agentframework/build/harness/DocumentationLanguagePolicyTest.java
@@ -2313,7 +2313,7 @@ cannot be embedded here. Write it directly in `docs/ko/README.md` against the se
 link contract, and prohibition list below. Every one of them is objectively checkable by the
 commands in Step 4.
 
-- [ ] **Step 1: Rewrite the companion against the section contract**
+- [x] **Step 1: Rewrite the companion against the section contract**
 
 `docs/ko/README.md` is a curated guide, not a line-by-line translation of the root README. Give it
 these eight sections, in this order, written in Korean:
@@ -2331,7 +2331,7 @@ Keep the existing self-referencing fragment link working: if the current-state h
 the same-document link that targets it in the same edit. Find it with `rg -n '\]\(#' docs/ko/README.md`
 and compute the new anchor with the rule in `MarkdownDocuments.anchorOf`.
 
-- [ ] **Step 2: Apply the companion prohibitions**
+- [x] **Step 2: Apply the companion prohibitions**
 
 The companion routes readers to canonical English contracts. It must not become a second
 specification tree, so it must not contain:
@@ -2344,7 +2344,7 @@ specification tree, so it must not contain:
 
 Where the reader needs that content, link the English document instead.
 
-- [ ] **Step 3: Apply the link contract**
+- [x] **Step 3: Apply the link contract**
 
 `docs/ko/README.md` must contain link targets `../../README.md`, `../README.md`,
 `../requirements/README.md`, `../design/foundation-design.md`, `../design/module-composition.md`,
@@ -2354,7 +2354,7 @@ Where the reader needs that content, link the English document instead.
 `README.md` must contain `](docs/README.md)` and `](docs/ko/README.md)`; `docs/README.md` must
 contain `](ko/README.md)` and `](../README.md)`. Task 1 added all four; re-add anything missing.
 
-- [ ] **Step 4: Verify the companion**
+- [x] **Step 4: Verify the companion**
 
 ```bash
 doc_metrics < docs/ko/README.md
@@ -2374,7 +2374,7 @@ non-zero line count; the marker sentence matches once; the three prohibition che
 fallback message; every link target reports at least `1` and none reports `MISSING`; `git ls-files`
 lists only `docs/ko/README.md`.
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [x] **Step 5: Run the tests to verify they pass**
 
 Run: `./gradlew :build-tools:harness-policy:test --tests '*DocumentationLanguagePolicyTest*' --tests '*MarkdownLinkPolicyTest*'`
 
@@ -2382,7 +2382,7 @@ Expected: PASS, including `koreanCompanionDeclaresEnglishAsAuthoritative`,
 `koreanCompanionIsTheOnlyDocumentUnderDocsKo`, and every
 `directoryIndexLinksBackToTheDocumentationIndex` case.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add docs/ko/README.md docs/README.md README.md
@@ -2402,7 +2402,7 @@ git commit -m "docs: expand the Korean companion and documentation navigation" -
 - Consumes: everything produced by Tasks 1 through 7.
 - Produces: an unconditional language policy with no suppression list, and the final report.
 
-- [ ] **Step 1: Prove the migration list is empty of live entries**
+- [x] **Step 1: Prove the migration list is empty of live entries**
 
 Run: `rg -n 'PENDING_TRANSLATION' build-tools/harness-policy/src/test/java/com/microsoft/agentframework/build/harness/DocumentationLanguagePolicyTest.java`
 
@@ -2410,7 +2410,7 @@ Expected: the constant is declared and referenced, and `Set.of(` is followed imm
 no remaining document paths. If any path remains, the task that owned it is unfinished; stop and
 finish that task first.
 
-- [ ] **Step 2: Delete the migration list and its guard**
+- [x] **Step 2: Delete the migration list and its guard**
 
 In `DocumentationLanguagePolicyTest.java`:
 
@@ -2429,14 +2429,14 @@ In `DocumentationLanguagePolicyTest.java`:
 The scan is now unconditional: every repository-owned Markdown file except the companion must be
 English, with no allowlist that a future document could be added to.
 
-- [ ] **Step 3: Run the language and link policy to verify it passes unconditionally**
+- [x] **Step 3: Run the language and link policy to verify it passes unconditionally**
 
 Run: `./gradlew :build-tools:harness-policy:test --tests '*DocumentationLanguagePolicyTest*' --tests '*MarkdownLinkPolicyTest*'`
 
 Expected: PASS with one `canonicalDocumentContainsNoKoreanText` case per document and no skipped or
 suppressed case.
 
-- [ ] **Step 4: Prove the policy actually fails on a regression**
+- [x] **Step 4: Prove the policy actually fails on a regression**
 
 ```bash
 python3 -c "open('docs/README.md','a',encoding='utf-8').write('\\n' + chr(0xD55C) + chr(0xAE00) + '\\n')"
@@ -2454,7 +2454,7 @@ git status --short docs/README.md
 
 Expected: PASS, and `git status --short` prints nothing.
 
-- [ ] **Step 5: Run the whole-corpus preservation comparison**
+- [x] **Step 5: Run the whole-corpus preservation comparison**
 
 ```bash
 BASE=$(git rev-list -1 --grep='docs: plan the English documentation migration' HEAD)
@@ -2470,7 +2470,7 @@ Expected: only `comparison complete`. `README.md` is compared too and must match
 documentation-index row Task 1 added; if the loop reports `README.md` with a table-row difference of
 exactly one, confirm the difference is that row and nothing else.
 
-- [ ] **Step 6: Run the global evidence and requirement counts**
+- [x] **Step 6: Run the global evidence and requirement counts**
 
 ```bash
 CORPUS=$(git ls-files 'docs/*.md' 'README.md' | rg -v '^docs/plans/')
@@ -2487,7 +2487,7 @@ rg --count-matches '^## [A-Z]{2,6}-[0-9]{3} ' docs/requirements/*.md --no-filena
 
 Expected, in order: `244`, `7286`, `7350`, `244`, `244`, `244`, `244`, `244`, `244`.
 
-- [ ] **Step 7: Run the terminology sweep**
+- [x] **Step 7: Run the terminology sweep**
 
 ```bash
 for f in $(git ls-files 'docs/requirements/*.md'); do printf '%-48s %s | %s | %s\n' "$f" "$(column_values 4 < "$f")" "$(column_values 5 < "$f")" "$(column_values 6 < "$f")"; done
@@ -2501,7 +2501,7 @@ Expected: every adoption, grade, and phase value drawn only from `Required`, `Re
 `Optional`, `Deferred`, `MVP`, `Core+`, `Workflow`, `Hosting`; the three drift probes print their
 fallback message or a short list you then fix in place.
 
-- [ ] **Step 8: Run the language and link scans one last time**
+- [x] **Step 8: Run the language and link scans one last time**
 
 ```bash
 rg -l '\p{Hangul}' --glob '*.md' .
@@ -2512,7 +2512,7 @@ git ls-files 'docs/ko/*'
 Expected: the first command prints exactly `docs/ko/README.md`; the second prints nothing; the third
 prints exactly `docs/ko/README.md`.
 
-- [ ] **Step 9: Run the full verification contract**
+- [x] **Step 9: Run the full verification contract**
 
 Run: `./gradlew policyCheck`
 Expected: BUILD SUCCESSFUL.
@@ -2530,7 +2530,7 @@ Expected: BUILD SUCCESSFUL.
 Run: `git diff --stat build-tools/harness-policy/gradle.lockfile gradle/libs.versions.toml`
 Expected: no output.
 
-- [ ] **Step 10: Review the migration diff**
+- [x] **Step 10: Review the migration diff**
 
 ```bash
 BASE=$(git rev-list -1 --grep='docs: plan the English documentation migration' HEAD)
@@ -2550,14 +2550,14 @@ coverage ledger, and the compatibility matrix, and confirm for each:
 Record any ambiguity found during translation in the final report rather than resolving it in a
 document.
 
-- [ ] **Step 11: Commit**
+- [x] **Step 11: Commit**
 
 ```bash
 git add build-tools/harness-policy/src/test/java/com/microsoft/agentframework/build/harness/DocumentationLanguagePolicyTest.java docs README.md
 git commit -m "docs: enforce the English documentation policy without a migration list" -m "Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
 ```
 
-- [ ] **Step 12: Report**
+- [x] **Step 12: Report**
 
 State, in this order: the commands run and their outcomes; any check that could not run and why; the
 final counts from Step 6; the list of documents translated per task; and every ambiguity found but
