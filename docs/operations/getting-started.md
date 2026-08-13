@@ -50,7 +50,7 @@ requirement wins, because the requirement is where a Java decision was made.
 
 Every requirement has a stable id such as `AGT-002`. Good first targets share three traits:
 
-- graded **필수** so the decision is settled,
+- graded **Required** so the decision is settled,
 - staged **MVP** so nothing else must land first,
 - owned by `agent-framework-api` so no execution machinery is needed.
 

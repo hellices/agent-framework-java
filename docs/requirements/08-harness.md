@@ -1,536 +1,560 @@
-# 08 하네스 기능
+# 08 Harness features
 
-**접두사** `HAR` · **원본 기능** [12 harness](../upstream/snapshots/d0a4165f/features/12-harness.md),
+**Prefix** `HAR` · **Upstream features** [12 harness](../upstream/snapshots/d0a4165f/features/12-harness.md),
 [13 skills-background-code](../upstream/snapshots/d0a4165f/features/13-skills-background-code.md)
 
-하네스 조립, 반복 정책, 내장 제공자, 스킬, 승인 기본 조립, 선택적 실행 모듈의 계약을 정의한다.
-하네스는 실행 커널이 아니라 의견이 담긴 조립 계층이다. 모델 호출, 세션, 워크플로 커널은
-각 소유 문서가 맡고, 승인 상태 기계·standing rule 의미·예산 계산은 [04 도구 정의와 실행 루프](04-tools.md)와 [07 인터셉터와 컨텍스트 관리](07-interceptors.md)가
-소유한다. 이 문서는 하네스가 그 계약을 어떤 기본 조합으로 켜는지만 다룬다.
+Defines the contracts for harness assembly, the iteration policy, the built-in providers, skills,
+the default approval assembly, and the optional execution modules. The harness is not an execution
+kernel but an opinionated assembly layer. Model calls, sessions, and the workflow kernel are handled
+by their own owning documents, and the approval state machine, the meaning of a standing rule, and
+budget accounting are owned by [04 Tool definitions and the tool call loop](04-tools.md) and [07 Interceptors and context management](07-interceptors.md).
+This document covers only which default combination the harness switches those contracts on with.
 
-## 채택 범위
+## Adoption scope
 
-이 문서의 `등급`은 [README](README.md#요구사항-등급) 정의대로 기능을 만들기로 했을 때의 강제력이고, 채택 여부는 [호환성 매트릭스](../upstream/snapshots/d0a4165f/compatibility-matrix.md)를 따른다.
+The `Grade` column in this document is, as [README](README.md#requirement-grades) defines it, how binding a requirement is once the decision to build the feature has been made; whether the feature is adopted at all follows the [compatibility matrix](../upstream/snapshots/d0a4165f/compatibility-matrix.md).
 
-- 하네스(`HAR01`, `HAR02`), 스킬(`SKL01`), 백그라운드(`BKG01`)는 모두 채택 `보류`다.
-- 따라서 이 문서 전체는 MVP 이후에만 검토하는 보류 범위다.
+- The harness (`HAR01`, `HAR02`), skills (`SKL01`), and background (`BKG01`) all have adoption `Deferred`.
+- This whole document is therefore deferred scope that is reviewed only after the MVP.
 
-## 요약
+## Summary
 
-| ID | 요구사항 | 채택 | 등급 | 단계 |
+| ID | Requirement | Adoption | Grade | Phase |
 | --- | --- | --- | --- | --- |
-| HAR-001 | 하네스는 조립 계층으로만 둔다 | 보류 | 필수 | Core+ |
-| HAR-002 | 기본 하네스 조립은 보수적 opt-in 정책을 따른다 | 보류 | 필수 | Core+ |
-| HAR-003 | 하네스는 잘못된 조합을 생성 시점에 거부한다 | 보류 | 필수 | Core+ |
-| HAR-004 | 자동 반복은 predicate 미들웨어 seam으로 시작한다 | 보류 | 권장 | Core+ |
-| HAR-005 | 반복은 승인 대기에서 즉시 멈춘다 | 보류 | 필수 | Core+ |
-| HAR-006 | Todo 제공자는 세션 상태 저장만 코어에 포함한다 | 보류 | 필수 | Core+ |
-| HAR-007 | Todo 조작 결과는 안정된 계약을 가진다 | 보류 | 권장 | Core+ |
-| HAR-008 | Mode 제공자는 기본 `plan` 모드와 외부 변경 알림을 제공한다 | 보류 | 필수 | Core+ |
-| HAR-009 | File memory는 세션 범위를 기본값으로 하고 예약 이름을 막는다 | 보류 | 필수 | Core+ |
-| HAR-010 | File access는 별도 선택 모듈로만 제공한다 | 보류 | 선택 | Optional |
-| HAR-011 | Tool approval은 대기열과 standing rule을 세션에 유지한다 | 보류 | 필수 | Core+ |
-| HAR-012 | Tool approval 규칙은 인자와 호스트 경계를 정확히 구분한다 | 보류 | 필수 | Core+ |
-| HAR-013 | 승인 재진입은 같은 요청 예산 안에서 계산한다 | 보류 | 권장 | Core+ |
-| HAR-014 | Skills는 progressive disclosure와 세 도구 표면을 유지한다 | 보류 | 권장 | Optional |
-| HAR-015 | Skill script 실행은 기본 승인 필요다 | 보류 | 필수 | Optional |
-| HAR-016 | 파일 기반 skills와 상세 오류는 신뢰 경계를 넘지 않게 다룬다 | 보류 | 필수 | Optional |
-| HAR-017 | Background agents는 MVP에 넣지 않고 나중에도 polling registry로 시작한다 | 보류 | 권장 | Optional |
-| HAR-018 | 셸 실행은 별도 tools 모듈에서 수동 조립한다 | 보류 | 선택 | Optional |
-| HAR-019 | 셸과 로컬 실행의 거부 목록은 가드레일로만 문서화한다 | 보류 | 필수 | Optional |
-| HAR-020 | LocalCodeAct는 샌드박스로 취급하지 않고 코어에서 제외한다 | 보류 | 선택 | Optional |
-| HAR-021 | 샌드박스형 CodeAct 백엔드는 별도 선택 모듈로 분리한다 | 보류 | 선택 | Optional |
+| HAR-001 | The harness is kept as an assembly layer only | Deferred | Required | Core+ |
+| HAR-002 | The default harness assembly follows a conservative opt-in policy | Deferred | Required | Core+ |
+| HAR-003 | The harness rejects an invalid combination at creation time | Deferred | Required | Core+ |
+| HAR-004 | Automatic iteration starts from a predicate middleware seam | Deferred | Recommended | Core+ |
+| HAR-005 | Iteration stops immediately on a pending approval | Deferred | Required | Core+ |
+| HAR-006 | The Todo provider includes only session state storage in the core | Deferred | Required | Core+ |
+| HAR-007 | Todo manipulation results have a stable contract | Deferred | Recommended | Core+ |
+| HAR-008 | The Mode provider offers a default `plan` mode and external change notifications | Deferred | Required | Core+ |
+| HAR-009 | File memory defaults to session scope and blocks reserved names | Deferred | Required | Core+ |
+| HAR-010 | File access is provided only as a separate optional module | Deferred | Optional | Optional |
+| HAR-011 | Tool approval keeps the queue and the standing rules in the session | Deferred | Required | Core+ |
+| HAR-012 | Tool approval rules distinguish arguments and host boundaries exactly | Deferred | Required | Core+ |
+| HAR-013 | Approval re-entry is counted within the same request budget | Deferred | Recommended | Core+ |
+| HAR-014 | Skills keep progressive disclosure and the three tool surfaces | Deferred | Recommended | Optional |
+| HAR-015 | Skill script execution requires approval by default | Deferred | Required | Optional |
+| HAR-016 | File-based skills and detailed errors are handled so they do not cross the trust boundary | Deferred | Required | Optional |
+| HAR-017 | Background agents are left out of the MVP and start from a polling registry even later | Deferred | Recommended | Optional |
+| HAR-018 | Shell execution is assembled manually from a separate tools module | Deferred | Optional | Optional |
+| HAR-019 | The denylists of shell and local execution are documented as guardrails only | Deferred | Required | Optional |
+| HAR-020 | LocalCodeAct is not treated as a sandbox and is excluded from the core | Deferred | Optional | Optional |
+| HAR-021 | Sandboxed CodeAct backends are split into a separate optional module | Deferred | Optional | Optional |
 
 ---
 
-## HAR-001 하네스는 조립 계층으로만 둔다
+## HAR-001 The harness is kept as an assembly layer only
 
-**요구사항.** Java 하네스는 실행 커널을 다시 구현하지 않고 기존 에이전트, 컨텍스트 제공자,
-미들웨어, 승인 계층을 조립하는 표면으로만 제공해야 한다.
+**Requirement.** The Java harness must not reimplement the execution kernel and must be provided
+only as a surface that assembles the existing agent, context providers, middleware, and approval
+layer.
 
-**원본 비교**
+**Upstream comparison**
 
-- .NET: `HarnessAgent`가 chat client stack, context providers, decorator를 조립한다.
-- Python: `create_harness_agent`가 history, providers, middleware, tools를 조립한다.
+- .NET: `HarnessAgent` assembles the chat client stack, context providers, and decorators.
+- Python: `create_harness_agent` assembles history, providers, middleware, and tools.
 
-**판단.** 두 원본 모두 하네스를 orchestration kernel이 아니라 opinionated assembly layer로 둔다.
-Java도 이 경계를 유지해야 `AgentEngine`이 호스트 책임을 가져오지 않는다. 하네스가 커널까지
-흡수하면 세션, 워크플로, 공급자 경계가 흐려진다.
+**Decision.** Both upstreams keep the harness as an opinionated assembly layer rather than an
+orchestration kernel. Java must hold the same boundary so that `AgentEngine` does not take on host
+responsibilities. If the harness absorbs the kernel too, the session, workflow, and provider
+boundaries blur.
 
-**수용 기준**
+**Acceptance criteria**
 
-- 하네스 API는 기존 `Agent`와 컨텍스트 제공자 조합 결과를 반환한다.
-- 하네스 모듈이 독자적인 모델 호출 루프나 세션 저장 형식을 새로 정의하지 않는다.
-- 하네스 없이도 같은 코어 `Agent`를 직접 조립해 실행할 수 있다.
+- The harness API returns the result of combining an existing `Agent` with context providers.
+- The harness module does not newly define its own model call loop or session storage format.
+- The same core `Agent` can be assembled and run directly without the harness.
 
-**근거** [12 하네스 조립](../upstream/snapshots/d0a4165f/features/12-harness.md)
-
----
-
-## HAR-002 기본 하네스 조립은 보수적 opt-in 정책을 따른다
-
-**요구사항.** 기본 하네스 조립은 todo, mode, file memory, approval만 자동 포함하고, skills,
-file access, background agents, shell, code execution은 명시적으로 요청할 때만 붙여야 한다.
-
-**원본 비교**
-
-- .NET: 현재 작업 디렉터리 기반 skills를 기본으로 붙이고 file access, background는 옵션으로 둔다.
-- Python: skills, file access, background, shell을 모두 명시적 opt-in으로 둔다.
-
-**판단.** Java는 Python 쪽 기본값을 택한다. 더 안전한 기본값이 우선이고, 하네스는 연구용 편의
-계층이라 자동 확장을 최소화하는 편이 낫다. 파일 접근과 스크립트 실행을 기본 활성화하면 호스트가
-모르는 신뢰 경계를 만든다.
-
-**수용 기준**
-
-- 기본 하네스 생성만으로 skills, file access, background, shell 도구가 노출되지 않는다.
-- 해당 기능은 전용 옵션이나 모듈 의존성을 준 경우에만 조립된다.
-- 기본 조립 결과에 todo, mode, file memory, approval이 포함된다.
-
-**근거** [12 하네스 조립](../upstream/snapshots/d0a4165f/features/12-harness.md), [13 공통 비교](../upstream/snapshots/d0a4165f/features/13-skills-background-code.md)
+**Evidence** [12 harness assembly](../upstream/snapshots/d0a4165f/features/12-harness.md)
 
 ---
 
-## HAR-003 하네스는 잘못된 조합을 생성 시점에 거부한다
+## HAR-002 The default harness assembly follows a conservative opt-in policy
 
-**요구사항.** 하네스 옵션이 서로 모순되면 Java는 첫 실행 전이 아니라 생성 시점에 실패해야 한다.
+**Requirement.** The default harness assembly must include only todo, mode, file memory, and
+approval automatically, and must attach skills, file access, background agents, shell, and code
+execution only when they are explicitly requested.
 
-**원본 비교**
+**Upstream comparison**
 
-- .NET: 잘못된 context/output token 조합을 constructor 단계에서 거부한다.
-- Python: 잘못된 토큰 조합을 하네스 조립 단계에서 거부한다.
+- .NET: Attaches skills based on the current working directory by default and keeps file access and background as options.
+- Python: Keeps skills, file access, background, and shell all as explicit opt-ins.
 
-**판단.** 동일하다. 하네스는 조립 계층이므로 오류를 늦게 드러낼 이유가 없다. 실행 도중 실패하게
-두면 사용자 메시지와 상태를 소비한 뒤에야 잘못된 구성임을 알게 된다.
+**Decision.** Java takes the Python defaults. The safer default comes first, and because the harness
+is a convenience layer for research, minimizing automatic expansion is better. Enabling file access
+and script execution by default creates a trust boundary the host does not know about.
 
-**수용 기준**
+**Acceptance criteria**
 
-- 잘못된 옵션 조합으로 하네스를 만들면 예외가 즉시 발생한다.
-- 실패 전까지 모델 호출이나 세션 변경이 일어나지 않는다.
-- 동일한 잘못된 조합은 완료 실행과 스트리밍 실행 모두에서 같은 예외 범주로 보고된다.
+- Creating the default harness alone does not expose the skills, file access, background, or shell tools.
+- Those features are assembled only when a dedicated option or module dependency is given.
+- The default assembly result includes todo, mode, file memory, and approval.
 
-**근거** [12 하네스 조립](../upstream/snapshots/d0a4165f/features/12-harness.md)
-
----
-
-## HAR-004 자동 반복은 predicate 미들웨어 seam으로 시작한다
-
-**요구사항.** Java 하네스의 자동 반복은 MVP에서 단일 predicate 미들웨어 seam으로 제공하고,
-정렬된 evaluator chain은 후속 단계로 남겨야 한다.
-
-**원본 비교**
-
-- .NET: ordered evaluator chain으로 반복 여부를 결정한다.
-- Python: `should_continue` predicate와 helper 함수 조합으로 반복을 구현한다.
-
-**판단.** Java는 구현 난이도와 설명 가능성을 위해 Python 모델을 먼저 택한다. 하네스는 코어 실행
-커널이 아니므로 초기에 복잡한 evaluator 우선순위 체계를 도입할 필요가 없다. 다만 후속 단계에서
-체인 모델로 확장할 수 있게 seam은 열어 둔다.
-
-**수용 기준**
-
-- 반복 여부를 결정하는 공개 seam이 단일 predicate 인터페이스로 존재한다.
-- 반복 seam은 다음 입력 메시지를 반환하거나 중단을 선택할 수 있다.
-- evaluator chain 전용 공개 타입은 Core+ 초기 단계에 필수로 요구되지 않는다.
-
-**근거** [12 자동 반복 정책](../upstream/snapshots/d0a4165f/features/12-harness.md)
+**Evidence** [12 harness assembly](../upstream/snapshots/d0a4165f/features/12-harness.md), [13 shared comparison](../upstream/snapshots/d0a4165f/features/13-skills-background-code.md)
 
 ---
 
-## HAR-005 반복은 승인 대기에서 즉시 멈춘다
+## HAR-003 The harness rejects an invalid combination at creation time
 
-**요구사항.** 반복 중 승인 대기 요청이 생기면 하네스는 즉시 실행을 멈추고 호출자에게 그 요청을
-반환해야 한다.
+**Requirement.** When harness options contradict each other, Java must fail at creation time rather
+than before the first run.
 
-**원본 비교**
+**Upstream comparison**
 
-- .NET: loop evaluator가 pending approval을 만나면 반복을 멈춘다.
-- Python: loop helper가 pending approval을 만나면 caller에 approval request를 돌려준다.
+- .NET: Rejects an invalid context/output token combination at the constructor stage.
+- Python: Rejects an invalid token combination at the harness assembly stage.
 
-**판단.** 동일하다. 승인 대기 중에 다음 반복을 계속 돌리면 아직 결정되지 않은 side effect 위에
-새 상태를 쌓게 된다. 승인 계층은 하네스의 안전 조정자이므로 반복보다 우선한다.
+**Decision.** Both upstreams agree. Because the harness is an assembly layer, there is no reason to
+surface the error late. Letting it fail during execution means the misconfiguration is discovered
+only after user messages and state have been consumed.
 
-**수용 기준**
+**Acceptance criteria**
 
-- 승인 요청이 생긴 run은 같은 run 안에서 다음 반복을 시작하지 않는다.
-- 호출자는 대기 중인 승인 요청 하나를 즉시 관찰할 수 있다.
-- 승인 응답을 주기 전까지 같은 요청에 대한 추가 자동 반복이 발생하지 않는다.
+- Creating a harness with an invalid option combination raises an exception immediately.
+- No model call or session change happens before the failure.
+- The same invalid combination is reported in the same exception category in both completion and streaming execution.
 
-**근거** [12 자동 반복 정책](../upstream/snapshots/d0a4165f/features/12-harness.md), [12 도구 승인](../upstream/snapshots/d0a4165f/features/12-harness.md)
-
----
-
-## HAR-006 Todo 제공자는 세션 상태 저장만 코어에 포함한다
-
-**요구사항.** Java 코어 하네스는 세션 상태 기반 Todo 제공자만 포함하고, 파일 기반 Todo 저장은
-별도 선택 기능으로 남겨야 한다.
-
-**원본 비교**
-
-- .NET: todo provider와 관련 테스트가 안정된 표면을 가진다.
-- Python: 세션 상태 저장과 파일 저장을 모두 제공하지만 file-backed store는 더 넓은 운영 표면을 가진다.
-
-**판단.** Java는 세션 상태 경로만 코어에 넣는다. file-backed store는 경로 안전성, rename 실패,
-crash safety를 함께 설계해야 하므로 하네스 Core+ 범위를 넘는다. loop와 mode 통합에는 세션 상태
-모델만으로 충분하다.
-
-**수용 기준**
-
-- 코어 하네스 모듈은 세션 상태에 Todo 목록을 저장한다.
-- 코어 하네스 모듈이 파일 경로를 요구하지 않는다.
-- 파일 기반 Todo 저장은 별도 모듈 없이는 사용할 수 없다.
-
-**근거** [12 Todo provider](../upstream/snapshots/d0a4165f/features/12-harness.md)
+**Evidence** [12 harness assembly](../upstream/snapshots/d0a4165f/features/12-harness.md)
 
 ---
 
-## HAR-007 Todo 조작 결과는 안정된 계약을 가진다
+## HAR-004 Automatic iteration starts from a predicate middleware seam
 
-**요구사항.** Todo 추가와 완료 도구는 증가하는 식별자 부여와 존재하지 않는 항목에 대한 0건 완료
-반환을 고정 계약으로 가져야 한다.
+**Requirement.** Automatic iteration in the Java harness must be provided as a single predicate
+middleware seam in the MVP, and an ordered evaluator chain must be left to a later stage.
 
-**원본 비교**
+**Upstream comparison**
 
-- .NET: `todos_add` 증가 ID와 `todos_complete`의 0 반환을 테스트로 고정한다.
-- Python: 같은 동작을 따르며 file-backed 저장의 내구성까지 추가로 검증한다.
+- .NET: Decides whether to iterate with an ordered evaluator chain.
+- Python: Implements iteration with a `should_continue` predicate combined with helper functions.
 
-**판단.** 동일하다. 하네스 루프와 프롬프트는 Todo 도구를 결정적 상태 기계처럼 다룬다. 존재하지
-않는 ID를 예외로 바꾸면 모델이 보정하기 어려운 실패가 된다.
+**Decision.** Java takes the Python model first, for implementation cost and explainability. The
+harness is not the core execution kernel, so there is no need to introduce a complex evaluator
+priority scheme early. The seam is nevertheless left open so it can grow into the chain model in a
+later stage.
 
-**수용 기준**
+**Acceptance criteria**
 
-- 한 번의 추가 호출에서 생성된 Todo ID는 중복되지 않는다.
-- 나중에 추가한 Todo의 ID는 앞선 ID보다 크다.
-- 존재하지 않는 ID 집합을 완료하면 반환값은 0이다.
+- The public seam that decides whether to iterate exists as a single predicate interface.
+- The iteration seam can return the next input message or choose to stop.
+- A public type dedicated to an evaluator chain is not required in the early Core+ stage.
 
-**근거** [12 Todo provider](../upstream/snapshots/d0a4165f/features/12-harness.md)
-
----
-
-## HAR-008 Mode 제공자는 기본 `plan` 모드와 외부 변경 알림을 제공한다
-
-**요구사항.** Mode 제공자는 기본 모드를 `plan`으로 시작하고, 외부에서 모드가 바뀌면 다음 turn에
-사용자 역할 알림으로 그 변경을 주입해야 한다.
-
-**원본 비교**
-
-- .NET: 기본 mode를 `plan`으로 두고 잘못된 mode 설정을 거부한다.
-- Python: 외부 helper가 mode를 바꾸면 다음 run 전에 notification을 주입한다.
-
-**판단.** Java는 두 원본의 계약을 합친다. 기본 모드를 고정해야 프롬프트 앵커가 생기고, 외부 변경
-알림이 있어야 시스템 지시만으로는 부족한 mode 전환을 모델이 관찰할 수 있다.
-
-**수용 기준**
-
-- 새 세션에서 mode를 읽으면 `plan`이다.
-- 허용되지 않은 mode 설정은 실패하고 기존 mode를 보존한다.
-- 외부 helper가 mode를 바꾸면 다음 turn 입력에 변경 알림 메시지가 포함된다.
-
-**근거** [12 Mode provider](../upstream/snapshots/d0a4165f/features/12-harness.md)
+**Evidence** [12 automatic iteration policy](../upstream/snapshots/d0a4165f/features/12-harness.md)
 
 ---
 
-## HAR-009 File memory는 세션 범위를 기본값으로 하고 예약 이름을 막는다
+## HAR-005 Iteration stops immediately on a pending approval
 
-**요구사항.** File memory 제공자는 기본 namespace를 세션 범위로 잡고, 내부 예약 파일 이름은 저장을
-거부해야 한다.
+**Requirement.** When a pending approval request appears during iteration, the harness must stop
+execution immediately and return that request to the caller.
 
-**원본 비교**
+**Upstream comparison**
 
-- .NET: 기본 namespace 초기화와 예약 이름 검증을 제공한다.
-- Python: `session_id` 범위 namespace와 `memories.md` 주입, 예약 이름 거부를 테스트로 고정한다.
+- .NET: The loop evaluator stops iterating when it meets a pending approval.
+- Python: The loop helper returns the approval request to the caller when it meets a pending approval.
 
-**판단.** Java는 Python의 세션 범위 기본값을 택한다. timestamp+GUID 기본값보다 재현성과 디버깅이
-좋다. 또한 내부 인덱스와 설명 파일 이름을 열어 두면 모델이 메모리 시스템 파일을 오염시킬 수 있다.
+**Decision.** Both upstreams agree. Continuing to run the next iteration while an approval is
+pending piles new state on top of a side effect that has not been decided yet. The approval layer is
+the harness's safety coordinator, so it takes precedence over iteration.
 
-**수용 기준**
+**Acceptance criteria**
 
-- 별도 shared scope를 주지 않으면 같은 세션 안에서만 같은 memory namespace를 본다.
-- 메모리 저장 뒤 다음 run에서 `memories.md` 인덱스가 컨텍스트로 주입된다.
-- `memories.md`와 `*_description.md` 이름으로는 저장할 수 없다.
+- A run in which an approval request appeared does not start the next iteration inside the same run.
+- The caller can immediately observe one pending approval request.
+- No further automatic iteration for the same request happens until an approval response is given.
 
-**근거** [12 File memory](../upstream/snapshots/d0a4165f/features/12-harness.md)
-
----
-
-## HAR-010 File access는 별도 선택 모듈로만 제공한다
-
-**요구사항.** File access 제공자는 Java 코어 하네스에 포함하지 않고, 전용 선택 모듈에서 명시적
-opt-in으로만 제공해야 한다.
-
-**원본 비교**
-
-- .NET: file access 관련 옵션이 experimental이고 기본은 approval-required다.
-- Python: file access는 opt-in이며 경로 안전성과 정규식 guard를 함께 구현한다.
-
-**판단.** 둘 다 기능은 있지만 표면이 넓다. shared mutable state, 승인 경계, symlink 차단,
-regex timeout까지 묶여 있어 코어 하네스에 넣기에는 위험하다. Java는 별도 모듈로 분리한다.
-
-**수용 기준**
-
-- 코어 하네스 의존성만으로 file access 도구를 사용할 수 없다.
-- file access를 쓰려면 별도 모듈과 명시적 설정이 필요하다.
-- file access 모듈 기본값은 approval-required다.
-
-**근거** [12 File access](../upstream/snapshots/d0a4165f/features/12-harness.md)
+**Evidence** [12 automatic iteration policy](../upstream/snapshots/d0a4165f/features/12-harness.md), [12 tool approval](../upstream/snapshots/d0a4165f/features/12-harness.md)
 
 ---
 
-## HAR-011 Tool approval은 대기열과 standing rule을 세션에 유지한다
+## HAR-006 The Todo provider includes only session state storage in the core
 
-**요구사항.** 기본 하네스 approval 조립은 [04 도구 정의와 실행 루프](04-tools.md)와 [07 인터셉터와 컨텍스트 관리](07-interceptors.md)가 정의한 승인 규칙 상태와 대기 중 요청 상태를 세션 저장 경로에 연결하고, 호출자 표면에는 한 번에 하나의 pending request만 노출해야 한다.
+**Requirement.** The Java core harness must include only the session-state-based Todo provider, and
+must leave file-based Todo storage as a separate optional feature.
 
-**원본 비교**
+**Upstream comparison**
 
-- .NET: approval agent가 rules와 queued state를 세션에 저장하고 one-by-one surface를 사용한다.
-- Python: approval middleware가 `rules`, `queued_approval_requests`, `collected_approval_responses`를 상태에 저장한다.
+- .NET: The todo provider and its tests have a stable surface.
+- Python: Provides both session state storage and file storage, but the file-backed store has a wider operational surface.
 
-**판단.** 여러 승인 요청을 한 번에 노출하지 않는 surface는 유지하되, 상태 기계의 의미 자체는 소유 문서를 재정의하지 않는다. 하네스는 approval 컴포넌트를 세션 backing store와 기본 UI surface에 올리는 조립 책임만 가진다.
+**Decision.** Java puts only the session state path in the core. A file-backed store has to be
+designed together with path safety, rename failures, and crash safety, so it goes beyond the Core+
+scope of the harness. The session state model alone is enough for loop and mode integration.
 
-**수용 기준**
+**Acceptance criteria**
 
-- 기본 하네스 preset으로 approval을 켜면 core approval 상태가 세션 직렬화 경로에 포함된다.
-- 동시에 여러 pending request가 있어도 하네스 호출 표면은 가장 앞선 요청 하나만 반환한다.
-- 세션을 저장 후 복원한 다음 같은 pending approval run을 다시 읽으면 같은 요청이 다시 표면화된다.
+- The core harness module stores the Todo list in the session state.
+- The core harness module does not require a file path.
+- File-based Todo storage cannot be used without a separate module.
 
-**근거** [12 도구 승인](../upstream/snapshots/d0a4165f/features/12-harness.md)
-
----
-
-## HAR-012 Tool approval 규칙은 인자와 호스트 경계를 정확히 구분한다
-
-**요구사항.** 기본 하네스의 자동 승인 wiring은 [04 도구 정의와 실행 루프](04-tools.md)가 정의한 exact-argument·host-boundary 규칙을 그대로 사용해야 하며, 이름만 맞으면 승인되는 더 느슨한 하네스 전용 shortcut을 추가하지 않아야 한다.
-
-**원본 비교**
-
-- .NET: name-based auto-approval 충돌 위험을 경고하고 all-tools 규칙을 신뢰 환경으로 제한한다.
-- Python: argument-scoped rule과 hosted `server_label` 범위를 테스트로 고정한다.
-
-**판단.** exact-argument와 host-boundary의 의미는 코어 승인 문서가 이미 정의한다. 하네스는 그 의미를 다시 풀어쓰지 않고, 기본 preset이 같은 규칙 세트를 켜도록 조립만 고정해야 한다.
-
-**수용 기준**
-
-- 기본 approval preset은 exact-argument matching을 끈 name-only standing rule 모드를 추가로 만들지 않는다.
-- hosted 도구를 조립할 때 하네스는 core approval 상태에 `server_label` 또는 동등한 호스트 경계 식별자를 함께 전달한다.
-- 같은 도구 이름이라도 인자나 호스트 경계가 달라지면 하네스 기본 preset은 새 approval 요청을 다시 표면화한다.
-
-**근거** [12 도구 승인](../upstream/snapshots/d0a4165f/features/12-harness.md)
+**Evidence** [12 Todo provider](../upstream/snapshots/d0a4165f/features/12-harness.md)
 
 ---
 
-## HAR-013 승인 재진입은 같은 요청 예산 안에서 계산한다
+## HAR-007 Todo manipulation results have a stable contract
 
-**요구사항.** 기본 하네스의 approval re-entry wiring은 [04 도구 정의와 실행 루프](04-tools.md)와 [07 인터셉터와 컨텍스트 관리](07-interceptors.md)가 정의한 공용 요청 예산을 그대로 공유해야 하며, 하네스 계층이 승인 재진입 전용 별도 budget counter를 만들지 않아야 한다.
+**Requirement.** The Todo add and complete tools must have increasing identifier assignment and a
+zero-count completion return for non-existent items as a fixed contract.
 
-**원본 비교**
+**Upstream comparison**
 
-- .NET: approval loop에 별도 `MaxAutoApprovalIterations` cap을 둔다.
-- Python: function invocation budget state를 approval 재진입과 공유한다.
+- .NET: Fixes the increasing `todos_add` ID and the 0 return of `todos_complete` with tests.
+- Python: Follows the same behavior and additionally verifies the durability of file-backed storage.
 
-**판단.** 예산 의미는 코어 실행 루프가 소유하고 하네스는 그 위에 별도 상태 기계를 얹지 않는다. 필요하면 운영 안전장치로 외곽 cap을 둘 수 있지만, 기본 조립은 core budget semantics를 그대로 따라야 설명 가능성이 유지된다.
+**Decision.** Both upstreams agree. The harness loop and the prompts treat the Todo tools like a
+deterministic state machine. Turning a non-existent ID into an exception makes it a failure the
+model cannot easily correct.
 
-**수용 기준**
+**Acceptance criteria**
 
-- approval-enabled 하네스 preset은 자동 승인 재진입용 독립 budget counter를 추가로 만들지 않는다.
-- 자동 승인 뒤 이어진 도구 호출은 같은 core 남은 예산을 소모한다.
-- 선택적 outer cap이 있더라도 core usage 집계와 차감 규칙은 바꾸지 않고 추가 중단 조건으로만 동작한다.
+- Todo IDs created in a single add call are not duplicated.
+- The ID of a Todo added later is greater than the earlier IDs.
+- Completing a set of non-existent IDs returns 0.
 
-**근거** [12 Invocation budget](../upstream/snapshots/d0a4165f/features/12-harness.md), [12 도구 승인](../upstream/snapshots/d0a4165f/features/12-harness.md)
-
----
-
-## HAR-014 Skills는 progressive disclosure와 세 도구 표면을 유지한다
-
-**요구사항.** Skills 기능은 기본 프롬프트에는 이름과 설명만 광고하고, 실제 본문과 자원과 스크립트는
-`load_skill`, `read_skill_resource`, `run_skill_script` 세 도구로만 늦게 노출해야 한다.
-
-**원본 비교**
-
-- .NET: source에서 skills를 읽어 prompt와 세 도구를 만든다.
-- Python: `before_run`에서 skills를 읽어 system prompt와 세 도구를 만든다.
-
-**판단.** 동일하다. skills는 단순 프롬프트 조각이 아니라 실행 자산까지 품는다. progressive disclosure가
-없으면 모든 세부 문서와 스크립트가 기본 프롬프트를 오염시키고 승인 경계도 흐려진다.
-
-**수용 기준**
-
-- skill이 없으면 skills 관련 prompt와 도구가 주입되지 않는다.
-- skill이 있으면 공개 도구 이름은 정확히 세 개다.
-- skill 본문은 `load_skill` 호출 전까지 전체 프롬프트에 직접 삽입되지 않는다.
-
-**근거** [13 Skills](../upstream/snapshots/d0a4165f/features/13-skills-background-code.md)
+**Evidence** [12 Todo provider](../upstream/snapshots/d0a4165f/features/12-harness.md)
 
 ---
 
-## HAR-015 Skill script 실행은 기본 승인 필요다
+## HAR-008 The Mode provider offers a default `plan` mode and external change notifications
 
-**요구사항.** `run_skill_script`는 기본적으로 승인 필요 도구여야 하며, 읽기 전용 skills 도구와
-독립된 승인 정책을 가져야 한다.
+**Requirement.** The Mode provider must start with `plan` as the default mode and, when the mode is
+changed externally, must inject that change as a user-role notification on the next turn.
 
-**원본 비교**
+**Upstream comparison**
 
-- .NET: 세 skills 도구 각각에 개별 approval wrapper를 붙일 수 있다.
-- Python: `load_skill`, `read_skill_resource`, `run_skill_script` 각각의 approval disable flag를 둔다.
+- .NET: Keeps the default mode as `plan` and rejects an invalid mode setting.
+- Python: Injects a notification before the next run when an external helper changes the mode.
 
-**판단.** 동일하다. 읽기와 실행을 같은 신뢰 수준으로 취급하면 안 된다. Java는 `run_skill_script`를
-기본 승인 필요로 유지하고, read-only 도구만 별도 자동 승인 규칙을 허용한다.
+**Decision.** Java combines the contracts of the two upstreams. Fixing the default mode creates a
+prompt anchor, and an external change notification is what lets the model observe a mode transition
+that a system instruction alone does not convey.
 
-**수용 기준**
+**Acceptance criteria**
 
-- `run_skill_script`는 별도 설정이 없으면 approval-required다.
-- `load_skill`과 `read_skill_resource`는 독립적으로 자동 승인 정책을 줄 수 있다.
-- 읽기 도구 자동 승인 설정이 script 실행 승인까지 확장되지 않는다.
+- Reading the mode in a new session gives `plan`.
+- Setting a mode that is not allowed fails and preserves the existing mode.
+- When an external helper changes the mode, the next turn's input includes a change notification message.
 
-**근거** [13 Skills](../upstream/snapshots/d0a4165f/features/13-skills-background-code.md)
-
----
-
-## HAR-016 파일 기반 skills와 상세 오류는 신뢰 경계를 넘지 않게 다룬다
-
-**요구사항.** 파일 기반 skills source는 traversal과 symlink escape를 막아야 하고, 상세 예외를 모델에
-그대로 돌려주는 옵션은 기본적으로 꺼야 한다.
-
-**원본 비교**
-
-- .NET: file skills source가 traversal/symlink를 검사하고 `IncludeDetailedErrors`를 trusted source로 제한한다.
-- Python: file source가 traversal/symlink를 방어하고 external source를 trust boundary로 문서화한다.
-
-**판단.** 동일하다. skills source 자체가 신뢰 경계다. 경로 탈출과 상세 예외 재주입은 prompt injection과
-비밀 노출 통로가 될 수 있다. Java는 상세 오류를 선택 기능으로만 두고 기본값은 안전 쪽으로 둔다.
-
-**수용 기준**
-
-- 파일 기반 skills 검색이 루트 밖 경로나 symlink escape를 따라가지 않는다.
-- 기본 설정에서 예외 message 원문이 모델 출력 경로로 자동 재주입되지 않는다.
-- 상세 오류 노출을 켜려면 명시적 옵션이 필요하다.
-
-**근거** [13 Skills](../upstream/snapshots/d0a4165f/features/13-skills-background-code.md)
+**Evidence** [12 Mode provider](../upstream/snapshots/d0a4165f/features/12-harness.md)
 
 ---
 
-## HAR-017 Background agents는 MVP에 넣지 않고 나중에도 polling registry로 시작한다
+## HAR-009 File memory defaults to session scope and blocks reserved names
 
-**요구사항.** Background agents는 Java 코어 하네스 MVP에 포함하지 않으며, 후속 단계에 도입하더라도
-실시간 push가 아닌 polling task registry 계약부터 시작해야 한다.
+**Requirement.** The file memory provider must set its default namespace to session scope and must
+refuse to store internal reserved file names.
 
-**원본 비교**
+**Upstream comparison**
 
-- .NET: background provider와 completion evaluator가 experimental이다.
-- Python: background agents가 experimental이며 tool-polled registry와 LOST 상태를 사용한다.
+- .NET: Provides default namespace initialization and reserved name validation.
+- Python: Fixes the `session_id`-scoped namespace, the `memories.md` injection, and reserved name rejection with tests.
 
-**판단.** 둘 다 experimental이고 runtime handle/session handle 유지가 필요하다. restart 뒤 LOST semantics,
-child agent trust boundary, clear/continue 규칙을 함께 설계해야 하므로 Core+에 넣기 어렵다.
+**Decision.** Java takes Python's session-scoped default. It gives better reproducibility and
+debugging than a timestamp+GUID default. Leaving the internal index and description file names open
+would also let the model contaminate the memory system files.
 
-**수용 기준**
+**Acceptance criteria**
 
-- 코어 하네스 모듈은 background task 도구를 기본 제공하지 않는다.
-- 후속 모듈이 추가되더라도 상태 조회 기본 계약은 polling API다.
-- runtime reference를 잃은 task는 명시적 `LOST` 상태로 전이한다.
+- Without a separate shared scope, the same memory namespace is visible only inside the same session.
+- After a memory is stored, the `memories.md` index is injected as context on the next run.
+- Storing under the names `memories.md` and `*_description.md` is not possible.
 
-**근거** [13 Background agents](../upstream/snapshots/d0a4165f/features/13-skills-background-code.md)
-
----
-
-## HAR-018 셸 실행은 별도 tools 모듈에서 수동 조립한다
-
-**요구사항.** 셸 실행과 셸 환경 제공자는 하네스 본체가 아니라 별도 tools 모듈에 두고, 호출자가 이를
-수동 조립해야 한다.
-
-**원본 비교**
-
-- .NET: shell은 별도 패키지이며 하네스가 자동 wiring하지 않는다.
-- Python: tools 패키지에 shell을 두고, 하네스는 `shell_executor`를 받으면 자동 wiring할 수 있다.
-
-**판단.** Java는 .NET 쪽 모듈 경계를 택한다. 셸은 호스트 의존성과 보안 설명이 크다. 하네스 본체에
-넣으면 조립 계층이 실행 계층의 책임까지 가져오게 된다.
-
-**수용 기준**
-
-- 셸 실행 타입은 하네스 코어가 아니라 별도 모듈에 정의된다.
-- 하네스 기본 조립은 셸 도구를 자동 추가하지 않는다.
-- 셸 환경 제공자는 선택적으로 컨텍스트 제공자로 붙일 수 있다.
-
-**근거** [13 Shell environment / shell executors](../upstream/snapshots/d0a4165f/features/13-skills-background-code.md)
+**Evidence** [12 File memory](../upstream/snapshots/d0a4165f/features/12-harness.md)
 
 ---
 
-## HAR-019 셸과 로컬 실행의 거부 목록은 가드레일로만 문서화한다
+## HAR-010 File access is provided only as a separate optional module
 
-**요구사항.** 셸 정책의 denylist와 로컬 실행 제한은 보안 경계로 주장하지 않고, 승인 기반 가드레일과
-추가 격리를 전제로 문서화해야 한다.
+**Requirement.** The file access provider must not be included in the Java core harness and must be
+provided only as an explicit opt-in from a dedicated optional module.
 
-**원본 비교**
+**Upstream comparison**
 
-- .NET: local shell approval loop를 보안 경계로 보고 denylist 충돌 위험을 경고한다.
-- Python: `ShellPolicy`가 security boundary가 아니라 guardrail임을 테스트로 고정한다.
+- .NET: The file access options are experimental and the default is approval-required.
+- Python: File access is opt-in and implements path safety together with regular expression guards.
 
-**판단.** user 지시대로 이 입장을 정확히 반영한다. denylist는 우발적 실수를 줄이는 장치일 뿐,
-적대적 입력을 완전히 막지 못한다. Java 문서가 이를 과장하면 호스트가 잘못된 신뢰를 갖는다.
+**Decision.** Both have the feature, but its surface is wide. Shared mutable state, the approval
+boundary, symlink blocking, and regex timeouts are all bundled together, which makes it risky to put
+in the core harness. Java splits it into a separate module.
 
-**수용 기준**
+**Acceptance criteria**
 
-- 공개 문서에 denylist나 policy가 보안 경계가 아님을 명시한다.
-- local shell에서 승인 비활성화는 explicit unsafe acknowledgement 없이는 허용되지 않는다.
-- 보안 설명이 추가 격리나 승인 절차를 대체한다고 주장하지 않는다.
+- The file access tools cannot be used with the core harness dependency alone.
+- Using file access requires a separate module and explicit configuration.
+- The file access module default is approval-required.
 
-**근거** [13 Shell environment / shell executors](../upstream/snapshots/d0a4165f/features/13-skills-background-code.md)
-
----
-
-## HAR-020 LocalCodeAct는 샌드박스로 취급하지 않고 코어에서 제외한다
-
-**요구사항.** LocalCodeAct 류의 로컬 subprocess 코드 실행은 샌드박스가 아니라고 명시하고 Java 코어와
-기본 하네스에서 제외해야 한다.
-
-**원본 비교**
-
-- .NET: LocalCodeAct는 preview이고 외부 격리가 이미 있는 환경만 대상으로 한다.
-- Python: inspected 범위에 LocalCodeAct 대응 구현이 없다.
-
-**판단.** 더 안전한 기본값을 택한다. sandbox처럼 보이는 이름의 로컬 실행 기능은 가장 위험한 오해를
-부른다. 외부 VM이나 컨테이너가 이미 있는 환경이 아니면 제공하지 않는 편이 낫다.
-
-**수용 기준**
-
-- 코어 하네스와 기본 배포물에 로컬 subprocess 코드 실행 기능이 포함되지 않는다.
-- 문서에 이 기능이 sandbox가 아니라고 명시한다.
-- 후속 모듈이 생겨도 외부 격리 선행 조건을 타입이나 설정 문서에 강하게 요구한다.
-
-**근거** [13 LocalCodeAct](../upstream/snapshots/d0a4165f/features/13-skills-background-code.md)
+**Evidence** [12 File access](../upstream/snapshots/d0a4165f/features/12-harness.md)
 
 ---
 
-## HAR-021 샌드박스형 CodeAct 백엔드는 별도 선택 모듈로 분리한다
+## HAR-011 Tool approval keeps the queue and the standing rules in the session
 
-**요구사항.** Hyperlight나 Monty 같은 코드 실행 백엔드는 하네스 본체와 분리된 선택 모듈로 두고,
-첫 구현부터 승인 번들링과 파일 staging 안전성을 강제해야 한다.
+**Requirement.** The default harness approval assembly must connect the approval rule state and the pending request state defined by [04 Tool definitions and the tool call loop](04-tools.md) and [07 Interceptors and context management](07-interceptors.md) to the session storage path, and must expose only one pending request at a time on the caller surface.
 
-**원본 비교**
+**Upstream comparison**
 
-- .NET: Hyperlight는 preview sandbox backend이며 approval mode와 provider-owned tool registry를 묶는다.
-- Python: Hyperlight와 Monty는 beta backend이고 mount, approval, symlink-safe capture를 각각 고정한다.
+- .NET: The approval agent stores rules and queued state in the session and uses a one-by-one surface.
+- Python: The approval middleware stores `rules`, `queued_approval_requests`, and `collected_approval_responses` in the state.
 
-**판단.** sandbox backend는 하네스 convenience 기능이 아니라 별도 실행 계층이다. Java는 backend-first
-전략으로 모듈을 분리하고, 승인 계산과 safe staging을 초기에 강제해야 한다. Monty는 .NET parity도 없어
-더욱 Optional이 적절하다.
+**Decision.** The surface that does not expose several approval requests at once is kept, but the meaning of the state machine itself does not redefine the owning documents. The harness has only the assembly responsibility of putting the approval component on the session backing store and the default UI surface.
 
-**수용 기준**
+**Acceptance criteria**
 
-- 코드 실행 backend는 하네스 코어 의존성에 포함되지 않는다.
-- provider-owned tool 중 하나라도 승인 필요면 `execute_code`도 승인 필요가 된다.
-- 입력 staging과 출력 capture는 symlink 또는 reparse point escape를 차단한다.
+- When approval is switched on through the default harness preset, the core approval state is included in the session serialization path.
+- Even when several pending requests exist at once, the harness call surface returns only the earliest single request.
+- Reading the same pending approval run again after saving and restoring the session surfaces the same request again.
 
-**근거** [13 Hyperlight CodeAct](../upstream/snapshots/d0a4165f/features/13-skills-background-code.md), [13 Monty CodeAct](../upstream/snapshots/d0a4165f/features/13-skills-background-code.md)
+**Evidence** [12 tool approval](../upstream/snapshots/d0a4165f/features/12-harness.md)
 
 ---
 
-## 이 문서가 다루지 않는 것
+## HAR-012 Tool approval rules distinguish arguments and host boundaries exactly
 
-| 주제 | 소유 문서 |
+**Requirement.** The automatic approval wiring of the default harness must use the exact-argument and host-boundary rules defined by [04 Tool definitions and the tool call loop](04-tools.md) as they are, and must not add a looser harness-only shortcut that approves whenever the name alone matches.
+
+**Upstream comparison**
+
+- .NET: Warns about the collision risk of name-based auto-approval and limits the all-tools rule to trusted environments.
+- Python: Fixes argument-scoped rules and the hosted `server_label` scope with tests.
+
+**Decision.** The meaning of exact-argument and host-boundary is already defined by the core approval document. The harness does not restate that meaning and must only fix the assembly so that the default preset switches on the same rule set.
+
+**Acceptance criteria**
+
+- The default approval preset does not additionally create a name-only standing rule mode with exact-argument matching turned off.
+- When assembling a hosted tool, the harness also passes `server_label` or an equivalent host boundary identifier into the core approval state.
+- Even for the same tool name, the default harness preset surfaces a new approval request again when the arguments or the host boundary differ.
+
+**Evidence** [12 tool approval](../upstream/snapshots/d0a4165f/features/12-harness.md)
+
+---
+
+## HAR-013 Approval re-entry is counted within the same request budget
+
+**Requirement.** The approval re-entry wiring of the default harness must share, as it is, the common request budget defined by [04 Tool definitions and the tool call loop](04-tools.md) and [07 Interceptors and context management](07-interceptors.md), and the harness layer must not create a separate budget counter dedicated to approval re-entry.
+
+**Upstream comparison**
+
+- .NET: Puts a separate `MaxAutoApprovalIterations` cap on the approval loop.
+- Python: Shares the function invocation budget state with approval re-entry.
+
+**Decision.** The meaning of the budget is owned by the core execution loop and the harness does not layer a separate state machine on top of it. An outer cap may be kept as an operational safeguard when needed, but the default assembly must follow the core budget semantics as they are for explainability to hold.
+
+**Acceptance criteria**
+
+- An approval-enabled harness preset does not additionally create an independent budget counter for automatic approval re-entry.
+- A tool call that follows an automatic approval consumes the same remaining core budget.
+- Even when an optional outer cap exists, it does not change the core usage accounting and deduction rules and acts only as an additional stop condition.
+
+**Evidence** [12 Invocation budget](../upstream/snapshots/d0a4165f/features/12-harness.md), [12 tool approval](../upstream/snapshots/d0a4165f/features/12-harness.md)
+
+---
+
+## HAR-014 Skills keep progressive disclosure and the three tool surfaces
+
+**Requirement.** The skills feature must advertise only names and descriptions in the default prompt,
+and must disclose the actual bodies, resources, and scripts late, only through the three tools
+`load_skill`, `read_skill_resource`, and `run_skill_script`.
+
+**Upstream comparison**
+
+- .NET: Reads skills from a source and builds the prompt and the three tools.
+- Python: Reads skills in `before_run` and builds the system prompt and the three tools.
+
+**Decision.** Both upstreams agree. Skills are not simple prompt fragments; they also carry
+executable assets. Without progressive disclosure, every detail document and script contaminates the
+default prompt and the approval boundary blurs as well.
+
+**Acceptance criteria**
+
+- When there is no skill, the skills-related prompt and tools are not injected.
+- When there is a skill, there are exactly three public tool names.
+- The skill body is not inserted directly into the full prompt before `load_skill` is called.
+
+**Evidence** [13 Skills](../upstream/snapshots/d0a4165f/features/13-skills-background-code.md)
+
+---
+
+## HAR-015 Skill script execution requires approval by default
+
+**Requirement.** `run_skill_script` must be an approval-required tool by default and must have an
+approval policy independent from the read-only skills tools.
+
+**Upstream comparison**
+
+- .NET: An individual approval wrapper can be attached to each of the three skills tools.
+- Python: Keeps an approval disable flag for each of `load_skill`, `read_skill_resource`, and `run_skill_script`.
+
+**Decision.** Both upstreams agree. Reading and executing must not be treated at the same trust
+level. Java keeps `run_skill_script` approval-required by default and allows a separate automatic
+approval rule only for the read-only tools.
+
+**Acceptance criteria**
+
+- `run_skill_script` is approval-required unless configured otherwise.
+- `load_skill` and `read_skill_resource` can be given automatic approval policies independently.
+- An automatic approval setting for the read tools does not extend to approving script execution.
+
+**Evidence** [13 Skills](../upstream/snapshots/d0a4165f/features/13-skills-background-code.md)
+
+---
+
+## HAR-016 File-based skills and detailed errors are handled so they do not cross the trust boundary
+
+**Requirement.** A file-based skills source must block traversal and symlink escape, and the option
+that returns detailed exceptions to the model as they are must be off by default.
+
+**Upstream comparison**
+
+- .NET: The file skills source checks traversal/symlink and limits `IncludeDetailedErrors` to trusted sources.
+- Python: The file source defends against traversal/symlink and documents external sources as a trust boundary.
+
+**Decision.** Both upstreams agree. The skills source is itself a trust boundary. Path escape and
+re-injection of detailed exceptions can become channels for prompt injection and secret exposure.
+Java keeps detailed errors as an optional feature only and keeps the default on the safe side.
+
+**Acceptance criteria**
+
+- File-based skills discovery does not follow paths outside the root or a symlink escape.
+- In the default configuration, the raw exception message is not automatically re-injected into the model output path.
+- Turning on detailed error exposure requires an explicit option.
+
+**Evidence** [13 Skills](../upstream/snapshots/d0a4165f/features/13-skills-background-code.md)
+
+---
+
+## HAR-017 Background agents are left out of the MVP and start from a polling registry even later
+
+**Requirement.** Background agents must not be included in the Java core harness MVP, and even when
+they are introduced in a later stage they must start from a polling task registry contract rather
+than real-time push.
+
+**Upstream comparison**
+
+- .NET: The background provider and the completion evaluator are experimental.
+- Python: Background agents are experimental and use a tool-polled registry and a LOST state.
+
+**Decision.** Both are experimental and require keeping a runtime handle and a session handle. The
+LOST semantics after a restart, the child agent trust boundary, and the clear/continue rules have to
+be designed together, which makes it hard to put in Core+.
+
+**Acceptance criteria**
+
+- The core harness module does not provide background task tools by default.
+- Even when a later module is added, the default status query contract is a polling API.
+- A task that has lost its runtime reference transitions to an explicit `LOST` state.
+
+**Evidence** [13 Background agents](../upstream/snapshots/d0a4165f/features/13-skills-background-code.md)
+
+---
+
+## HAR-018 Shell execution is assembled manually from a separate tools module
+
+**Requirement.** Shell execution and the shell environment provider must live in a separate tools
+module rather than in the harness proper, and the caller must assemble them manually.
+
+**Upstream comparison**
+
+- .NET: The shell is a separate package and the harness does not wire it automatically.
+- Python: Keeps the shell in the tools package, and the harness can wire it automatically when it receives a `shell_executor`.
+
+**Decision.** Java takes the .NET module boundary. The shell carries large host dependencies and a
+large security explanation. Putting it in the harness proper would make the assembly layer take on
+the responsibilities of the execution layer.
+
+**Acceptance criteria**
+
+- The shell execution types are defined in a separate module, not in the harness core.
+- The default harness assembly does not add shell tools automatically.
+- The shell environment provider can optionally be attached as a context provider.
+
+**Evidence** [13 Shell environment / shell executors](../upstream/snapshots/d0a4165f/features/13-skills-background-code.md)
+
+---
+
+## HAR-019 The denylists of shell and local execution are documented as guardrails only
+
+**Requirement.** The shell policy denylist and the local execution limits must not be claimed as a
+security boundary, and must be documented on the premise of approval-based guardrails and
+additional isolation.
+
+**Upstream comparison**
+
+- .NET: Treats the local shell approval loop as the security boundary and warns about the collision risk of the denylist.
+- Python: Fixes with tests that `ShellPolicy` is a guardrail and not a security boundary.
+
+**Decision.** As instructed by the user, this position is reflected exactly. A denylist is only a
+device that reduces accidental mistakes; it does not fully block adversarial input. If the Java
+documentation overstates it, hosts will place misplaced trust in it.
+
+**Acceptance criteria**
+
+- The public documentation states that the denylist and the policy are not a security boundary.
+- Disabling approval for the local shell is not allowed without an explicit unsafe acknowledgement.
+- The security description does not claim to replace additional isolation or the approval procedure.
+
+**Evidence** [13 Shell environment / shell executors](../upstream/snapshots/d0a4165f/features/13-skills-background-code.md)
+
+---
+
+## HAR-020 LocalCodeAct is not treated as a sandbox and is excluded from the core
+
+**Requirement.** Local subprocess code execution of the LocalCodeAct kind must be stated not to be a
+sandbox and must be excluded from the Java core and the default harness.
+
+**Upstream comparison**
+
+- .NET: LocalCodeAct is preview and targets only environments that already have external isolation.
+- Python: There is no implementation corresponding to LocalCodeAct in the inspected scope.
+
+**Decision.** The safer default is taken. A local execution feature with a name that looks like a
+sandbox invites the most dangerous misunderstanding. It is better not to provide it unless the
+environment already has an external VM or container.
+
+**Acceptance criteria**
+
+- The core harness and the default distribution do not include a local subprocess code execution feature.
+- The documentation states that this feature is not a sandbox.
+- Even if a later module appears, it requires the external isolation precondition strongly in the types or the configuration documentation.
+
+**Evidence** [13 LocalCodeAct](../upstream/snapshots/d0a4165f/features/13-skills-background-code.md)
+
+---
+
+## HAR-021 Sandboxed CodeAct backends are split into a separate optional module
+
+**Requirement.** Code execution backends such as Hyperlight or Monty must be kept in an optional
+module separate from the harness proper, and must enforce approval bundling and file staging safety
+from the first implementation.
+
+**Upstream comparison**
+
+- .NET: Hyperlight is a preview sandbox backend and ties together the approval mode and a provider-owned tool registry.
+- Python: Hyperlight and Monty are beta backends and fix mount, approval, and symlink-safe capture individually.
+
+**Decision.** A sandbox backend is not a harness convenience feature but a separate execution layer.
+Java splits the module out with a backend-first strategy and must enforce approval accounting and
+safe staging early. Monty has no .NET parity either, which makes Optional even more appropriate.
+
+**Acceptance criteria**
+
+- Code execution backends are not included in the harness core dependencies.
+- If any one of the provider-owned tools requires approval, `execute_code` requires approval too.
+- Input staging and output capture block symlink or reparse point escape.
+
+**Evidence** [13 Hyperlight CodeAct](../upstream/snapshots/d0a4165f/features/13-skills-background-code.md), [13 Monty CodeAct](../upstream/snapshots/d0a4165f/features/13-skills-background-code.md)
+
+---
+
+## What this document does not cover
+
+| Topic | Owning document |
 | --- | --- |
-| 일반 도구 호출 루프와 기본 승인 모델 | [04 도구 정의와 실행 루프](04-tools.md) |
-| 세션 직렬화와 저장소 | [06 세션과 대화 상태](06-sessions.md) |
-| 인터셉터와 컨텍스트 컴팩션 | [07 인터셉터와 컨텍스트 관리](07-interceptors.md) |
-| 워크플로 그래프와 런타임 | [09 워크플로와 오케스트레이션](09-workflows.md) |
-| 호스팅 환경과 프로토콜 어댑터 | [10 호스팅과 프로토콜](10-hosting.md) |
-| 운영 정책, 관찰성, 보안 운영 | [11 운영 품질](11-operations.md) |
+| The general tool call loop and the default approval model | [04 Tool definitions and the tool call loop](04-tools.md) |
+| Session serialization and stores | [06 Sessions and conversation state](06-sessions.md) |
+| Interceptors and context compaction | [07 Interceptors and context management](07-interceptors.md) |
+| Workflow graphs and the runtime | [09 Workflows and orchestration](09-workflows.md) |
+| Hosting environments and protocol adapters | [10 Hosting and protocols](10-hosting.md) |
+| Operational policy, observability, security operations | [11 Operational quality](11-operations.md) |

@@ -1,63 +1,64 @@
-# Gradle Kotlin DSL 및 Java ARC Foundation 설계
+# Gradle Kotlin DSL and Java ARC Foundation Design
 
-- 상태: 승인
-- 작성일: 2026-08-10
-- 개정: 2026-08-11 — 5.3 registry 결정과 신규 5.4 대상 환경을 실측값으로 확정
-- 대체 범위: 기존 엔지니어링 하네스 설계의 Maven build와 범용 `aks-runners` 사용 결정
-- 유지 범위: 저장소/로컬/플랫폼 소유권 분리, MAF conformance, agent DAG와 3층 회귀 전략
+- Status: approved
+- Date: 2026-08-10
+- Revised: 2026-08-11 — the 5.3 registry decision and the new 5.4 target environment settled with measured values
+- Supersedes: the Maven build and the general-purpose `aks-runners` usage decision of the existing engineering harness design
+- Retains: the repository, local, and platform ownership separation, MAF conformance, the agent DAG, and the three-layer regression strategy
 
-## 1. 결정
+## 1. Decision
 
-Agent Framework for Java의 build harness는 Gradle Kotlin DSL을 사용한다. GitHub Actions의
-trusted Java 작업은 기존 범용 `aks-runners`가 아니라 별도 Java 전용 ARC scale set
-`arc-java-build`에서 실행한다.
+The build harness of Agent Framework for Java uses Gradle Kotlin DSL. The trusted Java jobs of
+GitHub Actions run on a dedicated Java-only ARC scale set `arc-java-build` rather than on the
+existing general-purpose `aks-runners`.
 
-두 자산은 다음처럼 분리한다.
+The two assets are separated as follows.
 
-- 애플리케이션 저장소: Gradle Wrapper, Kotlin DSL build logic, 품질 규칙, test와 workflow
-- 별도 로컬 platform 저장소: Java runner image, image 검증, ARC Helm values와 Kubernetes 정책
-- Azure/AKS/GitHub 설정: registry credential, GitHub App key, federated identity와 runner group
+- Application repository: the Gradle Wrapper, the Kotlin DSL build logic, the quality rules, the tests, and the workflows
+- Separate local platform repository: the Java runner image, image verification, the ARC Helm values, and the Kubernetes policy
+- Azure, AKS, and GitHub configuration: the registry credential, the GitHub App key, the federated identity, and the runner group
 
-기존 `harness-foundation` branch의 Maven 구현은 merge하지 않는다. 설계 근거를 보존하되 새
-Gradle branch에서 독립적으로 구현한다.
+The Maven implementation on the existing `harness-foundation` branch is not merged. Its design
+rationale is preserved, but the implementation is done independently on the new Gradle branch.
 
-## 2. 검토한 접근법
+## 2. Considered approaches
 
-### 2.1 범용 runner와 CI 설치
+### 2.1 A general-purpose runner with CI installation
 
-기존 `aks-runners`에서 매 job마다 JDK와 Gradle을 설치한다. 초기 변경은 적지만 ephemeral
-runner에서 다운로드 비용이 반복되고 Java toolchain이 플랫폼 계약으로 고정되지 않는다.
+Install the JDK and Gradle on every job on the existing `aks-runners`. The initial change is small,
+but the download cost repeats on an ephemeral runner and the Java toolchain is not pinned as a
+platform contract.
 
-### 2.2 JDK별 image와 scale set
+### 2.2 A per-JDK image and scale set
 
-JDK 17, 21, 25마다 image와 ARC scale set을 둔다. 격리는 명확하지만 image, Helm release,
-보안 정책과 autoscaling 운영 대상이 세 배가 된다.
+Keep an image and an ARC scale set for each of JDK 17, 21, and 25. The isolation is clear, but the
+images, Helm releases, security policies, and autoscaling targets triple in number.
 
-### 2.3 단일 Java image와 Gradle Wrapper
+### 2.3 A single Java image with the Gradle Wrapper
 
-runner image에 JDK 17, 21, 25를 GitHub tool-cache 형식으로 포함하고 저장소의 Gradle
-Wrapper로 Gradle 버전을 고정한다. `actions/setup-java`는 download 없이 preinstalled
-toolchain을 선택한다.
+Include JDK 17, 21, and 25 in the runner image in the GitHub tool-cache format and pin the Gradle
+version with the repository's Gradle Wrapper. `actions/setup-java` then selects the preinstalled
+toolchain without a download.
 
-**결정:** 2.3을 채택한다. JDK matrix 재현성과 runner 운영 단순성을 함께 확보하며 Gradle
-버전 소유권은 저장소에 남긴다.
+**Decision:** adopt 2.3. It secures both the reproducibility of the JDK matrix and the simplicity of
+runner operations, and it leaves ownership of the Gradle version in the repository.
 
-## 3. 애플리케이션 저장소 build
+## 3. The application repository build
 
-### 3.1 기준
+### 3.1 Baseline
 
 - Gradle Wrapper: 9.7.0
-- Gradle runtime: JDK 17 이상
-- Java source/bytecode baseline: release 17
+- Gradle runtime: JDK 17 or later
+- Java source and bytecode baseline: release 17
 - CI toolchain matrix: Eclipse Temurin 17, 21, 25
-- Build scripts: Kotlin DSL만 사용
-- Dependency version: `gradle/libs.versions.toml`
-- 공통 plugin 설정: included build `build-logic`
+- Build scripts: Kotlin DSL only
+- Dependency versions: `gradle/libs.versions.toml`
+- Shared plugin configuration: the included build `build-logic`
 
-Gradle distribution과 wrapper JAR checksum을 검증한다. system Gradle은 wrapper 생성과
-bootstrap 이외에 사용하지 않는다.
+The Gradle distribution and the wrapper JAR checksum are verified. A system Gradle is not used for
+anything other than wrapper generation and bootstrap.
 
-### 3.2 파일 구조
+### 3.2 File structure
 
 ```text
 agent-framework-java/
@@ -79,25 +80,25 @@ agent-framework-java/
     └── harness-policy/
 ```
 
-root project는 제품 code를 포함하지 않는다. 제품 module은 실제 vertical slice를 구현할 때만
-추가한다.
+The root project contains no product code. A product module is added only when an actual vertical
+slice is implemented.
 
-### 3.3 convention plugin 경계
+### 3.3 Convention plugin boundaries
 
-`java-library-conventions`는 Java toolchain 17, `options.release=17`, UTF-8, compiler lint,
-reproducible archive와 dependency locking을 소유한다.
+`java-library-conventions` owns the Java toolchain 17, `options.release=17`, UTF-8, the compiler
+lint, reproducible archives, and dependency locking.
 
-`test-conventions`는 JUnit 5, AssertJ, deterministic test defaults와 test report를
-소유한다. 각 JDK compatibility task는 Gradle Java Toolchains를 사용해 해당 launcher로
-test를 실행한다.
+`test-conventions` owns JUnit 5, AssertJ, the deterministic test defaults, and the test reports.
+Each per-JDK compatibility task uses Gradle Java Toolchains to run the tests with the corresponding
+launcher.
 
-`quality-conventions`는 Spotless, Checkstyle, PMD, SpotBugs와 JaCoCo 설정을 소유한다.
-formatter는 javac internal API에 의존하지 않는 engine을 우선한다.
+`quality-conventions` owns the Spotless, Checkstyle, PMD, SpotBugs, and JaCoCo configuration. The
+formatter prefers an engine that does not depend on javac internal APIs.
 
-## 4. 검증 그래프
+## 4. Verification graph
 
-formatter와 static analysis는 한 번만 실행하고 JDK compatibility는 compile/test에
-집중한다.
+The formatter and static analysis run only once, and JDK compatibility concentrates on compilation
+and tests.
 
 ```text
 policy
@@ -111,30 +112,30 @@ policy
   +--> fan-in --> required CI
 ```
 
-`quality`는 format, Checkstyle, PMD, SpotBugs, dependency policy, architecture와 coverage
-report를 실행한다. `testJava17/21/25`는 품질 plugin을 다시 실행하지 않는다. 이 분리는
-google-java-format처럼 JDK compiler internals에 결합된 도구가 matrix 전체를 깨는 문제를
-방지한다.
+`quality` runs format, Checkstyle, PMD, SpotBugs, the dependency policy, architecture, and the
+coverage report. `testJava17/21/25` does not run the quality plugins again. This separation prevents
+a tool coupled to JDK compiler internals, such as google-java-format, from breaking the entire
+matrix.
 
-CI와 local command는 동일한 Gradle task를 사용한다.
+CI and local commands use the same Gradle tasks.
 
 - `./gradlew policyCheck`
 - `./gradlew quality`
 - `./gradlew testJava17 testJava21 testJava25`
 - `./gradlew check`
 
-## 5. Java 전용 runner image
+## 5. The Java-only runner image
 
-### 5.1 별도 platform 저장소
+### 5.1 A separate platform repository
 
-로컬 sibling 저장소 기본 경로는 다음과 같다.
+The default path of the local sibling repository is as follows.
 
 ```text
-/Users/hwang-inhwan/workspace/agent-framework-java-platform/
+$HOME/workspace/agent-framework-java-platform/
 ```
 
-이 저장소는 향후 private infrastructure repository로 이동할 수 있게 독립 Git 저장소로
-관리한다.
+This repository is managed as an independent Git repository so that it can later move to a private
+infrastructure repository.
 
 ```text
 agent-framework-java-platform/
@@ -155,154 +156,157 @@ agent-framework-java-platform/
     └── verify-arc-java-build.sh
 ```
 
-실제 secret과 credential은 이 저장소에도 커밋하지 않는다.
+Real secrets and credentials are not committed to this repository either.
 
-### 5.2 image 내용
+### 5.2 Image contents
 
-image는 공식 GitHub Actions runner image를 pinned digest로 기반 삼고 다음만 추가한다.
+The image is based on the official GitHub Actions runner image at a pinned digest and adds only the
+following.
 
 - Eclipse Temurin JDK 17, 21, 25
 - `JAVA_HOME_17_X64`, `JAVA_HOME_21_X64`, `JAVA_HOME_25_X64`
-- GitHub tool-cache metadata와 `.complete` marker
-- Git, curl, unzip, zip, jq, bash, CA certificates
-- non-root `runner` 사용자와 `/home/runner/run.sh`
+- the GitHub tool-cache metadata and the `.complete` marker
+- Git, curl, unzip, zip, jq, bash, and CA certificates
+- the non-root `runner` user and `/home/runner/run.sh`
 
-Gradle distribution, dependency cache, Azure credential, kubectl, Helm, Docker daemon은 image에
-넣지 않는다. Gradle은 저장소 wrapper가 소유하고 dependency는 GitHub cache service를
-사용한다.
+The Gradle distribution, the dependency cache, Azure credentials, kubectl, Helm, and the Docker
+daemon are not put into the image. Gradle is owned by the repository wrapper, and dependencies use
+the GitHub cache service.
 
-image build는 JDK archive checksum과 base image digest를 검증한다. `verify-image.sh`는
-세 JDK version, `javac`, tool-cache layout, non-root 사용자와 runner entrypoint를 확인한다.
+The image build verifies the JDK archive checksums and the base image digest. `verify-image.sh`
+checks the three JDK versions, `javac`, the tool-cache layout, the non-root user, and the runner
+entrypoint.
 
-### 5.3 registry
+### 5.3 Registry
 
-**결정(2026-08-11 확정):** 기존 Azure Container Registry `acrpensionguard`를 재사용하고
-dedicated repository `gha-runners/agent-framework-java`만 새로 만든다. **새 registry를
-만들지 않는다.**
+**Decision (settled 2026-08-11):** reuse the existing Azure Container Registry `acrpensionguard` and
+create only a new dedicated repository `gha-runners/agent-framework-java`. **Do not create a new
+registry.**
 
-`acrpensionguard`는 `rg-pension-guard`의 공용 자산이므로 이 작업은 registry를 생성하지도,
-SKU·admin user·network 등 어떤 property도 변경하지 않는다. AKS kubelet managed identity에
-대한 `AcrPull` role assignment는 registry scope로 이미 존재하므로 platform 작업은 이를
-가정하지 않고 idempotent하게 재확인만 한다.
+`acrpensionguard` is a shared asset of `rg-pension-guard`, so this work neither creates the registry
+nor changes any property such as its SKU, admin user, or network. The `AcrPull` role assignment for
+the AKS kubelet managed identity already exists at registry scope, so the platform work does not
+assume it and only re-confirms it idempotently.
 
-tag는 편의용이고 Helm values는 immutable digest를 사용한다.
+Tags are for convenience, and the Helm values use the immutable digest.
 
 ```text
 acrpensionguard.azurecr.io/gha-runners/agent-framework-java:<date>-<source-sha>
 acrpensionguard.azurecr.io/gha-runners/agent-framework-java@sha256:<digest>
 ```
 
-### 5.4 대상 환경
+### 5.4 Target environment
 
-다음 값은 2026-08-11에 실제 cluster와 subscription에서 확인한 authoritative 값이다.
-이전 설계 논의에서 등장한 `rg-korvid-contract-test` / `aks-korvid-contract-test` /
-신규 registry 안은 폐기한다.
+The following values are the authoritative values confirmed on 2026-08-11 against the actual cluster
+and subscription. The `rg-korvid-contract-test` / `aks-korvid-contract-test` / new-registry proposal
+that appeared in earlier design discussion is discarded.
 
-| 항목 | 값 | 소유 |
+| Item | Value | Ownership |
 | --- | --- | --- |
-| kubectl context | `evalollama` | 기존 |
-| Azure subscription | `95933ae5-0201-4a21-a1fc-8051a7437982` (`ME-MngEnvMCAP310512-inhwanhwang-3`) | 기존 |
-| Resource group / location | `rg-pension-guard` / `koreacentral` | 기존 |
-| AKS cluster | `aks-shared-runners` (Kubernetes 1.35, Cilium dataplane) | 기존 |
-| Container registry | `acrpensionguard` / `acrpensionguard.azurecr.io` (Basic, admin disabled) | 기존, 재사용 |
-| Image repository | `gha-runners/agent-framework-java` | 신규 |
-| ARC chart | `gha-runner-scale-set` `0.14.2` | 기존 |
-| 기존 scale set | `arc-runners`의 `aks-runners`, `aks-runners-flutter`, `korvid-runners` | 기존, 변경 금지 |
-| 신규 scale set | `arc-runners-java`의 `arc-java-build` | 신규 |
-| GitHub credential | secret `gha-token` | 기존, 복사 |
+| kubectl context | `evalollama` | Existing |
+| Azure subscription | `95933ae5-0201-4a21-a1fc-8051a7437982` (`ME-MngEnvMCAP310512-inhwanhwang-3`) | Existing |
+| Resource group / location | `rg-pension-guard` / `koreacentral` | Existing |
+| AKS cluster | `aks-shared-runners` (Kubernetes 1.35, Cilium dataplane) | Existing |
+| Container registry | `acrpensionguard` / `acrpensionguard.azurecr.io` (Basic, admin disabled) | Existing, reused |
+| Image repository | `gha-runners/agent-framework-java` | New |
+| ARC chart | `gha-runner-scale-set` `0.14.2` | Existing |
+| Existing scale sets | `aks-runners`, `aks-runners-flutter`, and `korvid-runners` in `arc-runners` | Existing, must not change |
+| New scale set | `arc-java-build` in `arc-runners-java` | New |
+| GitHub credential | secret `gha-token` | Existing, copied |
 
-기존 `aks-runners`와 `aks-runners-flutter`는 `https://github.com/open-play-ground/grown-up`,
-`korvid-runners`는 `https://github.com/hellices/korvid`를 대상으로 하며 셋 다 `arc-runners`
-namespace의 `gha-token`을 참조한다. 신규 scale set은
-`https://github.com/open-play-ground/agent-framework-java`를 대상으로 하고 같은 이름의
-secret을 자기 namespace에서 참조한다.
+The existing `aks-runners` and `aks-runners-flutter` target
+`https://github.com/open-play-ground/grown-up`, and `korvid-runners` targets
+`https://github.com/hellices/korvid`; all three reference the `gha-token` of the `arc-runners`
+namespace. The new scale set targets
+`https://github.com/open-play-ground/agent-framework-java` and references a secret of the same name
+in its own namespace.
 
-## 6. ARC scale set
+## 6. The ARC scale set
 
-`arc-java-build`는 기존 scale set을 수정하지 않고 새 Helm release로 추가한다.
+`arc-java-build` is added as a new Helm release without modifying the existing scale sets.
 
 - runner scale set name: `arc-java-build`
 - namespace: `arc-runners-java`
 - container name: `runner`
-- image: Java runner image digest
+- image: the Java runner image digest
 - `minRunners: 0`
-- 초기 `maxRunners: 5`
+- an initial `maxRunners: 5`
 - non-privileged
 - `allowPrivilegeEscalation: false`
-- 모든 Linux capability drop
-- dedicated service account
-- GitHub credential은 secret reference만 사용
-- Docker-in-Docker와 Kubernetes container mode 사용 안 함
+- every Linux capability dropped
+- a dedicated service account
+- the GitHub credential used only as a secret reference
+- Docker-in-Docker and the Kubernetes container mode not used
 
-Kubernetes Secret은 namespace-scoped이므로 `arc-runners`의 `gha-token`을
-`arc-runners-java`에서 그대로 참조할 수 없다. cluster operator가
-`scripts/copy-github-config-secret.sh`로 복사하며, 이 script는 secret을 JSON으로 읽되
-`kubectl apply --namespace "$ARC_NAMESPACE" -f -`로 끝나는 단일 pipeline 안에서만 다룬다.
-문서 전체는 terminal, log, file 어디에도 출력되지 않고 key 이름만 표시된다. 값을 만들거나
-decode하거나 commit하지 않는다.
+A Kubernetes Secret is namespace-scoped, so the `gha-token` of `arc-runners` cannot be referenced as
+is from `arc-runners-java`. The cluster operator copies it with
+`scripts/copy-github-config-secret.sh`, and that script reads the secret as JSON but handles it only
+inside a single pipeline that ends with `kubectl apply --namespace "$ARC_NAMESPACE" -f -`. The whole
+Secret document is never printed to a terminal, a log, or a file; only the key names are shown. The values
+are never created, decoded, or committed.
 
-NetworkPolicy는 기본 deny 후 DNS, GitHub Actions endpoints, GitHub API, Maven Central,
-Gradle Plugin Portal, Gradle distribution service와 승인된 artifact registry HTTPS만
-허용한다. AKS IMDS와 Kubernetes API는 runner pod에서 차단한다.
+The NetworkPolicy denies by default and then permits only DNS, the GitHub Actions endpoints, the
+GitHub API, Maven Central, the Gradle Plugin Portal, the Gradle distribution service, and approved
+artifact registries over HTTPS. The AKS IMDS and the Kubernetes API are blocked from the runner pod.
 
-ARC controller, listener와 ephemeral runner log는 pod 삭제 전에 Azure Monitor 또는 기존
-cluster telemetry로 수집한다.
+The ARC controller, listener, and ephemeral runner logs are collected into Azure Monitor or the
+existing cluster telemetry before the pod is deleted.
 
 ## 7. GitHub Actions
 
-### 7.1 trusted path
+### 7.1 The trusted path
 
-same-repository PR, `main` push와 manual dispatch는 `arc-java-build`에서 실행한다.
+A same-repository PR, a `main` push, and a manual dispatch run on `arc-java-build`.
 
 - `quality`: JDK 17
 - `testJava17`: JDK 17
 - `testJava21`: JDK 21
 - `testJava25`: JDK 25
 
-`actions/setup-java`는 image의 tool-cache를 선택하며 network download가 발생하면 runner
-image regression으로 기록한다.
+`actions/setup-java` selects the image's tool cache, and a network download that occurs is recorded
+as a runner image regression.
 
-PR concurrency만 cancel한다. `main` push는 취소하지 않는다.
+Only PR concurrency is cancelled. A `main` push is not cancelled.
 
-### 7.2 fork path
+### 7.2 The fork path
 
-fork PR은 `ubuntu-latest`에서 read-only token과 secret 없는 최소 `policyCheck`,
-`quality`, `testJava17`을 실행한다. trusted ARC job은 명시적으로 skip한다.
+A fork PR runs a minimal `policyCheck`, `quality`, and `testJava17` on `ubuntu-latest` with a
+read-only token and no secrets. The trusted ARC jobs are skipped explicitly.
 
-branch protection은 fork와 trusted path를 하나의 required result job으로 fan-in해 실제
-검증 없이 skipped-green이 되지 않게 한다.
+Branch protection fans the fork and trusted paths into a single required result job so that they
+cannot become skipped-green without real verification.
 
-### 7.3 workflow policy
+### 7.3 Workflow policy
 
-정규식 한두 개로 단일 workflow만 검사하지 않는다. repository policy test는 모든
-`.github/workflows/*.yml`과 `*.yaml`을 parse해 다음을 검증한다.
+A single workflow is not checked with one or two regular expressions. The repository policy test
+parses every `.github/workflows/*.yml` and `*.yaml` and verifies the following.
 
-- 외부 action과 reusable workflow는 full SHA
-- local composite action은 `./` 경로만 허용
-- `pull_request_target` 금지
-- runner label allow-list
-- workflow/job permission allow-list
-- 모든 checkout에 `persist-credentials: false`
-- fork와 trusted runner의 상호 배타적 조건
-- `main` run cancellation 금지
+- external actions and reusable workflows are pinned to a full SHA
+- a local composite action is allowed only through a `./` path
+- `pull_request_target` is forbidden
+- the runner label allow-list
+- the workflow and job permission allow-list
+- `persist-credentials: false` on every checkout
+- the mutually exclusive conditions of the fork and trusted runners
+- no cancellation of a `main` run
 
 ## 8. Repository policy
 
-shell policy script는 독립 실행만 가능한 dead gate로 남기지 않는다. `build-tools`의 Gradle
-test 또는 custom task로 다음을 검증하고 `check`에 연결한다.
+A shell policy script is not left as a dead gate that can only be run standalone. A Gradle test or a
+custom task in `build-tools` verifies the following and is wired into `check`.
 
-- `AGENTS.md`와 vendor adapter 크기·연결
-- Gradle wrapper URL과 checksum
-- quality tool version
-- artifact schema/example
-- workflow policy
+- the size of and the links between `AGENTS.md` and the vendor adapters
+- the Gradle wrapper URL and checksum
+- the quality tool versions
+- the artifact schemas and examples
+- the workflow policy
 
-shell script가 필요하면 Gradle task가 실행하거나 Java/Kotlin policy test의 thin wrapper로
-만든다.
+When a shell script is needed, a Gradle task runs it or it is made a thin wrapper around a Java or
+Kotlin policy test.
 
-## 9. Artifact 계약
+## 9. Artifact contracts
 
-foundation은 기존 여섯 계약에 두 계약을 추가해 설계 DAG와 일치시킨다.
+The foundation adds two contracts to the existing six so that they match the design DAG.
 
 - `TaskIntent`
 - `ChangeContext`
@@ -313,65 +317,65 @@ foundation은 기존 여섯 계약에 두 계약을 추가해 설계 DAG와 일�
 - `ReviewResult`
 - `RunScore`
 
-JSON Schema 2020-12 validator로 example 전체를 실제 schema에 대해 검증한다. top-level key
-존재만 확인하지 않는다. `additionalProperties`가 명시적으로 `false`인지도 검증한다.
+A JSON Schema 2020-12 validator verifies every example against the real schema. Checking only the
+presence of top-level keys is not enough. Whether `additionalProperties` is explicitly `false` is
+verified as well.
 
-## 10. 오류와 복구
+## 10. Errors and recovery
 
-- image checksum 또는 image test 실패: publish와 Helm upgrade를 중단한다.
-- 새 scale set listener/runner 실패: 기존 `aks-runners`는 변경하지 않고 새 release만 rollback한다.
-- tool-cache miss: CI를 실패시키기보다 metric으로 먼저 기록하고 image test에서 차단한다.
-- fork path 실패: trusted runner로 자동 재실행하지 않는다.
-- quality 실패: compatibility test 성공으로 덮지 않는다.
-- ARC credential/registry 정보 부재: app build를 완료하고 platform deploy만 명시적으로 blocked 처리한다.
-- registry 부재·이름 변경·admin user 활성화: `verify-acr.sh`가 BLOCKED로 중단하고 아무것도
-  바꾸지 않는다. 공용 registry이므로 수정은 out-of-band operator 작업이다.
-- `arc-runners-java`에 `gha-token` 부재: preflight가 차단하고 operator가 복사 script를 실행한
-  뒤 재실행한다. credential을 생성하는 경로는 없다.
+- An image checksum or image test failure: stop the publish and the Helm upgrade.
+- A new scale set listener or runner failure: leave the existing `aks-runners` unchanged and roll back only the new release.
+- A tool-cache miss: record it as a metric first rather than failing CI, and block it in the image test.
+- A fork path failure: do not re-run it automatically on a trusted runner.
+- A quality failure: do not cover it with a passing compatibility test.
+- Missing ARC credential or registry information: complete the app build and mark only the platform deploy as explicitly blocked.
+- A missing registry, a renamed registry, or an enabled admin user: `verify-acr.sh` stops as BLOCKED and changes
+  nothing. Because the registry is shared, a fix is an out-of-band operator task.
+- A missing `gha-token` in `arc-runners-java`: preflight blocks, the operator runs the copy script, and then it is
+  re-run. There is no path that creates a credential.
 
-## 11. 회귀
+## 11. Regression
 
-### 앱 저장소
+### The application repository
 
-- Gradle TestKit으로 convention plugin 적용과 task graph 검증
-- JDK 17·21·25 toolchain test
-- workflow YAML parser 기반 security policy
+- verifying convention plugin application and the task graph with Gradle TestKit
+- the JDK 17, 21, and 25 toolchain tests
+- the security policy based on a workflow YAML parser
 - JSON Schema example validation
-- wrapper distribution/checksum regression
+- the wrapper distribution and checksum regression
 
-### platform 저장소
+### The platform repository
 
-- Dockerfile lint와 base digest 확인
-- image 내부 JDK/tool-cache/non-root 검증
-- Helm template snapshot과 schema validation
-- `kubectl --dry-run=server` 또는 별도 test cluster 검증
-- 배포 후 ephemeral runner smoke workflow
+- Dockerfile lint and base digest confirmation
+- verification of the JDK, the tool cache, and the non-root user inside the image
+- Helm template snapshots and schema validation
+- verification with `kubectl --dry-run=server` or a separate test cluster
+- an ephemeral runner smoke workflow after deployment
 
-## 12. 단계
+## 12. Stages
 
-1. Maven branch를 merge 대상에서 제외하고 Gradle 설계·계획을 확정한다.
-2. 앱 저장소에 Gradle Wrapper, Kotlin DSL, build-logic과 policy test를 만든다.
-3. sibling platform 저장소에 Java runner image와 검증을 만든다.
-4. 기존 ACR `acrpensionguard`와 현재 ARC authentication/namespace 정책을 확인한다. 새 registry는 만들지 않는다.
-5. image를 publish하고 `arc-java-build`를 별도 release로 배포한다.
-6. smoke workflow 후 앱 CI label을 `arc-java-build`로 전환한다.
-7. fork/trusted result fan-in과 branch protection을 검증한다.
+1. Exclude the Maven branch from the merge targets and settle the Gradle design and plan.
+2. Create the Gradle Wrapper, the Kotlin DSL, build-logic, and the policy tests in the application repository.
+3. Create the Java runner image and its verification in the sibling platform repository.
+4. Confirm the existing ACR `acrpensionguard` and the current ARC authentication and namespace policy. Do not create a new registry.
+5. Publish the image and deploy `arc-java-build` as a separate release.
+6. After the smoke workflow, switch the application CI label to `arc-java-build`.
+7. Verify the fork and trusted result fan-in and branch protection.
 
-## 13. 성공 기준
+## 13. Success criteria
 
-1. `./gradlew check`가 JDK 17에서 통과한다.
-2. Java 17·21·25 compatibility test가 동일 source baseline을 검증한다.
-3. `arc-java-build` runner가 image download 없이 세 JDK를 선택한다.
-4. runner pod는 non-privileged이며 기존 세 scale set(`aks-runners`, `aks-runners-flutter`, `korvid-runners`)을 변경하지 않는다.
-5. fork PR은 GitHub-hosted 검증 없이 green이 되지 않는다.
-6. 모든 repository policy가 Gradle `check`에 포함된다.
-7. runner image와 ARC configuration은 앱 저장소 밖에서 재현 가능하다.
+1. `./gradlew check` passes on JDK 17.
+2. The Java 17, 21, and 25 compatibility tests verify the same source baseline.
+3. The `arc-java-build` runner selects all three JDKs without an image download.
+4. The runner pod is non-privileged and does not change the three existing scale sets (`aks-runners`, `aks-runners-flutter`, `korvid-runners`).
+5. A fork PR does not turn green without GitHub-hosted verification.
+6. Every repository policy is included in the Gradle `check`.
+7. The runner image and the ARC configuration are reproducible outside the application repository.
 
-## 14. 참고
+## 14. References
 
 - [Gradle 9.7.0 release metadata](https://services.gradle.org/versions/current)
 - [Gradle Java compatibility](https://docs.gradle.org/9.7.0/userguide/compatibility.html)
 - [Gradle Java Toolchains](https://docs.gradle.org/9.7.0/userguide/toolchains.html)
 - [ARC custom runner image](https://docs.github.com/en/actions/how-tos/manage-runners/use-actions-runner-controller/deploy-runner-scale-sets#using-a-custom-runner-image)
 - [setup-java](https://github.com/actions/setup-java)
-

@@ -97,6 +97,8 @@ Start here depending on what you need.
 | How do modules relate? | [Module composition](docs/design/module-composition.md) |
 | How is the repository verified? | [Engineering harness design](docs/design/engineering-harness-design.md) |
 | How does the build work? | [Gradle and Java ARC foundation](docs/design/gradle-kotlin-arc-foundation-design.md) |
+| Where is every document listed? | [Documentation index](docs/README.md) |
+| How is documentation organized? | [Documentation language and information architecture](docs/design/documentation-language-policy.md) |
 
 The requirements are the contract. 244 requirements across twelve documents, each with a stable id,
 a .NET and Python comparison, the reasoning behind the Java decision, and acceptance criteria.
@@ -137,9 +139,10 @@ depends on it and the compatibility matrix marks it required for the initial rel
 
 ## Translations
 
-- [한국어](docs/ko/README.md)
+- [Korean companion guide](docs/ko/README.md)
 
-English is the source of truth. Translations follow.
+English is the source of truth. The Korean companion guide is a single orientation document, not a
+translation of the English documentation; when the two disagree, the English document wins.
 
 ## License
 
