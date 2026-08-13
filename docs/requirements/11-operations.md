@@ -1,601 +1,662 @@
-# 11 운영 품질
+# 11 Operational quality
 
-**접두사** `OPS` · **원본 기능** [27 observability](../upstream/snapshots/d0a4165f/features/27-observability.md),
+**Prefix** `OPS` · **Upstream features** [27 observability](../upstream/snapshots/d0a4165f/features/27-observability.md),
 [28 errors-resilience-security](../upstream/snapshots/d0a4165f/features/28-errors-resilience-security.md),
 [29 evaluation-testing](../upstream/snapshots/d0a4165f/features/29-evaluation-testing.md),
 [30 packaging-compatibility](../upstream/snapshots/d0a4165f/features/30-packaging-compatibility.md)
 
-관찰성, 오류 분류, 복원력 경계, 평가, 테스트, 패키징, 호환성 계약을 정의한다. 실행 모델과 프로토콜 자체는 [01 에이전트 실행과 모델 호출](01-agent-execution.md)과 [10 호스팅과 프로토콜](10-hosting.md)이 소유하고, 이 문서는 그 위에 놓이는 운영 품질 규칙만 확정한다.
+Defines the contracts for observability, error classification, resilience boundaries, evaluation,
+testing, packaging, and compatibility. The execution model and the protocols themselves are owned by
+[01 Agent execution and model calls](01-agent-execution.md) and
+[10 Hosting and protocols](10-hosting.md), and this document settles only the operational quality
+rules that sit on top of them.
 
-## 채택 범위
+## Adoption scope
 
-이 문서의 `등급`은 [README](README.md#요구사항-등급) 정의대로 기능을 만들기로 했을 때의 강제력이고, 채택 여부는 [호환성 매트릭스](../upstream/snapshots/d0a4165f/compatibility-matrix.md)를 따른다.
+The `Grade` column in this document is, as [README](README.md#requirement-grades) defines it, how binding a requirement is once the decision to build the feature has been made; whether the feature is adopted at all follows the [compatibility matrix](../upstream/snapshots/d0a4165f/compatibility-matrix.md).
 
-- 기본 운영 품질(`OBS01`, `ERR01`, `SEC01`, `TEST01`, `PKG01`)은 채택 `필수`다.
-- 선택 관찰성 확장(`OBS02`)과 평가 기능(`EVAL01`)은 채택 `선택`이다.
+- The basic operational quality features (`OBS01`, `ERR01`, `SEC01`, `TEST01`, `PKG01`) have adoption `Required`.
+- The optional observability extension (`OBS02`) and the evaluation features (`EVAL01`) have adoption `Optional`.
 
-## 요약
+## Summary
 
-| ID | 요구사항 | 채택 | 등급 | 단계 |
+| ID | Requirement | Adoption | Grade | Phase |
 | --- | --- | --- | --- | --- |
-| OPS-001 | OpenTelemetry GenAI 규약을 표준으로 삼는다 | 필수 | 필수 | Core+ |
-| OPS-002 | 관찰성은 bootstrap과 wrapper를 분리한다 | 필수 | 필수 | Core+ |
-| OPS-003 | 민감 데이터 수집은 기본 끔인 별도 opt-in이다 | 필수 | 필수 | Core+ |
-| OPS-004 | logging은 tracing과 별도 계층으로 유지한다 | 필수 | 필수 | Core+ |
-| OPS-005 | feature telemetry는 승인된 origin에만 실시간으로 찍는다 | 선택 | 권장 | Core+ |
-| OPS-006 | 계측 비활성은 sticky 하게 유지한다 | 필수 | 필수 | Core+ |
-| OPS-007 | 같은 작업을 두 계층에서 중복 계측하지 않고 카테고리별 제어를 둔다 | 필수 | 필수 | Core+ |
-| OPS-008 | 공통 오류 taxonomy를 노출한다 | 필수 | 필수 | Core+ |
-| OPS-009 | validation과 프로그래밍 오류는 built-in 예외로 남긴다 | 필수 | 필수 | Core+ |
-| OPS-010 | 취소는 일반 실패로 번역하지 않는다 | 필수 | 필수 | Core+ |
-| OPS-011 | timeout은 결과 envelope에 남긴다 | 필수 | 필수 | Core+ |
-| OPS-012 | cleanup은 process tree와 remote task 단위로 수행한다 | 필수 | 필수 | Core+ |
-| OPS-013 | persistent executor는 session-owned resource다 | 필수 | 필수 | Core+ |
-| OPS-014 | shell과 tool 정책을 보안 경계로 포장하지 않는다 | 필수 | 필수 | Core+ |
-| OPS-015 | 위험한 우회 경로에는 명시적 안전 장치를 둔다 | 필수 | 필수 | Core+ |
-| OPS-016 | 재시도·타임아웃·서킷브레이커 운영 정책은 호스트가 소유한다 | 필수 | 필수 | Core+ |
-| OPS-017 | 평가 SPI는 batch-oriented provider-neutral 계약을 쓴다 | 선택 | 필수 | Core+ |
-| OPS-018 | evaluation converter를 1급 API로 두고 외부 전송 payload를 최소화한다 | 선택 | 필수 | Core+ |
-| OPS-019 | 평가 결과는 실행 실패와 품질 실패를 분리한다 | 선택 | 필수 | Core+ |
-| OPS-020 | workflow 평가는 공개 API와 per-agent subresults를 가져야 한다 | 선택 | 필수 | Workflow |
-| OPS-021 | generated evaluator와 golden 입력은 결정적으로 재현 가능해야 한다 | 선택 | 필수 | Optional |
-| OPS-022 | 공급자 공통 contract test와 golden scenario를 유지한다 | 필수 | 필수 | Core+ |
-| OPS-023 | 패키징은 단일 버전 라인과 Gradle BOM을 기준으로 하고 단계 레지스트리를 따로 둔다 | 필수 | 필수 | Core+ |
-| OPS-024 | 의존성 관리는 validated bounds와 공급망 pinning을 함께 쓴다 | 필수 | 필수 | Core+ |
-| OPS-025 | 호환성·설치 가능성 gate를 maturity와 연결한다 | 필수 | 필수 | Core+ |
-| OPS-026 | 교차 언어 호환성은 공개 surface와 행동으로 판정한다 | 필수 | 권장 | Core+ |
+| OPS-001 | The OpenTelemetry GenAI conventions are taken as the standard | Required | Required | Core+ |
+| OPS-002 | Observability separates bootstrap from the wrappers | Required | Required | Core+ |
+| OPS-003 | Sensitive data collection is a separate opt-in that is off by default | Required | Required | Core+ |
+| OPS-004 | Logging is kept as a layer separate from tracing | Required | Required | Core+ |
+| OPS-005 | Feature telemetry is emitted live only to approved origins | Optional | Recommended | Core+ |
+| OPS-006 | Disabling instrumentation stays sticky | Required | Required | Core+ |
+| OPS-007 | The same operation is not instrumented twice in two layers and per-category control exists | Required | Required | Core+ |
+| OPS-008 | A common error taxonomy is exposed | Required | Required | Core+ |
+| OPS-009 | Validation and programming errors are left as built-in exceptions | Required | Required | Core+ |
+| OPS-010 | Cancellation is not translated into an ordinary failure | Required | Required | Core+ |
+| OPS-011 | A timeout is recorded in the result envelope | Required | Required | Core+ |
+| OPS-012 | Cleanup is performed per process tree and per remote task | Required | Required | Core+ |
+| OPS-013 | A persistent executor is a session-owned resource | Required | Required | Core+ |
+| OPS-014 | Shell and tool policies are not dressed up as security boundaries | Required | Required | Core+ |
+| OPS-015 | Dangerous bypass paths carry explicit safeguards | Required | Required | Core+ |
+| OPS-016 | Retry, timeout, and circuit breaker operational policies are owned by the host | Required | Required | Core+ |
+| OPS-017 | The evaluation SPI uses a batch-oriented provider-neutral contract | Optional | Required | Core+ |
+| OPS-018 | The evaluation converter is a first-class API and minimizes the payload sent outside | Optional | Required | Core+ |
+| OPS-019 | Evaluation results separate execution failures from quality failures | Optional | Required | Core+ |
+| OPS-020 | Workflow evaluation must have a public API and per-agent subresults | Optional | Required | Workflow |
+| OPS-021 | Generated evaluators and golden inputs must be deterministically reproducible | Optional | Required | Optional |
+| OPS-022 | Provider-common contract tests and golden scenarios are maintained | Required | Required | Core+ |
+| OPS-023 | Packaging is based on a single version line and a Gradle BOM, with a separate stage registry | Required | Required | Core+ |
+| OPS-024 | Dependency management uses validated bounds together with supply chain pinning | Required | Required | Core+ |
+| OPS-025 | Compatibility and installability gates are tied to maturity | Required | Required | Core+ |
+| OPS-026 | Cross-language compatibility is judged by the public surface and behavior | Required | Recommended | Core+ |
 
 ---
 
-### 관찰성
+### Observability
 
-## OPS-001 OpenTelemetry GenAI 규약을 표준으로 삼는다
+## OPS-001 The OpenTelemetry GenAI conventions are taken as the standard
 
-**요구사항.** 관찰성의 표준 semantic convention은 OpenTelemetry GenAI 규약이어야 한다.
-이 결정은 core 공개 API가 OpenTelemetry SDK 타입에 직접 의존한다는 뜻이 아니며, telemetry
-adapter가 표준 vocabulary와 context를 변환해야 한다.
+**Requirement.** The standard semantic convention for observability must be the OpenTelemetry GenAI
+conventions. This selects the standard vocabulary, not OpenTelemetry SDK types for the core public
+API; a telemetry adapter must translate the vocabulary and context.
 
-**원본 비교**
+**Upstream comparison**
 
-- .NET: OpenTelemetryAgent와 workflow telemetry가 GenAI semantic conventions를 전제로 span과 metric을 만든다.
-- Python: observability 모듈이 tracer, meter, metrics view를 한곳에서 관리하며 같은 OTel 의미 체계를 쓴다.
+- .NET: OpenTelemetryAgent and workflow telemetry build spans and metrics on the assumption of the GenAI semantic conventions.
+- Python: The observability module manages the tracer, meter, and metrics views in one place and uses the same OTel semantics.
 
-**판단.** 두 원본의 공통 분모다. Java도 독자 규약을 만들지 않고 OTel GenAI를 기준으로 해야 exporter와 backend가 바로 호환된다.
+**Decision.** This is the common denominator of the two upstreams. Java must also base itself on OTel
+GenAI rather than inventing its own convention, so that exporters and backends are compatible
+immediately.
 
-**수용 기준**
+**Acceptance criteria**
 
-- 공개 span과 metric 이름은 OTel GenAI vocabulary에 맞는다.
-- provider, agent, workflow 식별 태그가 custom ad-hoc key가 아니라 표준 의미 체계 위에 놓인다.
-- `agent-framework-api`와 `agent-framework-engine`의 공개 signature에 OpenTelemetry,
-  Micrometer, Spring Observation 타입이 없다.
+- The public span and metric names match the OTel GenAI vocabulary.
+- The provider, agent, and workflow identification tags sit on the standard semantics rather than on custom ad-hoc keys.
+- Public signatures in `agent-framework-api` and `agent-framework-engine` contain no OpenTelemetry,
+  Micrometer, or Spring Observation types.
 
-**근거** [27 observability](../upstream/snapshots/d0a4165f/features/27-observability.md)
-
----
-
-## OPS-002 관찰성은 bootstrap과 wrapper를 분리한다
-
-**요구사항.** Java 관찰성은 provider bootstrap 계층과 agent·workflow wrapper 계층을 분리해야 한다.
-
-**원본 비교**
-
-- .NET: builder extension이 OpenTelemetryAgent와 workflow wrapper를 붙인다.
-- Python: observability.py가 provider wiring과 accessor를 중앙에서 관리한다.
-
-**판단.** 둘의 장점을 합친다. bootstrap과 wrapper가 섞이면 app-wide 초기화와 per-run decoration이 서로를 오염시킨다.
-
-**수용 기준**
-
-- OTel provider 초기화 없이도 no-op wrapper를 구성할 수 있다.
-- bootstrap API를 바꾸지 않고 agent 또는 workflow wrapper만 교체할 수 있다.
-
-**근거** [27 observability](../upstream/snapshots/d0a4165f/features/27-observability.md)
+**Evidence** [27 observability](../upstream/snapshots/d0a4165f/features/27-observability.md)
 
 ---
 
-## OPS-003 민감 데이터 수집은 기본 끔인 별도 opt-in이다
+## OPS-002 Observability separates bootstrap from the wrappers
 
-**요구사항.** message content, tool args, tool results 같은 민감 데이터 수집은 기본 비활성이고 별도 opt-in이어야 한다.
+**Requirement.** Java observability must separate the provider bootstrap layer from the agent and
+workflow wrapper layer.
 
-**원본 비교**
+**Upstream comparison**
 
-- .NET: EnableSensitiveData를 켜야 raw inputs, outputs, tool payload가 span에 들어간다.
-- Python: enable_sensitive_telemetry()를 명시적으로 호출해야 민감 payload capture가 켜진다.
+- .NET: A builder extension attaches OpenTelemetryAgent and the workflow wrapper.
+- Python: observability.py manages the provider wiring and the accessors centrally.
 
-**판단.** 사용자 지시와 원본이 일치한다. 더 안전한 기본값을 택해 운영 환경에서 우발적 payload 유출을 막는다.
+**Decision.** The strengths of the two are combined. When bootstrap and wrappers are mixed, app-wide
+initialization and per-run decoration contaminate each other.
 
-**수용 기준**
+**Acceptance criteria**
 
-- 기본 설정의 span·log에는 원문 메시지와 tool arguments가 없다.
-- 민감 데이터 capture를 켜는 설정과 끄는 설정이 테스트로 구분된다.
+- A no-op wrapper can be configured even without OTel provider initialization.
+- Only the agent or workflow wrapper can be replaced without changing the bootstrap API.
 
-**근거** [27 observability](../upstream/snapshots/d0a4165f/features/27-observability.md)
-
----
-
-## OPS-004 logging은 tracing과 별도 계층으로 유지한다
-
-**요구사항.** 사람이 읽는 logging 계층은 tracing 계층과 분리하고 payload-bearing 로그는 기본 비활성으로 둬야 한다.
-
-**원본 비교**
-
-- .NET: LoggingAgent가 lifecycle 로그와 payload-bearing Trace 로그를 구분한다.
-- Python: logger exporter는 observability bootstrap의 일부지만 민감 데이터 capture와 별도 스위치로 통제된다.
-
-**판단.** 동일한 목적이다. tracing과 logging을 한 경로로 숨기면 운영자가 payload log를 예기치 않게 켜기 쉽다.
-
-**수용 기준**
-
-- Debug 수준만 켜면 lifecycle 정보만 남고 payload는 남지 않는다.
-- redaction-aware serializer나 formatter를 교체할 수 있다.
-
-**근거** [27 observability](../upstream/snapshots/d0a4165f/features/27-observability.md)
+**Evidence** [27 observability](../upstream/snapshots/d0a4165f/features/27-observability.md)
 
 ---
 
-## OPS-005 feature telemetry는 승인된 origin에만 실시간으로 찍는다
+## OPS-003 Sensitive data collection is a separate opt-in that is off by default
 
-**요구사항.** feature telemetry는 request-time live signal로 계산하되 승인된 first-party origin에만 방출해야 한다.
+**Requirement.** The collection of sensitive data such as message content, tool args, and tool results
+must be disabled by default and must be a separate opt-in.
 
-**원본 비교**
+**Upstream comparison**
 
-- .NET: 이번 스냅샷의 production code에서는 UA identity와 hosted prefix는 보이지만 Python 수준의 live feature token 전체 구현은 직접 확인되지 않는다.
-- Python: process-global bitmask, approved-origin 검사, stale token stripping, opt-out env var를 실제로 구현한다.
+- .NET: Raw inputs, outputs, and tool payloads enter spans only when EnableSensitiveData is switched on.
+- Python: Sensitive payload capture is switched on only by calling enable_sensitive_telemetry() explicitly.
 
-**판단.** 확인 가능한 구현이 더 엄격한 Python 모델을 채택한다. 숨겨진 telemetry나 third-party leakage를 막는 쪽이 더 안전하다.
+**Decision.** The user's instruction and the upstreams agree. The safer default is taken to prevent
+accidental payload leakage in production environments.
 
-**수용 기준**
+**Acceptance criteria**
 
-- feature token은 승인된 HTTPS origin이 아니면 request header에서 제거된다.
-- feature telemetry 전체 opt-out과 bitmask-only opt-out을 별도로 지원한다.
+- The spans and logs of the default configuration contain no raw messages and no tool arguments.
+- The configuration that switches sensitive data capture on and the one that switches it off are distinguished by tests.
 
-**근거** [27 observability](../upstream/snapshots/d0a4165f/features/27-observability.md)
-
----
-
-## OPS-006 계측 비활성은 sticky 하게 유지한다
-
-**요구사항.** 운영자가 application-scoped instrumentation control에서 계측을 끄면 force
-재활성화 전까지 framework helper가 다시 켜지 못하게 해야 한다. 상태는 host가 소유하며
-JVM-global static flag로 모든 application context에 공유하지 않는다.
-
-**원본 비교**
-
-- .NET: builder opt-in 구조라 자동 재활성화 경로가 상대적으로 좁다.
-- Python: disable_instrumentation() 뒤에는 sticky disable이 유지되고 force=True 없이는 다시 켜지지 않는다.
-
-**판단.** Python의 운영 보호가 더 강하다. Java도 sticky disable을 채택해 예기치 않은 재계측을 막는다.
-
-**수용 기준**
-
-- disable 뒤에는 민감 telemetry enable이나 provider bootstrap 호출만으로 계측이 다시 켜지지 않는다.
-- force 재활성화 경로가 별도 API로 드러난다.
-- 같은 JVM의 독립 application context 두 개가 instrumentation 상태를 공유하지 않는다.
-
-**근거** [27 observability](../upstream/snapshots/d0a4165f/features/27-observability.md)
+**Evidence** [27 observability](../upstream/snapshots/d0a4165f/features/27-observability.md)
 
 ---
 
-## OPS-007 같은 작업을 두 계층에서 중복 계측하지 않고 카테고리별 제어를 둔다
+## OPS-004 Logging is kept as a layer separate from tracing
 
-**요구사항.** 같은 작업은 한 계층에서만 계측하고 workflow 계측은 카테고리별로 켜고 끌 수 있어야 한다.
+**Requirement.** The human-readable logging layer must be separated from the tracing layer, and
+payload-bearing logs must be disabled by default.
 
-**원본 비교**
+**Upstream comparison**
 
-- .NET: 이미 계측된 chat client는 다시 장식하지 않고 workflow telemetry에 category-level disable switch를 둔다.
-- Python: 중앙 bootstrap이 tracer와 meter 구성을 통제해 중복 wiring을 피하고 broad enable/disable을 관리한다.
+- .NET: LoggingAgent distinguishes lifecycle logs from payload-bearing Trace logs.
+- Python: The logger exporter is part of the observability bootstrap but is controlled by a switch separate from sensitive data capture.
 
-**판단.** 사용자 지시의 “동일 작업 중복 계측 금지”를 직접 반영한다. 중복 span은 비용과 해석 혼란만 늘린다.
+**Decision.** The purpose is the same. Hiding tracing and logging on one path makes it easy for an
+operator to switch on payload logs unexpectedly.
 
-**수용 기준**
+**Acceptance criteria**
 
-- 이미 계측된 inner client나 transport를 재장식하면 no-op가 된다.
-- workflow build, run, executor, message 카테고리를 독립적으로 비활성화할 수 있다.
+- Switching on only the Debug level leaves lifecycle information and no payload.
+- A redaction-aware serializer or formatter can be replaced.
 
-**근거** [27 observability](../upstream/snapshots/d0a4165f/features/27-observability.md)
-
----
-
----
-
-### 오류·복원력·보안
-
-## OPS-008 공통 오류 taxonomy를 노출한다
-
-**요구사항.** Java는 layer별 분기가 가능한 공통 오류 taxonomy를 노출해야 한다.
-
-**원본 비교**
-
-- .NET: 이번 스냅샷에서는 package별 로컬 예외 계층과 built-in 예외 혼용이 중심이다.
-- Python: framework-wide exception hierarchy를 제공하고 agent, workflow, integration, tool branches를 둔다.
-
-**판단.** 분류 가능한 taxonomy가 있어야 protocol binder와 host가 machine-readable branching을 할 수 있다. Python 구조를 기본으로 채택한다.
-
-**수용 기준**
-
-- 공개 예외 타입은 agent, workflow, integration, tool, provider 같은 상위 branch를 가진다.
-- 호스트는 메시지 문자열 파싱 없이 예외 타입만으로 오류 분류를 할 수 있다.
-
-**근거** [28 errors-resilience-security](../upstream/snapshots/d0a4165f/features/28-errors-resilience-security.md)
+**Evidence** [27 observability](../upstream/snapshots/d0a4165f/features/27-observability.md)
 
 ---
 
-## OPS-009 validation과 프로그래밍 오류는 built-in 예외로 남긴다
+## OPS-005 Feature telemetry is emitted live only to approved origins
 
-**요구사항.** 잘못된 인자, 잘못된 상태, 구성 실수는 framework-specific domain error로 감싸지 않고 built-in 예외로 남겨야 한다.
+**Requirement.** Feature telemetry must be computed as a request-time live signal but must be emitted
+only to approved first-party origins.
 
-**원본 비교**
+**Upstream comparison**
 
-- .NET: LocalShellExecutor가 ArgumentException과 ArgumentOutOfRangeException을 직접 사용한다.
-- Python: coding standard가 ValueError, TypeError, RuntimeError 같은 built-in 경계를 명시한다.
+- .NET: In the production code of this snapshot the UA identity and the hosted prefix are visible, but a full live feature token implementation at the Python level is not directly confirmed.
+- Python: Actually implements a process-global bitmask, an approved-origin check, stale token stripping, and an opt-out env var.
 
-**판단.** 두 원본의 의도는 같다. validation 오류까지 domain 예외로 감싸면 사용자가 수정해야 할 실수를 운영 실패처럼 오해한다.
+**Decision.** The Python model, whose implementation is verifiable and stricter, is adopted.
+Preventing hidden telemetry and third-party leakage is the safer side.
 
-**수용 기준**
+**Acceptance criteria**
 
-- 잘못된 API 입력은 IllegalArgumentException류로 실패한다.
-- domain exception hierarchy는 외부 서비스 실패나 runtime failure에만 사용된다.
+- The feature token is removed from the request header unless the origin is an approved HTTPS origin.
+- A complete feature telemetry opt-out and a bitmask-only opt-out are supported separately.
 
-**근거** [28 errors-resilience-security](../upstream/snapshots/d0a4165f/features/28-errors-resilience-security.md)
-
----
-
-## OPS-010 취소는 일반 실패로 번역하지 않는다
-
-**요구사항.** 취소는 ordinary failure와 다른 제어 신호로 유지하고 generic domain exception으로 번역하지 않아야 한다.
-
-**원본 비교**
-
-- .NET: MCP wrapper가 cancelled 상태를 OperationCanceledException으로 드러낸다.
-- Python: declarative HTTP executor가 CancelledError를 wrapping하지 않고 그대로 전파한다.
-
-**판단.** 사용자 지시대로 cancellation은 taxonomy에 포함되되 실패로 오염하지 않는다. 그래야 host timeout, client abort, human cancel이 정확히 구분된다.
-
-**수용 기준**
-
-- 취소된 실행은 generic FrameworkException으로 치환되지 않는다.
-- 취소 전파 테스트가 tool transport와 workflow transport 양쪽에 존재한다.
-
-**근거** [28 errors-resilience-security](../upstream/snapshots/d0a4165f/features/28-errors-resilience-security.md)
+**Evidence** [27 observability](../upstream/snapshots/d0a4165f/features/27-observability.md)
 
 ---
 
-## OPS-011 timeout은 결과 envelope에 남긴다
+## OPS-006 Disabling instrumentation stays sticky
 
-**요구사항.** shell과 코드 실행 같은 장기 작업은 timeout 여부를 예외와 별도로 결과 envelope에 남겨야 한다.
+**Requirement.** When an operator switches instrumentation off through application-scoped
+instrumentation control, framework helpers must not be able to switch it on again before a forced
+re-enable. The host owns the state; it must not be shared across application contexts through a
+JVM-global static flag.
 
-**원본 비교**
+**Upstream comparison**
 
-- .NET: ShellResult가 TimedOut과 ExitCode=124 규약을 가진다.
-- Python: shell executor가 timeout 후 output을 수습해 envelope로 반환하려 한다.
+- .NET: Because of the builder opt-in structure, the automatic re-enable path is relatively narrow.
+- Python: After disable_instrumentation() the sticky disable is kept and it is not switched on again without force=True.
 
-**판단.** 동일하다. timeout을 결과 구조에 남겨야 상위 agent와 harness가 deterministic하게 후속 정책을 적용할 수 있다.
+**Decision.** Python's operational protection is stronger. Java also adopts the sticky disable to
+prevent unexpected re-instrumentation.
 
-**수용 기준**
+**Acceptance criteria**
 
-- timeout 결과에는 timedOut=true와 표준화된 종료 정보가 포함된다.
-- timeout 미발생 경로에서는 같은 필드가 false 또는 empty로 일관된다.
+- After a disable, instrumentation is not switched on again merely by enabling sensitive telemetry or by calling the provider bootstrap.
+- The forced re-enable path is surfaced as a separate API.
+- Two independent application contexts in the same JVM do not share instrumentation state.
 
-**근거** [28 errors-resilience-security](../upstream/snapshots/d0a4165f/features/28-errors-resilience-security.md)
-
----
-
-## OPS-012 cleanup은 process tree와 remote task 단위로 수행한다
-
-**요구사항.** cleanup은 parent process 하나가 아니라 process tree 전체와 원격 장기 task까지 포함해야 한다.
-
-**원본 비교**
-
-- .NET: shell이 timeout 후 process tree를 정리하고 MCP wrapper는 local cancellation 시 remote cancel을 best-effort로 시도한다.
-- Python: kill_process_tree가 자식 프로세스까지 정리한다.
-
-**판단.** 더 안전한 기본값을 택한다. cleanup이 얕으면 고아 프로세스와 고아 task가 남아 운영 리소스를 잠식한다.
-
-**수용 기준**
-
-- local process timeout 또는 cancel 시 descendants까지 정리된다.
-- 원격 task wrapper는 local cancel 후 remote cancel을 best-effort로 시도한다.
-
-**근거** [28 errors-resilience-security](../upstream/snapshots/d0a4165f/features/28-errors-resilience-security.md)
+**Evidence** [27 observability](../upstream/snapshots/d0a4165f/features/27-observability.md)
 
 ---
 
-## OPS-013 persistent executor는 session-owned resource다
+## OPS-007 The same operation is not instrumented twice in two layers and per-category control exists
 
-**요구사항.** persistent shell이나 code executor는 단일 conversation 또는 session이 소유하는 resource로 제한해야 한다.
+**Requirement.** The same operation must be instrumented in only one layer, and workflow
+instrumentation must be switchable on and off per category.
 
-**원본 비교**
+**Upstream comparison**
 
-- .NET: persistent shell session ownership과 timeout 시 interrupt-then-teardown 규칙을 둔다.
-- Python: shell tooling은 stateless 중심이지만 session-level coordination과 cleanup 필요성을 sample과 policy가 드러낸다.
+- .NET: Does not decorate an already instrumented chat client again and keeps a category-level disable switch in the workflow telemetry.
+- Python: The central bootstrap controls the tracer and meter configuration to avoid duplicate wiring and manages broad enable/disable.
 
-**판단.** 세션 소유를 강제해야 state leakage와 command interleaving을 막을 수 있다. singleton 공유는 Java에서 특히 위험하다.
+**Decision.** The user's instruction "no duplicate instrumentation of the same operation" is
+reflected directly. Duplicate spans only add cost and interpretation confusion.
 
-**수용 기준**
+**Acceptance criteria**
 
-- persistent executor 인스턴스는 동시에 두 session에서 공유되지 않는다.
-- 세션 종료나 복구 실패 시 executor teardown 경로가 명시된다.
+- Re-decorating an already instrumented inner client or transport becomes a no-op.
+- The workflow build, run, executor, and message categories can be disabled independently.
 
-**근거** [28 errors-resilience-security](../upstream/snapshots/d0a4165f/features/28-errors-resilience-security.md)
-
----
-
-## OPS-014 shell과 tool 정책을 보안 경계로 포장하지 않는다
-
-**요구사항.** regex denylist, allowlist, command policy 같은 guardrail은 approval·sandbox 요구를 대체하는 보안 경계로 동작하지 않아야 한다.
-
-**원본 비교**
-
-- .NET: ShellPolicy가 variable expansion과 interpreter escape 우회를 직접 경고한다.
-- Python: shell policy 문서가 guardrail 한계를 노골적으로 적고 approval와 sandbox를 실제 경계로 둔다.
-
-**판단.** 우회 가능한 정책 객체만으로 신뢰 등급이 올라가면 운영자가 잘못 믿게 된다. Java는 policy-only guardrail과 실제 승인·격리 경계를 구성과 API에서 분리해 드러내야 한다.
-
-**수용 기준**
-
-- unattended unsafe mode 또는 approval 비활성 경로는 `acknowledgeUnsafe`와 동등한 명시 인자 없이는 생성되거나 활성화되지 않는다.
-- regex denylist·allowlist·command policy 설정만으로 tool 또는 executor의 approval-required 기본값이 꺼지지 않는다.
-- sandbox capability 또는 격리 backend가 없는 executor는 API나 descriptor에서 sandboxed로 보고되지 않는다.
-
-**근거** [28 errors-resilience-security](../upstream/snapshots/d0a4165f/features/28-errors-resilience-security.md)
-
----
-
-## OPS-015 위험한 우회 경로에는 명시적 안전 장치를 둔다
-
-**요구사항.** unattended unsafe mode와 declarative state path access 같은 위험 경로에는 명시적 acknowledgement 또는 path safety 검사를 강제해야 한다.
-
-**원본 비교**
-
-- .NET: shell approval wrapper와 auto-approval 충돌 경고가 위험한 우회 경로를 제한한다.
-- Python: LocalShellTool은 acknowledge_unsafe를 요구하고 declarative state path는 reflective escape를 차단한다.
-
-**판단.** 둘 다 “위험한 우회는 눈에 띄게 켠다”는 방향이다. Java도 silent opt-out을 금지하고 state traversal 공격면을 줄여야 한다.
-
-**수용 기준**
-
-- approval을 끄는 unattended mode는 explicit acknowledgement 없이 생성되지 않는다.
-- reflective escape나 path traversal에 해당하는 state path는 기본값 또는 오류로 차단된다.
-
-**근거** [28 errors-resilience-security](../upstream/snapshots/d0a4165f/features/28-errors-resilience-security.md)
-
----
-
-## OPS-016 재시도·타임아웃·서킷브레이커 운영 정책은 호스트가 소유한다
-
-**요구사항.** 재시도, request timeout, circuit breaker 같은 운영 정책은 코어의 암묵 동작이 아니라 host 또는 adapter가 명시적으로 소유해야 한다.
-
-**원본 비교**
-
-- .NET: 이번 스냅샷 근거로는 framework-wide generic retry layer를 직접 확인할 수 없다.
-- Python: runtime 전반 공통 retry보다 test workflow와 개별 layer 설정이 확인된다.
-
-**판단.** 확인 불가한 자동 재시도를 요구사항으로 만들지 않는다. 사용자 지시대로 retry·timeout·circuit breaker 운영 정책은 host 소유로 고정한다.
-
-**수용 기준**
-
-- 코어 기본 동작에 silent retry가 없다.
-- 재시도, timeout, circuit-breaker는 host 또는 adapter 설정으로만 활성화된다.
-
-**근거** [28 errors-resilience-security](../upstream/snapshots/d0a4165f/features/28-errors-resilience-security.md)
+**Evidence** [27 observability](../upstream/snapshots/d0a4165f/features/27-observability.md)
 
 ---
 
 ---
 
-### 평가·테스트
+### Errors, resilience, and security
 
-## OPS-017 평가 SPI는 batch-oriented provider-neutral 계약을 쓴다
+## OPS-008 A common error taxonomy is exposed
 
-**요구사항.** 평가 SPI는 batch-oriented provider-neutral 계약을 사용해야 한다.
+**Requirement.** Java must expose a common error taxonomy that allows branching per layer.
 
-**원본 비교**
+**Upstream comparison**
 
-- .NET: IAgentEvaluator가 batch 단위 EvaluateAsync(items, evalName, ...)를 사용한다.
-- Python: Evaluator 모델도 EvalItem 목록을 받아 EvalResults를 돌려준다.
+- .NET: In this snapshot, per-package local exception hierarchies mixed with built-in exceptions are central.
+- Python: Provides a framework-wide exception hierarchy with agent, workflow, integration, and tool branches.
 
-**판단.** 동일하다. 배치 계약이 있어야 cloud evaluator, 비용 집계, score aggregation을 효율적으로 다룬다.
+**Decision.** A classifiable taxonomy is what lets protocol binders and hosts branch in a
+machine-readable way. The Python structure is adopted as the base.
 
-**수용 기준**
+**Acceptance criteria**
 
-- 단일 evaluator 호출로 여러 EvalItem을 평가할 수 있다.
-- provider-specific evaluator도 같은 EvalItem/EvalResults 모델을 사용한다.
+- The public exception types have top-level branches such as agent, workflow, integration, tool, and provider.
+- A host can classify errors from the exception type alone, without parsing message strings.
 
-**근거** [29 evaluation-testing](../upstream/snapshots/d0a4165f/features/29-evaluation-testing.md)
-
----
-
-## OPS-018 evaluation converter를 1급 API로 두고 외부 전송 payload를 최소화한다
-
-**요구사항.** runtime message와 tool definition을 evaluator schema로 바꾸는 converter를 1급 API로 두고 외부 evaluator로 나가는 payload를 최소화해야 한다.
-
-**원본 비교**
-
-- .NET: BuildEvalItem 계열 helper가 minimal conversation과 tool definitions를 조립한다.
-- Python: AgentEvalConverter가 content 변환과 unparseable tool arguments sanitization을 직접 수행한다.
-
-**판단.** Python 쪽이 더 엄격하다. converter는 단순 포맷터가 아니라 정보 최소화 경계이므로 Java도 별도 API와 sanitization 규칙을 가져야 한다.
-
-**수용 기준**
-
-- converter 없이 evaluator가 runtime Message를 직접 파싱하지 않는다.
-- 파싱 불가능한 tool arguments는 raw string 대신 safe placeholder로 치환된다.
-
-**근거** [29 evaluation-testing](../upstream/snapshots/d0a4165f/features/29-evaluation-testing.md)
+**Evidence** [28 errors-resilience-security](../upstream/snapshots/d0a4165f/features/28-errors-resilience-security.md)
 
 ---
 
-## OPS-019 평가 결과는 실행 실패와 품질 실패를 분리한다
+## OPS-009 Validation and programming errors are left as built-in exceptions
 
-**요구사항.** 평가 결과 모델은 evaluator 실행 실패와 품질 기준 미달을 서로 다른 상태로 표현하고 gate helper를 별도로 제공해야 한다.
+**Requirement.** Invalid arguments, invalid states, and configuration mistakes must be left as
+built-in exceptions rather than wrapped in framework-specific domain errors.
 
-**원본 비교**
+**Upstream comparison**
 
-- .NET: AgentEvaluationResults가 Status, Error, AssertAllPassed, AssertScoreAtLeast를 함께 가진다.
-- Python: EvalResults가 status, error, raise_for_status, assert_score_at_least를 제공한다.
+- .NET: LocalShellExecutor uses ArgumentException and ArgumentOutOfRangeException directly.
+- Python: The coding standard states the built-in boundaries such as ValueError, TypeError, and RuntimeError.
 
-**판단.** infra failure와 quality failure를 섞으면 CI와 리포팅이 둘 중 하나를 잘못 삼킨다. 두 실패를 분리하는 공통 결과 모델을 유지한다.
+**Decision.** The intent of the two upstreams is the same. Wrapping even validation errors in domain
+exceptions makes a mistake the user has to fix look like an operational failure.
 
-**수용 기준**
+**Acceptance criteria**
 
-- 평가 실행 실패는 gate failure와 다른 상태 코드나 enum으로 구분된다.
-- raw 결과를 읽는 API와 gate helper API가 같은 모델 위에서 분리되어 있다.
+- Invalid API input fails with an IllegalArgumentException-family exception.
+- The domain exception hierarchy is used only for external service failures and runtime failures.
 
-**근거** [29 evaluation-testing](../upstream/snapshots/d0a4165f/features/29-evaluation-testing.md)
-
----
-
-## OPS-020 workflow 평가는 공개 API와 per-agent subresults를 가져야 한다
-
-**요구사항.** workflow 평가는 별도 공개 API로 제공하고 overall 결과와 per-agent subresults를 함께 반환해야 한다.
-
-**원본 비교**
-
-- .NET: 결과 모델은 SubResults를 준비하지만 explicit workflow evaluation public API는 이번 스냅샷 근거로 직접 확인되지 않는다.
-- Python: evaluate_workflow()가 public API로 존재하고 per-agent breakdown을 채운다.
-
-**판단.** Python이 더 완전하다. Java는 결과 타입만 준비하는 수준에 머물지 않고 explicit API까지 요구해야 한다.
-
-**수용 기준**
-
-- evaluateWorkflow류 공개 API가 존재한다.
-- 결과 모델은 overall score와 executor 또는 agent id keyed subresults를 함께 보존한다.
-
-**근거** [29 evaluation-testing](../upstream/snapshots/d0a4165f/features/29-evaluation-testing.md)
+**Evidence** [28 errors-resilience-security](../upstream/snapshots/d0a4165f/features/28-errors-resilience-security.md)
 
 ---
 
-## OPS-021 generated evaluator와 golden 입력은 결정적으로 재현 가능해야 한다
+## OPS-010 Cancellation is not translated into an ordinary failure
 
-**요구사항.** generated 또는 provider evaluator와 golden 입력은 버전 고정과 결정적 재현을 전제로 운영해야 한다.
+**Requirement.** Cancellation must be kept as a control signal different from an ordinary failure and
+must not be translated into a generic domain exception.
 
-**원본 비교**
+**Upstream comparison**
 
-- .NET: GeneratedEvaluatorRef가 version pinning을 전제로 하고 conformance traces를 disk corpus로 고정한다.
-- Python: FoundryEvals가 generated rubric evaluator reference를 관리하고 tests가 deterministic inputs를 사용한다.
+- .NET: The MCP wrapper surfaces the cancelled state as OperationCanceledException.
+- Python: The declarative HTTP executor propagates CancelledError as is instead of wrapping it.
 
-**판단.** 사용자 요구의 “결정적 재현”을 그대로 반영한다. latest-floating evaluator나 가변 입력은 회귀 판단을 흐리게 만든다.
+**Decision.** As the user instructs, cancellation is included in the taxonomy but is not
+contaminated as a failure. That is what keeps host timeout, client abort, and human cancel exactly
+distinguished.
 
-**수용 기준**
+**Acceptance criteria**
 
-- generated evaluator reference는 버전 없는 latest 기본값을 강제하지 않는다.
-- golden 또는 trace corpus는 소스 관리되는 고정 입력으로 유지된다.
+- A cancelled execution is not replaced by a generic FrameworkException.
+- Cancellation propagation tests exist for both the tool transport and the workflow transport.
 
-**근거** [29 evaluation-testing](../upstream/snapshots/d0a4165f/features/29-evaluation-testing.md)
-
----
-
-## OPS-022 공급자 공통 contract test와 golden scenario를 유지한다
-
-**요구사항.** 공급자 공통 contract test, golden scenario, protocol wire conformance test를 별도 층으로 유지해야 한다.
-
-**원본 비교**
-
-- .NET: agent contract integration tests와 OpenAI trace-driven conformance suite를 분리해 둔다.
-- Python: aggregate tests와 provider-sharded integration jobs를 강하게 운용하지만 동급 trace-driven wire harness는 이번 스냅샷 근거로 직접 확인되지 않는다.
-
-**판단.** Java는 둘 다 요구한다. 공통 contract test만으로는 wire regression을 못 잡고 golden만으로는 provider-neutral contract를 못 고정한다.
-
-**수용 기준**
-
-- provider를 바꿔도 같은 suite로 돌 수 있는 공통 contract test가 존재한다.
-- 대표 시나리오는 golden 입력과 기대 결과로 고정된다.
-- 프로토콜 어댑터는 trace-driven 또는 동등한 wire conformance suite를 가진다.
-
-**근거** [29 evaluation-testing](../upstream/snapshots/d0a4165f/features/29-evaluation-testing.md)
+**Evidence** [28 errors-resilience-security](../upstream/snapshots/d0a4165f/features/28-errors-resilience-security.md)
 
 ---
 
----
+## OPS-011 A timeout is recorded in the result envelope
 
-### 패키징·호환성
+**Requirement.** Long-running work such as shell and code execution must record whether a timeout
+occurred in the result envelope, separately from exceptions.
 
-## OPS-023 패키징은 단일 버전 라인과 Gradle BOM을 기준으로 하고 단계 레지스트리를 따로 둔다
+**Upstream comparison**
 
-**요구사항.** Java monorepo는 단일 버전 라인과 Gradle BOM을 기준으로 패키징하되 artifact metadata와 별도 lifecycle registry로 성숙도 단계를 관리해야 한다.
+- .NET: ShellResult has the TimedOut and ExitCode=124 convention.
+- Python: The shell executor tries to collect the output after a timeout and return it as an envelope.
 
-**원본 비교**
+**Decision.** Both upstreams agree. Recording the timeout in the result structure is what lets the
+upper agent and the harness apply follow-up policy deterministically.
 
-- .NET: 중앙 VersionPrefix와 csproj stage metadata로 버전과 단계 계산을 관리한다.
-- Python: workspace package와 PACKAGE_STATUS.md로 package lifecycle을 별도 문서에 유지한다.
+**Acceptance criteria**
 
-**판단.** 사용자 요구의 단일 버전, BOM, 성숙도 구분을 한 요구사항으로 고정한다. 버전 계산과 단계 공지는 같은 파일에 묶어 두지 않는 편이 downstream에 명확하다.
+- A timeout result includes timedOut=true and standardized termination information.
+- On paths where no timeout occurred, the same fields are consistently false or empty.
 
-**수용 기준**
-
-- 모든 published artifact는 같은 release train 버전을 따른다.
-- 소비자는 Gradle BOM 또는 platform을 import해 tested dependency set을 받을 수 있다.
-- alpha, beta, preview, released 같은 단계는 별도 lifecycle registry에서 확인할 수 있다.
-
-**근거** [30 packaging-compatibility](../upstream/snapshots/d0a4165f/features/30-packaging-compatibility.md)
+**Evidence** [28 errors-resilience-security](../upstream/snapshots/d0a4165f/features/28-errors-resilience-security.md)
 
 ---
 
-## OPS-024 의존성 관리는 validated bounds와 공급망 pinning을 함께 쓴다
+## OPS-012 Cleanup is performed per process tree and per remote task
 
-**요구사항.** 의존성 관리는 tested version BOM과 validated bounds를 함께 두고 보안 목적 pinning을 명시적으로 기록해야 한다.
+**Requirement.** Cleanup must cover the whole process tree and long-running remote tasks, not just a
+single parent process.
 
-**원본 비교**
+**Upstream comparison**
 
-- .NET: 중앙 package management와 transitive pinning, NuGet audit를 사용한다.
-- Python: dependency bounds 규칙과 constraint 또는 override dependency를 함께 관리한다.
+- .NET: The shell cleans up the process tree after a timeout, and the MCP wrapper attempts a best-effort remote cancel on local cancellation.
+- Python: kill_process_tree cleans up child processes too.
 
-**판단.** 둘의 장점을 합친다. tested version만 고정하면 소비자 유연성이 줄고 bounds만 두면 공급망 대응이 느려진다.
+**Decision.** The safer default is taken. Shallow cleanup leaves orphaned processes and orphaned
+tasks that eat operational resources.
 
-**수용 기준**
+**Acceptance criteria**
 
-- 권장 tested version은 BOM이나 중앙 dependency file에 고정된다.
-- supported bounds와 보안 목적 override 또는 pinning 변경 사유가 문서나 주석에 남는다.
+- On a local process timeout or cancel, the descendants are cleaned up too.
+- A remote task wrapper attempts a best-effort remote cancel after a local cancel.
 
-**근거** [30 packaging-compatibility](../upstream/snapshots/d0a4165f/features/30-packaging-compatibility.md)
-
----
-
-## OPS-025 호환성·설치 가능성 gate를 maturity와 연결한다
-
-**요구사항.** binary 또는 API compatibility gate와 installability smoke test는 artifact maturity와 연결해 release pipeline에서 강제해야 한다.
-
-**원본 비교**
-
-- .NET: package validation baseline, suppression, install check를 release build에 포함한다.
-- Python: release workflow가 package directory 해석과 build artifact 생성을 강제한다.
-
-**판단.** 릴리스는 빌드 성공만으로 충분하지 않다. 실제 설치와 호환성이 깨지지 않는지까지 CI가 책임져야 한다.
-
-**수용 기준**
-
-- stable artifact는 binary 또는 API compatibility gate를 통과해야 한다.
-- release pipeline은 예제 소비자 프로젝트에서 실제 resolve와 build를 검증한다.
-
-**근거** [30 packaging-compatibility](../upstream/snapshots/d0a4165f/features/30-packaging-compatibility.md)
+**Evidence** [28 errors-resilience-security](../upstream/snapshots/d0a4165f/features/28-errors-resilience-security.md)
 
 ---
 
-## OPS-026 교차 언어 호환성은 공개 surface와 행동으로 판정한다
+## OPS-013 A persistent executor is a session-owned resource
 
-**요구사항.** 교차 언어 호환성은 같은 버전 체계가 아니라 공개 surface, behavioral contract, facade 유지, changelog-driven review로 판정해야 한다.
+**Requirement.** A persistent shell or code executor must be limited to a resource owned by a single
+conversation or session.
 
-**원본 비교**
+**Upstream comparison**
 
-- .NET: version metadata와 package validation, conformance testing으로 공개 surface를 유지한다.
-- Python: repo split이 있어도 re-export와 install surface를 유지하고 changelog로 promotion과 compatibility adjustment를 기록한다.
+- .NET: Keeps persistent shell session ownership and an interrupt-then-teardown rule on timeout.
+- Python: The shell tooling is mostly stateless, but the samples and the policy reveal the need for session-level coordination and cleanup.
 
-**판단.** 사용자 요구의 “Java 관습을 따르되 동작 호환을 우선한다”를 packaging 관점에서 풀어낸다. facade 유지와 change review가 숫자 버전 일치보다 중요하다.
+**Decision.** Enforcing session ownership is what prevents state leakage and command interleaving.
+Sharing a singleton is particularly dangerous in Java.
 
-**수용 기준**
+**Acceptance criteria**
 
-- repo split이나 package 이동이 생겨도 facade 또는 re-export 유지 여부가 명시된다.
-- stage promotion, compatibility adjustment, central version 변경은 changelog나 동등 문서 신호로 snapshot 재검토를 유발한다.
+- A persistent executor instance is not shared by two sessions at the same time.
+- The executor teardown path on session termination or recovery failure is specified.
 
-**근거** [30 packaging-compatibility](../upstream/snapshots/d0a4165f/features/30-packaging-compatibility.md)
+**Evidence** [28 errors-resilience-security](../upstream/snapshots/d0a4165f/features/28-errors-resilience-security.md)
 
 ---
 
-## 이 문서가 다루지 않는 것
+## OPS-014 Shell and tool policies are not dressed up as security boundaries
 
-| 주제 | 소유 문서 |
+**Requirement.** Guardrails such as a regex denylist, an allowlist, and a command policy must not act
+as a security boundary that replaces the need for approval and sandboxing.
+
+**Upstream comparison**
+
+- .NET: ShellPolicy warns directly about variable expansion and interpreter escape bypasses.
+- Python: The shell policy documentation states the limits of a guardrail bluntly and keeps approval and the sandbox as the real boundaries.
+
+**Decision.** If the trust level rises on a bypassable policy object alone, operators come to trust
+it wrongly. Java must surface the separation between a policy-only guardrail and the real approval
+and isolation boundaries in both the configuration and the API.
+
+**Acceptance criteria**
+
+- An unattended unsafe mode or an approval-disabled path is not created or activated without an explicit argument equivalent to `acknowledgeUnsafe`.
+- A regex denylist, allowlist, or command policy setting alone does not switch off the approval-required default of a tool or an executor.
+- An executor without a sandbox capability or an isolation backend is not reported as sandboxed in the API or the descriptor.
+
+**Evidence** [28 errors-resilience-security](../upstream/snapshots/d0a4165f/features/28-errors-resilience-security.md)
+
+---
+
+## OPS-015 Dangerous bypass paths carry explicit safeguards
+
+**Requirement.** Dangerous paths such as an unattended unsafe mode and declarative state path access
+must enforce an explicit acknowledgement or a path safety check.
+
+**Upstream comparison**
+
+- .NET: The shell approval wrapper and the auto-approval collision warning limit dangerous bypass paths.
+- Python: LocalShellTool requires acknowledge_unsafe and the declarative state path blocks reflective escape.
+
+**Decision.** Both point in the direction of "switch dangerous bypasses on visibly". Java must also
+forbid a silent opt-out and reduce the state traversal attack surface.
+
+**Acceptance criteria**
+
+- An unattended mode that switches approval off is not created without an explicit acknowledgement.
+- A state path that amounts to a reflective escape or path traversal is blocked by default or by an error.
+
+**Evidence** [28 errors-resilience-security](../upstream/snapshots/d0a4165f/features/28-errors-resilience-security.md)
+
+---
+
+## OPS-016 Retry, timeout, and circuit breaker operational policies are owned by the host
+
+**Requirement.** Operational policies such as retry, request timeout, and circuit breaker must be
+owned explicitly by the host or the adapter rather than being implicit core behavior.
+
+**Upstream comparison**
+
+- .NET: On the evidence of this snapshot, a framework-wide generic retry layer cannot be directly confirmed.
+- Python: Rather than a common retry across the runtime, test workflows and per-layer settings are what can be confirmed.
+
+**Decision.** An automatic retry that cannot be confirmed is not turned into a requirement. As the
+user instructs, the retry, timeout, and circuit breaker operational policies are fixed as
+host-owned.
+
+**Acceptance criteria**
+
+- There is no silent retry in the default core behavior.
+- Retry, timeout, and circuit-breaker are activated only through host or adapter configuration.
+
+**Evidence** [28 errors-resilience-security](../upstream/snapshots/d0a4165f/features/28-errors-resilience-security.md)
+
+---
+
+---
+
+### Evaluation and testing
+
+## OPS-017 The evaluation SPI uses a batch-oriented provider-neutral contract
+
+**Requirement.** The evaluation SPI must use a batch-oriented provider-neutral contract.
+
+**Upstream comparison**
+
+- .NET: IAgentEvaluator uses batch-level EvaluateAsync(items, evalName, ...).
+- Python: The Evaluator model likewise takes a list of EvalItem and returns EvalResults.
+
+**Decision.** Both upstreams agree. A batch contract is what makes cloud evaluators, cost accounting,
+and score aggregation efficient to handle.
+
+**Acceptance criteria**
+
+- Several EvalItems can be evaluated in a single evaluator call.
+- A provider-specific evaluator uses the same EvalItem/EvalResults model.
+
+**Evidence** [29 evaluation-testing](../upstream/snapshots/d0a4165f/features/29-evaluation-testing.md)
+
+---
+
+## OPS-018 The evaluation converter is a first-class API and minimizes the payload sent outside
+
+**Requirement.** The converter that turns runtime messages and tool definitions into the evaluator
+schema must be a first-class API, and the payload leaving for an external evaluator must be
+minimized.
+
+**Upstream comparison**
+
+- .NET: The BuildEvalItem-family helpers assemble a minimal conversation and the tool definitions.
+- Python: AgentEvalConverter performs the content conversion and the sanitization of unparseable tool arguments directly.
+
+**Decision.** The Python side is stricter. The converter is not a simple formatter but an information
+minimization boundary, so Java must also have a separate API and sanitization rules.
+
+**Acceptance criteria**
+
+- Without the converter, an evaluator does not parse a runtime Message directly.
+- Unparseable tool arguments are replaced by a safe placeholder instead of a raw string.
+
+**Evidence** [29 evaluation-testing](../upstream/snapshots/d0a4165f/features/29-evaluation-testing.md)
+
+---
+
+## OPS-019 Evaluation results separate execution failures from quality failures
+
+**Requirement.** The evaluation result model must express an evaluator execution failure and a
+failure to meet the quality bar as different states, and must provide gate helpers separately.
+
+**Upstream comparison**
+
+- .NET: AgentEvaluationResults carries Status, Error, AssertAllPassed, and AssertScoreAtLeast together.
+- Python: EvalResults provides status, error, raise_for_status, and assert_score_at_least.
+
+**Decision.** Mixing an infra failure with a quality failure makes CI and reporting swallow one of
+the two incorrectly. A shared result model that separates the two failures is kept.
+
+**Acceptance criteria**
+
+- An evaluation execution failure is distinguished from a gate failure by a different status code or enum.
+- The API that reads the raw results and the gate helper API are separated on top of the same model.
+
+**Evidence** [29 evaluation-testing](../upstream/snapshots/d0a4165f/features/29-evaluation-testing.md)
+
+---
+
+## OPS-020 Workflow evaluation must have a public API and per-agent subresults
+
+**Requirement.** Workflow evaluation must be provided as a separate public API and must return the
+overall result together with per-agent subresults.
+
+**Upstream comparison**
+
+- .NET: The result model prepares SubResults, but an explicit public API for workflow evaluation cannot be directly confirmed on the evidence of this snapshot.
+- Python: evaluate_workflow() exists as a public API and fills in the per-agent breakdown.
+
+**Decision.** Python is more complete. Java must not stop at preparing only the result types but must
+also require the explicit API.
+
+**Acceptance criteria**
+
+- A public API of the evaluateWorkflow kind exists.
+- The result model preserves the overall score together with subresults keyed by executor or agent id.
+
+**Evidence** [29 evaluation-testing](../upstream/snapshots/d0a4165f/features/29-evaluation-testing.md)
+
+---
+
+## OPS-021 Generated evaluators and golden inputs must be deterministically reproducible
+
+**Requirement.** Generated or provider evaluators and golden inputs must be operated on the premise
+of version pinning and deterministic reproduction.
+
+**Upstream comparison**
+
+- .NET: GeneratedEvaluatorRef assumes version pinning and fixes conformance traces as a disk corpus.
+- Python: FoundryEvals manages the generated rubric evaluator reference and the tests use deterministic inputs.
+
+**Decision.** The user's requirement of "deterministic reproduction" is reflected as it is. A
+latest-floating evaluator or variable inputs blur regression judgements.
+
+**Acceptance criteria**
+
+- A generated evaluator reference does not force an unversioned latest default.
+- The golden or trace corpus is kept as source-controlled fixed input.
+
+**Evidence** [29 evaluation-testing](../upstream/snapshots/d0a4165f/features/29-evaluation-testing.md)
+
+---
+
+## OPS-022 Provider-common contract tests and golden scenarios are maintained
+
+**Requirement.** Provider-common contract tests, golden scenarios, and protocol wire conformance tests
+must be maintained as separate layers.
+
+**Upstream comparison**
+
+- .NET: Keeps the agent contract integration tests and the OpenAI trace-driven conformance suite apart.
+- Python: Runs aggregate tests and provider-sharded integration jobs strongly, but an equivalent trace-driven wire harness cannot be directly confirmed on the evidence of this snapshot.
+
+**Decision.** Java requires both. Common contract tests alone cannot catch wire regressions, and
+golden scenarios alone cannot pin the provider-neutral contract.
+
+**Acceptance criteria**
+
+- A common contract test exists that can be run as the same suite even when the provider is changed.
+- Representative scenarios are fixed with golden inputs and expected results.
+- Protocol adapters have a trace-driven or equivalent wire conformance suite.
+
+**Evidence** [29 evaluation-testing](../upstream/snapshots/d0a4165f/features/29-evaluation-testing.md)
+
+---
+
+---
+
+### Packaging and compatibility
+
+## OPS-023 Packaging is based on a single version line and a Gradle BOM, with a separate stage registry
+
+**Requirement.** The Java monorepo must be packaged on the basis of a single version line and a
+Gradle BOM, while managing maturity stages in a lifecycle registry separate from the artifact
+metadata.
+
+**Upstream comparison**
+
+- .NET: Manages version and stage computation with a central VersionPrefix and csproj stage metadata.
+- Python: Keeps the package lifecycle in a separate document with workspace packages and PACKAGE_STATUS.md.
+
+**Decision.** The user's requirements of a single version, a BOM, and a maturity distinction are
+fixed as one requirement. Keeping version computation and stage announcements out of the same file is
+clearer for downstream consumers.
+
+**Acceptance criteria**
+
+- Every published artifact follows the same release train version.
+- Consumers can import a Gradle BOM or platform to get the tested dependency set.
+- Stages such as alpha, beta, preview, and released can be checked in a separate lifecycle registry.
+
+**Evidence** [30 packaging-compatibility](../upstream/snapshots/d0a4165f/features/30-packaging-compatibility.md)
+
+---
+
+## OPS-024 Dependency management uses validated bounds together with supply chain pinning
+
+**Requirement.** Dependency management must keep a tested version BOM together with validated bounds
+and must record security-motivated pinning explicitly.
+
+**Upstream comparison**
+
+- .NET: Uses central package management, transitive pinning, and NuGet audit.
+- Python: Manages dependency bounds rules together with constraint or override dependencies.
+
+**Decision.** The strengths of the two are combined. Pinning only the tested version reduces consumer
+flexibility, and keeping only bounds slows the supply chain response.
+
+**Acceptance criteria**
+
+- The recommended tested versions are pinned in a BOM or a central dependency file.
+- The supported bounds and the reason for a security-motivated override or pinning change are left in documentation or comments.
+
+**Evidence** [30 packaging-compatibility](../upstream/snapshots/d0a4165f/features/30-packaging-compatibility.md)
+
+---
+
+## OPS-025 Compatibility and installability gates are tied to maturity
+
+**Requirement.** Binary or API compatibility gates and installability smoke tests must be tied to
+artifact maturity and enforced in the release pipeline.
+
+**Upstream comparison**
+
+- .NET: Includes the package validation baseline, suppressions, and the install check in the release build.
+- Python: The release workflow enforces package directory resolution and build artifact generation.
+
+**Decision.** A release is not sufficient on a successful build alone. CI must also be responsible for
+whether the actual installation and compatibility hold.
+
+**Acceptance criteria**
+
+- A stable artifact must pass the binary or API compatibility gate.
+- The release pipeline verifies an actual resolve and build in a sample consumer project.
+
+**Evidence** [30 packaging-compatibility](../upstream/snapshots/d0a4165f/features/30-packaging-compatibility.md)
+
+---
+
+## OPS-026 Cross-language compatibility is judged by the public surface and behavior
+
+**Requirement.** Cross-language compatibility must be judged by the public surface, the behavioral
+contract, facade preservation, and changelog-driven review, not by an identical version scheme.
+
+**Upstream comparison**
+
+- .NET: Maintains the public surface with version metadata, package validation, and conformance testing.
+- Python: Maintains re-exports and the install surface even after a repo split and records promotions and compatibility adjustments in the changelog.
+
+**Decision.** The user's requirement of "follow Java conventions but put behavioral compatibility
+first" is worked out from the packaging perspective. Facade preservation and change review matter
+more than matching version numbers.
+
+**Acceptance criteria**
+
+- Even when a repo split or a package move happens, whether the facade or the re-exports are preserved is stated.
+- A stage promotion, a compatibility adjustment, or a central version change triggers a snapshot re-review through the changelog or an equivalent documentation signal.
+
+**Evidence** [30 packaging-compatibility](../upstream/snapshots/d0a4165f/features/30-packaging-compatibility.md)
+
+---
+
+## What this document does not cover
+
+| Topic | Owning document |
 | --- | --- |
-| 세션과 체크포인트의 직렬화 포맷 | [06 세션과 대화 상태](06-sessions.md) |
-| 호스팅 route와 protocol binding | [10 호스팅과 프로토콜](10-hosting.md) |
-| 공급자별 wire contract와 adapter surface | [12 공급자 통합](12-providers.md) |
-| 개별 workflow 그래프의 비즈니스 의미 | [09 워크플로와 오케스트레이션](09-workflows.md) |
+| The serialization format of sessions and checkpoints | [06 Sessions and conversation state](06-sessions.md) |
+| Hosting routes and protocol binding | [10 Hosting and protocols](10-hosting.md) |
+| Per-provider wire contracts and adapter surfaces | [12 Provider integrations](12-providers.md) |
+| The business meaning of an individual workflow graph | [09 Workflows and orchestration](09-workflows.md) |

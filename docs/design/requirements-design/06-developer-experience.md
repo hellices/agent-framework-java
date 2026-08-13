@@ -1,15 +1,15 @@
 # Developer experience and progressive disclosure
 
-## 1. 목표
+## 1. Goals
 
-내부 clean architecture의 module·port 복잡도를 애플리케이션 개발자에게 노출하지 않는다.
-대부분의 사용자는 다음 네 타입만 이해하면 agent를 실행할 수 있어야 한다.
+Do not expose the internal clean-architecture complexity of modules and ports to application
+developers. Most users should be able to run an agent by understanding only these four types.
 
 ```text
 AgentFactory -> AgentBuilder -> Agent -> AgentRun
 ```
 
-최소 경로:
+Minimal path:
 
 ```java
 Agent agent =
@@ -20,13 +20,13 @@ Agent agent =
 AgentResponse response = agent.run("Hello").await();
 ```
 
-`await()`는 imperative convenience다. async 애플리케이션은 `AgentRun.response()` completion을
-사용하고, streaming 애플리케이션은 `agent.runStreaming(...)`이 반환한
-`AgentStreamingRun.updates()`의 `Flow.Publisher<AgentResponseUpdate>`를 사용한다.
+`await()` is an imperative convenience. Async applications use the `AgentRun.response()`
+completion, while streaming applications use the `Flow.Publisher<AgentResponseUpdate>` from
+`AgentStreamingRun.updates()` returned by `agent.runStreaming(...)`.
 
-## 2. 공개 facade와 고급 SPI
+## 2. Public facade and advanced SPI
 
-### 일반 개발자 API
+### General developer API
 
 ```text
 Agent
@@ -39,7 +39,7 @@ Harness
 AgentApplication
 ```
 
-### integration 개발자 SPI
+### Integration developer SPI
 
 ```text
 ModelClient
@@ -52,13 +52,13 @@ TelemetrySink
 InterceptorRegistration
 ```
 
-SPI는 공개되어도 getting-started API와 IDE discovery의 중심이 아니다. 일반 사용자는 starter나
-standalone assembly가 만든 `AgentFactory`를 사용한다.
+Although SPIs are public, they are not central to the getting-started API or IDE discovery. General
+users use the `AgentFactory` created by a starter or standalone assembly.
 
 ## 3. AgentFactory
 
-mutable `AgentBuilder`를 singleton bean으로 공유하지 않는다. framework가 singleton
-`AgentFactory`를 제공하고 호출마다 새 builder를 만든다.
+Do not share a mutable `AgentBuilder` as a singleton bean. The framework provides a singleton
+`AgentFactory` that creates a new builder for each call.
 
 ```java
 public interface AgentFactory {
@@ -68,12 +68,12 @@ public interface AgentFactory {
 }
 ```
 
-- factory는 model-independent `AgentEngine`과 immutable `ModelCatalog`를 합성한다.
-- model 하나가 명확하면 `builder()` 사용
-- model이 여러 개면 name 또는 explicit port 선택
-- 여러 named model이 있어도 factory는 생성하며, default가 없는 `builder()` 호출만 명시적으로
-  실패한다. `builder(name)`은 해당 model을 선택한다.
-- builder는 thread-confined이고 build 결과는 immutable
+- the factory combines a model-independent `AgentEngine` with an immutable `ModelCatalog`
+- use `builder()` when exactly one model is unambiguous
+- when multiple models exist, select one by name or explicit port
+- create the factory even when multiple named models exist; only a `builder()` call without a
+  default fails explicitly, while `builder(name)` selects the corresponding model
+- builders are thread-confined and build results are immutable
 
 ## 4. Plain Java / standalone
 
@@ -96,37 +96,38 @@ try (AgentApplication app =
 }
 ```
 
-`hosting/agent-framework-standalone`은 다음을 조립할 수 있다.
+`hosting/agent-framework-standalone` can assemble:
 
 - provider adapter
 - JDK `HttpClient`
-- virtual-thread 또는 caller-provided execution strategy
-- development용 in-memory session store
-- owned resource를 닫는 `AutoCloseable AgentApplication`
+- a virtual-thread or caller-provided execution strategy
+- an in-memory session store for development
+- an `AutoCloseable AgentApplication` that closes owned resources
 
-HTTP server, DI container, shutdown hook, global registry는 만들지 않는다.
+It creates no HTTP server, DI container, shutdown hook, or global registry.
 
-ownership은 method 이름으로 구분한다.
+Method names distinguish ownership.
 
-- `model(ModelClient)`: caller-owned borrowed model; application이 닫지 않음
-- `ownedModel(Supplier<? extends ModelClient>)`: application이 생성하고 종료 시 닫음
+- `model(ModelClient)`: caller-owned borrowed model; the application does not close it
+- `ownedModel(Supplier<? extends ModelClient>)`: the application creates it and closes it on
+  shutdown
 
-이미 생성한 closeable model을 `model(...)`로 넘긴 호출자는 별도로 close해야 한다.
-`AgentApplication.close()`는 idempotent다. 반복 호출은 성공하고 owned resource는 정확히 한 번
-닫으며 borrowed model/client/store/executor는 닫지 않는다.
+Callers that pass an already-created closeable model to `model(...)` must close it separately.
+`AgentApplication.close()` is idempotent: repeated calls succeed, owned resources are closed
+exactly once, and borrowed models, clients, stores, and executors are never closed.
 
 ## 5. Spring Boot
 
-기존 Spring AI 애플리케이션:
+Existing Spring AI application:
 
 ```kotlin
 implementation("io.github.hellices.agentframework:agent-framework-spring-boot-starter-spring-ai")
 implementation("org.springframework.ai:spring-ai-starter-model-openai")
 ```
 
-Spring AI가 정확히 하나의 model bean을 제공하면 starter가 포함한 auto-configuration이
-`AgentEngine`, `AgentFactory`, default `Agent` Bean을 만든다. 기본 경로에는 application
-`@Configuration`이나 `@Bean Agent`가 필요 없다.
+When Spring AI provides exactly one model bean, the auto-configuration included by the starter
+creates `AgentEngine`, `AgentFactory`, and a default `Agent` bean. The default path requires no
+application `@Configuration` or `@Bean Agent`.
 
 ```yaml
 agent:
@@ -135,7 +136,7 @@ agent:
       instructions: You are a helpful assistant.
 ```
 
-사용 코드는 default Agent를 바로 주입한다.
+Application code injects the default Agent directly.
 
 ```java
 @Service
@@ -152,8 +153,8 @@ final class SupportService {
 }
 ```
 
-다중 Agent, Agent별 tool/model/instructions, custom session policy가 필요할 때만 Agent Bean을
-정의한다.
+Define an Agent bean only when multiple Agents, per-Agent tools/models/instructions, or a custom
+session policy are required.
 
 ```java
 @Bean
@@ -166,19 +167,21 @@ Agent assistant(AgentFactory agents, WeatherFunctions weather) {
 }
 ```
 
-starter만으로 model을 발명할 수는 없다. 다음 중 하나가 있어야 한다.
+A starter cannot invent a model by itself. One of the following must be present:
 
-- Spring AI-specific Agent Framework starter + Spring AI model starter가 만든 model bean
-- direct provider adapter가 만든 `ModelClient`
+- a model bean created by the Spring AI-specific Agent Framework starter plus a Spring AI model
+  starter
+- a `ModelClient` created by a direct provider adapter
 - user-defined `ModelClient`
 
-zero model이면 condition report가 missing dependency를 설명하고 `AgentFactory`/default Agent를
-만들지 않는다. 여러 model인데 default가 없으면 `AgentFactory`는 만들되 default Agent를
-만들지 않고 named builder 또는 primary model을 요구한다.
+With zero models, the condition report explains the missing dependency and neither `AgentFactory`
+nor a default Agent is created. With multiple models and no default, `AgentFactory` is created but
+the default Agent is not; a named builder or primary model is required.
 
-## 6. Quarkus와 Jakarta EE
+## 6. Quarkus and Jakarta EE
 
-Agent 정의는 Spring과 동일하다. factory를 얻는 방법만 container-native하다.
+Agent definitions are the same as in Spring; only the way the factory is obtained is
+container-native.
 
 ```java
 @ApplicationScoped
@@ -197,7 +200,7 @@ class Agents {
 - Quarkus: CDI injection, ConfigMapping, Mutiny bridge, `@Identifier`/custom qualifier for named models
 - Jakarta EE: CDI 4 producer/extension, optional MicroProfile Config bridge, Jakarta REST bridge
 
-Spring annotation이나 Reactor 타입을 공유 API 예제에 사용하지 않는다.
+Do not use Spring annotations or Reactor types in shared API examples.
 
 ## 7. Tools
 
@@ -223,17 +226,18 @@ Weather getWeather(@ToolParam String city) {
 }
 ```
 
-annotation processor가 target instance를 받아 `ToolSet`을 만드는 framework-neutral companion
-`WeatherFunctionsToolSet`을 생성한다. processor는 원본 class가 `ToolSet`을 구현하게 바꿀 수
-없으므로 예제와 DI adapter는 생성 companion을 명시적으로 사용한다. Spring component scan,
-Quarkus/Jakarta reflection은 schema 생성의 필수 조건이 아니다.
+The annotation processor generates a framework-neutral companion, `WeatherFunctionsToolSet`, which
+accepts a target instance and creates a `ToolSet`. Because the processor cannot alter the original
+class to implement `ToolSet`, examples and DI adapters use the generated companion explicitly.
+Spring component scanning and Quarkus/Jakarta reflection are not prerequisites for schema
+generation.
 
-도구는 agent별로 명시 연결한다. classpath/DI container의 모든 tool을 모든 agent에 자동
-노출하지 않는다.
+Attach tools explicitly to each agent. Do not automatically expose every tool on the classpath or
+in the DI container to every agent.
 
 ## 8. MCP
 
-사용자는 direct SDK와 Spring AI MCP의 transport 차이를 `ToolSet` 뒤에서 다룬다.
+Users handle transport differences between the direct SDK and Spring AI MCP behind `ToolSet`.
 
 ```java
 Agent assistant =
@@ -242,7 +246,7 @@ Agent assistant =
         .build();
 ```
 
-Spring configuration은 named MCP `ToolSet`을 만들 수 있다.
+Spring configuration can create a named MCP `ToolSet`.
 
 ```yaml
 agent:
@@ -254,7 +258,7 @@ agent:
           adapter: spring-ai
 ```
 
-또는 direct adapter:
+Alternatively, use the direct adapter:
 
 ```yaml
 agent:
@@ -266,11 +270,11 @@ agent:
           url: https://example.com/mcp
 ```
 
-server별 `adapter`가 global `default-adapter`를 이긴다. 둘 다 없고 direct/Spring AI 후보가
-둘 이상이면 해당 server의 ToolSet 생성이 startup에서 실패한다.
+The per-server `adapter` takes precedence over the global `default-adapter`. If neither is set and
+multiple direct/Spring AI candidates exist, creation of that server's ToolSet fails at startup.
 
-사용자가 `ToolSet`을 agent에 붙이는 행위는 명시적이다. MCP server가 발견됐다는 이유만으로
-모든 agent에 tool이 자동 노출되지 않는다.
+Users attach a `ToolSet` to an agent explicitly. Discovering an MCP server does not automatically
+expose its tools to every agent.
 
 ## 9. Workflow
 
@@ -285,22 +289,22 @@ Workflow support =
 WorkflowRun run = workflows.run(support, request);
 ```
 
-Agent API로 노출하려면 명시적으로 변환한다.
+Convert explicitly to expose a workflow through the Agent API.
 
 ```java
 Agent supportAgent = workflows.asAgent(support);
 supportAgent.run("My server is down");
 ```
 
-`WorkflowRunner workflows`는 standalone 또는 framework assembly가 주입한다. runner가
-execution strategy, clock, checkpoint store, codec registry를 주입받아 묶는다. immutable
-`Workflow` 정의만으로 실행하거나 Agent로 변환하는 static global helper는 제공하지 않는다.
-Spring/Quarkus/Jakarta에서 `Workflow`, `WorkflowRunner`, `Agent`는 injectable component일 뿐
-endpoint가 아니다.
+The standalone or framework assembly injects `WorkflowRunner workflows`. The runner receives and
+combines the execution strategy, clock, checkpoint store, and codec registry. Do not provide a
+static global helper that runs or converts to an Agent using only an immutable `Workflow`
+definition. In Spring, Quarkus, and Jakarta, `Workflow`, `WorkflowRunner`, and `Agent` are injectable
+components, not endpoints.
 
 ## 10. Harness
 
-Harness는 별도 runtime이 아니라 Agent decorator facade다.
+Harness is an Agent decorator facade, not a separate runtime.
 
 ```java
 Agent codingAgent =
@@ -310,7 +314,7 @@ Agent codingAgent =
         .build();
 ```
 
-skills 같은 별도 optional module은 자신의 decorator/factory를 제공한다.
+Separate optional modules such as skills provide their own decorators or factories.
 
 ```java
 Agent skilledAgent =
@@ -319,29 +323,29 @@ Agent skilledAgent =
         .build();
 ```
 
-Java optional jar는 이미 컴파일된 `AgentBuilder`에 메서드를 추가할 수 없다. 따라서 base
-builder에 `.harness()`, `.skills()`, `.codeAct()`를 미리 늘어놓지 않는다. harness, skills,
-background agents, shell, CodeAct module은 `AgentDecorator`, `ToolSet`, 또는 module-owned
-builder/factory를 제공하고 명시적으로 Agent에 적용한다.
+An optional Java JAR cannot add methods to an already-compiled `AgentBuilder`. Therefore, do not
+predeclare `.harness()`, `.skills()`, or `.codeAct()` on the base builder. Harness, skills,
+background-agent, shell, and CodeAct modules provide an `AgentDecorator`, `ToolSet`, or module-owned
+builder/factory and are applied to an Agent explicitly.
 
 ## 11. Progressive disclosure levels
 
-| Level | 대상 | 사용하는 API |
+| Level | Audience | APIs used |
 | --- | --- | --- |
-| 0 | 단일 agent | `AgentFactory`, `AgentBuilder`, `Agent.run` |
+| 0 | single agent | `AgentFactory`, `AgentBuilder`, `Agent.run` |
 | 1 | tools/MCP | `Tool`, `ToolSet`, builder `.tools(...)` |
-| 2 | session/interceptor | named builder customizer와 typed options |
+| 2 | session/interceptor | named builder customizer and typed options |
 | 3 | workflow/harness | injected `WorkflowRunner`, optional decorator/factory |
-| 4 | adapter 개발 | public SPI와 contract testkit |
+| 4 | adapter development | public SPI and contract testkit |
 
-각 level은 이전 level의 API를 바꾸지 않는다. 간단한 예제에서 SPI type이나 engine internal이
-등장하면 developer experience regression이다.
+Each level leaves the APIs from previous levels unchanged. The appearance of an SPI type or engine
+internal in a simple example is a developer-experience regression.
 
 ## 12. Dependency experience
 
-provider × framework 조합별 artifact를 모두 만들지 않는다.
+Do not create an artifact for every provider × framework combination.
 
-| 환경 | 최소 dependencies |
+| Environment | Minimum dependencies |
 | --- | --- |
 | standalone direct provider | `agent-framework-standalone` + provider adapter |
 | Spring AI | Agent Framework Spring AI starter + Spring AI model starter |
@@ -349,12 +353,13 @@ provider × framework 조합별 artifact를 모두 만들지 않는다.
 | Quarkus | Agent Framework Quarkus extension + provider adapter |
 | Jakarta EE | Agent Framework Jakarta integration + provider adapter |
 
-모든 dependency는 BOM으로 정렬한다. protocol endpoint는 필요한 protocol starter만 추가한다.
+Align all dependencies through the BOM. For protocol endpoints, add only the required protocol
+starter.
 
 ## 13. Developer experience acceptance tests
 
-- starter + single model → `AgentFactory` 사용 가능
-- starter + single model + no user Agent → default Agent injection 가능
+- starter + single model → `AgentFactory` is available
+- starter + single model + no user Agent → default Agent injection is available
 - user Agent/Engine/Factory bean → corresponding auto-configured default backs off
 - zero model → actionable condition/error message
 - multiple models without default → default Agent backs off; unqualified `builder()` fails with

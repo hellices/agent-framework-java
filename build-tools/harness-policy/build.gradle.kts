@@ -1,3 +1,5 @@
+import io.github.hellices.agentframework.build.logic.RepositoryPolicyInputs
+
 plugins {
     id("agentframework.java-library-conventions")
     id("agentframework.test-conventions")
@@ -15,18 +17,13 @@ dependencies {
 // The policy tests read repository files that Gradle cannot infer from the compile classpath.
 // Without declaring them, a workflow, instruction, contract, or documentation edit leaves every
 // policy task UP-TO-DATE and `check` reports success without re-running a single policy.
-val repositoryPolicySources =
-    rootProject.layout.projectDirectory.asFileTree.matching {
-        exclude(
-            "**/build/**",
-            "**/.git/**",
-            "**/.gradle/**",
-            "**/.kotlin/**",
-            "**/.gradle-bootstrap/**",
-            ".worktrees/**",
-            ".harness/runs/**"
-        )
-    }
+//
+// `RepositoryPolicyInputs` removes build output by location: only a directory that actually is a
+// Gradle project root loses its own `build` directory. Removing it by name would also remove
+// `build-tools/harness-policy/src/test/java/io/github/hellices/agentframework/build/harness`, where
+// these policies live; removing it by depth would also remove `docs/build/` and `docs/*/build/`,
+// so a canonical document under a `build` path segment would stop invalidating the policies.
+val repositoryPolicySources = RepositoryPolicyInputs.repositoryPolicySources(project)
 
 tasks.withType<Test>().configureEach {
     inputs.files(repositoryPolicySources)

@@ -1,19 +1,19 @@
 # Core execution design
 
-## 1. 범위
+## 1. Scope
 
-이 문서는 다음 요구사항의 canonical owner다.
+This document is the canonical owner of the following requirements.
 
 - `AGT-001..016`: agent lifecycle, model call, streaming
 - `MSG-001..013`: message/content/response/update
 - `OUT-001..012`: structured output
 - `TOOL-001..021`: tool definition, loop, budgets, approval
 
-session persistence와 interceptor pipeline은
-[02 State, extension, and MCP](02-state-extension-mcp.md), host assembly는
-[05 Framework adapters](05-framework-adapters.md)가 소유한다.
+Session persistence and the interceptor pipeline are owned by
+[02 State, extension, and MCP](02-state-extension-mcp.md); host assembly is owned by
+[05 Framework adapters](05-framework-adapters.md).
 
-## 2. 패키지와 책임
+## 2. Packages and responsibilities
 
 ### 2.1 API
 
@@ -42,11 +42,11 @@ io.github.hellices.agentframework.spi.tool
   ToolSchemaGenerator, ToolArgumentValidator, ToolResultMapper, ExecutionStrategy
 ```
 
-`ModelClient`는 공급자 SDK 타입을 노출하지 않는다. Spring AI `ChatClient`와 simple name이
-충돌하지 않도록 이름을 분리한다. `ToolHandler`는 모델이 만든 JSON-safe
-arguments와 `ToolContext`를 별도 인자로 받으며, context가 schema에 들어가지 않는다.
+`ModelClient` does not expose provider SDK types. Its name is distinct to avoid conflicting with
+the simple name of Spring AI's `ChatClient`. `ToolHandler` receives JSON-safe arguments produced by
+the model and a `ToolContext` as separate arguments; the context is not included in the schema.
 
-`ModelCatalog`는 host assembly가 만드는 instance-scoped immutable model index다.
+`ModelCatalog` is an instance-scoped immutable model index created by the host assembly.
 
 - stable model name → `ModelClient`
 - optional default model name
@@ -73,24 +73,24 @@ io.github.hellices.agentframework.engine.internal.structured
   StructuredOutputCoordinator, SchemaWrapper, StructuredValueParser
 ```
 
-engine internal 타입은 public port 구현자가 참조하지 않는다.
+Implementors of public ports do not reference engine internal types.
 
-## 3. Public API 형태
+## 3. Public API shape
 
 ### 3.1 Agent
 
-`Agent`는 식별자와 두 실행 진입점을 제공한다.
+`Agent` provides an identifier and two execution entry points.
 
 ```text
 Agent.run(request)            -> AgentRun(final completion + cancel)
 Agent.runStreaming(request)   -> AgentStreamingRun(updates + final completion + cancel)
 ```
 
-`AgentRun.response()`는 `CompletionStage<AgentResponse>`,
-`AgentStreamingRun.updates()`는 `Flow.Publisher<AgentResponseUpdate>`를 제공한다. 두 handle의
-`cancel()`은 request에 전달된 동일 `CancellationSignal`을 발동한다.
+`AgentRun.response()` provides a `CompletionStage<AgentResponse>`, and
+`AgentStreamingRun.updates()` provides a `Flow.Publisher<AgentResponseUpdate>`. The `cancel()` method
+on both handles triggers the same `CancellationSignal` passed to the request.
 
-`AgentRunRequest`는 non-null immutable value다.
+`AgentRunRequest` is a non-null immutable value.
 
 - normalized message list
 - optional session handle
@@ -98,23 +98,24 @@ Agent.runStreaming(request)   -> AgentStreamingRun(updates + final completion + 
 - explicit cancellation signal
 - typed execution attributes
 
-no-input 실행은 `AgentRunRequest.empty()` 또는 별도 overload로 표현한다. `null`은 빈 입력이
-아니다.
+A no-input execution is represented by `AgentRunRequest.empty()` or a separate overload. `null`
+does not mean empty input.
 
-`AgentFactory`는 thread-safe singleton facade이고 호출마다 새 `AgentBuilder`를 만든다.
-framework adapter와 standalone assembly는 port 조립을 끝낸 factory를 제공하므로 일반 사용자는
-`AgentEngineBuilder`를 직접 다루지 않는다.
+`AgentFactory` is a thread-safe singleton facade that creates a new `AgentBuilder` for every call.
+Framework adapters and the standalone assembly provide a factory with fully assembled ports, so
+general users do not interact directly with `AgentEngineBuilder`.
 
-`AgentFactory`는 `AgentEngine`과 `ModelCatalog`를 합성한다.
+`AgentFactory` composes `AgentEngine` and `ModelCatalog`.
 
-- `builder()`: catalog default model 사용; default가 없으면 actionable failure
-- `builder(name)`: named model resolve
-- `builder(ModelClient)`: explicit model
+- `builder()`: uses the catalog's default model; fails with actionable guidance if there is no
+  default
+- `builder(name)`: resolves a named model
+- `builder(ModelClient)`: uses an explicit model
 
 ### 3.2 AgentEngine
 
-`AgentEngine`은 `Agent`를 구현하거나 `Agent` 구현을 만드는 application service다. host는
-builder로 다음 port를 주입한다.
+`AgentEngine` is an application service that implements `Agent` or creates an `Agent`
+implementation. The host injects the following ports through the builder.
 
 - session services
 - ordered interceptor lists
@@ -122,18 +123,18 @@ builder로 다음 port를 주입한다.
 - schema/result mapper
 - telemetry sink
 
-builder는 지원하지 않는 interceptor seam, 누락된 mandatory port, 상충하는 tool option을 build
-시점에 거부한다.
+At build time, the builder rejects unsupported interceptor seams, missing mandatory ports, and
+conflicting tool options.
 
-engine은 특정 model에 bind되지 않는다. `AgentFactory`가 `ModelCatalog`에서 model을 선택해
-immutable Agent definition에 `ModelClient`를 결합하고, engine은 그 definition으로 run을
-실행한다. run-level model override도 같은 public port를 사용한다.
+The engine is not bound to a specific model. `AgentFactory` selects a model from `ModelCatalog`,
+associates its `ModelClient` with an immutable Agent definition, and the engine runs that
+definition. A run-level model override uses the same public port.
 
 ### 3.3 Tool facade
 
-`Tools`는 explicit Java handler를 `Tool`로 만드는 static factory다. `ToolSet`은 이름과 immutable
-tool collection을 가진 portable aggregate이며 MCP discovery와 annotation processor companion도
-같은 타입을 반환한다.
+`Tools` is a static factory that creates a `Tool` from an explicit Java handler. `ToolSet` is a
+portable aggregate with a name and an immutable tool collection; MCP discovery and annotation
+processor companions also return the same type.
 
 ```text
 AgentBuilder.tools(Tool...)
@@ -142,22 +143,22 @@ AgentBuilder.tools(Collection<? extends Tool>)
 AgentBuilder.declaredTools(ToolDefinition...)
 ```
 
-각 overload는 이름 충돌을 검증하고 build 결과에 immutable snapshot을 저장한다. `ToolSet`을
-붙이는 것은 명시적이며 DI container나 classpath의 모든 tool을 자동 수집하지 않는다.
-`declaredTools`는 model에 노출하지만 local handler를 등록하지 않으며 core가 가짜 tool result를
-만들지 않는다.
+Each overload validates name conflicts and stores an immutable snapshot in the build result.
+Attaching a `ToolSet` is explicit; it does not automatically collect every tool from a DI container
+or the classpath. `declaredTools` exposes definitions to the model without registering local
+handlers, and the core does not create fake tool results.
 
 ### 3.4 Values
 
-- `Role`: 알려진 상수를 제공하는 immutable string value
-- `Content`: core-known value와 `ProviderExtensionContent` envelope
-- `Message`: role, content, attribution, typed extension values
-- `AgentResponse`/`AgentResponseUpdate`: content, usage, finish reason, response/session metadata
+- `Role`: immutable string value that provides known constants
+- `Content`: core-known values and a `ProviderExtensionContent` envelope
+- `Message`: role, content, attribution, and typed extension values
+- `AgentResponse`/`AgentResponseUpdate`: content, usage, finish reason, and response/session metadata
 
-provider SDK raw object는 transient diagnostic handle이다. snapshot과 wire conversion은
-JSON-safe extension value만 본다.
+A raw provider SDK object is a transient diagnostic handle. Snapshot and wire conversions consider
+only JSON-safe extension values.
 
-## 4. 실행 상태 기계
+## 4. Execution state machine
 
 ```text
 VALIDATE
@@ -188,32 +189,37 @@ VALIDATE
 
 ### 4.1 Invariants
 
-- session compatibility는 model call 전에 검증한다.
-- model update만으로 final response를 결정적으로 복원할 수 있다.
-- non-streaming과 streaming은 같은 tool loop와 merge rule을 사용한다.
-- inbound approval response는 첫 model call 전에 원 요청과 검증하고 실행 또는 거부한다.
-- approval queue는 head부터 한 건씩 처리하고 queue가 완전히 비기 전에는 model을 호출하지 않는다.
-- session injection queue는 매 model iteration 전에 drain하고, tool-free response 뒤에도 queue가
-  남아 있으면 finalization 대신 새 internal model iteration을 시작한다.
-- per-service-call history 옵션은 각 model response 뒤에 persist하며 final session persist와 구분한다.
-- structured target binding은 final response에 lazy value를 붙이고 accessor 호출 전에는 parse하지 않는다.
-- tool batch의 input order와 result order가 같다.
-- approval 대기 상태에서 승인되지 않은 tool은 실행되지 않는다.
-- cancellation 뒤 success finalization과 session commit이 발생하지 않는다.
+- Session compatibility is validated before a model call.
+- A final response can be deterministically reconstructed from model updates alone.
+- Non-streaming and streaming use the same tool loop and merge rules.
+- An inbound approval response is validated against the original request and executed or rejected
+  before the first model call.
+- The approval queue is processed one item at a time from the head, and the model is not called
+  until the queue is completely empty.
+- The session injection queue is drained before every model iteration. If the queue remains
+  non-empty after a tool-free response, a new internal model iteration starts instead of
+  finalization.
+- The per-service-call history option persists after each model response and is distinct from final
+  session persistence.
+- Structured target binding attaches a lazy value to the final response and does not parse it
+  before the accessor is called.
+- Tool batch input order and result order are identical.
+- A tool awaiting approval is not executed.
+- Successful finalization and session commit do not occur after cancellation.
 
-## 5. Model port와 options
+## 5. Model port and options
 
-`ModelClient`는 최소 공통 기능만 가진다. web search, code interpreter, provider continuation은
-typed `ModelCapability<T>` 또는 adapter-specific API로 노출한다.
+`ModelClient` has only the minimum common functionality. Web search, code interpreter, and provider
+continuation are exposed through typed `ModelCapability<T>` or adapter-specific APIs.
 
-`ModelOptions`는 typed immutable properties를 가진다.
+`ModelOptions` has typed immutable properties.
 
 - temperature
 - maximum output tokens
-- top-p 등 cross-provider 합의가 있는 값
+- cross-provider agreed values such as top-p
 - adapter-owned provider options
 
-merge 순서:
+Merge order:
 
 ```text
 engine safe defaults
@@ -222,13 +228,13 @@ engine safe defaults
   < host-enforced restrictions
 ```
 
-host restriction은 낮은 우선순위 값으로 덮이지 않는다. unsupported provider option은 무시하지
-않고 model call 전에 실패한다.
+A host restriction cannot be overridden by a lower-priority value. An unsupported provider option
+is not ignored; it fails before the model call.
 
-## 6. Streaming과 cancellation
+## 6. Streaming and cancellation
 
-stream subscription, model transport, tool invocation은 같은 `CancellationSignal`을 관찰한다.
-adapter는 standard 취소를 bridge한다.
+The stream subscription, model transport, and tool invocation observe the same
+`CancellationSignal`. Adapters bridge standard cancellation.
 
 ```text
 HTTP disconnect / Future.cancel / Subscription.cancel / Thread.interrupt
@@ -236,17 +242,17 @@ HTTP disconnect / Future.cancel / Subscription.cancel / Thread.interrupt
                 -> model + tool + session operation cancel
 ```
 
-`AgentRun`은 다음 control surface를 가진다.
+`AgentRun` has the following control surface.
 
 - final response completion
 - explicit cancel
 - completion status
 
-`AgentStreamingRun`은 같은 control surface와 `updates` subscription을 추가한다. 두 handle의
-cancel은 같은 request cancellation signal을 발동한다.
+`AgentStreamingRun` adds an `updates` subscription to the same control surface. The cancel method
+on both handles triggers the same request cancellation signal.
 
-`AgentStreamingRun<T>`는 raw publisher만 노출하지 않고 lifecycle-preserving transform을
-제공한다.
+`AgentStreamingRun<T>` provides lifecycle-preserving transformations rather than exposing only a
+raw publisher.
 
 ```text
 updates(): Flow.Publisher<T>
@@ -254,36 +260,38 @@ mapUpdates(Function<T,R>): AgentStreamingRun<R>
 flatMapUpdates(Function<T,Flow.Publisher<R>>): AgentStreamingRun<R>
 ```
 
-변환된 run은 원본과 같은 final response completion, finalizer, result hook, cleanup hook,
-cancellation signal을 공유한다. wrapper를 여러 번 겹쳐도 hook는 원래 순서로 한 번만 실행된다.
+A transformed run shares the original final response completion, finalizer, result hook, cleanup
+hook, and cancellation signal. Even when wrappers are layered multiple times, hooks execute exactly
+once in their original order.
 
-updates consumer가 final response를 요청하지 않아도 stream completion이 run finalization을
-완료한다. 중도 취소는 부분 response를 durable final response로 commit하지 않는다.
+Stream completion finalizes the run even if the updates consumer does not request the final
+response. Early cancellation does not commit a partial response as a durable final response.
 
 ## 7. Tool model
 
 ### 7.1 Definition
 
-`ToolDefinition`은 immutable하다.
+`ToolDefinition` is immutable.
 
-- stable name, description
+- stable name and description
 - input schema
 - execution availability: local, declaration-only, remote/hosted
 - approval policy reference
 
-runtime counters와 error streak는 `ToolRunState`에 둔다.
+Runtime counters and the error streak reside in `ToolRunState`.
 
 ### 7.2 Schema
 
-schema source 우선순위:
+Schema source priority:
 
 1. explicit JSON schema
-2. generated metadata from annotation processor
+2. generated metadata from an annotation processor
 3. reliable reflection metadata
 
-parameter name/generic type이 보존되지 않으면 `arg0`를 추측하지 않고 explicit schema를 요구한다.
-`ToolSchemaGenerator` SPI가 Java reflection, record/bean metadata, adapter-specific schema system을
-변환하되 public API에 Jackson/Spring type을 노출하지 않는다.
+When parameter names or generic types are not preserved, the framework requires an explicit schema
+rather than guessing `arg0`. The `ToolSchemaGenerator` SPI converts Java reflection, record/bean
+metadata, and adapter-specific schema systems without exposing Jackson or Spring types in the
+public API.
 
 ### 7.3 Handler
 
@@ -292,14 +300,14 @@ ToolHandler.invoke(ToolArguments, ToolContext) -> completion of ToolResult
 ```
 
 - `ToolArguments`: validated JSON-safe values
-- `ToolContext`: run/session/cancellation/typed attributes; schema 밖
-- typed handler의 `null`: implementation error
-- void convenience adapter: empty-string text content 하나
-- arbitrary object: default JSON-safe mapper; explicit mapper overrides
+- `ToolContext`: run/session/cancellation/typed attributes; outside the schema
+- `null` from a typed handler: implementation error
+- void convenience adapter: one empty-string text content value
+- arbitrary object: default JSON-safe mapper; an explicit mapper overrides it
 
 ### 7.4 Tool options and merge
 
-tool policy merge 순서:
+Tool policy merge order:
 
 ```text
 engine safe defaults
@@ -308,69 +316,72 @@ engine safe defaults
   < host-enforced restrictions
 ```
 
-run-level 값이 agent default를 덮고 미지정 값은 유지한다. tool collections는 stable name으로
-병합한다. 같은 layer의 duplicate name은 실패하고, run layer의 same-name tool은 agent default를
-명시적으로 대체해 최종 목록에는 한 번만 나타난다. executable tool과 declaration-only definition
-충돌도 같은 규칙으로 검증한다.
+A run-level value overrides the agent default, while unspecified values are retained. Tool
+collections are merged by stable name. A duplicate name in the same layer fails; a run-layer tool
+with the same name explicitly replaces the agent default and appears only once in the final list.
+Conflicts between executable tools and declaration-only definitions are validated by the same
+rules.
 
 ## 8. Tool loop
 
 ### 8.1 Planning
 
-`ToolBatchPlanner`는 model calls를 다음으로 분류한다.
+`ToolBatchPlanner` classifies model calls as follows.
 
 - executable local calls
 - approval-required calls
 - declaration-only/remote calls
 - unknown calls
 
-혼합된 batch를 무조건 병렬 실행하지 않는다. 실행 가능한 local subset만 `ExecutionStrategy`에
-전달한다.
+A mixed batch is not unconditionally executed in parallel. Only the executable local subset is
+passed to `ExecutionStrategy`.
 
 ### 8.2 Budget
 
-`ToolBudget`은 run-scoped다.
+`ToolBudget` is run-scoped.
 
 - maximum iterations
 - maximum total calls
 - maximum consecutive errors per request
 - automatic approval chain limit
 
-한 model response가 budget보다 큰 batch를 만들면 현재 batch boundary 뒤에서 best-effort
-차단한다. 이미 시작한 call을 수치 맞추기 위해 임의 취소하지 않는다.
+If a model response produces a batch larger than the budget, execution is blocked on a best-effort
+basis after the current batch boundary. Calls that have already started are not arbitrarily
+cancelled merely to meet the numeric limit.
 
 ### 8.3 Parallel execution
 
-engine은 executor를 만들지 않는다. `ExecutionStrategy`가 sequential/parallel policy와
-host-owned execution resource를 캡슐화한다. 결과는 input call order로 재정렬한다.
+The engine does not create an executor. `ExecutionStrategy` encapsulates sequential/parallel policy
+and host-owned execution resources. Results are reordered to match input call order.
 
 ### 8.4 Approval
 
-approval request/response는 core `Content`다.
+Approval requests and responses are core `Content` values.
 
-- request id + exact tool name + canonical arguments
-- response는 original request와 id/type을 함께 검증
-- deny는 synthetic terminal tool result
-- standing approval은 host/tenant boundary와 exact argument matcher 포함
-- queue와 counters는 session state에 저장
+- request ID + exact tool name + canonical arguments
+- a response validates both the ID and type against the original request
+- denial is a synthetic terminal tool result
+- standing approval includes the host/tenant boundary and an exact argument matcher
+- the queue and counters are stored in session state
 
 ## 9. Structured output
 
-`StructuredOutputRequest<T>`는 다음을 가진다.
+`StructuredOutputRequest<T>` contains the following.
 
 - framework-neutral `StructuredType<T>`
 - JSON schema
 - native preference
-- wrapper metadata for non-object target
+- wrapper metadata for a non-object target
 
-provider native structured output는 best effort다. 유효 JSON text가 있으면 native 지원 여부와
-관계없이 fallback parser가 동작한다.
+Provider-native structured output is best effort. When valid JSON text is present, the fallback
+parser works regardless of native support.
 
-parser source는 final response에서 마지막 non-empty assistant message를 찾고 그 message의 text
-content chunks만 순서대로 직접 이어 붙인다. 이전 assistant message와 뒤따른 tool message는
-대상에서 제외한다.
+The parser source is the last non-empty assistant message in the final response. Only that
+message's text content chunks are concatenated directly in order. Earlier assistant messages and
+subsequent tool messages are excluded from the target.
 
-parse는 `StructuredValue<T>.value()` 접근 시점까지 반드시 지연한다. 오류를 구분한다.
+Parsing must be deferred until `StructuredValue<T>.value()` is accessed. Errors are distinguished
+as follows.
 
 - empty or JSON `null`
 - malformed JSON
@@ -378,24 +389,25 @@ parse는 `StructuredValue<T>.value()` 접근 시점까지 반드시 지연한다
 - target type binding
 - wrapper mismatch
 
-wrapper가 기대됐는데 bare JSON이 오면 원본 JSON으로 한 번 재시도한다. stream update에서 typed
-value를 노출하지 않고 final response에서만 읽는다.
+If a wrapper was expected but bare JSON arrives, parsing retries once with the original JSON. A
+typed value is not exposed in stream updates and is read only from the final response.
 
-## 10. 오류 모델
+## 10. Error model
 
-| 오류 | 타입 방향 |
+| Error | Type direction |
 | --- | --- |
 | null/invalid option, invalid URI | `IllegalArgumentException` |
 | unsupported mode/seam | `IllegalStateException` |
 | model/provider failure | `ModelException` + category/cause |
 | tool validation | `ToolArgumentException` |
 | tool execution | `ToolExecutionException` |
-| structured parse/validation | 별도 unchecked subtype |
-| cancellation | cancellation outcome; generic exception wrapping 금지 |
+| structured parse/validation | separate unchecked subtype |
+| cancellation | cancellation outcome; no generic exception wrapping |
 
-protocol binder는 이 category를 HTTP/A2A/MCP 오류로 변환하며 message string을 파싱하지 않는다.
+A protocol binder converts these categories to HTTP/A2A/MCP errors without parsing message
+strings.
 
-## 11. 테스트
+## 11. Tests
 
 ### Unit
 
@@ -406,10 +418,10 @@ protocol binder는 이 category를 HTTP/A2A/MCP 오류로 변환하며 message s
 - approval response executes/rejects before any resumed model call
 - injected messages drain between tool results and the next model call
 - per-service-call history persistence runs only when enabled
-- schema inference fail-closed
-- structured parser selects the last non-empty assistant text only
-- structured binding remains lazy until final-response accessor
-- result normalization including void/null distinction
+- schema inference fails closed
+- structured parser selects only the last non-empty assistant text
+- structured binding remains lazy until the final-response accessor
+- result normalization, including the void/null distinction
 - budget and approval matching
 - run-level tool options win and same-name tools deduplicate deterministically
 
@@ -429,13 +441,14 @@ protocol binder는 이 category를 HTTP/A2A/MCP 오류로 변환하며 message s
 - structured wrapper/bare fallback
 - final response reconstruction
 
-## 12. 현재 구현
+## 12. Current implementation
 
-`ApiContract`와 `EngineContract`는 module marker이며 이 문서의 행동을 구현하지 않는다. 모든 기능
-ID의 현재 상태는 `absent`이고 module 자체만 `bootstrap`이다.
+`ApiContract` and `EngineContract` are module markers and do not implement the behavior in this
+document. The current status of every feature ID is `absent`; only the modules themselves are
+`bootstrap`.
 
-## 13. 요구사항 매핑
+## 13. Requirement mapping
 
-`AGT`, `MSG`, `OUT`, `TOOL`의 canonical rows는
-[Requirements traceability matrix](requirements-traceability-matrix.md)에 있다. 각 row의 목표
-code family는 이 문서의 package/component와 일치해야 한다.
+The canonical rows for `AGT`, `MSG`, `OUT`, and `TOOL` are in the
+[Requirements traceability matrix](requirements-traceability-matrix.md). The target code family in
+each row must match the packages and components in this document.

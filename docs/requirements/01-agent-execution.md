@@ -1,438 +1,457 @@
-# 01 에이전트 실행과 모델 호출
+# 01 Agent execution and model calls
 
-**접두사** `AGT` · **원본 기능** [01 agent-lifecycle](../upstream/snapshots/d0a4165f/features/01-agent-lifecycle.md),
+**Prefix** `AGT` · **Upstream features** [01 agent-lifecycle](../upstream/snapshots/d0a4165f/features/01-agent-lifecycle.md),
 [03 model-execution](../upstream/snapshots/d0a4165f/features/03-model-execution.md)
 
-에이전트를 만들고, 실행하고, 모델을 호출하고, 결과를 돌려주기까지의 계약을 정의한다.
-세션 저장 형식은 [06 세션과 대화 상태](06-sessions.md), 도구 실행 루프는
-[04 도구 정의와 실행 루프](04-tools.md), 인터셉터는
-[07 인터셉터와 컨텍스트 관리](07-interceptors.md)가 소유한다.
+Defines the contract for creating an agent, running it, calling the model, and returning the
+result. The session storage format is owned by [06 Sessions and conversation state](06-sessions.md),
+the tool call loop by [04 Tool definitions and the tool call loop](04-tools.md), and interceptors by
+[07 Interceptors and context management](07-interceptors.md).
 
-## 채택 범위
+## Adoption scope
 
-이 문서의 `등급`은 [README](README.md#요구사항-등급) 정의대로 기능을 만들기로 했을 때의 강제력이고, 채택 여부는 [호환성 매트릭스](../upstream/snapshots/d0a4165f/compatibility-matrix.md)를 따른다.
+The `Grade` column in this document is, as [README](README.md#requirement-grades) defines it, how binding a requirement is once the decision to build the feature has been made; whether the feature is adopted at all follows the [compatibility matrix](../upstream/snapshots/d0a4165f/compatibility-matrix.md).
 
-- 에이전트 코어(`AG01`~`AG04`)와 모델 실행(`MOD01`, `MOD02`)은 모두 채택 `필수`다.
+- The agent core (`AG01`–`AG04`) and model execution (`MOD01`, `MOD02`) are all adoption `Required`.
 
-## 요약
+## Summary
 
-| ID | 요구사항 | 채택 | 등급 | 단계 |
+| ID | Requirement | Adoption | Grade | Phase |
 | --- | --- | --- | --- | --- |
-| AGT-001 | 공개 진입점은 `Agent` 하나로 통일한다 | 필수 | 필수 | MVP |
-| AGT-002 | 모든 에이전트는 안정적인 식별자를 가진다 | 필수 | 필수 | MVP |
-| AGT-003 | 실행과 스트리밍 진입점을 분리한다 | 필수 | 필수 | MVP |
-| AGT-004 | 스트리밍만 소비해도 실행이 완결된다 | 필수 | 필수 | MVP |
-| AGT-005 | 취소는 명시적 인자로 전달한다 | 필수 | 필수 | MVP |
-| AGT-006 | 에이전트는 세션 호환성만 검증한다 | 필수 | 필수 | MVP |
-| AGT-007 | 데코레이터로 에이전트를 감쌀 수 있다 | 필수 | 필수 | MVP |
-| AGT-008 | 실행 컨텍스트를 명시적으로 전달한다 | 필수 | 필수 | MVP |
-| AGT-009 | 모델 호출은 `ModelClient` 포트로 분리한다 | 필수 | 필수 | MVP |
-| AGT-010 | 선택적 모델 기능은 별도 인터페이스로 노출한다 | 필수 | 필수 | MVP |
-| AGT-011 | 공통 요청 옵션은 타입 안전한 공급자 중립 계약으로 둔다 | 필수 | 필수 | MVP |
-| AGT-012 | 옵션 병합 우선순위를 고정한다 | 필수 | 필수 | MVP |
-| AGT-013 | 실행 단위로 모델 클라이언트를 교체할 수 있다 | 필수 | 권장 | Core+ |
-| AGT-014 | 이어받기 실행에 새 입력을 함께 줄 수 없다 | 필수 | 필수 | Core+ |
-| AGT-015 | 스트리밍 조각만으로 최종 응답을 복원한다 | 필수 | 필수 | MVP |
-| AGT-016 | 서비스가 이력을 저장하면 로컬 이력을 중복 저장하지 않는다 | 필수 | 필수 | Core+ |
+| AGT-001 | The public entry point is unified into the single `Agent` type | Required | Required | MVP |
+| AGT-002 | Every agent has a stable identifier | Required | Required | MVP |
+| AGT-003 | The run and streaming entry points are separate | Required | Required | MVP |
+| AGT-004 | Consuming only the stream still completes the run | Required | Required | MVP |
+| AGT-005 | Cancellation is passed as an explicit argument | Required | Required | MVP |
+| AGT-006 | The agent validates session compatibility only | Required | Required | MVP |
+| AGT-007 | An agent can be wrapped with a decorator | Required | Required | MVP |
+| AGT-008 | The run context is passed explicitly | Required | Required | MVP |
+| AGT-009 | Model calls are separated behind the `ModelClient` port | Required | Required | MVP |
+| AGT-010 | Optional model capabilities are exposed as separate interfaces | Required | Required | MVP |
+| AGT-011 | Common request options use a typed provider-neutral contract | Required | Required | MVP |
+| AGT-012 | The option merge precedence is fixed | Required | Required | MVP |
+| AGT-013 | The model client can be replaced per run | Required | Recommended | Core+ |
+| AGT-014 | A continuation run cannot carry new input as well | Required | Required | Core+ |
+| AGT-015 | The final response is reconstructed from the streamed fragments alone | Required | Required | MVP |
+| AGT-016 | When the service stores history, local history is not stored twice | Required | Required | Core+ |
 
 ---
 
-## AGT-001 공개 진입점은 `Agent` 하나로 통일한다
+## AGT-001 The public entry point is unified into the single `Agent` type
 
-**요구사항.** 사용자는 `Agent` 타입 하나로 에이전트를 사용해야 한다. 코어는 그 아래에
-구현 계층을 두더라도 공개 표면에 여러 개의 경쟁하는 최상위 에이전트 타입을 노출하지
-않는다.
+**Requirement.** A user must be able to use an agent through the single `Agent` type. The core may
+keep implementation layers underneath it, but it does not expose several competing top-level agent
+types on its public surface.
 
-**원본 비교**
+**Upstream comparison**
 
-- .NET: `AIAgent` 추상 클래스를 최상위에 두고 `ChatClientAgent`, `DelegatingAIAgent`로 확장한다.
-- Python: `BaseAgent`, `RawAgent`, `Agent`, `SupportsAgentRun`으로 계층을 나누되 사용자는 주로 `Agent`를 쓴다.
+- .NET: puts the `AIAgent` abstract class at the top and extends it with `ChatClientAgent` and `DelegatingAIAgent`.
+- Python: splits the hierarchy into `BaseAgent`, `RawAgent`, `Agent`, and `SupportsAgentRun`, but users mostly work with `Agent`.
 
-**판단.** 두 원본 모두 "에이전트가 실행의 최상위 추상화"라는 점은 같다. 차이는 계층을
-얼마나 공개하느냐다. Java는 Python의 단일 진입점 사용성을 택하고, 계층 분리는 내부
-구현으로 감춘다. 공개 타입이 늘어나면 어댑터 작성자가 어느 것을 구현해야 할지 판단할 수
-없기 때문이다.
+**Decision.** Both upstreams agree that the agent is the top-level abstraction of a run. They differ
+in how much of the hierarchy they publish. Java takes the single-entry-point usability of Python and
+hides the layering as an implementation detail. When the number of public types grows, an adapter
+author cannot tell which one to implement.
 
-**수용 기준**
+**Acceptance criteria**
 
-- 공개 패키지에 사용자가 직접 구현하도록 의도된 에이전트 타입은 `Agent` 하나다.
-- 로깅, 계측, 정책 래퍼는 모두 `Agent`를 받아 `Agent`를 반환한다.
+- `Agent` is the only agent type in the public packages that users are meant to implement directly.
+- Logging, instrumentation, and policy wrappers all take an `Agent` and return an `Agent`.
 
-**근거** [01 공개 API·타입](../upstream/snapshots/d0a4165f/features/01-agent-lifecycle.md)
-
----
-
-## AGT-002 모든 에이전트는 안정적인 식별자를 가진다
-
-**요구사항.** 에이전트는 생성 시 식별자를 받지 않으면 스스로 생성해야 하며, 같은 인스턴스가
-살아 있는 동안 그 값은 바뀌지 않아야 한다. 이름과 설명은 선택 항목이다.
-
-**원본 비교**
-
-- .NET: `Id`가 비면 `Guid.NewGuid().ToString("N")`을 기본값으로 쓴다. `Name`, `Description`은 가상 속성이다.
-- Python: `id`를 생략하면 `uuid4()` 문자열을 만들고 `name`, `description`을 필드로 보관한다.
-
-**판단.** 동일하다. 관찰성에서 실행을 에이전트에 귀속시키려면 식별자가 항상 존재해야
-한다. 자동 생성 실패를 허용하면 추적 계층이 조건부 코드를 갖게 되므로 예외 없이 항상
-값을 채운다.
-
-**수용 기준**
-
-- 식별자 없이 만든 에이전트도 비어 있지 않은 식별자를 노출한다.
-- 같은 인스턴스에서 식별자를 두 번 읽으면 같은 값이다.
-- 식별자를 명시하면 그 값이 그대로 유지된다.
-
-**근거** [01 Identity / Metadata](../upstream/snapshots/d0a4165f/features/01-agent-lifecycle.md)
+**Evidence** [01 Public API and types](../upstream/snapshots/d0a4165f/features/01-agent-lifecycle.md)
 
 ---
 
-## AGT-003 실행과 스트리밍 진입점을 분리한다
+## AGT-002 Every agent has a stable identifier
 
-**요구사항.** 코어는 완료 응답을 돌려주는 실행과 증분 조각을 돌려주는 스트리밍을 서로 다른
-메서드로 제공해야 한다. 하나의 메서드가 인자 값에 따라 반환 타입을 바꾸지 않는다.
+**Requirement.** An agent must generate its own identifier when it is not given one at construction
+time, and that value must not change while the same instance is alive. Name and description are
+optional.
 
-**원본 비교**
+**Upstream comparison**
 
-- .NET: `RunAsync()`와 `RunStreamingAsync()`를 분리한다.
-- Python: `run(..., stream=False|True)` 한 메서드가 awaitable 또는 스트림을 반환한다.
+- .NET: uses `Guid.NewGuid().ToString("N")` as the default when `Id` is empty. `Name` and `Description` are virtual properties.
+- Python: creates a `uuid4()` string when `id` is omitted and keeps `name` and `description` as fields.
 
-**판단.** .NET 방식을 택한다. Python의 단일 메서드는 동적 타입에서는 자연스럽지만 Java에서는
-반환 타입이 인자에 따라 달라지는 API를 타입 시스템으로 표현할 수 없다. 분리하면 오류 처리,
-취소, 리액티브 스트림 선택이 각각 명확해진다.
+**Decision.** Both upstreams agree. Attributing a run to an agent in observability requires the
+identifier to always exist. Allowing automatic generation to fail would give the tracing layer
+conditional code, so the value is always filled in, without exception.
 
-**수용 기준**
+**Acceptance criteria**
 
-- 완료 실행과 스트리밍 실행의 메서드 이름과 반환 타입이 다르다.
-- 두 경로 모두 같은 입력에 대해 같은 최종 메시지를 만든다.
+- An agent created without an identifier still exposes a non-empty identifier.
+- Reading the identifier twice from the same instance yields the same value.
+- An explicitly supplied identifier is kept as is.
 
-**근거** [01 Run entry points](../upstream/snapshots/d0a4165f/features/01-agent-lifecycle.md),
-[03 실행 형태](../upstream/snapshots/d0a4165f/features/03-model-execution.md)
-
----
-
-## AGT-004 스트리밍만 소비해도 실행이 완결된다
-
-**요구사항.** 스트리밍을 끝까지 소비하면, 최종 응답 객체를 따로 요청하지 않아도 세션 상태
-갱신과 실행 후 처리가 모두 끝나야 한다.
-
-**원본 비교**
-
-- .NET: 스트리밍 경로도 세션 갱신과 이력 저장을 수행한다.
-- Python: 스트림 순회만 끝내도 `service_session_id`가 설정되고 실행 후 제공자가 이력을 저장한다는 것을 테스트로 고정한다.
-
-**판단.** 동일하며 Python이 테스트로 명시한다. 이 규칙이 없으면 스트리밍 사용자만 상태를
-잃는 조용한 데이터 손실이 생긴다. 실행 완결의 기준은 "최종 객체를 읽었는가"가 아니라
-"스트림이 끝났는가"여야 한다.
-
-**수용 기준**
-
-- 스트림을 끝까지 소비한 뒤 세션을 다시 읽으면 이번 실행의 메시지가 들어 있다.
-- 최종 응답 객체를 한 번도 요청하지 않아도 위 조건이 성립한다.
-- 스트림을 도중에 취소하면 부분 상태를 확정하지 않는다.
-
-**근거** [01 acceptance scenarios](../upstream/snapshots/d0a4165f/features/01-agent-lifecycle.md)
+**Evidence** [01 Identity / Metadata](../upstream/snapshots/d0a4165f/features/01-agent-lifecycle.md)
 
 ---
 
-## AGT-005 취소는 명시적 인자로 전달한다
+## AGT-003 The run and streaming entry points are separate
 
-**요구사항.** 취소 신호는 공개 실행 API의 명시적 인자여야 하며, 실행으로 생성된 run handle도
-동일 신호를 발동하는 cancel 연산을 제공해야 한다. 스레드 로컬이나 암묵적 실행 컨텍스트에서
-취소를 읽지 않으며, 특정 프레임워크의 취소 타입을 core 계약으로 고정하지 않는다.
+**Requirement.** The core must offer the run that returns a completed response and the streaming
+that returns incremental fragments as different methods. A single method does not change its return
+type according to an argument value.
 
-**원본 비교**
+**Upstream comparison**
 
-- .NET: `CancellationToken`을 모든 실행 메서드 인자로 받는다.
-- Python: asyncio의 암묵적 태스크 취소에 의존한다.
+- .NET: separates `RunAsync()` and `RunStreamingAsync()`.
+- Python: has one `run(..., stream=False|True)` method that returns either an awaitable or a stream.
 
-**판단.** .NET의 명시성을 택하되 `CancellationToken`을 직역하지 않는다. Java 취소는
-`Future.cancel`, `Flow.Subscription.cancel`, thread interruption, HTTP client abort로 나뉜다.
-core 신호가 이 경로들을 연결해야 호스트가 요청 시간 초과와 client abort를 손실 없이 전파할
-수 있다.
+**Decision.** The .NET approach is chosen. Python's single method is natural in a dynamic language,
+but Java cannot express an API whose return type depends on an argument in its type system.
+Separating them makes error handling, cancellation, and the choice of a reactive stream clear for
+each path.
 
-**수용 기준**
+**Acceptance criteria**
 
-- 완료 실행과 스트리밍 실행 모두 취소 인자를 받는다.
-- 두 실행 경로가 반환하거나 노출하는 run handle의 cancel은 같은 취소 신호를 발동한다.
-- 취소가 발동하면 진행 중이던 모델 호출과 도구 호출로 전파된다.
-- 취소된 실행은 성공으로 보고되지 않는다.
-- `Future`·`Flow.Subscription`·thread interruption 중 하나로 시작된 취소를 core 신호에 연결할
-  수 있고, core 취소도 해당 adapter의 취소 경로로 전파된다.
+- The completed run and the streaming run differ in method name and return type.
+- Both paths produce the same final message for the same input.
 
-**근거** [03 Java 결정](../upstream/snapshots/d0a4165f/features/03-model-execution.md)
+**Evidence** [01 Run entry points](../upstream/snapshots/d0a4165f/features/01-agent-lifecycle.md),
+[03 Run shapes](../upstream/snapshots/d0a4165f/features/03-model-execution.md)
 
 ---
 
-## AGT-006 에이전트는 세션 호환성만 검증한다
+## AGT-004 Consuming only the stream still completes the run
 
-**요구사항.** 에이전트는 전달받은 세션이 자신과 호환되는지 검증하고, 맞지 않으면 모델을
-호출하기 전에 실패해야 한다. 세션 payload의 저장 형식은 세션과 저장소가 소유한다.
+**Requirement.** Once the stream has been consumed to the end, the session state update and the
+post-run processing must both be finished, without a separate request for the final response object.
 
-**원본 비교**
+**Upstream comparison**
 
-- .NET: 에이전트가 세션 직렬화 API를 소유하고 지원 세션 타입을 통제한다.
-- Python: `AgentSession`과 저장소가 스냅샷을 소유하고, 에이전트는 잘못된 세션 입력을 실행 전에 거부한다.
+- .NET: the streaming path also performs the session update and history storage.
+- Python: pins by test that finishing the stream iteration alone sets `service_session_id` and that the provider stores history after the run.
 
-**판단.** 양쪽의 장점을 나눠 가진다. 에이전트가 형식까지 소유하면(.NET) 범용 세션 저장소를
-만들 수 없고, 세션이 호환성까지 책임지면(Python 단독) 에이전트별 제약을 표현하기 어렵다.
-따라서 **호환성 검증은 에이전트, payload 보관은 세션과 저장소**로 나눈다.
+**Decision.** The two are the same, and Python states it explicitly in a test. Without this rule,
+only streaming users lose state, which is a silent data loss. The criterion for a completed run must
+be "has the stream ended", not "has the final object been read".
 
-**수용 기준**
+**Acceptance criteria**
 
-- 호환되지 않는 세션으로 실행하면 모델 호출 이전에 실패한다.
-- 실패는 조용한 폴백이 아니라 명시적 오류다.
-- 세션 저장 형식은 특정 에이전트 구현을 알지 못해도 읽고 쓸 수 있다.
+- Reading the session again after consuming the stream to the end contains the messages of this run.
+- The condition above holds even when the final response object is never requested.
+- Cancelling the stream partway does not commit partial state.
 
-**근거** [01 상태·스냅샷](../upstream/snapshots/d0a4165f/features/01-agent-lifecycle.md),
-[08 세션](../upstream/snapshots/d0a4165f/features/08-sessions.md)
-
----
-
-## AGT-007 데코레이터로 에이전트를 감쌀 수 있다
-
-**요구사항.** 코어는 `Agent`를 받아 동작을 덧입힌 `Agent`를 돌려주는 위임 방식을 제공해야
-한다. 로깅과 계측은 이 방식으로 조립한다.
-
-**원본 비교**
-
-- .NET: `DelegatingAIAgent`와 `AIAgentBuilder`로 파이프라인을 조립한다.
-- Python: 계층 클래스와 미들웨어 조합으로 같은 효과를 낸다.
-
-**판단.** .NET 방식을 택한다. 위임 타입이 명시적이면 래퍼를 독립적으로 테스트하고 순서를
-제어할 수 있다. 이는 [AGT-001](#agt-001-공개-진입점은-agent-하나로-통일한다)과 충돌하지
-않는다. 위임 타입은 확장 지점이고, 사용자가 다루는 타입은 여전히 `Agent`다.
-
-**수용 기준**
-
-- 감싼 에이전트도 `Agent`로 사용할 수 있다.
-- 감싼 뒤에도 식별자와 메타데이터를 조회할 수 있다.
-- 래퍼를 여러 개 겹쳐도 실행 결과가 달라지지 않는다.
-
-**근거** [01 Delegation / Wrapping](../upstream/snapshots/d0a4165f/features/01-agent-lifecycle.md)
+**Evidence** [01 acceptance scenarios](../upstream/snapshots/d0a4165f/features/01-agent-lifecycle.md)
 
 ---
 
-## AGT-008 실행 컨텍스트를 명시적으로 전달한다
+## AGT-005 Cancellation is passed as an explicit argument
 
-**요구사항.** 실행 중인 에이전트, 세션, 요청 메타데이터는 실행 컨텍스트로 인터셉터와 도구에
-전달되어야 한다. 코어는 이 값을 스레드 로컬 전역 상태로 보관하지 않는다.
+**Requirement.** The cancellation signal must be an explicit argument of the public run API, and
+run handles created by execution must provide a cancel operation that triggers the same signal.
+Cancellation is not read from a thread local or an implicit execution context, and the core
+contract must not be tied to a framework-specific cancellation type.
 
-**원본 비교**
+**Upstream comparison**
 
-- .NET: `AgentRunContext`를 두고 모든 실행 경로에서 채운다. 테스트가 이를 고정한다.
-- Python: 실행 컨텍스트와 미들웨어 컨텍스트로 같은 정보를 전달한다.
+- .NET: takes a `CancellationToken` as an argument of every run method.
+- Python: relies on the implicit task cancellation of asyncio.
 
-**판단.** 컨텍스트가 필요하다는 점은 동일하다. 전달 방식만 Java에 맞춘다. 스레드 로컬을
-기준으로 삼으면 가상 스레드, 리액티브 체인, 비동기 조합에서 컨텍스트가 유실된다. 명시적
-전달은 호스트가 어떤 실행 모델을 쓰든 안전하다.
+**Decision.** The explicitness of the .NET approach is chosen without directly translating
+`CancellationToken`. Java cancellation is split across `Future.cancel`, `Flow.Subscription.cancel`,
+thread interruption, and HTTP client abort. The core signal must bridge these paths so that a host
+can propagate request timeouts and client aborts without loss.
 
-**수용 기준**
+**Acceptance criteria**
 
-- 인터셉터는 실행 중인 에이전트와 세션을 컨텍스트로 읽을 수 있다.
-- 스레드를 넘나드는 실행에서도 컨텍스트 값이 유지된다.
-- 컨텍스트 조회가 전역 정적 상태에 의존하지 않는다.
+- Both the completed run and the streaming run take a cancellation argument.
+- The run handle returned or exposed by each execution path has a cancel operation that triggers the
+  same cancellation signal.
+- When cancellation fires, it propagates into the model call and the tool calls in flight.
+- A cancelled run is not reported as a success.
+- Cancellation initiated through `Future`, `Flow.Subscription`, or thread interruption can be
+  bridged to the core signal, and core cancellation propagates to the corresponding adapter
+  cancellation path.
 
-**근거** [01 acceptance scenarios](../upstream/snapshots/d0a4165f/features/01-agent-lifecycle.md)
-
----
-
-## AGT-009 모델 호출은 `ModelClient` 포트로 분리한다
-
-**요구사항.** 에이전트는 모델 공급자 SDK를 직접 호출하지 않고, 코어가 정의한 모델 호출
-포트를 통해서만 호출해야 한다.
-
-**원본 비교**
-
-- .NET: `IChatClient`를 두고 `ChatClientAgent`가 이를 사용한다.
-- Python: `BaseChatClient`와 `SupportsChatGetResponse` 프로토콜을 둔다.
-
-**판단.** 동일하다. 이 분리가 없으면 공급자 교체와 결정적 테스트가 모두 불가능하다. 이
-포트는 `agent-framework-api`가 소유하고, 공급자 어댑터가 구현한다. Java 공개 이름은 Spring
-AI의 `ChatClient`와 import 충돌을 피하기 위해 `ModelClient`를 사용한다.
-
-**수용 기준**
-
-- 코어 모듈은 어떤 공급자 SDK에도 의존하지 않는다.
-- 결정적 가짜 구현만으로 에이전트 실행 전체를 테스트할 수 있다.
-
-**근거** [03 공개 API·타입](../upstream/snapshots/d0a4165f/features/03-model-execution.md)
+**Evidence** [03 Java decisions](../upstream/snapshots/d0a4165f/features/03-model-execution.md)
 
 ---
 
-## AGT-010 선택적 모델 기능은 별도 인터페이스로 노출한다
+## AGT-006 The agent validates session compatibility only
 
-**요구사항.** 모든 공급자가 지원하지 않는 기능은 기본 포트에 넣지 않고 별도 기능 인터페이스로
-분리해야 한다. 호출자는 실행 전에 지원 여부를 확인할 수 있어야 한다.
+**Requirement.** The agent must validate that the session it was given is compatible with it and
+fail before calling the model when it is not. The storage format of the session payload is owned by
+the session and the store.
 
-**원본 비교**
+**Upstream comparison**
 
-- .NET: 서비스 조회 방식으로 기능을 얻는다.
-- Python: `SupportsCodeInterpreterTool`, `SupportsWebSearchTool` 같은 기능별 프로토콜을 명시한다.
+- .NET: the agent owns the session serialization API and controls which session types are supported.
+- Python: `AgentSession` and the store own the snapshot, and the agent rejects an invalid session input before the run.
 
-**판단.** Python 방식을 택한다. 기능을 타입으로 표현하면 IDE와 컴파일러가 지원 여부를 알려
-주고, 미지원 기능 호출이 런타임 문자열 조회 실패가 아니라 타입 불일치로 드러난다.
+**Decision.** The strengths of both are divided up. If the agent owned the format as well (.NET), a
+general-purpose session store could not be built; if the session were also responsible for
+compatibility (Python alone), per-agent constraints would be hard to express. So **compatibility
+validation belongs to the agent and payload storage belongs to the session and the store**.
 
-**수용 기준**
+**Acceptance criteria**
 
-- 기본 포트만 구현한 공급자도 유효한 구현이다.
-- 미지원 기능을 요청하면 조용히 무시하지 않고 명시적으로 실패하거나 사전에 걸러낸다.
-- 지원 여부 확인이 예외 처리에 의존하지 않는다.
+- Running with an incompatible session fails before the model call.
+- The failure is an explicit error, not a silent fallback.
+- The session storage format can be read and written without knowing a specific agent implementation.
 
-**근거** [03 capability contracts](../upstream/snapshots/d0a4165f/features/03-model-execution.md)
-
----
-
-## AGT-011 공통 요청 옵션은 타입 안전한 공급자 중립 계약으로 둔다
-
-**요구사항.** 온도, 최대 토큰처럼 공통된 요청 옵션은 타입이 지정된 불변 코어 계약으로
-정의하고, 공급자 고유 옵션은 adapter-owned 타입에 담아야 한다. 공급자 고유 키와
-`Map<String, Object>`가 공통 옵션과 같은 평면에 섞이지 않는다.
-
-**원본 비교**
-
-- .NET: 풍부한 `ChatOptions`와 병합 규칙을 제공한다.
-- Python: 공통 옵션을 두고 별도 검증 함수로 제약을 강제한다.
-
-**판단.** 두 원본 모두 공통 옵션을 1차 계약으로 둔다. Java는 .NET의 typed property와
-Python의 확장성을 결합한다. 공통 값은 builder가 타입과 범위를 검증하고, 공급자 전용 값은
-adapter-owned immutable option으로 분리해 교체 시 이식되지 않는 설정을 컴파일러와 IDE에서
-드러낸다.
-
-**수용 기준**
-
-- 공통 옵션만 사용한 실행은 공급자를 바꿔도 그대로 동작한다.
-- 공급자 고유 옵션은 어느 공급자용인지 구분할 수 있다.
-- 지원하지 않는 공급자에 고유 옵션을 주면 조용히 무시하지 않는다.
-- 온도와 최대 토큰에 잘못된 Java 타입을 넣는 호출은 컴파일되지 않거나 builder 생성 시
-  `IllegalArgumentException`으로 실패하며, adapter 내부 cast까지 미뤄지지 않는다.
-
-**근거** [03 요청 옵션](../upstream/snapshots/d0a4165f/features/03-model-execution.md)
+**Evidence** [01 State and snapshots](../upstream/snapshots/d0a4165f/features/01-agent-lifecycle.md),
+[08 Sessions](../upstream/snapshots/d0a4165f/features/08-sessions.md)
 
 ---
 
-## AGT-012 옵션 병합 우선순위를 고정한다
+## AGT-007 An agent can be wrapped with a decorator
 
-**요구사항.** 에이전트 기본 옵션과 실행 시점 옵션이 겹치면 실행 시점 옵션이 이긴다. 이
-우선순위는 문서화하고 테스트로 고정해야 한다.
+**Requirement.** The core must provide a delegation form that takes an `Agent` and returns an
+`Agent` with added behavior. Logging and instrumentation are assembled this way.
 
-**원본 비교**
+**Upstream comparison**
 
-- .NET: 기본 옵션과 실행 옵션의 병합 규칙을 구현하고 테스트로 고정한다.
-- Python: 옵션 병합과 검증을 별도 함수로 두고 테스트한다.
+- .NET: assembles a pipeline with `DelegatingAIAgent` and `AIAgentBuilder`.
+- Python: achieves the same effect with layered classes and middleware composition.
 
-**판단.** 동일하다. 병합 규칙이 암묵적이면 같은 설정이 경로에 따라 다르게 적용되는 버그가
-생긴다. 규칙 자체보다 "규칙이 고정되어 있고 검증된다"는 점이 중요하다.
+**Decision.** The .NET approach is chosen. An explicit delegating type lets a wrapper be tested
+independently and its ordering be controlled. This does not conflict with
+[AGT-001](#agt-001-the-public-entry-point-is-unified-into-the-single-agent-type). The delegating
+type is an extension point, and the type users work with is still `Agent`.
 
-**수용 기준**
+**Acceptance criteria**
 
-- 같은 키를 양쪽에 주면 실행 시점 값이 적용된다.
-- 실행 시점에 지정하지 않은 키는 에이전트 기본값이 유지된다.
-- 도구 목록 병합 규칙도 같은 문서에 명시된다.
+- A wrapped agent can still be used as an `Agent`.
+- The identifier and the metadata can still be read after wrapping.
+- Stacking several wrappers does not change the result of a run.
 
-**근거** [03 옵션 병합](../upstream/snapshots/d0a4165f/features/03-model-execution.md)
-
----
-
-## AGT-013 실행 단위로 모델 클라이언트를 교체할 수 있다
-
-**요구사항.** 실행 시점에 모델 클라이언트를 감싸거나 교체할 수 있어야 한다. 교체하면 그
-실행에서는 원본 클라이언트가 호출되지 않아야 한다.
-
-**원본 비교**
-
-- .NET: 실행 옵션의 클라이언트 팩토리로 변환된 클라이언트를 쓰고, 테스트가 원본 미호출을 검증한다.
-- Python: 동등한 실행 단위 교체 지점이 확인되지 않는다.
-
-**판단.** .NET 방식을 채택하되 등급은 권장이다. 재시도, 페일오버, 요청별 자격 증명 같은
-호스트 관심사를 코어 변경 없이 붙일 수 있다. MVP에는 필요하지 않아 `Core+`로 둔다.
-
-**수용 기준**
-
-- 실행 단위로 교체한 클라이언트만 호출된다.
-- 교체하지 않은 실행은 에이전트 기본 클라이언트를 사용한다.
-
-**근거** [03 acceptance scenarios](../upstream/snapshots/d0a4165f/features/03-model-execution.md)
+**Evidence** [01 Delegation / Wrapping](../upstream/snapshots/d0a4165f/features/01-agent-lifecycle.md)
 
 ---
 
-## AGT-014 이어받기 실행에 새 입력을 함께 줄 수 없다
+## AGT-008 The run context is passed explicitly
 
-**요구사항.** 이전 실행을 이어받는 토큰과 새 사용자 입력을 같은 실행에 함께 전달하면
-거부해야 한다.
+**Requirement.** The running agent, the session, and the request metadata must be passed to
+interceptors and tools as a run context. The core does not hold these values in thread-local global
+state.
 
-**원본 비교**
+**Upstream comparison**
 
-- .NET: 이어받기 토큰이 설정된 실행에 새 입력 메시지가 있으면 예외를 던진다.
-- Python: 대응하는 제약이 이 스냅샷에서 확인되지 않는다.
+- .NET: has an `AgentRunContext` and fills it on every run path. Tests pin this.
+- Python: passes the same information through the run context and the middleware context.
 
-**판단.** .NET의 제약을 채택한다. 둘을 동시에 허용하면 새 입력이 이어받기 이전에 반영되는지
-이후에 반영되는지가 모호해지고, 그 모호함은 대화 순서를 조용히 깨뜨린다. 더 안전한 쪽을
-택하는 원칙에 해당한다.
+**Decision.** That a context is needed is the same on both sides. Only the way it is passed is
+adapted to Java. Making thread locals the baseline loses the context in virtual threads, reactive
+chains, and asynchronous composition. Explicit passing is safe whatever execution model the host
+uses.
 
-**수용 기준**
+**Acceptance criteria**
 
-- 이어받기 토큰과 새 입력을 함께 주면 실행 전에 실패한다.
-- 이어받기 토큰만 주면 정상 재개한다.
+- An interceptor can read the running agent and the session from the context.
+- The context values survive a run that moves across threads.
+- Reading the context does not depend on global static state.
 
-**근거** [03 continuation](../upstream/snapshots/d0a4165f/features/03-model-execution.md)
-
----
-
-## AGT-015 스트리밍 조각만으로 최종 응답을 복원한다
-
-**요구사항.** 스트리밍으로 받은 조각들을 모으면 완료 실행과 같은 최종 응답을 만들 수 있어야
-한다. 사용량과 종료 사유도 함께 복원되어야 한다.
-
-**원본 비교**
-
-- .NET: 조각을 최종 응답으로 합치는 도우미를 제공한다.
-- Python: 스트림 래퍼가 버퍼링한 조각과 마무리 처리로 최종 응답을 복원한다.
-
-**판단.** 동일하다. 이 요구가 없으면 스트리밍 사용자는 사용량 집계와 종료 사유를 잃는다.
-관찰성과 과금이 두 경로에서 같은 값을 보려면 복원이 보장되어야 한다.
-
-**수용 기준**
-
-- 같은 입력에서 완료 실행과 스트리밍 복원 결과의 메시지가 일치한다.
-- 복원된 응답에 사용량과 종료 사유가 포함된다.
-
-**근거** [03 스트리밍 조립](../upstream/snapshots/d0a4165f/features/03-model-execution.md),
-[02 응답 모델](../upstream/snapshots/d0a4165f/features/02-message-content.md)
+**Evidence** [01 acceptance scenarios](../upstream/snapshots/d0a4165f/features/01-agent-lifecycle.md)
 
 ---
 
-## AGT-016 서비스가 이력을 저장하면 로컬 이력을 중복 저장하지 않는다
+## AGT-009 Model calls are separated behind the `ModelClient` port
 
-**요구사항.** 모델 서비스가 대화 이력을 스스로 보관하는 경우, 코어는 같은 이력을 로컬에
-중복 저장하지 않아야 한다. 서비스 저장을 끄면 다시 로컬 이력 경로를 사용해야 한다.
+**Requirement.** The agent must not call a model provider SDK directly; it must call the model only
+through the model call port defined by the core.
 
-**원본 비교**
+**Upstream comparison**
 
-- .NET: 대화 식별자가 없는 클라이언트에서는 기본 인메모리 이력 제공자로 상태를 유지한다.
-- Python: 기본 저장 클라이언트에는 로컬 이력을 자동 주입하지 않고, 저장을 끄면 로컬 경로로 되돌린다는 것을 테스트로 고정한다.
+- .NET: has `IChatClient`, which `ChatClientAgent` uses.
+- Python: has the `BaseChatClient` and `SupportsChatGetResponse` protocols.
 
-**판단.** 동일한 의도이며 Python이 전환 조건까지 테스트로 고정한다. 중복 저장은 프롬프트에
-같은 메시지를 두 번 넣어 토큰을 낭비하고 모델을 혼란시킨다. 저장 주체는 항상 한 곳이어야
-한다.
+**Decision.** Both upstreams agree. Without this separation, neither provider replacement nor
+deterministic testing is possible. This port is owned by `agent-framework-api` and implemented by
+provider adapters. The Java public name is `ModelClient` to avoid an import collision with Spring
+AI's `ChatClient`.
 
-**수용 기준**
+**Acceptance criteria**
 
-- 서비스가 이력을 저장하는 공급자에서는 로컬 이력이 자동 주입되지 않는다.
-- 서비스 저장을 끄면 로컬 이력 경로가 다시 활성화된다.
-- 어느 경로에서도 같은 메시지가 프롬프트에 두 번 들어가지 않는다.
+- The core modules depend on no provider SDK.
+- A whole agent run can be tested with a deterministic fake implementation alone.
 
-**근거** [03 이력 저장 경로](../upstream/snapshots/d0a4165f/features/03-model-execution.md),
-[09 이력 제공자](../upstream/snapshots/d0a4165f/features/09-history-context-memory.md)
+**Evidence** [03 Public API and types](../upstream/snapshots/d0a4165f/features/03-model-execution.md)
 
 ---
 
-## 이 문서가 다루지 않는 것
+## AGT-010 Optional model capabilities are exposed as separate interfaces
 
-| 주제 | 소유 문서 |
+**Requirement.** A capability that not every provider supports must be kept out of the base port and
+split into a separate capability interface. The caller must be able to check support before the run.
+
+**Upstream comparison**
+
+- .NET: obtains capabilities through service lookup.
+- Python: states per-capability protocols such as `SupportsCodeInterpreterTool` and `SupportsWebSearchTool`.
+
+**Decision.** The Python approach is chosen. Expressing a capability as a type lets the IDE and the
+compiler report whether it is supported, and calling an unsupported capability shows up as a type
+mismatch rather than a failed runtime string lookup.
+
+**Acceptance criteria**
+
+- A provider that implements only the base port is a valid implementation.
+- Requesting an unsupported capability is not silently ignored; it fails explicitly or is filtered out beforehand.
+- Checking support does not depend on exception handling.
+
+**Evidence** [03 capability contracts](../upstream/snapshots/d0a4165f/features/03-model-execution.md)
+
+---
+
+## AGT-011 Common request options use a typed provider-neutral contract
+
+**Requirement.** Common request options such as temperature and maximum tokens must be defined in a
+typed, immutable core contract, and provider-specific options must be held in adapter-owned types.
+Provider-specific keys and `Map<String, Object>` values are not mixed into the same plane as the
+common options.
+
+**Upstream comparison**
+
+- .NET: provides a rich `ChatOptions` and merge rules.
+- Python: has common options and enforces constraints with a separate validation function.
+
+**Decision.** Both upstreams keep the common options as the primary contract. Java combines .NET's
+typed properties with Python's extensibility. A builder validates the types and ranges of common
+values, while adapter-owned immutable options keep provider-only settings separate so that the
+compiler and IDE reveal which settings do not carry over when an adapter is replaced.
+
+**Acceptance criteria**
+
+- A run that uses only common options keeps working when the provider is changed.
+- A provider-specific option can be told apart by the provider it belongs to.
+- Giving a provider-specific option to a provider that does not support it is not silently ignored.
+- Supplying an invalid Java type for temperature or maximum tokens either does not compile or fails
+  with `IllegalArgumentException` when the builder constructs the options, rather than being
+  deferred to a cast inside an adapter.
+
+**Evidence** [03 Request options](../upstream/snapshots/d0a4165f/features/03-model-execution.md)
+
+---
+
+## AGT-012 The option merge precedence is fixed
+
+**Requirement.** When the agent default options and the run-time options overlap, the run-time
+options win. This precedence must be documented and pinned by a test.
+
+**Upstream comparison**
+
+- .NET: implements the merge rules for default options and run options and pins them by test.
+- Python: keeps option merging and validation in separate functions and tests them.
+
+**Decision.** Both upstreams agree. An implicit merge rule produces bugs where the same setting is
+applied differently depending on the path. What matters is not the rule itself but that "the rule
+is fixed and verified".
+
+**Acceptance criteria**
+
+- Giving the same key on both sides applies the run-time value.
+- A key not specified at run time keeps the agent default.
+- The merge rule for the tool list is stated in the same document.
+
+**Evidence** [03 Option merging](../upstream/snapshots/d0a4165f/features/03-model-execution.md)
+
+---
+
+## AGT-013 The model client can be replaced per run
+
+**Requirement.** It must be possible to wrap or replace the model client at run time. Once replaced,
+the original client must not be called during that run.
+
+**Upstream comparison**
+
+- .NET: uses the transformed client from the client factory in the run options, and a test verifies that the original is not called.
+- Python: no equivalent per-run replacement point is confirmed.
+
+**Decision.** The .NET approach is adopted, but the grade is recommended. Host concerns such as
+retries, failover, and per-request credentials can be attached without changing the core. It is not
+needed for the MVP, so it is placed in `Core+`.
+
+**Acceptance criteria**
+
+- Only the client replaced for that run is called.
+- A run without a replacement uses the agent default client.
+
+**Evidence** [03 acceptance scenarios](../upstream/snapshots/d0a4165f/features/03-model-execution.md)
+
+---
+
+## AGT-014 A continuation run cannot carry new input as well
+
+**Requirement.** Passing a token that continues a previous run together with new user input in the
+same run must be rejected.
+
+**Upstream comparison**
+
+- .NET: throws when a run with a continuation token set also has new input messages.
+- Python: no corresponding constraint is confirmed in this snapshot.
+
+**Decision.** The .NET constraint is adopted. Allowing both at once makes it ambiguous whether the
+new input is applied before or after the continuation, and that ambiguity silently breaks the
+conversation order. This is an application of the rule that chooses the safer side.
+
+**Acceptance criteria**
+
+- Passing a continuation token together with new input fails before the run.
+- Passing only the continuation token resumes normally.
+
+**Evidence** [03 continuation](../upstream/snapshots/d0a4165f/features/03-model-execution.md)
+
+---
+
+## AGT-015 The final response is reconstructed from the streamed fragments alone
+
+**Requirement.** Collecting the fragments received by streaming must be enough to build the same
+final response as a completed run. Usage and the finish reason must be reconstructed as well.
+
+**Upstream comparison**
+
+- .NET: provides a helper that combines the fragments into a final response.
+- Python: reconstructs the final response from the fragments the stream wrapper buffered plus its finalization step.
+
+**Decision.** Both upstreams agree. Without this requirement, streaming users lose usage totals
+and the finish reason. For observability and billing to see the same values on both paths,
+reconstruction has to be guaranteed.
+
+**Acceptance criteria**
+
+- For the same input, the messages of the completed run and of the streaming reconstruction match.
+- The reconstructed response contains usage and the finish reason.
+
+**Evidence** [03 Stream assembly](../upstream/snapshots/d0a4165f/features/03-model-execution.md),
+[02 Response model](../upstream/snapshots/d0a4165f/features/02-message-content.md)
+
+---
+
+## AGT-016 When the service stores history, local history is not stored twice
+
+**Requirement.** When the model service keeps the conversation history itself, the core must not
+store the same history locally as well. When service-side storage is turned off, the local history
+path must be used again.
+
+**Upstream comparison**
+
+- .NET: keeps state with the default in-memory history provider for clients that have no conversation identifier.
+- Python: pins by test that local history is not injected automatically for a storing client by default, and that turning storage off falls back to the local path.
+
+**Decision.** The intent is the same, and Python pins the switch-over condition by test as well.
+Duplicate storage puts the same message into the prompt twice, wasting tokens and confusing the
+model. There must always be exactly one owner of storage.
+
+**Acceptance criteria**
+
+- Local history is not injected automatically for a provider whose service stores history.
+- Turning service-side storage off re-enables the local history path.
+- On neither path does the same message enter the prompt twice.
+
+**Evidence** [03 History storage paths](../upstream/snapshots/d0a4165f/features/03-model-execution.md),
+[09 History providers](../upstream/snapshots/d0a4165f/features/09-history-context-memory.md)
+
+---
+
+## What this document does not cover
+
+| Topic | Owning document |
 | --- | --- |
-| 메시지와 콘텐츠 타입의 구조 | [02 메시지와 콘텐츠 모델](02-message-content.md) |
-| 구조화 출력 요청과 파싱 | [03 구조화 출력](03-structured-output.md) |
-| 도구 호출 루프와 반복 제한 | [04 도구 정의와 실행 루프](04-tools.md) |
-| 세션 직렬화 형식과 저장소 | [06 세션과 대화 상태](06-sessions.md) |
-| 인터셉터 실행 순서 | [07 인터셉터와 컨텍스트 관리](07-interceptors.md) |
-| 추적과 계측 | [11 운영 품질](11-operations.md) |
+| The structure of messages and content types | [02 Messages and the content model](02-message-content.md) |
+| Structured output requests and parsing | [03 Structured output](03-structured-output.md) |
+| The tool call loop and its iteration limit | [04 Tool definitions and the tool call loop](04-tools.md) |
+| The session serialization format and stores | [06 Sessions and conversation state](06-sessions.md) |
+| Interceptor execution order | [07 Interceptors and context management](07-interceptors.md) |
+| Tracing and instrumentation | [11 Operational quality](11-operations.md) |

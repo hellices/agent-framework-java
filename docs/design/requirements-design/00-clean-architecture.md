@@ -1,12 +1,13 @@
 # Clean architecture and Java extension model
 
-## 1. 목적
+## 1. Purpose
 
-Microsoft Agent Framework의 관찰 가능한 실행 의미를 Java에 구현하되 애플리케이션 runtime,
-DI container, provider SDK를 core에 포함하지 않는다. 결과물은 plain Java에 embed할 수 있는
-`AgentEngine`이며 Spring Boot, Quarkus, Jakarta EE는 동일 port를 조립하는 host adapter다.
+Implement Microsoft Agent Framework's observable execution semantics in Java without including the
+application runtime, DI container, or provider SDK in the core. The result is an `AgentEngine` that
+can be embedded in plain Java; Spring Boot, Quarkus, and Jakarta EE are host adapters that assemble
+the same ports.
 
-## 2. 계층
+## 2. Layers
 
 ```text
 Application / host
@@ -25,24 +26,25 @@ Immutable domain values and deterministic state transitions
 
 ### 2.1 Public contracts
 
-`agent-framework-api`가 다음을 소유한다.
+`agent-framework-api` owns the following:
 
-- application-facing `Agent`와 실행 input/output
-- immutable message, content, tool, session value
-- provider·storage·telemetry가 구현하는 public port
-- typed interceptor와 lifecycle contract
+- application-facing `Agent` and execution input/output
+- immutable message, content, tool, and session values
+- public ports implemented by providers, storage, and telemetry
+- typed interceptors and lifecycle contracts
 
-port는 공개 API이지만 application 편의 API와 구분되는 `io.github.hellices.agentframework.spi.*`
-package에 둔다. 초기에는 별도 SPI artifact를 만들지 않는다. API와 SPI 릴리스 주기가 실제로
-분리된 증거가 생기기 전 module을 나누면 consumer dependency만 늘어난다.
+Ports are public APIs, but they reside in the
+`io.github.hellices.agentframework.spi.*` package to distinguish them from application convenience
+APIs. No separate SPI artifact is created initially. Splitting the module before there is evidence
+that the API and SPI release cycles actually differ would only increase consumer dependencies.
 
-일반 개발자는 SPI가 아니라 `AgentFactory`, `AgentBuilder`, `Agent`, `AgentRun`, `ToolSet`,
-`Workflow`, `Harness` facade를 사용한다. 상세 사용성 계약은
-[Developer experience](06-developer-experience.md)가 정의한다.
+General developers use the `AgentFactory`, `AgentBuilder`, `Agent`, `AgentRun`, `ToolSet`,
+`Workflow`, and `Harness` facades rather than the SPI. The detailed usability contract is defined in
+[Developer experience](06-developer-experience.md).
 
 ### 2.2 Application engine
 
-`agent-framework-engine`은 public API에만 의존한다.
+`agent-framework-engine` depends only on the public API.
 
 - run/turn state machine
 - model→tool→model loop
@@ -50,35 +52,36 @@ package에 둔다. 초기에는 별도 SPI artifact를 만들지 않는다. API�
 - interceptor invocation
 - stream finalization
 
-public entry는 `AgentEngine`과 builder/factory에 한정한다. 상태 기계 구현은
-`io.github.hellices.agentframework.engine.internal.*`에 두고 adapter가 참조하지 못하게 한다.
+Public entry points are limited to `AgentEngine` and its builder/factory. The state machine
+implementation resides in `io.github.hellices.agentframework.engine.internal.*` so adapters cannot
+reference it.
 
 ### 2.3 Optional application subsystems
 
-- `workflow/agent-framework-workflow-api`: immutable graph, event, run, checkpoint contracts
+- `workflow/agent-framework-workflow-api`: immutable graph, event, run, and checkpoint contracts
 - `workflow/agent-framework-workflow-core`: graph validation and run/superstep state machine
-- `integrations/agent-framework-harness`: `Agent`를 조립하는 optional facade
+- `integrations/agent-framework-harness`: optional facade that assembles an `Agent`
 - `hosting/agent-framework-hosting-core`: target/session/checkpoint coordination only
 
-이 모듈들은 engine internal에 의존하지 않는다. `Agent`, session port, tool/content contract처럼
-공개 API를 통해 조합한다.
+These modules do not depend on engine internals. They compose through public APIs such as `Agent`,
+session ports, and tool/content contracts.
 
 ### 2.4 Adapters
 
-- `providers/`: model provider SDK adapter
-- `integrations/`: MCP, storage, memory, Spring AI, telemetry adapter
+- `providers/`: model provider SDK adapters
+- `integrations/`: MCP, storage, memory, Spring AI, and telemetry adapters
 - `hosting/`: framework-neutral hosting coordination and standalone assembly
-- `protocols/`: Responses, A2A, AG-UI, MCP hosting wire adapter
+- `protocols/`: Responses, A2A, AG-UI, and MCP hosting wire adapters
 - `starters/`: dependency-only framework starter artifacts
 
-adapter는 outbound port를 구현하거나 inbound protocol을 public use case로 변환한다. adapter가
-engine state machine을 복제하거나 tool loop를 다시 소유하지 않는다.
+An adapter implements an outbound port or converts an inbound protocol to a public use case.
+Adapters neither duplicate the engine state machine nor take ownership of the tool loop.
 
-integration은 endpoint-first가 아니다. framework 내부 사용자는 endpoint를 거치지 않고
-container-native component로 `AgentEngine`과 `Agent`를 주입받는다. endpoint는 Responses, A2A,
-AG-UI 같은 wire protocol을 실제로 노출할 애플리케이션만 별도 opt-in module로 추가한다.
+Integration is not endpoint-first. Internal framework users inject `AgentEngine` and `Agent` as
+container-native components without going through an endpoint. Only applications that actually
+expose a wire protocol such as Responses, A2A, or AG-UI add its separate opt-in module.
 
-## 3. 의존성 규칙
+## 3. Dependency rules
 
 ```text
 api                 <- engine
@@ -92,60 +95,61 @@ testkit             <- api
 samples             <- published products (never reverse)
 ```
 
-금지:
+Prohibited:
 
 - API→engine, API→framework/SDK
-- provider/protocol→engine internal
+- provider/protocol→engine internals
 - core→starter
 - product→sample/testkit
-- static global registry로 adapter 발견
+- adapter discovery through a static global registry
 
-## 4. Java public API 규칙
+## 4. Java public API rules
 
 ### 4.1 Values
 
-- 불변 final class와 defensive copy를 기본으로 한다.
-- 선택 항목이 많은 request/options에는 builder와 `toBuilder()`를 제공한다.
-- ID, closed snapshot, stable event처럼 구성 요소가 고정된 값만 record로 둔다.
-- collection은 생성 시 복사하고 unmodifiable view를 반환한다.
-- public parameter는 non-null이며 부재 반환은 `Optional<T>`로 표현한다.
+- Default to immutable final classes and defensive copies.
+- Provide a builder and `toBuilder()` for requests/options with many optional fields.
+- Use records only for values with fixed components, such as IDs, closed snapshots, and stable
+  events.
+- Copy collections on construction and return unmodifiable views.
+- Public parameters are non-null; represent an absent return value as `Optional<T>`.
 
 ### 4.2 Extension points
 
-- provider/tool/store/interceptor는 small open interface다.
-- 닫힌 engine 상태와 protocol discriminator만 sealed hierarchy를 사용할 수 있다.
-- `ContextKey<T>`, `CapabilityKey<T>` 같은 typed key는 public factory로 생성하고 전역 등록을
-  요구하지 않는다.
-- provider-specific data는 adapter-owned immutable option/value 또는 typed extension envelope로
-  보존한다.
+- Providers, tools, stores, and interceptors are small open interfaces.
+- Only closed engine states and protocol discriminators may use sealed hierarchies.
+- Create typed keys such as `ContextKey<T>` and `CapabilityKey<T>` through public factories without
+  requiring global registration.
+- Preserve provider-specific data in adapter-owned immutable options/values or typed extension
+  envelopes.
 
 ### 4.3 Async and streaming
 
-framework-neutral public async contract:
+Framework-neutral public asynchronous contracts:
 
-- 단일 비동기 결과: `CompletionStage<T>`
+- single asynchronous result: `CompletionStage<T>`
 - backpressure stream: `Flow.Publisher<T>`
-- 장기 실행 제어: `RunHandle`
-- 취소: 명시 `CancellationSignal`과 standard cancellation bridge
+- long-running execution control: `RunHandle`
+- cancellation: explicit `CancellationSignal` and standard cancellation bridge
 
-framework adapter는 이 타입을 Reactor/Mutiny/Jakarta 비동기 타입으로 양방향 변환하고
-cancellation/backpressure contract test를 제공한다.
+Framework adapters convert these types bidirectionally to Reactor, Mutiny, or Jakarta asynchronous
+types and provide cancellation/backpressure contract tests.
 
-engine은 executor/scheduler를 만들지 않는다. 병렬 tool execution은 host가 주입한
-`ExecutionStrategy` 또는 port가 반환한 비동기 결과를 조합한다.
+The engine does not create executors or schedulers. Parallel tool execution composes an
+`ExecutionStrategy` injected by the host or asynchronous results returned by a port.
 
 ### 4.4 Errors
 
 - argument/state: `IllegalArgumentException`, `IllegalStateException`
 - external/runtime: bounded-context unchecked exception + machine-readable category
-- cancellation: 별도 control outcome; generic framework exception으로 감싸지 않음
-- adapter는 cause를 보존하고 protocol binder가 HTTP/A2A/MCP error로 변환
+- cancellation: separate control outcome; not wrapped in a generic framework exception
+- adapters preserve the cause, and protocol binders convert it to an HTTP/A2A/MCP error
 
-## 5. 프레임워크 조립
+## 5. Framework assembly
 
 ### 5.1 Plain Java
 
-plain Java builder가 reference assembly다.
+The plain Java builder is the reference assembly.
 
 ```text
 AgentEngine.builder()
@@ -158,83 +162,83 @@ AgentFactory(engine, modelCatalog)
   -> builder() / builder(modelName) / builder(ModelClient)
 ```
 
-framework adapter가 제공하는 기능은 이 builder로도 표현 가능해야 한다.
+Every feature provided by a framework adapter must also be expressible through this builder.
 
-`hosting/agent-framework-standalone`은 이 reference assembly의 batteries-included facade다.
-서버나 DI container를 만들지 않고 JDK client, host-owned execution strategy, in-memory store,
-provider adapter를 하나의 `AutoCloseable` assembly로 묶는다. standalone 경로가 모든
-framework contract test의 기준 구현이다.
+`hosting/agent-framework-standalone` is the batteries-included facade for this reference assembly.
+It creates neither a server nor a DI container; it combines a JDK client, a host-owned execution
+strategy, an in-memory store, and provider adapters into one `AutoCloseable` assembly. The
+standalone path is the reference implementation for all framework contract tests.
 
 ### 5.2 Spring Boot
 
-- `*-autoconfigure`: conditional beans, ordered customizers, configuration properties
+- `*-autoconfigure`: conditional beans, ordered customizers, and configuration properties
 - `*-starter`: dependency aggregation only
-- user bean이 auto-configured bean을 이김
-- `ObjectProvider`/ordered beans를 명시 builder input으로 변환
-- Spring AI `ChatModel`/`ToolCallback`은 optional adapter
-- engine tool loop 사용 시 Spring AI automatic tool execution 비활성
+- user beans take precedence over auto-configured beans
+- convert `ObjectProvider`/ordered beans into explicit builder inputs
+- Spring AI `ChatModel`/`ToolCallback` is an optional adapter
+- disable Spring AI automatic tool execution when using the engine tool loop
 
-Spring integration은 Spring application 안에서 native bean처럼 사용되는 것이 우선이다.
-protocol endpoint auto-configuration은 protocol별 starter가 명시적으로 추가된 경우에만
-활성화한다.
+The priority for Spring integration is use as native beans within a Spring application. Protocol
+endpoint auto-configuration is enabled only when the starter for that protocol is explicitly
+added.
 
 ### 5.3 Quarkus
 
-- first-class extension으로 `quarkus-agent-framework` runtime과
-  `quarkus-agent-framework-deployment`를 첫 릴리스부터 제공
-- runtime artifact가 `META-INF/quarkus-extension.*` descriptor와 consumer API를 소유
-- deployment artifact가 generated route/tool indexing, native-image hints, recorder/build steps를
-  소유
-- Mutiny `Uni`/`Multi`는 boundary에서 core async/stream contract로 변환
-- build item, recorder, Arc container type은 core API에 노출하지 않음
+- provide the `quarkus-agent-framework` runtime and
+  `quarkus-agent-framework-deployment` as a first-class extension from the first release
+- the runtime artifact owns the `META-INF/quarkus-extension.*` descriptor and consumer API
+- the deployment artifact owns generated route/tool indexing, native-image hints, and
+  recorder/build steps
+- convert Mutiny `Uni`/`Multi` to the core async/stream contracts at the boundary
+- do not expose build items, recorders, or Arc container types in the core API
 
-두 artifact는 `integrations/` 아래 sibling project로 두고 runtime coordinate를 안정적으로
-유지한다. deployment build step가 아직 적어도 Quarkus CLI/platform extension contract는
-생략하지 않는다.
+The two artifacts are sibling projects under `integrations/`, and the runtime coordinate remains
+stable. Even while there are few deployment build steps, do not omit the Quarkus CLI/platform
+extension contract.
 
 ### 5.4 Jakarta EE
 
-- CDI producer/portable extension으로 port와 engine 조립
-- request/application scope와 `SecurityContext`는 container 소유
-- Jakarta REST async response/stream은 protocol binder에서 변환
-- core는 `BeanManager`, `Instance<T>`, transaction API를 참조하지 않음
+- assemble ports and the engine through CDI producers/portable extensions
+- request/application scopes and `SecurityContext` are container-owned
+- convert Jakarta REST asynchronous responses/streams in protocol binders
+- the core does not reference `BeanManager`, `Instance<T>`, or transaction APIs
 
-## 6. Lifecycle과 scope
+## 6. Lifecycle and scope
 
-| 자원 | 소유자 | core 동작 |
+| Resource | Owner | Core behavior |
 | --- | --- | --- |
-| model/MCP HTTP client | 생성한 adapter 또는 host | borrowed client는 close하지 않음 |
-| executor/scheduler | host/container | 저장하지 않거나 명시 lifecycle port로 참조 |
-| session transaction | store adapter/host | state transition 순서만 정의 |
-| telemetry provider/exporter | host bootstrap | semantic events만 발행 |
-| request security context | host binder | 검증된 user/session context만 전달 |
-| engine | application scope | host가 생성·종료 |
-| run/session context | run/session scope | 전역 static 상태 없음 |
+| model/MCP HTTP client | adapter or host that created it | does not close a borrowed client |
+| executor/scheduler | host/container | does not retain it, or references it through an explicit lifecycle port |
+| session transaction | store adapter/host | defines only state transition ordering |
+| telemetry provider/exporter | host bootstrap | emits only semantic events |
+| request security context | host binder | passes only validated user/session context |
+| engine | application scope | created and closed by the host |
+| run/session context | run/session scope | no global static state |
 
-## 7. 직렬화와 native image
+## 7. Serialization and native image
 
-- stable type id + schema version + injected codec registry
-- Java native serialization과 class-name loading 금지
-- codec registry는 instance-scoped, build 후 immutable
-- annotation processor는 workflow route/tool metadata의 기본 생성 경로
-- reflection path는 명시 opt-in이며 metadata 불충분 시 fail-closed
-- framework native-image metadata는 해당 adapter가 소유
+- stable type ID + schema version + injected codec registry
+- prohibit Java native serialization and class-name loading
+- codec registry is instance-scoped and immutable after build
+- annotation processors are the default generation path for workflow route/tool metadata
+- the reflection path is an explicit opt-in and fails closed when metadata is insufficient
+- framework native-image metadata is owned by the corresponding adapter
 
-## 8. 테스트 계층
+## 8. Test layers
 
 1. unit: immutable values, merge rules, state transitions
 2. API contract: provider/store/interceptor/target resolver implementations
 3. golden compatibility: pinned upstream scenarios
-4. wire: SSE/A2A/AG-UI/MCP payload and cancellation
+4. wire: SSE/A2A/AG-UI/MCP payloads and cancellation
 5. framework assembly: plain Java, Spring Boot, Quarkus, Jakarta EE
-6. architecture policy: dependency direction, public package, no framework leakage
+6. architecture policy: dependency direction, public packages, no framework leakage
 
-exact natural language와 exact tool-call ordering은 long-term contract로 삼지 않는다. event ordering,
-state transition, budgets, result shape처럼 관찰 가능한 의미만 고정한다.
+Exact natural language and exact tool-call ordering are not long-term contracts. Only observable
+semantics such as event ordering, state transitions, budgets, and result shapes are fixed.
 
-## 9. 첫 vertical slice
+## 9. First vertical slice
 
-첫 end-to-end slice는 Spring AI나 LangChain4j 위의 wrapper로 만들지 않는다.
+The first end-to-end slice is not a wrapper over Spring AI or LangChain4j.
 
 ```text
 standalone AgentFactory
@@ -244,32 +248,34 @@ standalone AgentFactory
     -> engine-owned session/interceptor/finalization
 ```
 
-provider adapter는 provider request/response/stream/cancellation 변환만 소유한다. SDK의 automatic
-tool loop, memory, middleware, retry runtime을 실행 의미의 기준으로 사용하지 않는다.
+Provider adapters own only the conversion of provider requests, responses, streams, and
+cancellation. The SDK's automatic tool loop, memory, middleware, and retry runtime are not used as
+the reference for execution semantics.
 
-slice acceptance:
+Slice acceptance:
 
-- Spring/Quarkus/Jakarta 없이 standalone sample이 실행됨
-- direct provider adapter를 deterministic fake로 교체해 같은 scenario가 통과
-- model → tool → model 반복을 AgentEngine event로 관찰
-- session save/restore, cancellation, streaming finalization, interceptor order를 engine contract
-  test로 검증
-- provider SDK automatic tool execution은 비활성
+- a standalone sample runs without Spring, Quarkus, or Jakarta
+- the same scenario passes when the direct provider adapter is replaced with a deterministic fake
+- model → tool → model iterations are observable as AgentEngine events
+- engine contract tests verify session save/restore, cancellation, streaming finalization, and
+  interceptor ordering
+- provider SDK automatic tool execution is disabled
 
-Spring AI와 향후 LangChain4j integration은 이 slice 이후 `ModelClient`, `Tool`, MCP, telemetry
-adapter로 추가한다. 동일 contract suite를 통과해야 하며 engine semantics를 대체하지 않는다.
+Spring AI and future LangChain4j integrations are added after this slice as `ModelClient`, `Tool`,
+MCP, and telemetry adapters. They must pass the same contract suite and must not replace engine
+semantics.
 
-## 10. 주요 ADR 후보
+## 10. Major ADR candidates
 
-| ADR | 결정 |
+| ADR | Decision |
 | --- | --- |
-| Async bridge | `CompletionStage`/`Flow.Publisher` cancellation과 framework reactive bridge |
-| API evolution | record/final class 기준과 binary compatibility baseline |
-| Extension values | typed key와 provider extension envelope |
-| Schema | framework-neutral type descriptor와 schema generator SPI |
+| Async bridge | `CompletionStage`/`Flow.Publisher` cancellation and framework reactive bridge |
+| API evolution | record/final class criteria and binary compatibility baseline |
+| Extension values | typed keys and provider extension envelope |
+| Schema | framework-neutral type descriptor and schema generator SPI |
 | State codec | registry freeze, version migration, copy strategy |
 | Execution strategy | host-owned concurrency and structured cancellation |
-| Framework adapters | Quarkus deployment split을 추가하는 증거 |
+| Framework adapters | evidence for adding the Quarkus deployment split |
 
-ADR이 요구사항을 바꿀 수는 없다. 여러 구현이 요구사항을 만족할 때 public API와 운영 trade-off를
-선택하는 데만 사용한다.
+An ADR cannot change a requirement. It is used only to select public APIs and operational
+trade-offs when multiple implementations satisfy a requirement.

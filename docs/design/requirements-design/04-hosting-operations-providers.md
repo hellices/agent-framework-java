@@ -1,12 +1,12 @@
 # Hosting, operations, and provider design
 
-## 1. 범위
+## 1. Scope
 
 - `HOST-001..029`: hosting core and protocol adapters
 - `OPS-001..026`: observability, errors, security, evaluation, packaging
 - `PRV-001..010`: provider/infrastructure adapter policy
 
-## 2. 모듈
+## 2. Modules
 
 ```text
 hosting/agent-framework-hosting-core
@@ -35,11 +35,12 @@ hosting/agent-framework-standalone
   plain-Java batteries-included assembly
 ```
 
-module은 구현 단계에 첫 기능과 함께 추가하며 빈 module을 미리 만들지 않는다.
+Add each module together with its first feature during implementation; do not create empty modules
+in advance.
 
 ## 3. Hosting core
 
-hosting core는 target과 state를 protocol binder에 연결한다.
+The hosting core connects targets and state to protocol binders.
 
 ```text
 validated HostRequest
@@ -50,10 +51,10 @@ validated HostRequest
   -> HostResult
 ```
 
-포함하지 않는 것:
+It does not include:
 
 - HTTP route/status/header
-- auth provider와 security realm
+- auth providers and security realms
 - executor/scheduler
 - transaction manager
 - retry/circuit breaker
@@ -61,72 +62,73 @@ validated HostRequest
 
 ### 3.1 TargetResolver
 
-하나의 비동기 resolver port를 사용한다. instance, `Supplier`, async factory, builder, CDI/Spring
-provider는 convenience adapter로 변환한다. cache policy와 target source는 분리한다.
+Use a single asynchronous resolver port. Convert instances, `Supplier`s, async factories, builders,
+and CDI/Spring providers through convenience adapters. Keep cache policy separate from target
+source.
 
 ### 3.2 Session continuity
 
-- load는 independent snapshot
-- create-on-miss는 key당 한 번
-- service session candidate는 auth 전 untrusted
-- host가 principal/tenant context로 trusted storage key를 도출
-- single-writer coordination과 authorization은 host 책임
+- loads return independent snapshots
+- create-on-miss occurs once per key
+- service session candidates are untrusted before authentication
+- the host derives a trusted storage key from principal and tenant context
+- single-writer coordination and authorization are host responsibilities
 
-workflow는 session cursor를 먼저 restore하고 durable store를 fallback으로 사용한다.
+Workflows restore the session cursor first and use the durable store as a fallback.
 
 ## 4. Protocol adapters
 
-protocol module은 wire DTO와 pure converter를 소유하고 host framework route는 소유하지 않는다.
-framework 애플리케이션이 내부에서 agent를 사용하기 위해 protocol endpoint를 거칠 필요는 없다.
+Protocol modules own wire DTOs and pure converters, but not host-framework routes. Framework
+applications do not need to go through a protocol endpoint to use an agent internally.
 
 ### 4.1 OpenAI Responses
 
-- request parse와 candidate session key extraction 분리
-- default mapping은 agent-owned instructions/tools/sampling override 거부
-- branch pointer와 mutable conversation head 분리
+- separate request parsing from candidate session-key extraction
+- default mapping rejects overrides of agent-owned instructions, tools, and sampling
+- separate branch pointers from mutable conversation heads
 - minimal SSE profile + rich content profile
-- final payload에 tool/reasoning/media 보존
+- preserve tools, reasoning, and media in the final payload
 
 ### 4.2 A2A
 
 - remote agent implements public `Agent` contract
-- local expose helper와 framework binder 분리
+- separate local exposure helpers from framework binders
 - structured service session id
-- continuation token + new user input 동시 사용 거부
-- message/task/artifact lifecycle 분리
-- remote/local cancellation과 A2A cancel request를 task `CANCELED` terminal state로 변환
-- canceled terminal event 뒤 추가 event/artifact emission 금지
+- reject simultaneous use of a continuation token and new user input
+- separate message, task, and artifact lifecycles
+- map remote/local cancellation and A2A cancel requests to the task's terminal `CANCELED` state
+- prohibit additional event or artifact emission after the canceled terminal event
 
 ### 4.3 AG-UI
 
-- request aliases/resume normalization
-- predictive delta vs deterministic snapshot type 분리
-- UI tool payload vs LLM text 분리
-- thread id vs snapshot scope 분리
-- stream completion 뒤 persist
+- request alias and resume normalization
+- separate predictive-delta and deterministic-snapshot types
+- separate UI tool payloads from LLM text
+- separate thread IDs from snapshot scope
+- persist after stream completion
 
 ### 4.4 Foundry
 
-Foundry는 wire surface를 두 artifact로 분리한다.
+Foundry divides its wire surface into two artifacts.
 
-- `protocols/agent-framework-foundry-responses`: Responses request/stream/final payload와
+- `protocols/agent-framework-foundry-responses`: Responses request/stream/final payload and
   continuation mapping
 - `protocols/agent-framework-foundry-invocations`: platform invocation envelope, hosted context,
   invocation status/result mapping
 
-두 surface는 hosting-core use case를 재사용하지만 wire DTO와 endpoint contract를 공유하거나
-자동 변환하지 않는다. hosted path는 platform context를 검증하고 local path는 explicit
-configuration으로만 활성화한다.
+The two surfaces reuse hosting-core use cases but do not share or automatically convert wire DTOs
+or endpoint contracts. The hosted path validates platform context, while the local path is enabled
+only through explicit configuration.
 
 ### 4.5 Other hosting
 
-DevUI와 channels는 optional protocol/adapter artifact다. local/dev mode는 authenticated hosted
-header만으로 승격되지 않는다.
+DevUI and channels are optional protocol/adapter artifacts. An authenticated hosted header alone
+does not elevate a request to local or development mode.
 
 ## 5. Observability
 
-OTel GenAI semantic convention을 canonical vocabulary로 사용한다. core API는 OTel SDK,
-Micrometer, Spring Observation 타입을 노출하지 않는다.
+Use the OTel GenAI semantic conventions as the canonical vocabulary. Core APIs do not expose OTel
+SDK, Micrometer, or Spring Observation types.
 
 ```text
 engine semantic event
@@ -135,34 +137,34 @@ engine semantic event
   -> Micrometer bridge (Spring) / Quarkus OTel / Jakarta provider
 ```
 
-원칙:
+Principles:
 
-- bootstrap과 per-agent/workflow wrapper 분리
+- separate bootstrap from per-agent and per-workflow wrappers
 - prompt/tool argument/result capture default off
-- logging과 tracing 분리
-- approved HTTPS origin에만 feature telemetry
+- separate logging from tracing
+- send feature telemetry only to approved HTTPS origins
 - application-scoped sticky disable
-- 같은 operation 중복 계측 금지
+- do not instrument the same operation more than once
 - category-level enable/disable
 
 ## 6. Errors, cancellation, resilience, security
 
-host가 type/category로 error를 매핑한다.
+The host maps errors by type and category.
 
 - validation/programming: built-in Java exceptions
 - provider/transport/checkpoint: bounded-context exception
-- timeout: result/status envelope에 남김
-- cancellation: failure로 번역하지 않음
+- timeout: retain it in the result/status envelope
+- cancellation: do not translate it into a failure
 
-process tree/remote task cleanup은 resource owner가 수행한다. persistent executor는 session-owned
-resource이며 host가 lifecycle을 제공한다.
+The resource owner cleans up process trees and remote tasks. A persistent executor is a
+session-owned resource whose lifecycle is provided by the host.
 
-retry, timeout policy, circuit breaker, rate limiting은 host adapter가 소유한다. engine은
-idempotency/cancellation signal만 제공한다.
+Host adapters own retries, timeout policies, circuit breakers, and rate limiting. The engine
+provides only idempotency and cancellation signals.
 
-shell/tool policy와 allow/deny list는 security boundary가 아니다. unsafe bypass에는 explicit
-acknowledgement/capability가 필요하다. declarative workflow의 state path는 allowlisted root에서
-정규화하고 reflective member access와 path traversal을 기본 거부한다.
+Shell/tool policies and allow/deny lists are not security boundaries. Unsafe bypasses require
+explicit acknowledgement or capability. Normalize declarative-workflow state paths against an
+allowlisted root, and reject reflective member access and path traversal by default.
 
 ## 7. Evaluation and compatibility
 
@@ -183,7 +185,7 @@ test levels:
 
 ## 8. Provider adapters
 
-각 provider는 별도 artifact다.
+Each provider is a separate artifact.
 
 - core has no provider SDK dependency
 - no default all-providers bundle
@@ -192,15 +194,15 @@ test levels:
 - hosting/protocol independent from provider
 - storage/memory/governance separate integrations
 
-provider adapter public facade:
+Provider adapter public facade:
 
 - `ModelClient` implementation
 - typed options/capabilities
 - conversion utilities where justified
 - maturity and compatibility metadata
 
-새 provider는 core modification, static registry, automatic `ServiceLoader` discovery를 요구하지
-않는다. host builder/DI가 명시적으로 adapter instance를 선택한다.
+New providers require no core modification, static registry, or automatic `ServiceLoader`
+discovery. The host builder or DI container explicitly selects an adapter instance.
 
 ## 9. Maturity and packaging
 
@@ -213,7 +215,7 @@ provider adapter public facade:
 
 ## 10. Framework-neutral lifecycle
 
-| 관심사 | port/owner |
+| Concern | Port/owner |
 | --- | --- |
 | target creation/cache | `TargetResolver` + host |
 | session authorization | host binder |
@@ -224,24 +226,25 @@ provider adapter public facade:
 | retry/rate limit | host |
 | release/maturity | repository policy |
 
-## 11. 중복 기능 단일 소유자
+## 11. Single ownership of overlapping features
 
-framework와 provider가 같은 이름의 기능을 제공해도 한 실행 경로에는 소유자가 하나뿐이다.
+Even when a framework and provider offer features with the same name, each execution path has
+exactly one owner.
 
-| 관심사 | canonical owner | adapter 역할 |
+| Concern | Canonical owner | Adapter role |
 | --- | --- | --- |
-| agent/model/tool 반복 | AgentEngine | framework automatic execution 비활성 |
-| MCP connection/transport/auth | 선택된 MCP adapter | direct SDK 또는 Spring AI 중 하나 |
-| MCP collision/sampling/task semantics | Agent Framework MCP integration | connection 위 의미 적용 |
-| durable session | SessionStore port + adapter | Spring AI ChatMemory는 context projection만 |
-| application retry/circuit breaker | host | core는 암묵 retry 없음 |
-| semantic telemetry events | Agent Framework | Micrometer/OTel exporter로 변환 |
-| exporter/provider lifecycle | host framework | core가 bootstrap하지 않음 |
-| request auth/tenant | host binder | 검증된 context만 core에 전달 |
+| agent/model/tool loop | AgentEngine | disable framework automatic execution |
+| MCP connection/transport/auth | selected MCP adapter | either the direct SDK or Spring AI |
+| MCP collision/sampling/task semantics | Agent Framework MCP integration | apply semantics above the connection |
+| durable session | SessionStore port + adapter | Spring AI ChatMemory is context projection only |
+| application retry/circuit breaker | host | core has no implicit retries |
+| semantic telemetry events | Agent Framework | convert to Micrometer/OTel exporters |
+| exporter/provider lifecycle | host framework | core does not bootstrap it |
+| request auth/tenant | host binder | pass only validated context to core |
 
-하나만 선택돼야 하는 같은 concern의 adapter 후보가 둘 이상이면 classpath 순서로 임의 선택하지
-않고 명시 설정 또는 user bean을 요구한다. 여러 named model은 함께 등록할 수 있으며 default가
-없는 unqualified model 선택만 실패한다.
+When multiple adapter candidates exist for a concern that requires exactly one selection, do not
+choose arbitrarily by classpath order; require explicit configuration or a user bean. Multiple
+named models may be registered together; only unqualified model selection without a default fails.
 
 ## 12. Tests
 
@@ -256,13 +259,13 @@ framework와 provider가 같은 이름의 기능을 제공해도 한 실행 경�
 - provider common contract and option rejection
 - BOM/maturity/installability policy
 
-## 13. 현재 구현
+## 13. Current implementation
 
-hosting/protocol/provider/telemetry/evaluation production module은 아직 없다. packaging/BOM과
-dependency policy에 해당하는 `OPS-023`·`OPS-024` 일부만 `partial`이고 `implemented` 항목은
-없다.
+No hosting, protocol, provider, telemetry, or evaluation production modules exist yet. Only parts
+of `OPS-023` and `OPS-024`, covering packaging/BOM and dependency policy, are `partial`; no item is
+`implemented`.
 
-## 14. 요구사항 매핑
+## 14. Requirements mapping
 
-`HOST`, `OPS`, `PRV`의 canonical rows는
-[Requirements traceability matrix](requirements-traceability-matrix.md)에 있다.
+The canonical rows for `HOST`, `OPS`, and `PRV` are in the
+[Requirements traceability matrix](requirements-traceability-matrix.md).

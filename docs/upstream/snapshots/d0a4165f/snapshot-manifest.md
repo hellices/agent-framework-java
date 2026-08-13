@@ -1,8 +1,8 @@
 # Microsoft Agent Framework Upstream Snapshot
 
-## 식별 정보
+## Identification
 
-| 항목 | 값 |
+| Item | Value |
 | --- | --- |
 | Repository | `https://github.com/microsoft/agent-framework.git` |
 | Branch at capture | `main` |
@@ -15,14 +15,14 @@
 | Git archive SHA-256 | `73bf466a3df507a7af15355c32c37526fd4aad8a30de569fe34664c11237d45e` |
 | Tracked files | 4,876 |
 
-Git archive checksum은 다음 명령의 tar byte stream을 기준으로 한다.
+The Git archive checksum is taken over the tar byte stream of the following command.
 
 ```bash
 git archive --format=tar d0a4165f170193ba1d026a259af40d35bb7eaefe \
   | shasum -a 256
 ```
 
-소스는 다음 명령으로 재현한다.
+The source is reproduced with the following commands.
 
 ```bash
 git clone --no-checkout --filter=blob:none \
@@ -31,28 +31,27 @@ git -C agent-framework-upstream checkout --detach \
   d0a4165f170193ba1d026a259af40d35bb7eaefe
 ```
 
-## 저장소 구성
+## Repository composition
 
-| 영역 | 추적 파일 수 | 역할 |
+| Area | Tracked files | Role |
 | --- | ---: | --- |
-| `dotnet/` | 2,941 | .NET core, workflow, harness, hosting, protocol 및 provider 구현 |
-| `python/` | 1,778 | Python core, orchestration, hosting 및 provider 구현 |
-| `docs/` | 68 | Repository specification, decision 및 feature 문서 |
-| `declarative-agents/` | 19 | Declarative agent schema와 관련 자산 |
-| `.github/` | 58 | CI, release와 repository automation |
-| 기타 root 파일 | 12 | License, contribution, security와 project metadata |
+| `dotnet/` | 2,941 | .NET core, workflow, harness, hosting, protocol, and provider implementations |
+| `python/` | 1,778 | Python core, orchestration, hosting, and provider implementations |
+| `docs/` | 68 | Repository specification, decision, and feature documents |
+| `declarative-agents/` | 19 | Declarative agent schema and related assets |
+| `.github/` | 58 | CI, release, and repository automation |
+| Other root files | 12 | License, contribution, security, and project metadata |
 
-## 상위 버전
+## Top-level versions
 
 ### .NET
 
-`dotnet/nuget/nuget-package.props`의 공통 `VersionPrefix`는 `1.17.0`이다. Snapshot은
-`dotnet-1.17.0` tag 이후 23개 commit 상태이므로 `1.17.0` 릴리스와 동일하다고 간주하지
-않는다.
+The common `VersionPrefix` in `dotnet/nuget/nuget-package.props` is `1.17.0`. The snapshot is 23
+commits past the `dotnet-1.17.0` tag, so it is not treated as identical to the `1.17.0` release.
 
 ### Python
 
-| Package | Version | Version 상태 |
+| Package | Version | Version status |
 | --- | --- | --- |
 | `agent-framework-core` | `1.13.0` | stable version |
 | `agent-framework-openai` | `1.12.0` | stable version |
@@ -90,25 +89,28 @@ git -C agent-framework-upstream checkout --detach \
 | `agent-framework-redis` | `1.0.0b260730` | beta version |
 | `agent-framework-tools` | `1.0.0b260730` | beta version |
 
-여기서 상태는 package version 문자열의 PEP 440 prerelease marker를 기준으로 한다. Package
-metadata classifier나 개별 기능 안정성은 기능 매트릭스에서 별도로 판단한다.
+Status here is based on the PEP 440 prerelease marker of the package version string. Package
+metadata classifiers and the stability of individual features are judged separately in the feature
+matrix.
 
-## 분석 기준
+## Analysis criteria
 
-- 이 commit 이후 추가된 기능은 현재 Java 설계 기준에 포함하지 않는다.
-- 현재 commit에서 제거되었지만 외부 문서에 남아 있는 기능은 미구현 또는 제거 상태로
-  기록한다.
-- Public API 존재만으로 기능 완성을 판단하지 않고 실제 실행 경로와 테스트를 확인한다.
-- Sample은 기능 발견에 사용하지만 production contract의 근거로 단독 사용하지 않는다.
-- Provider 전용 기능을 core 공통 기능으로 일반화하지 않는다.
-- Experimental, alpha, beta 및 stable 상태를 하나의 지원 등급으로 합치지 않는다.
-- 코드 인용은 이 full commit의 GitHub permalink를 사용한다.
+- Features added after this commit are not part of the current Java design baseline.
+- A feature that was removed at the current commit but still appears in external documentation is
+  recorded as not implemented or as removed.
+- Feature completeness is not judged from the existence of a public API alone; the actual execution
+  path and its tests are checked.
+- Samples are used for feature discovery but are not used on their own as evidence of a production
+  contract.
+- Provider-only features are not generalized into common core features.
+- The experimental, alpha, beta, and stable states are not merged into a single support level.
+- Code citations use GitHub permalinks at this full commit.
 
-## Snapshot 변경 절차
+## Snapshot change procedure
 
-1. 새 `main` commit과 tree hash를 기록한다.
-2. Git archive SHA-256과 파일 수를 계산한다.
-3. Package version 및 안정성 변화를 기록한다.
-4. 기존 snapshot과 source tree 및 public API 차이를 산출한다.
-5. 기능 매트릭스에 추가·변경·제거 상태를 반영한다.
-6. Java 지원 목표와 구현 영향도를 별도 delta 문서에서 승인한다.
+1. Record the new `main` commit and tree hash.
+2. Compute the Git archive SHA-256 and the file counts.
+3. Record package version and stability changes.
+4. Derive the source tree and public API differences against the existing snapshot.
+5. Reflect the added, changed, and removed states in the feature matrix.
+6. Approve the Java support target and the implementation impact in a separate delta document.
