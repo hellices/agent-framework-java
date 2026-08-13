@@ -35,6 +35,20 @@ class BuildContractPolicyTest {
   private static final String TEST_CONVENTION =
       "build-logic/src/main/kotlin/agentframework.test-conventions.gradle.kts";
 
+  private static final String POLICY_BUILD_SCRIPT = "build-tools/harness-policy/build.gradle.kts";
+
+  private static final String POLICY_INPUTS =
+      "build-logic/src/main/kotlin/com/microsoft/agentframework/build/logic/"
+          + "RepositoryPolicyInputs.kt";
+
+  /**
+   * Build-output globs that remove more than project output: the first two also remove the policy
+   * sources under a {@code build} package, and the last two also remove {@code docs/build} and
+   * {@code docs/*}{@code /build}, where a canonical document may live.
+   */
+  private static final List<String> OVERREACHING_OUTPUT_GLOBS =
+      List.of("\"**/build/**\"", "\"build/**/**\"", "\"*/build/**\"", "\"*/*/build/**\"");
+
   private static final List<String> FORBIDDEN_MAVEN_NAMES =
       List.of("pom.xml", "mvnw", "mvnw.cmd", ".mvn");
 
@@ -107,6 +121,32 @@ class BuildContractPolicyTest {
     assertThat(quality).contains("googleJavaFormat(");
     assertThat(javaLibrary).doesNotContain("spotless");
     assertThat(testConvention).doesNotContain("spotless");
+  }
+
+  @Test
+  void policyInputsExcludeProjectOutputByLocationOnly() throws IOException {
+    String script = read(POLICY_BUILD_SCRIPT);
+
+    assertThat(RepositoryPaths.root().resolve(POLICY_INPUTS))
+        .as("The shared declaration of the files the policy tasks read")
+        .isRegularFile();
+    assertThat(script)
+        .withFailMessage(
+            "%s must declare its inputs through RepositoryPolicyInputs. A copy of the exclusion"
+                + " rules in the project script is exactly the duplication build-logic exists to"
+                + " prevent.",
+            POLICY_BUILD_SCRIPT)
+        .contains("RepositoryPolicyInputs.repositoryPolicySources(project)");
+    for (String glob : OVERREACHING_OUTPUT_GLOBS) {
+      assertThat(script)
+          .withFailMessage(
+              "%s must not exclude %s from the declared policy inputs. Matching a build directory"
+                  + " by name or by depth also drops the policy sources under a build package and"
+                  + " every Markdown file under docs/build, so those edits would leave the policy"
+                  + " tasks UP-TO-DATE.",
+              POLICY_BUILD_SCRIPT, glob)
+          .doesNotContain(glob);
+    }
   }
 
   @Test

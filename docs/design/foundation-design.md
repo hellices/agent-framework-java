@@ -1,62 +1,66 @@
-# Agent Framework for Java 기초 설계
+# Agent Framework for Java Foundation Design
 
-- 상태: 승인
-- 승인일: 2026-08-10
-- 범위: 프로젝트의 아키텍처 방향, 모듈 경계, 초기 개발 순서
+- Status: approved
+- Approval date: 2026-08-10
+- Scope: the architectural direction of the project, its module boundaries, and the initial development order
 
-## 1. 목적
+## 1. Goal
 
-Microsoft Agent Framework(MAF)의 핵심 실행 의미론을 Java에서 제공한다. Java 구현은
-특정 애플리케이션 프레임워크에 종속되지 않는 임베디드 에이전트 실행 엔진으로 제공하며,
-Spring Boot를 포함한 여러 호스트 환경에서 조립할 수 있어야 한다.
+Provide the core execution semantics of the Microsoft Agent Framework (MAF) in Java. The Java
+implementation is delivered as an embeddable agent execution engine that is not tied to any
+particular application framework, and it must be composable in several host environments, including
+Spring Boot.
 
-이 문서는 상세 구현 작업표가 아니다. 구현을 시작하기 전에 유지해야 할 책임 경계,
-의존성 방향, MVP 범위와 검증 순서를 확정한다.
+This document is not a detailed implementation worksheet. It settles the responsibility boundaries,
+the dependency direction, the MVP scope, and the verification order that must hold before
+implementation begins.
 
-## 2. 조사에서 확인한 전제
+## 2. Premises confirmed by the investigation
 
-MAF는 모델 호출 래퍼보다 넓은 개념이다. Agent, session, tool execution loop,
-middleware, workflow와 hosting protocol을 포함하는 실행 모델을 제공한다.
+MAF is a broader concept than a model invocation wrapper. It provides an execution model that covers
+agents, sessions, the tool execution loop, middleware, workflows, and hosting protocols.
 
-Spring AI 2.x는 `ChatModel`, `ChatClient`, `ToolCallback`, Advisor, `ChatMemory`,
-MCP와 모델 공급자 통합을 제공한다. 그러나 MAF의 session 및 workflow runtime과 동일한
-상위 실행 의미론을 제공하지 않는다.
+Spring AI 2.x provides `ChatModel`, `ChatClient`, `ToolCallback`, Advisor, `ChatMemory`, MCP, and
+model provider integrations. It does not, however, provide the same higher-level execution semantics
+as MAF's session and workflow runtime.
 
-따라서 두 프레임워크를 직접 포개면 다음 충돌이 발생한다.
+Stacking the two frameworks directly therefore produces the following conflicts.
 
-- Java 엔진과 Spring AI `ToolCallingAdvisor`가 도구 실행 루프를 중복 소유할 수 있다.
-- MAF의 영속 가능한 session과 Spring AI의 문맥 유지용 `ChatMemory`는 수명과 책임이 다르다.
-- Micrometer와 OpenTelemetry 계측을 독립적으로 적용하면 중복 span이 생성될 수 있다.
-- Spring AI API 변화가 코어 실행 계약에 전파될 수 있다.
+- The Java engine and Spring AI's `ToolCallingAdvisor` can both own the tool execution loop.
+- MAF's persistable session and Spring AI's `ChatMemory` for context retention differ in lifetime and responsibility.
+- Applying Micrometer and OpenTelemetry instrumentation independently can create duplicate spans.
+- Changes to the Spring AI API can propagate into the core execution contract.
 
-## 3. 검토한 접근법
+## 3. Considered approaches
 
-### 3.1 MAF API 직역
+### 3.1 A literal port of the MAF API
 
-.NET 또는 Python 공개 API를 Java 문법으로 옮기는 방식이다. 표면적인 친숙함은 얻지만,
-두 원본 구현의 차이와 변경을 계속 추적해야 하며 Java 생태계의 실행·비동기 관습을
-왜곡할 가능성이 높다.
+This approach transposes the .NET or Python public API into Java syntax. It gains surface
+familiarity, but it requires continuously tracking the differences and changes between the two
+original implementations, and it is likely to distort the execution and asynchrony conventions of
+the Java ecosystem.
 
-### 3.2 Spring AI 기반 확장
+### 3.2 An extension built on Spring AI
 
-Spring AI를 실행 기반으로 삼고 그 위에 MAF 형태의 API를 제공하는 방식이다. Spring
-애플리케이션에서는 빠르게 시작할 수 있지만 agent loop, session과 workflow의 소유권이
-불분명해지고 Spring 밖에서 재사용하기 어렵다.
+This approach takes Spring AI as the execution foundation and offers a MAF-shaped API on top of it.
+It allows a fast start inside a Spring application, but ownership of the agent loop, sessions, and
+workflows becomes unclear, and reuse outside Spring is difficult.
 
-### 3.3 임베디드 AgentEngine과 선택적 어댑터
+### 3.3 An embeddable AgentEngine with optional adapters
 
-프레임워크 중립적인 API와 실행 상태 머신을 만들고 공급자 및 Spring 통합을 별도
-artifact로 제공한다. 초기 모듈 수는 늘지만 책임과 의존성 방향이 명확하며 MAF 호환성과
-Java 생태계 통합을 함께 유지할 수 있다.
+This approach builds a framework-neutral API and execution state machine and delivers the provider
+and Spring integrations as separate artifacts. The initial module count grows, but the
+responsibilities and the dependency direction are clear, and MAF compatibility and Java ecosystem
+integration can be maintained together.
 
-**결정:** 3.3을 채택한다.
+**Decision:** adopt 3.3.
 
-## 4. 핵심 아키텍처 결정
+## 4. Core architectural decisions
 
-### 4.1 Runtime이 아닌 AgentEngine
+### 4.1 An AgentEngine, not a runtime
 
-프로젝트의 코어를 애플리케이션 런타임으로 만들지 않는다. `AgentEngine`은 모델 호출,
-도구 실행과 session 변경을 일관된 순서로 진행하는 임베디드 상태 머신이다.
+The core of the project is not built as an application runtime. `AgentEngine` is an embeddable state
+machine that advances model invocation, tool execution, and session changes in a consistent order.
 
 ```text
 Application
@@ -70,93 +74,99 @@ Model / Tool / Session / Telemetry ports
 Provider and infrastructure adapters
 ```
 
-`AgentEngine`이 소유하는 책임은 다음과 같다.
+`AgentEngine` owns the following responsibilities.
 
-- agent run과 turn의 상태 전이
-- 모델 응답과 도구 호출 결과의 연결
-- 도구 반복 횟수, 중단, 승인과 실패 전파 정책
-- session 상태 변경 규칙
-- 동기 및 스트리밍 실행에서 관찰 가능한 이벤트 순서
-- 향후 workflow graph의 결정적 상태 전이
+- the state transitions of an agent run and of a turn
+- the linkage between model responses and tool call results
+- the policy for tool iteration counts, interruption, approval, and failure propagation
+- the rules for session state changes
+- the observable event order in synchronous and streaming execution
+- the deterministic state transitions of the future workflow graph
 
-호스트가 소유하는 책임은 다음과 같다.
+The host owns the following responsibilities.
 
-- DI와 객체 생명주기
-- 스레드 풀, 스케줄러와 연결 풀
-- HTTP 서버와 endpoint
-- 설정, profile과 secret 공급
-- 인증, 권한과 security context
-- 트랜잭션
-- 재시도, timeout, rate limit과 circuit breaker의 운영 설정
-- telemetry exporter와 애플리케이션 시작·종료
+- DI and object lifecycle
+- thread pools, schedulers, and connection pools
+- the HTTP server and its endpoints
+- configuration, profiles, and secret supply
+- authentication, authorization, and the security context
+- transactions
+- the operational settings for retry, timeout, rate limiting, and circuit breaking
+- telemetry exporters and application startup and shutdown
 
-코어는 자체 `ExecutorService`, scheduler, 서버, 전역 registry, shutdown hook 또는 DI
-container를 생성하지 않는다. 필요한 실행 자원과 포트 구현은 생성자를 통해 전달받는다.
+The core does not create its own `ExecutorService`, scheduler, server, global registry, shutdown
+hook, or DI container. The execution resources and port implementations it needs are passed in
+through the constructor.
 
-### 4.2 확장 지점
+### 4.2 Extension points
 
-MAF 호환 동작에 필요한 실행 전후 개입은 유지하되 범용 애플리케이션 middleware를
-재구현하지 않는다. 코어는 책임이 명확한 typed interceptor SPI만 제공한다.
+The pre- and post-execution intervention that MAF-compatible behavior requires is retained, but
+general-purpose application middleware is not reimplemented. The core provides only a typed
+interceptor SPI with clear responsibilities.
 
 - agent run interceptor
 - model call interceptor
 - tool call interceptor
 - session operation interceptor
 
-인터셉터는 요청·응답 검사와 변환, 실행 중단, 오류 관찰과 명시적 실행 context 전달만
-담당한다. DI, transaction, security, HTTP filtering과 component scanning은 담당하지
-않는다.
+An interceptor is responsible only for inspecting and transforming requests and responses,
+interrupting execution, observing errors, and passing an explicit execution context. It is not
+responsible for DI, transactions, security, HTTP filtering, or component scanning.
 
-Spring 통합 모듈은 interceptor Bean을 순서대로 수집해 엔진에 전달한다. Spring AI
-Advisor를 이 SPI로 일반 변환하지 않는다. Advisor는 `ChatClient` 호출 모델에 묶여 있어
-agent, session, tool과 workflow 전체의 의미를 표현할 수 없기 때문이다.
+The Spring integration module collects interceptor beans in order and passes them to the engine. A
+Spring AI Advisor is not generically converted into this SPI. An Advisor is bound to the
+`ChatClient` invocation model and therefore cannot express the full semantics of agents, sessions,
+tools, and workflows.
 
-### 4.3 Spring 및 Spring AI 통합
+### 4.3 Spring and Spring AI integration
 
-Spring Boot는 실제 호스트 런타임으로 사용한다. Starter가 `AgentEngine`, port 구현과
-interceptor를 Bean으로 조립하되 코어는 `ApplicationContext`를 참조하지 않는다.
+Spring Boot is used as an actual host runtime. The starter composes `AgentEngine`, the port
+implementations, and the interceptors as beans, while the core never references
+`ApplicationContext`.
 
-Spring AI는 필수 의존성이 아니다. 코어 계약이 안정된 뒤 다음 기능만 선택적으로
-연결한다.
+Spring AI is not a required dependency. Only the following capabilities are connected optionally,
+after the core contract is stable.
 
-- `ChatModel`을 model client port로 변환
-- `ToolCallback`과 tool provider 변환
-- MCP tool discovery와 호출 연결
-- Micrometer observation을 코어 trace context에 연결
+- converting `ChatModel` into the model client port
+- converting `ToolCallback` and the tool provider
+- connecting MCP tool discovery and invocation
+- connecting Micrometer observation to the core trace context
 
-엔진이 도구 루프를 소유하는 경로에서는 Spring AI의 자동 도구 실행을 비활성화한다.
-`ChatMemory`는 session 저장소가 아닌 선택적 단기 문맥 투영으로만 사용할 수 있다.
+On the paths where the engine owns the tool loop, Spring AI's automatic tool execution is disabled.
+`ChatMemory` may be used only as an optional short-term context projection, never as the session
+store.
 
-### 4.4 Session 소유권
+### 4.4 Session ownership
 
-`AgentSession`이 영속 가능한 에이전트 상태의 단일 기준이다. 공급자 conversation ID와
-Spring AI conversation ID는 session의 내부 metadata일 뿐 권한 경계나 외부 식별자로
-사용하지 않는다.
+`AgentSession` is the single source of truth for persistable agent state. A provider conversation ID
+and a Spring AI conversation ID are merely internal session metadata and are not used as an
+authorization boundary or an external identifier.
 
-Session 저장소 구현은 낙관적 동시성 제어, tenant 및 사용자 소유권, 만료와 직렬화 버전을
-다룰 수 있어야 한다. 저장 기술과 트랜잭션은 호스트 및 infrastructure adapter가
-결정한다.
+A session store implementation must be able to handle optimistic concurrency control, tenant and
+user ownership, expiration, and the serialization version. The storage technology and the
+transactions are decided by the host and the infrastructure adapter.
 
-### 4.5 관찰성
+### 4.5 Observability
 
-코어의 canonical telemetry 모델은 OpenTelemetry GenAI semantic convention을 따른다.
-Agent run, model call, tool call과 session operation은 구분된 관찰 단위다.
+The core's canonical telemetry model follows the OpenTelemetry GenAI semantic convention. An agent
+run, a model call, a tool call, and a session operation are distinct units of observation.
 
-Spring 통합에서는 Micrometer Observation을 동일 trace context에 연결하며 동일 작업을
-코어와 Spring에서 각각 계측하지 않는다. Prompt, tool argument와 결과 기록은 민감정보
-노출을 막기 위해 기본 비활성화한다.
+In the Spring integration, Micrometer Observation is connected to the same trace context, and the
+same operation is not instrumented separately by the core and by Spring. Recording prompts, tool
+arguments, and results is disabled by default to prevent the exposure of sensitive data.
 
-## 5. Monorepo 결정
+## 5. Monorepo decision
 
-하나의 저장소에서 여러 artifact를 관리하는 multi-project monorepo를 사용한다.
-API 변경과 모든 adapter의 contract test를 한 변경 단위로 검증하기 위해서다.
+A multi-project monorepo that manages several artifacts in one repository is used. The reason is to
+verify an API change and the contract tests of every adapter as a single unit of change.
 
-빌드 도구는 Gradle Kotlin DSL을 사용한다. 이 결정은 `gradle-arc-foundation` 브랜치의
-Gradle Kotlin DSL 및 Java ARC Foundation 설계에서 확정했으며, 초기 초안의 Maven 전제를
-대체한다. 해당 빌드 구현과 설계 문서는 `arc-java-build` 신뢰 실행 게이트를 통과한 뒤
-`main`에 반영하며, 그때 이 저장소의 `docs/design/` 구조로 옮긴다.
+The build tool is Gradle Kotlin DSL. This decision was settled by the Gradle Kotlin DSL and Java ARC
+Foundation design on the `gradle-arc-foundation` branch, and it replaces the Maven premise of the
+initial draft. That build implementation and its design document are merged into `main` after they
+pass the `arc-java-build` trusted execution gate, at which point they move into the `docs/design/`
+structure of this repository.
 
-초기 목표 구조는 다음과 같다.
+The initial target structure is as follows.
 
 ```text
 agent-framework-java/
@@ -178,145 +188,148 @@ agent-framework-java/
     └── spring-boot-agent
 ```
 
-이 구조는 최종 디렉터리를 미리 모두 생성한다는 의미가 아니다. 각 기능을 구현하는 단계에
-필요한 모듈만 추가한다. Workflow, A2A, AG-UI와 standalone host 모듈은 초기 저장소에
-빈 모듈로 만들지 않는다.
+This structure does not mean that every final directory is created up front. Only the modules a
+given feature implementation step needs are added. The workflow, A2A, AG-UI, and standalone host
+modules are not created as empty modules in the initial repository.
 
-### 5.1 의존성 규칙
+### 5.1 Dependency rules
 
-- API는 외부 애플리케이션 프레임워크에 의존하지 않는다.
-- Engine은 API에만 의존하며 Spring에 의존하지 않는다.
-- Provider 및 integration 모듈은 공개 port를 구현하고 엔진 내부 구현을 참조하지 않는다.
-- Spring Boot autoconfigure가 조립을 담당하며 코어가 starter를 역참조하지 않는다.
-- Sample은 제품 artifact에서 참조하지 않는다.
-- Compatibility test는 공개 API를 통해서만 제품 동작을 검증한다.
+- The API does not depend on an external application framework.
+- The engine depends only on the API and does not depend on Spring.
+- Provider and integration modules implement public ports and do not reference engine internals.
+- Spring Boot autoconfigure is responsible for composition, and the core never references a starter in return.
+- Samples are not referenced from a product artifact.
+- Compatibility tests verify product behavior only through the public API.
 
-### 5.2 릴리스 규칙
+### 5.2 Release rules
 
-초기에는 모든 공개 artifact를 하나의 프로젝트 버전으로 원자적 릴리스한다. 사용자는 BOM을
-통해 호환 버전을 가져온다. 모듈별 독립 버전은 실제 릴리스 주기와 호환성 요구가 분리된
-증거가 생긴 후에만 검토한다.
+Initially, every public artifact is released atomically under a single project version. Users obtain
+compatible versions through the BOM. Independent per-module versions are considered only after there
+is evidence that the actual release cadence and the compatibility requirements have diverged.
 
-## 6. 초기 제품 범위
+## 6. Initial product scope
 
-### 6.1 MVP에 포함
+### 6.1 Included in the MVP
 
-- 단일 agent 실행
-- 일반 응답과 스트리밍 응답
-- function tool 실행 루프
-- session 저장 및 복원
-- typed interceptor
-- OpenAI-compatible 또는 Azure OpenAI 계열 provider 하나
-- MCP Java SDK 직접 연동
-- OpenTelemetry 관찰성
-- Spring Boot에서 엔진을 조립하는 최소 starter
-- standalone 및 Spring Boot sample
+- single agent execution
+- ordinary responses and streaming responses
+- the function tool execution loop
+- session persistence and restoration
+- typed interceptors
+- one OpenAI-compatible or Azure OpenAI family provider
+- direct integration with the MCP Java SDK
+- OpenTelemetry observability
+- a minimal starter that composes the engine in Spring Boot
+- standalone and Spring Boot samples
 
-### 6.2 MVP에서 제외
+### 6.2 Excluded from the MVP
 
-- graph workflow와 durable checkpoint
-- multi-agent handoff, group chat과 orchestration
-- harness, compaction, background task와 file memory
-- A2A, AG-UI와 OpenAI-compatible hosting endpoint
-- 자체 애플리케이션 서버
-- 자체 DI, transaction, security와 resilience framework
-- Spring AI를 통한 자동 도구 실행
+- graph workflows and durable checkpoints
+- multi-agent handoff, group chat, and orchestration
+- harness, compaction, background tasks, and file memory
+- A2A, AG-UI, and the OpenAI-compatible hosting endpoint
+- an application server of its own
+- DI, transaction, security, and resilience frameworks of its own
+- automatic tool execution through Spring AI
 
-Spring AI adapter 자체도 코어 계약과 직접 provider vertical slice가 안정된 후 진행한다.
-이 순서는 Spring AI 통합을 포기하는 것이 아니라 코어 계약이 외부 프레임워크에 끌려가지
-않도록 검증하는 장치다.
+The Spring AI adapter itself also proceeds only after the core contract and the direct provider
+vertical slice are stable. This order does not abandon the Spring AI integration; it is the device
+that verifies that the core contract is not dragged along by an external framework.
 
-## 7. 기초 개발 순서
+## 7. Foundation development order
 
-### 단계 0: 호환성 기준 확정
+### Stage 0: settle the compatibility baseline
 
-- .NET과 Python 중 기능별 기준 구현을 명시한다.
-- 일반 응답, 단일 도구, 연속 도구, 도구 실패, session 복원과 스트리밍 취소를 golden
-  scenario로 정의한다.
-- API 이름보다 입력, 출력 이벤트, 상태 변화와 오류의 관찰 가능한 동작을 비교한다.
+- State the reference implementation, .NET or Python, for each capability.
+- Define ordinary responses, a single tool, consecutive tools, tool failure, session restoration, and streaming cancellation as
+  golden scenarios.
+- Compare the observable behavior of inputs, output events, state changes, and errors rather than API names.
 
-종료 조건은 동일 scenario에서 Java 구현이 만들어야 할 상태 변화와 이벤트 순서를
-설명할 수 있는 것이다.
+The exit condition is being able to explain the state changes and event order that the Java
+implementation must produce for the same scenarios.
 
-### 단계 1: API와 결정적 AgentEngine
+### Stage 1: the API and a deterministic AgentEngine
 
-- 메시지, content, tool call/result, usage와 종료 원인의 중립 모델을 정의한다.
-- 모델, 도구, session 저장소와 telemetry port의 최소 계약을 정의한다.
-- 외부 LLM 없이 동작하는 deterministic fake provider로 기본 turn을 검증한다.
+- Define the neutral model for messages, content, tool calls and results, usage, and the finish reason.
+- Define the minimal contracts for the model, tool, session store, and telemetry ports.
+- Verify a basic turn with a deterministic fake provider that works without an external LLM.
 
-종료 조건은 fake provider만으로 일반 응답과 tool loop를 반복 재현할 수 있는 것이다.
+The exit condition is being able to reproduce an ordinary response and the tool loop repeatedly with
+the fake provider alone.
 
-### 단계 2: Session, 스트리밍과 MCP
+### Stage 2: sessions, streaming, and MCP
 
-- 버전이 있는 session 직렬화와 복원을 추가한다.
-- 취소, timeout 전파와 스트리밍 이벤트 순서를 검증한다.
-- MCP Java SDK를 tool port에 직접 연결한다.
+- Add versioned session serialization and restoration.
+- Verify cancellation, timeout propagation, and the streaming event order.
+- Connect the MCP Java SDK directly to the tool port.
 
-종료 조건은 프로세스 경계를 넘은 session 복원과 스트리밍 취소가 contract test를
-통과하는 것이다.
+The exit condition is that session restoration across a process boundary and streaming cancellation
+pass the contract tests.
 
-### 단계 3: 직접 Provider와 Spring Boot 호스팅
+### Stage 3: a direct provider and Spring Boot hosting
 
-- 공급자 adapter 하나를 end-to-end로 연결한다.
-- Spring Boot autoconfigure와 starter가 호스트 자원으로 엔진을 조립하도록 한다.
-- Standalone과 Spring Boot sample에 동일한 agent 정의를 사용한다.
+- Connect one provider adapter end to end.
+- Have Spring Boot autoconfigure and the starter compose the engine from host resources.
+- Use the same agent definition in the standalone and Spring Boot samples.
 
-종료 조건은 애플리케이션 코드의 agent 정의를 바꾸지 않고 두 호스트에서 동일한 golden
-scenario가 통과하는 것이다.
+The exit condition is that the same golden scenarios pass on both hosts without changing the agent
+definition in the application code.
 
-### 단계 4: Spring AI Adapter 평가 및 구현
+### Stage 4: evaluating and implementing the Spring AI adapter
 
-- `ChatModel`, tool callback, MCP와 observation의 변환 손실을 측정한다.
-- 자동 tool loop가 비활성화되었음을 contract test로 확인한다.
-- 지원하지 못하는 structured output 및 streaming capability를 명시적으로 노출한다.
+- Measure the conversion loss for `ChatModel`, tool callbacks, MCP, and observations.
+- Confirm with a contract test that the automatic tool loop is disabled.
+- Explicitly expose the structured output and streaming capabilities that cannot be supported.
 
-변환 손실이나 이중 실행 없이 공개 port만으로 통합 가능한 경우 별도 artifact로
-릴리스한다.
+When integration is possible through the public ports alone, without conversion loss or double
+execution, it is released as a separate artifact.
 
-### 단계 5: Workflow와 Protocol 확장
+### Stage 5: workflow and protocol extensions
 
-MVP 계약이 안정된 후 workflow를 독립 하위 프로젝트로 설계한다. 순차, 분기, 병렬,
-checkpoint, HITL과 multi-agent 순서로 확장한다. Hosting protocol은 engine과 분리된
-adapter로 추가한다.
+After the MVP contract is stable, workflows are designed as an independent subproject. They are
+extended in the order sequential, branching, parallel, checkpoint, HITL, and multi-agent. Hosting
+protocols are added as adapters separate from the engine.
 
-## 8. 검증 전략
+## 8. Verification strategy
 
-- 모든 model provider는 동일한 model client contract test를 통과해야 한다.
-- 모든 session store는 직렬화 round-trip과 동시 갱신 contract test를 통과해야 한다.
-- Tool loop는 반복 제한, 중복 이름, 실패, 승인 거부와 취소를 검증해야 한다.
-- 스트리밍은 이벤트 순서, 취소와 backpressure 동작을 검증해야 한다.
-- Spring Boot test는 Bean 조립과 호스트 lifecycle 위임을 검증해야 한다.
-- Dependency rule test는 코어에서 Spring 및 provider 구현 참조를 금지해야 한다.
-- Telemetry test는 중복 span과 기본 민감정보 기록이 없음을 검증해야 한다.
+- Every model provider must pass the same model client contract tests.
+- Every session store must pass the serialization round-trip and concurrent update contract tests.
+- The tool loop must verify the iteration limit, duplicate names, failure, approval rejection, and cancellation.
+- Streaming must verify the event order, cancellation, and backpressure behavior.
+- Spring Boot tests must verify bean composition and the delegation of the host lifecycle.
+- Dependency rule tests must forbid references to Spring and to provider implementations from the core.
+- Telemetry tests must verify that there are no duplicate spans and no sensitive data recorded by default.
 
-Compatibility matrix에는 MAF 기준 버전, Java framework 버전, Spring Boot 및 Spring AI
-검증 버전을 기록한다. Spring AI main branch의 snapshot API를 코어 계약의 기준으로
-사용하지 않는다.
+The compatibility matrix records the MAF baseline version, the Java framework version, and the
+verified Spring Boot and Spring AI versions. A snapshot API from the Spring AI main branch is not
+used as the baseline for the core contract.
 
-## 9. 주요 위험과 대응
+## 9. Principal risks and responses
 
-| 위험 | 대응 |
+| Risk | Response |
 | --- | --- |
-| Engine이 애플리케이션 런타임 역할까지 확장 | 금지 책임과 의존성 규칙을 CI에서 검증 |
-| Spring AI와 이중 tool loop | 엔진 소유권 고정 및 자동 tool execution 비활성화 테스트 |
-| Session과 ChatMemory 혼동 | AgentSession을 단일 영속 상태로 고정 |
-| Spring API가 코어에 유입 | API/Engine의 Spring dependency 금지 |
-| Micrometer와 OTel 중복 계측 | 동일 trace bridge와 span 소유자 지정 |
-| 원본 .NET/Python 구현 차이 | 기능별 기준 구현과 compatibility matrix 기록 |
-| 초기 범위 과대화 | Workflow와 protocol hosting을 MVP에서 제외 |
+| The engine expands into the role of an application runtime | Verify the forbidden responsibilities and the dependency rules in CI |
+| A double tool loop with Spring AI | Fix engine ownership and test that automatic tool execution is disabled |
+| Confusion between a session and ChatMemory | Fix AgentSession as the single persistent state |
+| The Spring API leaks into the core | Forbid a Spring dependency in the API and the engine |
+| Duplicate instrumentation by Micrometer and OTel | Designate the same trace bridge and span owner |
+| Differences between the original .NET and Python implementations | Record the per-capability reference implementation and the compatibility matrix |
+| Inflation of the initial scope | Exclude workflows and protocol hosting from the MVP |
 
-## 10. 다음 설계 산출물
+## 10. Next design deliverables
 
-구현 작업을 세분화하기 전에 다음 두 산출물만 먼저 작성한다.
+Before implementation work is broken down further, only the following two deliverables are written
+first.
 
-1. 여섯 개 golden scenario의 호환성 표
-2. API, Engine, provider와 host 사이의 최소 공개 계약
+1. the compatibility table for the six golden scenarios
+2. the minimal public contract between the API, the engine, the provider, and the host
 
-두 산출물이 승인된 뒤 첫 vertical slice의 파일·클래스·테스트 단위 구현 계획을 작성한다.
+Once both deliverables are approved, the file-, class-, and test-level implementation plan for the
+first vertical slice is written.
 
-## 11. 참고 자료
+## 11. References
 
-- [Microsoft Agent Framework 개요](https://learn.microsoft.com/en-us/agent-framework/overview/)
+- [Microsoft Agent Framework overview](https://learn.microsoft.com/en-us/agent-framework/overview/)
 - [Microsoft Agent Framework Agents](https://learn.microsoft.com/en-us/agent-framework/agents/)
 - [Microsoft Agent Framework Sessions](https://learn.microsoft.com/en-us/agent-framework/agents/conversations/session)
 - [Microsoft Agent Framework Workflows](https://learn.microsoft.com/en-us/agent-framework/workflows/)
