@@ -11,6 +11,9 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -18,6 +21,8 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
 
 class MarkdownLinkPolicyTest {
+
+  private static final ConcurrentMap<Path, Set<String>> ANCHORS_BY_FILE = new ConcurrentHashMap<>();
 
   static Stream<String> documents() {
     try {
@@ -55,7 +60,7 @@ class MarkdownLinkPolicyTest {
       if (fragment.isEmpty() || !file.toString().endsWith(".md")) {
         continue;
       }
-      if (!MarkdownDocuments.anchors(file).contains(fragment)) {
+      if (!anchorsFor(file).contains(fragment)) {
         unresolved.add(link.describe() + " (no such heading anchor)");
       }
     }
@@ -103,6 +108,27 @@ class MarkdownLinkPolicyTest {
         StandardCharsets.UTF_8);
 
     assertThat(MarkdownDocuments.anchors(document)).containsExactly("title", "notes", "notes-1");
+  }
+
+  @Test
+  void anchorCacheReadsEachTargetOnlyOnce(@TempDir Path directory) throws IOException {
+    Path document = directory.resolve("sample.md");
+    Files.writeString(document, "# Cached heading\n", StandardCharsets.UTF_8);
+
+    assertThat(anchorsFor(document)).containsExactly("cached-heading");
+    Files.delete(document);
+
+    assertThat(anchorsFor(document)).containsExactly("cached-heading");
+  }
+
+  private static Set<String> anchorsFor(Path file) throws IOException {
+    Set<String> cached = ANCHORS_BY_FILE.get(file);
+    if (cached != null) {
+      return cached;
+    }
+    Set<String> parsed = MarkdownDocuments.anchors(file);
+    Set<String> raced = ANCHORS_BY_FILE.putIfAbsent(file, parsed);
+    return raced == null ? parsed : raced;
   }
 
   @Test

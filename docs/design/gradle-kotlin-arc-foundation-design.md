@@ -131,7 +131,7 @@ CI and local commands use the same Gradle tasks.
 The default path of the local sibling repository is as follows.
 
 ```text
-/Users/hwang-inhwan/workspace/agent-framework-java-platform/
+$HOME/workspace/agent-framework-java-platform/
 ```
 
 This repository is managed as an independent Git repository so that it can later move to a private
@@ -379,4 +379,3 @@ verified as well.
 - [Gradle Java Toolchains](https://docs.gradle.org/9.7.0/userguide/toolchains.html)
 - [ARC custom runner image](https://docs.github.com/en/actions/how-tos/manage-runners/use-actions-runner-controller/deploy-runner-scale-sets#using-a-custom-runner-image)
 - [setup-java](https://github.com/actions/setup-java)
-
