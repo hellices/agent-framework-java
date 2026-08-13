@@ -334,12 +334,13 @@ class ModuleCompositionPolicyTest {
     for (Path source : sources) {
       String text = Files.readString(source, StandardCharsets.UTF_8);
       Matcher packageDeclaration = SOURCE_PACKAGE.matcher(text);
-      if (packageDeclaration.find()) {
-        assertThat(packageDeclaration.group(1))
-            .as("%s uses the community-owned Java namespace", source)
-            .startsWith("io.github.hellices.agentframework")
-            .doesNotStartWith("com.microsoft.");
-      }
+      assertThat(packageDeclaration.find())
+          .as("%s declares a Java/Kotlin package", source)
+          .isTrue();
+      assertThat(packageDeclaration.group(1))
+          .as("%s uses the community-owned Java namespace", source)
+          .matches("io\\.github\\.hellices\\.agentframework(?:\\..+)?")
+          .doesNotStartWith("com.microsoft.");
     }
   }
 

@@ -269,7 +269,8 @@ fix documentation and tests together.
 
 - When configuration is omitted, `enabled=true` and `includeDetailedErrors=false` are populated.
 - `maxIterations` and `maxConsecutiveErrorsPerRequest` reject values less than 1.
-- `maxFunctionCalls` accepts only `null` or a positive number.
+- `maxFunctionCalls` may be omitted or set to a positive number. The Java public API does not use
+  `null` as a valid option value.
 
 **Evidence** [05 Public API and types](../upstream/snapshots/d0a4165f/features/05-function-tools.md),
 [05 Invocation configuration / layers / budgets](../upstream/snapshots/d0a4165f/features/05-function-tools.md)

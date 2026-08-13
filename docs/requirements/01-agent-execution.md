@@ -137,11 +137,12 @@ be "has the stream ended", not "has the final object been read".
 
 ---
 
-## AGT-005 Cancellation is passed as an explicit argument
+## AGT-005 Every run exposes an explicit cancellation signal
 
-**Requirement.** The cancellation signal must be an explicit argument of the public run API, and
-run handles created by execution must provide a cancel operation that triggers the same signal.
-Cancellation is not read from a thread local or an implicit execution context, and the core
+**Requirement.** The canonical run request must carry an explicit cancellation signal, and run
+handles created by execution must provide a cancel operation that triggers the same signal.
+Convenience overloads may create the signal on the caller's behalf but must return the connected
+handle. Cancellation is not read from a thread local or an implicit execution context, and the core
 contract must not be tied to a framework-specific cancellation type.
 
 **Upstream comparison**
@@ -156,7 +157,9 @@ can propagate request timeouts and client aborts without loss.
 
 **Acceptance criteria**
 
-- Both the completed run and the streaming run take a cancellation argument.
+- The canonical completed-run and streaming-run requests carry a non-null cancellation signal.
+- A convenience `run(String)` or equivalent delegates to the canonical request with a newly created
+  signal; it does not use a hidden thread-local signal.
 - The run handle returned or exposed by each execution path has a cancel operation that triggers the
   same cancellation signal.
 - When cancellation fires, it propagates into the model call and the tool calls in flight.

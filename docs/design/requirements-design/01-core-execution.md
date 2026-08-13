@@ -101,6 +101,10 @@ on both handles triggers the same `CancellationSignal` passed to the request.
 A no-input execution is represented by `AgentRunRequest.empty()` or a separate overload. `null`
 does not mean empty input.
 
+`run(String)` and equivalent convenience overloads create a fresh `CancellationSignal`, build the
+canonical request, and return the connected `AgentRun`. Callers that need deadline or parent-request
+propagation construct `AgentRunRequest` with their own signal.
+
 `AgentFactory` is a thread-safe singleton facade that creates a new `AgentBuilder` for every call.
 Framework adapters and the standalone assembly provide a factory with fully assembled ports, so
 general users do not interact directly with `AgentEngineBuilder`.
@@ -233,8 +237,9 @@ is not ignored; it fails before the model call.
 
 ## 6. Streaming and cancellation
 
-The stream subscription, model transport, and tool invocation observe the same
-`CancellationSignal`. Adapters bridge standard cancellation.
+An Agent execution-stream subscription, model transport, and tool invocation observe the same
+`CancellationSignal`. Adapters bridge standard cancellation. Unsubscribing from a durable workflow
+event/watch stream stops observation only; it does not cancel that workflow run (WF-015).
 
 ```text
 HTTP disconnect / Future.cancel / Subscription.cancel / Thread.interrupt
