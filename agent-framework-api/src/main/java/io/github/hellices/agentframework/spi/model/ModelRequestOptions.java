@@ -64,7 +64,7 @@ public final class ModelRequestOptions {
   }
 
   public Map<String, Map<String, Object>> providerOptions() {
-    return providerOptions;
+    return immutableProviderOptions(providerOptions);
   }
 
   public ModelRequestOptions merge(ModelRequestOptions override) {
