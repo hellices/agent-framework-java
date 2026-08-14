@@ -213,6 +213,8 @@ final class SourcePackages {
         && (name.equals(".gitignore")
             || name.equals(".gitattributes")
             || name.endsWith(".properties")
+            || name.endsWith(".json")
+            || name.endsWith(".xml")
             || name.endsWith(".yml")
             || name.endsWith(".yaml")
             || name.endsWith(".toml"));

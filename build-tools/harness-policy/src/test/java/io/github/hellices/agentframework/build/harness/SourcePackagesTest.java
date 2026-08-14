@@ -436,6 +436,14 @@ class SourcePackagesTest {
         write(
             "gradle/libs.versions.toml",
             "legacy = \"" + "com." + "microsoft.agentframework.Legacy\"");
+    Path verificationMetadata =
+        write(
+            "gradle/verification-metadata.xml",
+            "<component group=\"" + "com." + "microsoft.agentframework\"/>");
+    Path toolConfiguration =
+        write(
+            "build-tools/tool.json",
+            "{\"path\":\"" + "com/" + "microsoft/agentframework/internal\"}");
     Path workflow =
         write(
             ".github/workflows/legacy.yml",
@@ -462,12 +470,16 @@ class SourcePackagesTest {
     assertThat(SourcePackages.violations(repository))
         .containsExactly(
             new SourcePackages.Violation(workflow, SourcePackages.microsoftReferenceProblem()),
+            new SourcePackages.Violation(
+                toolConfiguration, SourcePackages.microsoftReferenceProblem()),
             new SourcePackages.Violation(documentation, SourcePackages.microsoftReferenceProblem()),
             new SourcePackages.Violation(
                 unapprovedMigration, SourcePackages.microsoftReferenceProblem()),
             new SourcePackages.Violation(
                 ownedDirectoryName, SourcePackages.microsoftReferenceProblem()),
-            new SourcePackages.Violation(catalog, SourcePackages.microsoftReferenceProblem()));
+            new SourcePackages.Violation(catalog, SourcePackages.microsoftReferenceProblem()),
+            new SourcePackages.Violation(
+                verificationMetadata, SourcePackages.microsoftReferenceProblem()));
   }
 
   @Test
