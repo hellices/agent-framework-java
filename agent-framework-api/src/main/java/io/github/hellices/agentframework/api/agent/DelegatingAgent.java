@@ -29,7 +29,8 @@ public abstract class DelegatingAgent extends Agent {
   }
 
   @Override
-  protected AgentStreamingRun runStreamingInternal(AgentRunContext context, AgentRunRequest request) {
+  protected AgentStreamingRun runStreamingInternal(
+      AgentRunContext context, AgentRunRequest request) {
     return delegate.runStreamingInternal(context, request);
   }
 }

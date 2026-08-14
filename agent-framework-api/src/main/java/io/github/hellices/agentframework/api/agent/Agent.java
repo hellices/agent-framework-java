@@ -42,7 +42,8 @@ public abstract class Agent {
     if (session != null) {
       validateSessionCompatibility(session);
     }
-    return runInternal(new AgentRunContext(this, session, normalizedRequest.attributes()), normalizedRequest);
+    return runInternal(
+        new AgentRunContext(this, session, normalizedRequest.attributes()), normalizedRequest);
   }
 
   public final AgentStreamingRun runStreaming(String input) {

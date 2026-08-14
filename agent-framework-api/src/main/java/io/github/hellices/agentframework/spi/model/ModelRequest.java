@@ -19,6 +19,7 @@ public record ModelRequest(
 
   public static ModelRequest fromLegacyOptions(
       List<Message> messages, Map<String, Object> legacyOptions, Map<String, Object> metadata) {
-    return new ModelRequest(messages, ModelRequestOptions.fromLegacyOptions(legacyOptions), metadata);
+    return new ModelRequest(
+        messages, ModelRequestOptions.fromLegacyOptions(legacyOptions), metadata);
   }
 }

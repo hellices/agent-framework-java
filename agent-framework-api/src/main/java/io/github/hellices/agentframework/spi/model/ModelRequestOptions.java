@@ -13,7 +13,9 @@ public final class ModelRequestOptions {
   private final Map<String, Map<String, Object>> providerOptions;
 
   private ModelRequestOptions(
-      Double temperature, Integer maxOutputTokens, Map<String, Map<String, Object>> providerOptions) {
+      Double temperature,
+      Integer maxOutputTokens,
+      Map<String, Map<String, Object>> providerOptions) {
     this.temperature = temperature;
     this.maxOutputTokens = maxOutputTokens;
     this.providerOptions = providerOptions;
@@ -92,7 +94,7 @@ public final class ModelRequestOptions {
     private Builder() {}
 
     public Builder temperature(double value) {
-      if (value < 0.0 || value > 2.0) {
+      if (!Double.isFinite(value) || value < 0.0 || value > 2.0) {
         throw new IllegalArgumentException("temperature must be between 0.0 and 2.0");
       }
       this.temperature = value;

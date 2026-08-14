@@ -3,12 +3,13 @@ package io.github.hellices.agentframework.spi.model;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-import io.github.hellices.agentframework.api.message.Message;
 import io.github.hellices.agentframework.api.message.FinishReason;
+import io.github.hellices.agentframework.api.message.Message;
 import io.github.hellices.agentframework.api.message.Role;
 import io.github.hellices.agentframework.api.message.TextContent;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Flow;
 import org.junit.jupiter.api.Test;
 
@@ -33,10 +34,8 @@ class ModelOptionsTest {
 
     assertThat(merged.temperature()).hasValue(0.9);
     assertThat(merged.maxOutputTokens()).hasValue(256);
-    assertThat(merged.providerOption("openai"))
-        .contains(Map.of("parallelToolCalls", true));
-    assertThat(merged.providerOption("azure-openai"))
-        .contains(Map.of("apiVersion", "preview"));
+    assertThat(merged.providerOption("openai")).contains(Map.of("parallelToolCalls", true));
+    assertThat(merged.providerOption("azure-openai")).contains(Map.of("apiVersion", "preview"));
   }
 
   @Test
@@ -44,8 +43,7 @@ class ModelOptionsTest {
     ModelRequestOptions defaults =
         ModelRequestOptions.builder()
             .providerOption(
-                ModelProviderOption.of(
-                    "openai", Map.of("parallelToolCalls", false, "seed", 7)))
+                ModelProviderOption.of("openai", Map.of("parallelToolCalls", false, "seed", 7)))
             .build();
     ModelRequestOptions overrides =
         ModelRequestOptions.builder()
@@ -61,6 +59,13 @@ class ModelOptionsTest {
   @Test
   void optionsRejectOutOfRangeTemperature() {
     assertThatThrownBy(() -> ModelRequestOptions.builder().temperature(3.0).build())
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessage("temperature must be between 0.0 and 2.0");
+  }
+
+  @Test
+  void optionsRejectNaNTemperature() {
+    assertThatThrownBy(() -> ModelRequestOptions.builder().temperature(Double.NaN).build())
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessage("temperature must be between 0.0 and 2.0");
   }
@@ -87,25 +92,27 @@ class ModelOptionsTest {
 
     assertThat(request.options().temperature()).hasValue(0.6);
     assertThat(request.options().maxOutputTokens()).hasValue(128);
-    assertThat(request.options().providerOption("legacy"))
-        .contains(Map.of("toolChoice", "none"));
+    assertThat(request.options().providerOption("legacy")).contains(Map.of("toolChoice", "none"));
   }
 
   @Test
   void streamingCapabilityIsOptInInterface() {
-    ModelClient basicClient = request -> null;
+    ModelClient basicClient =
+        request ->
+            CompletableFuture.completedFuture(
+                new ModelResponse(List.of(), null, FinishReason.STOP, Map.of(), null));
     StreamingModelClient streamingClient =
         new StreamingModelClient() {
           @Override
           public java.util.concurrent.CompletionStage<ModelResponse> run(ModelRequest request) {
-            return null;
+            return CompletableFuture.completedFuture(
+                new ModelResponse(List.of(), null, FinishReason.STOP, Map.of(), null));
           }
 
           @Override
           public Flow.Publisher<ModelResponseUpdate> runStreaming(ModelRequest request) {
             return new SingleChunkPublisher(
-                new ModelResponseUpdate(
-                    List.of(), null, FinishReason.STOP, Map.of(), null));
+                new ModelResponseUpdate(List.of(), null, FinishReason.STOP, Map.of(), null));
           }
         };
 

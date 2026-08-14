@@ -96,9 +96,7 @@ class AgentLifecycleTest {
   @Test
   void stackingWrappersKeepsRunResultStable() throws Exception {
     TestAgent baseAgent = new TestAgent("base-agent");
-    Agent wrapped =
-        new DelegatingAgent(
-            new DelegatingAgent(baseAgent) {}) {};
+    Agent wrapped = new DelegatingAgent(new DelegatingAgent(baseAgent) {}) {};
 
     assertThat(wrapped.run("hello").response().toCompletableFuture().get().text()).isEqualTo("ok");
     assertThat(wrapped.runStreaming("hello").response().toCompletableFuture().get().text())
@@ -127,7 +125,8 @@ class AgentLifecycleTest {
 
   @Test
   void convenienceRunMethodsAreFinalToKeepInvariantChecks() throws Exception {
-    assertThat(Modifier.isFinal(Agent.class.getMethod("run", String.class).getModifiers())).isTrue();
+    assertThat(Modifier.isFinal(Agent.class.getMethod("run", String.class).getModifiers()))
+        .isTrue();
     assertThat(Modifier.isFinal(Agent.class.getMethod("runStreaming", String.class).getModifiers()))
         .isTrue();
   }
@@ -212,7 +211,8 @@ class AgentLifecycleTest {
     }
 
     @Override
-    protected AgentStreamingRun runStreamingInternal(AgentRunContext context, AgentRunRequest request) {
+    protected AgentStreamingRun runStreamingInternal(
+        AgentRunContext context, AgentRunRequest request) {
       executedStreamingRun = true;
       return super.runStreamingInternal(context, request);
     }
