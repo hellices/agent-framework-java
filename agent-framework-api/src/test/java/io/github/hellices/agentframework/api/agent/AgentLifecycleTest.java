@@ -9,6 +9,7 @@ import io.github.hellices.agentframework.api.message.TextContent;
 import java.lang.reflect.Modifier;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import org.junit.jupiter.api.Test;
 
 class AgentLifecycleTest {
@@ -129,6 +130,26 @@ class AgentLifecycleTest {
     assertThat(Modifier.isFinal(Agent.class.getMethod("run", String.class).getModifiers())).isTrue();
     assertThat(Modifier.isFinal(Agent.class.getMethod("runStreaming", String.class).getModifiers()))
         .isTrue();
+  }
+
+  @Test
+  void runContextIsPreservedWhenRunExecutesOnAnotherThread() {
+    ContextCapturingAgent agent = new ContextCapturingAgent("ctx-agent");
+    AgentSession session = new AgentSession("session-42", "service-42", Map.of());
+    AgentRunRequest request =
+        new AgentRunRequest(
+            Message.normalize("hello"),
+            session,
+            new AgentRunOptions(),
+            new CancellationSignal(),
+            Map.of("traceId", "trace-42"));
+
+    CompletableFuture.runAsync(() -> agent.run(request)).join();
+
+    assertThat(agent.lastContext).isNotNull();
+    assertThat(agent.lastContext.agent()).isEqualTo(agent);
+    assertThat(agent.lastContext.session()).isEqualTo(session);
+    assertThat(agent.lastContext.attributes()).containsEntry("traceId", "trace-42");
   }
 
   private static class TestAgent extends Agent {

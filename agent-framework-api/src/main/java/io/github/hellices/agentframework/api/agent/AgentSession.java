@@ -8,8 +8,10 @@ public record AgentSession(String sessionId, String serviceSessionId, Map<String
 
   public AgentSession {
     String normalizedSessionId = sessionId;
-    if (normalizedSessionId == null || normalizedSessionId.isBlank()) {
+    if (normalizedSessionId == null) {
       normalizedSessionId = UUID.randomUUID().toString();
+    } else if (normalizedSessionId.isBlank()) {
+      throw new IllegalArgumentException("sessionId must not be blank");
     }
     sessionId = normalizedSessionId;
     state = state == null ? Map.of() : Map.copyOf(state);
