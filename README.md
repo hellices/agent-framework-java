@@ -14,6 +14,9 @@ lifecycle, execution resources, security, transactions, and observability config
 
 > **Status:** early. The build harness, requirements, and module skeleton are in place. Agent
 > behavior is not implemented yet. See [Current state](#current-state).
+>
+> **API stability:** pre-1.0. Public contracts may evolve between requirement slices while the core
+> execution semantics are being established.
 
 ## Why this split
 
@@ -138,7 +141,7 @@ The repository has a verified foundation and no agent behavior yet.
 
 **Not started**
 
-- Message and content types, model client ports, tool loop, sessions, interceptors
+- The deterministic `AgentEngine` run loop, tool loop execution, and interceptor pipeline
 - Workflows, hosting, protocol adapters, provider integrations
 
 The first implementation target is the `agent-framework-api` type model, because every other module
