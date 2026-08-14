@@ -301,7 +301,12 @@ class ModuleCompositionPolicyTest {
   @Test
   void communitySourcesUseOwnedNamespaceAndDoNotReferenceMicrosoftPackages() throws IOException {
     SourcePackages.Report report = SourcePackages.inspect(RepositoryPaths.root());
-    assertThat(report.sources()).isNotEmpty();
+    assertThat(report.sources())
+        .contains(
+            RepositoryPaths.root()
+                .resolve(
+                    "agent-framework-api/src/main/java/"
+                        + "io/github/hellices/agentframework/api/ApiContract.java"));
     assertThat(report.scanFailures()).as("namespace source scan failures").isEmpty();
     assertThat(report.violations()).as("retired namespace references").isEmpty();
   }

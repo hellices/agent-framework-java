@@ -119,14 +119,16 @@ final class SourcePackages {
 
       boolean packageRequired =
           isJavaOrKotlin(source) && isCanonicalSource(repository.relativize(source));
-      Syntax syntax = syntax(source);
-      Optional<String> packageName = packageName(text, syntax);
-      if (packageRequired && packageName.isEmpty()) {
-        violations.add(new Violation(source, "source must declare a package"));
-      } else if (packageRequired
-          && !packageName.get().matches("io\\.github\\.hellices\\.agentframework(?:\\..+)?")) {
-        violations.add(
-            new Violation(source, "package must start with io.github.hellices.agentframework"));
+      if (packageRequired) {
+        Optional<String> packageName = packageName(text, syntax(source));
+        if (packageName.isEmpty()) {
+          violations.add(new Violation(source, "source must declare a package"));
+        } else if (!packageName
+            .get()
+            .matches("io\\.github\\.hellices\\.agentframework(?:\\..+)?")) {
+          violations.add(
+              new Violation(source, "package must start with io.github.hellices.agentframework"));
+        }
       }
       if (referencesMicrosoftNamespaceRaw(text)) {
         violations.add(new Violation(source, microsoftReferenceProblem()));
