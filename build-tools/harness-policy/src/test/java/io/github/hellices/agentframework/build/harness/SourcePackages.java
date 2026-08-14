@@ -39,12 +39,12 @@ final class SourcePackages {
   }
 
   static Optional<String> packageName(String source) {
-    Matcher matcher = PACKAGE.matcher(source);
+    Matcher matcher = PACKAGE.matcher(withoutCommentsAndLiterals(source));
     return matcher.find() ? Optional.of(matcher.group(1)) : Optional.empty();
   }
 
   static boolean referencesMicrosoftNamespace(String source) {
-    return MICROSOFT_REFERENCE.matcher(source).find();
+    return MICROSOFT_REFERENCE.matcher(withoutCommentsAndLiterals(source)).find();
   }
 
   static String microsoftReferenceProblem() {
@@ -64,7 +64,8 @@ final class SourcePackages {
         continue;
       }
 
-      boolean packageRequired = isJavaOrKotlin(source);
+      boolean packageRequired =
+          isJavaOrKotlin(source) && isCanonicalSource(repository.relativize(source));
       Optional<String> packageName = packageName(text);
       if (packageRequired && packageName.isEmpty()) {
         violations.add(new Violation(source, "source must declare a package"));
@@ -96,8 +97,7 @@ final class SourcePackages {
 
           @Override
           public FileVisitResult visitFile(Path file, BasicFileAttributes attributes) {
-            Path relative = repository.relativize(file);
-            if ((isJavaOrKotlin(file) && isCanonicalSource(relative)) || isBuildScript(file)) {
+            if (isJavaOrKotlin(file) || isBuildScript(file)) {
               sources.add(file);
             }
             return FileVisitResult.CONTINUE;
@@ -160,5 +160,88 @@ final class SourcePackages {
       }
     }
     return false;
+  }
+
+  private static String withoutCommentsAndLiterals(String source) {
+    StringBuilder visible = new StringBuilder(source.length());
+    int index = 0;
+    while (index < source.length()) {
+      char current = source.charAt(index);
+      char next = index + 1 < source.length() ? source.charAt(index + 1) : '\0';
+
+      if (current == '/' && next == '/') {
+        index = maskUntilLineEnd(source, visible, index + 2);
+      } else if (current == '/' && next == '*') {
+        index = maskBlockComment(source, visible, index + 2);
+      } else if (current == '"' && source.startsWith("\"\"\"", index)) {
+        index = maskTextBlock(source, visible, index + 3);
+      } else if (current == '"' || current == '\'') {
+        index = maskQuotedLiteral(source, visible, index + 1, current);
+      } else {
+        visible.append(current);
+        index++;
+      }
+    }
+    return visible.toString();
+  }
+
+  private static int maskUntilLineEnd(String source, StringBuilder visible, int index) {
+    visible.append("  ");
+    int cursor = index;
+    while (cursor < source.length() && source.charAt(cursor) != '\n') {
+      visible.append(' ');
+      cursor++;
+    }
+    return cursor;
+  }
+
+  private static int maskBlockComment(String source, StringBuilder visible, int index) {
+    visible.append("  ");
+    int cursor = index;
+    while (cursor < source.length()) {
+      if (cursor + 1 < source.length()
+          && source.charAt(cursor) == '*'
+          && source.charAt(cursor + 1) == '/') {
+        visible.append("  ");
+        return cursor + 2;
+      }
+      visible.append(source.charAt(cursor) == '\n' ? '\n' : ' ');
+      cursor++;
+    }
+    return cursor;
+  }
+
+  private static int maskTextBlock(String source, StringBuilder visible, int index) {
+    visible.append("   ");
+    int cursor = index;
+    while (cursor < source.length()) {
+      if (source.startsWith("\"\"\"", cursor)) {
+        visible.append("   ");
+        return cursor + 3;
+      }
+      visible.append(source.charAt(cursor) == '\n' ? '\n' : ' ');
+      cursor++;
+    }
+    return cursor;
+  }
+
+  private static int maskQuotedLiteral(
+      String source, StringBuilder visible, int index, char delimiter) {
+    visible.append(' ');
+    int cursor = index;
+    boolean escaped = false;
+    while (cursor < source.length()) {
+      char current = source.charAt(cursor);
+      visible.append(current == '\n' ? '\n' : ' ');
+      cursor++;
+      if (escaped) {
+        escaped = false;
+      } else if (current == '\\') {
+        escaped = true;
+      } else if (current == delimiter) {
+        return cursor;
+      }
+    }
+    return cursor;
   }
 }

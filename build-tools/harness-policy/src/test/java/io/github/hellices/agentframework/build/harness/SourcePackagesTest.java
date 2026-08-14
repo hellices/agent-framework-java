@@ -43,6 +43,18 @@ class SourcePackagesTest {
   }
 
   @Test
+  void reportsForbiddenNamespaceOutsideCanonicalSourceRoots() throws Exception {
+    Path source =
+        write(
+            "scripts/Legacy.java",
+            "package " + "com." + "microsoft.agentframework.legacy;\n" + "final class Legacy {}");
+
+    assertThat(SourcePackages.violations(repository))
+        .containsExactly(
+            new SourcePackages.Violation(source, SourcePackages.microsoftReferenceProblem()));
+  }
+
+  @Test
   void detectsPackageAndMicrosoftReferences() {
     String source =
         "package io.github.hellices.agentframework.example;\n"
@@ -54,6 +66,25 @@ class SourcePackagesTest {
         .hasValue("io.github.hellices.agentframework.example");
     assertThat(SourcePackages.referencesMicrosoftNamespace(source)).isTrue();
     assertThat(SourcePackages.packageName("final class PackageLess {}")).isEmpty();
+  }
+
+  @Test
+  void ignoresPackageLikeTextInsideCommentsAndTextBlocks() {
+    String source =
+        """
+        /*
+        package com.microsoft.agentframework.comment;
+        */
+        package io.github.hellices.agentframework.example;
+        final class Example {
+          String text = \"\"\"
+              package com.microsoft.agentframework.text;
+              \"\"\";
+        }
+        """;
+
+    assertThat(SourcePackages.packageName(source))
+        .hasValue("io.github.hellices.agentframework.example");
   }
 
   @Test
