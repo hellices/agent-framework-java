@@ -35,20 +35,6 @@ public final class AgentRunRequest {
     this.attributes = attributes == null ? Map.of() : Map.copyOf(attributes);
   }
 
-  public AgentRunRequest(
-      List<? extends Message> messages,
-      String sessionId,
-      AgentRunOptions options,
-      CancellationSignal cancellationSignal,
-      Map<String, Object> attributes) {
-    this(
-        messages,
-        sessionId == null ? null : new AgentSession(sessionId, null, Map.of()),
-        options,
-        cancellationSignal,
-        attributes);
-  }
-
   public static AgentRunRequest empty() {
     return new AgentRunRequest(
         List.of(), (AgentSession) null, new AgentRunOptions(), new CancellationSignal(), Map.of());

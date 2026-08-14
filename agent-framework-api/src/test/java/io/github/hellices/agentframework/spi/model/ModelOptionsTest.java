@@ -80,7 +80,7 @@ class ModelOptionsTest {
   @Test
   void legacyOptionMapConstructorRemainsAvailable() {
     ModelRequest request =
-        new ModelRequest(
+        ModelRequest.fromLegacyOptions(
             List.of(new Message(Role.USER, List.of(new TextContent("hello")))),
             Map.of("temperature", 0.6, "maxOutputTokens", 128, "toolChoice", "none"),
             Map.of());
