@@ -304,12 +304,18 @@ final class SourcePackages {
   }
 
   private static boolean referencesMicrosoftNamespace(String source, Syntax syntax) {
+    if (!source.contains(FORBIDDEN_NAMESPACE) && !source.contains(FORBIDDEN_NAMESPACE_PATH)) {
+      return false;
+    }
     String visible = withoutComments(source, syntax);
     return MICROSOFT_REFERENCE.matcher(visible).find()
         || MICROSOFT_PATH_REFERENCE.matcher(visible).find();
   }
 
   private static boolean referencesMicrosoftNamespaceRaw(String source) {
+    if (!source.contains(FORBIDDEN_NAMESPACE) && !source.contains(FORBIDDEN_NAMESPACE_PATH)) {
+      return false;
+    }
     return MICROSOFT_REFERENCE.matcher(source).find()
         || MICROSOFT_PATH_REFERENCE.matcher(source).find();
   }

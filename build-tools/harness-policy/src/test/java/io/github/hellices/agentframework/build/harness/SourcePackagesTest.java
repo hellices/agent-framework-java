@@ -166,6 +166,12 @@ class SourcePackagesTest {
             SourcePackages.referencesMicrosoftNamespace(
                 "String url = \"https://example." + "com/" + "microsoft/agentframework/status\";"))
         .isFalse();
+    assertThat(
+            SourcePackages.referencesMicrosoftNamespace(
+                "String url = \"https://repo1.maven.org/maven2/"
+                    + "com/"
+                    + "microsoft/agentframework/artifact\";"))
+        .isTrue();
   }
 
   @Test
