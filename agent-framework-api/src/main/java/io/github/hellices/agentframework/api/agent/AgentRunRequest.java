@@ -9,14 +9,14 @@ import java.util.Objects;
 public final class AgentRunRequest {
 
   private final List<Message> messages;
-  private final String sessionId;
+  private final AgentSession session;
   private final AgentRunOptions options;
   private final CancellationSignal cancellationSignal;
   private final Map<String, Object> attributes;
 
   public AgentRunRequest(
       List<? extends Message> messages,
-      String sessionId,
+      AgentSession session,
       AgentRunOptions options,
       CancellationSignal cancellationSignal,
       Map<String, Object> attributes) {
@@ -28,35 +28,57 @@ public final class AgentRunRequest {
       }
     }
     this.messages = List.copyOf(normalizedMessages);
-    this.sessionId = sessionId;
+    this.session = session;
     this.options = options == null ? new AgentRunOptions() : options;
     this.cancellationSignal =
         cancellationSignal == null ? new CancellationSignal() : cancellationSignal;
     this.attributes = attributes == null ? Map.of() : Map.copyOf(attributes);
   }
 
+  public AgentRunRequest(
+      List<? extends Message> messages,
+      String sessionId,
+      AgentRunOptions options,
+      CancellationSignal cancellationSignal,
+      Map<String, Object> attributes) {
+    this(
+        messages,
+        sessionId == null ? null : new AgentSession(sessionId, null, Map.of()),
+        options,
+        cancellationSignal,
+        attributes);
+  }
+
   public static AgentRunRequest empty() {
     return new AgentRunRequest(
-        List.of(), null, new AgentRunOptions(), new CancellationSignal(), Map.of());
+        List.of(), (AgentSession) null, new AgentRunOptions(), new CancellationSignal(), Map.of());
   }
 
   public static AgentRunRequest of(String input) {
     Objects.requireNonNull(input, "input must not be null");
     return new AgentRunRequest(
-        Message.normalize(input), null, new AgentRunOptions(), new CancellationSignal(), Map.of());
+        Message.normalize(input),
+        (AgentSession) null,
+        new AgentRunOptions(),
+        new CancellationSignal(),
+        Map.of());
   }
 
   public static AgentRunRequest of(List<? extends Message> messages) {
     return new AgentRunRequest(
-        messages, null, new AgentRunOptions(), new CancellationSignal(), Map.of());
+        messages, (AgentSession) null, new AgentRunOptions(), new CancellationSignal(), Map.of());
   }
 
   public List<Message> messages() {
     return messages;
   }
 
+  public AgentSession session() {
+    return session;
+  }
+
   public String sessionId() {
-    return sessionId;
+    return session == null ? null : session.sessionId();
   }
 
   public AgentRunOptions options() {

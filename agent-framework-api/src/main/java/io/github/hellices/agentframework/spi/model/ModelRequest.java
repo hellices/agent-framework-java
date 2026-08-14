@@ -6,11 +6,11 @@ import java.util.Map;
 import java.util.Objects;
 
 public record ModelRequest(
-    List<Message> messages, Map<String, Object> options, Map<String, Object> metadata) {
+    List<Message> messages, ModelRequestOptions options, Map<String, Object> metadata) {
 
   public ModelRequest {
     messages = messages == null ? List.of() : List.copyOf(messages);
-    options = options == null ? Map.of() : Map.copyOf(options);
+    options = options == null ? ModelRequestOptions.empty() : options;
     metadata = metadata == null ? Map.of() : Map.copyOf(metadata);
     for (Message message : messages) {
       Objects.requireNonNull(message, "messages must not contain null entries");

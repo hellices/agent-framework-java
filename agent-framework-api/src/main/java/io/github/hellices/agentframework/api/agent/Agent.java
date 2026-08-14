@@ -36,12 +36,36 @@ public abstract class Agent {
     return run(AgentRunRequest.of(input));
   }
 
-  public abstract AgentRun run(AgentRunRequest request);
+  public final AgentRun run(AgentRunRequest request) {
+    AgentRunRequest normalizedRequest = Objects.requireNonNull(request, "request must not be null");
+    AgentSession session = normalizedRequest.session();
+    if (session != null) {
+      validateSessionCompatibility(session);
+    }
+    return runInternal(new AgentRunContext(this, session, normalizedRequest.attributes()), normalizedRequest);
+  }
 
   public AgentStreamingRun runStreaming(String input) {
     Objects.requireNonNull(input, "input must not be null");
     return runStreaming(AgentRunRequest.of(input));
   }
 
-  public abstract AgentStreamingRun runStreaming(AgentRunRequest request);
+  public final AgentStreamingRun runStreaming(AgentRunRequest request) {
+    AgentRunRequest normalizedRequest = Objects.requireNonNull(request, "request must not be null");
+    AgentSession session = normalizedRequest.session();
+    if (session != null) {
+      validateSessionCompatibility(session);
+    }
+    return runStreamingInternal(
+        new AgentRunContext(this, session, normalizedRequest.attributes()), normalizedRequest);
+  }
+
+  protected void validateSessionCompatibility(AgentSession session) {
+    Objects.requireNonNull(session, "session must not be null");
+  }
+
+  protected abstract AgentRun runInternal(AgentRunContext context, AgentRunRequest request);
+
+  protected abstract AgentStreamingRun runStreamingInternal(
+      AgentRunContext context, AgentRunRequest request);
 }
