@@ -302,6 +302,7 @@ class ModuleCompositionPolicyTest {
   void communitySourcesUseOwnedNamespaceAndDoNotReferenceMicrosoftPackages() throws IOException {
     SourcePackages.Report report = SourcePackages.inspect(RepositoryPaths.root());
     assertThat(report.sources()).isNotEmpty();
+    assertThat(report.scanFailures()).as("namespace source scan failures").isEmpty();
     assertThat(report.violations()).as("retired namespace references").isEmpty();
   }
 

@@ -24,7 +24,7 @@ final class SourcePackages {
 
   record Violation(Path source, String problem) {}
 
-  record Report(List<Path> sources, List<Violation> violations) {}
+  record Report(List<Path> sources, List<Violation> violations, List<Violation> scanFailures) {}
 
   private record Scan(List<Path> sources, List<Violation> failures) {}
 
@@ -83,7 +83,7 @@ final class SourcePackages {
   }
 
   static boolean referencesMicrosoftNamespace(String source) {
-    return referencesMicrosoftNamespace(source, Syntax.JAVA);
+    return referencesMicrosoftNamespaceRaw(source);
   }
 
   static String microsoftReferenceProblem() {
@@ -96,13 +96,14 @@ final class SourcePackages {
 
   static Report inspect(Path repository) throws IOException {
     Scan scan = scan(repository);
-    List<Violation> violations = new ArrayList<>(scan.failures());
+    List<Violation> violations = new ArrayList<>();
+    List<Violation> scanFailures = new ArrayList<>(scan.failures());
     for (Path source : scan.sources()) {
       String text;
       try {
         text = Files.readString(source, StandardCharsets.UTF_8);
       } catch (IOException cause) {
-        violations.add(
+        scanFailures.add(
             new Violation(source, "source must be readable as UTF-8: " + cause.getMessage()));
         continue;
       }
@@ -127,11 +128,11 @@ final class SourcePackages {
         violations.add(
             new Violation(source, "package must start with io.github.hellices.agentframework"));
       }
-      if (referencesMicrosoftNamespace(text, syntax)) {
+      if (referencesMicrosoftNamespaceRaw(text)) {
         violations.add(new Violation(source, microsoftReferenceProblem()));
       }
     }
-    return new Report(scan.sources(), List.copyOf(violations));
+    return new Report(scan.sources(), List.copyOf(violations), List.copyOf(scanFailures));
   }
 
   private static Scan scan(Path repository) throws IOException {
@@ -303,15 +304,6 @@ final class SourcePackages {
       }
     }
     return false;
-  }
-
-  private static boolean referencesMicrosoftNamespace(String source, Syntax syntax) {
-    if (!source.contains(FORBIDDEN_NAMESPACE) && !source.contains(FORBIDDEN_NAMESPACE_PATH)) {
-      return false;
-    }
-    String visible = withoutComments(source, syntax);
-    return MICROSOFT_REFERENCE.matcher(visible).find()
-        || MICROSOFT_PATH_REFERENCE.matcher(visible).find();
   }
 
   private static boolean referencesMicrosoftNamespaceRaw(String source) {

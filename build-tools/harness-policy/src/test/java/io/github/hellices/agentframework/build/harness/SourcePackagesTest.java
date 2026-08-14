@@ -87,7 +87,9 @@ class SourcePackagesTest {
             "scripts/Legacy.java",
             "package " + "com." + "microsoft.agentframework.legacy;\n" + "final class Legacy {}");
 
-    assertThat(SourcePackages.violations(repository))
+    SourcePackages.Report report = SourcePackages.inspect(repository);
+    assertThat(report.sources()).contains(source);
+    assertThat(report.violations())
         .containsExactly(
             new SourcePackages.Violation(source, SourcePackages.microsoftReferenceProblem()));
   }
@@ -111,7 +113,7 @@ class SourcePackagesTest {
   }
 
   @Test
-  void ignoresPackageLikeTextInsideCommentsButDetectsTextBlocks() {
+  void detectsRetiredNamespaceInsideCommentsAndTextBlocks() {
     String source =
         """
         /*
@@ -133,7 +135,7 @@ class SourcePackagesTest {
     assertThat(
             SourcePackages.referencesMicrosoftNamespace(
                 "/* Path: " + "com/" + "microsoft/agentframework/comment */"))
-        .isFalse();
+        .isTrue();
   }
 
   @Test
@@ -216,21 +218,26 @@ class SourcePackagesTest {
                 + "com."
                 + "microsoft.agentframework.Hidden\n");
 
-    assertThat(SourcePackages.violations(repository))
+    SourcePackages.Report report = SourcePackages.inspect(repository);
+    assertThat(report.sources()).contains(source);
+    assertThat(report.violations())
         .containsExactly(
             new SourcePackages.Violation(source, SourcePackages.microsoftReferenceProblem()));
   }
 
   @Test
-  void ignoresForbiddenNamespaceInsideNestedKotlinComments() throws Exception {
-    write(
-        "scripts/NestedComment.kt",
-        "/* outer /* nested */ "
-            + "com."
-            + "microsoft.agentframework.Commented */\n"
-            + "val valid = true\n");
+  void detectsForbiddenNamespaceInsideNestedKotlinComments() throws Exception {
+    Path source =
+        write(
+            "scripts/NestedComment.kt",
+            "/* outer /* nested */ "
+                + "com."
+                + "microsoft.agentframework.Commented */\n"
+                + "val valid = true\n");
 
-    assertThat(SourcePackages.violations(repository)).isEmpty();
+    assertThat(SourcePackages.violations(repository))
+        .containsExactly(
+            new SourcePackages.Violation(source, SourcePackages.microsoftReferenceProblem()));
   }
 
   @Test
@@ -345,12 +352,15 @@ class SourcePackagesTest {
   }
 
   @Test
-  void slashPathCommentsInsideInterpolationRemainIgnored() throws Exception {
-    write(
-        "scripts/CommentedInterpolation.kt",
-        "val value = \"${ /* " + "com/" + "microsoft/agentframework/comment */ 1 }\"\n");
+  void detectsSlashPathCommentsInsideInterpolation() throws Exception {
+    Path source =
+        write(
+            "scripts/CommentedInterpolation.kt",
+            "val value = \"${ /* " + "com/" + "microsoft/agentframework/comment */ 1 }\"\n");
 
-    assertThat(SourcePackages.violations(repository)).isEmpty();
+    assertThat(SourcePackages.violations(repository))
+        .containsExactly(
+            new SourcePackages.Violation(source, SourcePackages.microsoftReferenceProblem()));
   }
 
   @Test
@@ -492,13 +502,25 @@ class SourcePackagesTest {
     Files.createDirectories(parent);
     Files.write(source, new byte[] {(byte) 0xC3, 0x28});
 
-    assertThat(SourcePackages.violations(repository))
+    SourcePackages.Report report = SourcePackages.inspect(repository);
+    assertThat(report.sources()).contains(source);
+    assertThat(report.scanFailures())
         .singleElement()
         .satisfies(
             violation -> {
               assertThat(violation.source()).isEqualTo(source);
               assertThat(violation.problem()).startsWith("source must be readable as UTF-8:");
             });
+  }
+
+  @Test
+  void requiresPackagesOnlyInsideCanonicalSourceRoots() throws Exception {
+    Path canonical =
+        write("module/src/main/java/example/NoPackage.java", "final class NoPackage {}");
+    write("scripts/NoPackage.java", "final class NoPackage {}");
+
+    assertThat(SourcePackages.violations(repository))
+        .containsExactly(new SourcePackages.Violation(canonical, "source must declare a package"));
   }
 
   @Test
@@ -515,6 +537,7 @@ class SourcePackagesTest {
     SourcePackages.Report report = SourcePackages.inspect(repository);
 
     assertThat(report.sources()).containsExactlyInAnyOrder(good, bad);
+    assertThat(report.scanFailures()).isEmpty();
     assertThat(report.violations())
         .containsExactly(
             new SourcePackages.Violation(
