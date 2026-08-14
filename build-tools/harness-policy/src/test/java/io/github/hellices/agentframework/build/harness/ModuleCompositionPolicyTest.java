@@ -294,7 +294,7 @@ class ModuleCompositionPolicyTest {
     String text =
         Files.readString(
             RepositoryPaths.root().resolve("gradle.properties"), StandardCharsets.UTF_8);
-    assertThat(text).contains("group=io.github.hellices.agentframework");
+    assertThat(text).containsPattern("(?m)^group=io\\.github\\.hellices\\.agentframework$");
     assertThat(text).containsPattern("(?m)^version=\\d+\\.\\d+\\.\\d+(-SNAPSHOT)?$");
   }
 

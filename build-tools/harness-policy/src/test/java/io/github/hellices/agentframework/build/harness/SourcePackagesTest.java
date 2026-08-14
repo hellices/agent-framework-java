@@ -468,6 +468,9 @@ class SourcePackagesTest {
         write(
             "docs/target/legacy.md", "Do not use `" + "com." + "microsoft.agentframework.Legacy`.");
     write(
+        "docs/node_modules/dependency/package.json",
+        "{\"legacy\":\"" + "com." + "microsoft.agentframework.Dependency\"}");
+    write(
         "docs/migration/namespace.md",
         "<!-- allow-retired-namespace: migration guidance -->\n"
             + "Migrate from `"

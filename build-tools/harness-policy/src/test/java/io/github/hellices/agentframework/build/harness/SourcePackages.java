@@ -215,14 +215,27 @@ final class SourcePackages {
     if (name.endsWith(".md")) {
       return isOwnedMarkdown(path);
     }
-    return name.equals(".gitignore")
-        || name.equals(".gitattributes")
-        || name.endsWith(".properties")
-        || name.endsWith(".json")
-        || name.endsWith(".xml")
-        || name.endsWith(".yml")
-        || name.endsWith(".yaml")
-        || name.endsWith(".toml");
+    return !isExcludedConfigurationInsideOwnedMarkdownTree(path)
+        && (name.equals(".gitignore")
+            || name.equals(".gitattributes")
+            || name.endsWith(".properties")
+            || name.endsWith(".json")
+            || name.endsWith(".xml")
+            || name.endsWith(".yml")
+            || name.endsWith(".yaml")
+            || name.endsWith(".toml"));
+  }
+
+  private static boolean isExcludedConfigurationInsideOwnedMarkdownTree(Path relativePath) {
+    if (!isUnderOwnedMarkdownTree(relativePath)) {
+      return false;
+    }
+    for (int index = 1; index < relativePath.getNameCount() - 1; index++) {
+      if (EXCLUDED_BEFORE_SOURCE_ROOT.contains(relativePath.getName(index).toString())) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private static boolean isOwnedMarkdown(Path relativePath) {
