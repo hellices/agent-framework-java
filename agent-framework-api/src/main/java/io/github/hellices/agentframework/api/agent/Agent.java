@@ -31,7 +31,7 @@ public abstract class Agent {
     return description;
   }
 
-  public AgentRun run(String input) {
+  public final AgentRun run(String input) {
     Objects.requireNonNull(input, "input must not be null");
     return run(AgentRunRequest.of(input));
   }
@@ -45,7 +45,7 @@ public abstract class Agent {
     return runInternal(new AgentRunContext(this, session, normalizedRequest.attributes()), normalizedRequest);
   }
 
-  public AgentStreamingRun runStreaming(String input) {
+  public final AgentStreamingRun runStreaming(String input) {
     Objects.requireNonNull(input, "input must not be null");
     return runStreaming(AgentRunRequest.of(input));
   }

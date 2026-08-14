@@ -6,6 +6,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import io.github.hellices.agentframework.api.message.Message;
 import io.github.hellices.agentframework.api.message.Role;
 import io.github.hellices.agentframework.api.message.TextContent;
+import java.lang.reflect.Modifier;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
@@ -55,6 +56,26 @@ class AgentLifecycleTest {
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessage("session session-1 is not compatible with agent test-agent");
     assertThat(agent.executedRun).isFalse();
+    assertThat(agent.executedStreamingRun).isFalse();
+  }
+
+  @Test
+  void streamingRunFailsBeforeExecutionWhenSessionIsIncompatible() {
+    CompatibilityCheckingAgent agent = new CompatibilityCheckingAgent("test-agent");
+
+    AgentRunRequest request =
+        new AgentRunRequest(
+            Message.normalize("hi"),
+            new AgentSession("session-1", "service-1", Map.of()),
+            new AgentRunOptions(),
+            new CancellationSignal(),
+            Map.of());
+
+    assertThatThrownBy(() -> agent.runStreaming(request))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessage("session session-1 is not compatible with agent test-agent");
+    assertThat(agent.executedRun).isFalse();
+    assertThat(agent.executedStreamingRun).isFalse();
   }
 
   @Test
@@ -69,6 +90,18 @@ class AgentLifecycleTest {
     assertThat(agent.name()).isEqualTo("TestAgent");
     assertThat(run.response()).isNotNull();
     assertThat(streamingRun.updates()).isNotNull();
+  }
+
+  @Test
+  void stackingWrappersKeepsRunResultStable() throws Exception {
+    TestAgent baseAgent = new TestAgent("base-agent");
+    Agent wrapped =
+        new DelegatingAgent(
+            new DelegatingAgent(baseAgent) {}) {};
+
+    assertThat(wrapped.run("hello").response().toCompletableFuture().get().text()).isEqualTo("ok");
+    assertThat(wrapped.runStreaming("hello").response().toCompletableFuture().get().text())
+        .isEqualTo("ok");
   }
 
   @Test
@@ -89,6 +122,13 @@ class AgentLifecycleTest {
     assertThat(agent.lastContext.agent()).isEqualTo(agent);
     assertThat(agent.lastContext.session()).isEqualTo(session);
     assertThat(agent.lastContext.attributes()).containsEntry("traceId", "trace-42");
+  }
+
+  @Test
+  void convenienceRunMethodsAreFinalToKeepInvariantChecks() throws Exception {
+    assertThat(Modifier.isFinal(Agent.class.getMethod("run", String.class).getModifiers())).isTrue();
+    assertThat(Modifier.isFinal(Agent.class.getMethod("runStreaming", String.class).getModifiers()))
+        .isTrue();
   }
 
   private static class TestAgent extends Agent {
@@ -132,6 +172,7 @@ class AgentLifecycleTest {
 
   private static final class CompatibilityCheckingAgent extends TestAgent {
     private boolean executedRun;
+    private boolean executedStreamingRun;
 
     private CompatibilityCheckingAgent(String id) {
       super(id);
@@ -147,6 +188,12 @@ class AgentLifecycleTest {
     protected AgentRun runInternal(AgentRunContext context, AgentRunRequest request) {
       executedRun = true;
       return super.runInternal(context, request);
+    }
+
+    @Override
+    protected AgentStreamingRun runStreamingInternal(AgentRunContext context, AgentRunRequest request) {
+      executedStreamingRun = true;
+      return super.runStreamingInternal(context, request);
     }
   }
 

@@ -51,7 +51,15 @@ public final class ModelRequestOptions {
     Integer mergedMaxTokens =
         override.maxOutputTokens != null ? override.maxOutputTokens : maxOutputTokens;
     Map<String, Map<String, Object>> mergedProviderOptions = new LinkedHashMap<>(providerOptions);
-    mergedProviderOptions.putAll(override.providerOptions);
+    for (Map.Entry<String, Map<String, Object>> entry : override.providerOptions.entrySet()) {
+      Map<String, Object> mergedValues = new LinkedHashMap<>();
+      Map<String, Object> existingValues = mergedProviderOptions.get(entry.getKey());
+      if (existingValues != null) {
+        mergedValues.putAll(existingValues);
+      }
+      mergedValues.putAll(entry.getValue());
+      mergedProviderOptions.put(entry.getKey(), Map.copyOf(mergedValues));
+    }
     return new ModelRequestOptions(
         mergedTemperature, mergedMaxTokens, immutableProviderOptions(mergedProviderOptions));
   }

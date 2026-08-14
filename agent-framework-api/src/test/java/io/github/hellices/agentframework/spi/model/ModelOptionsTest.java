@@ -40,6 +40,25 @@ class ModelOptionsTest {
   }
 
   @Test
+  void providerOptionsMergePerKeyForTheSameProvider() {
+    ModelRequestOptions defaults =
+        ModelRequestOptions.builder()
+            .providerOption(
+                ModelProviderOption.of(
+                    "openai", Map.of("parallelToolCalls", false, "seed", 7)))
+            .build();
+    ModelRequestOptions overrides =
+        ModelRequestOptions.builder()
+            .providerOption(ModelProviderOption.of("openai", Map.of("parallelToolCalls", true)))
+            .build();
+
+    ModelRequestOptions merged = defaults.merge(overrides);
+
+    assertThat(merged.providerOption("openai"))
+        .contains(Map.of("parallelToolCalls", true, "seed", 7));
+  }
+
+  @Test
   void optionsRejectOutOfRangeTemperature() {
     assertThatThrownBy(() -> ModelRequestOptions.builder().temperature(3.0).build())
         .isInstanceOf(IllegalArgumentException.class)
