@@ -454,6 +454,10 @@ class SourcePackagesTest {
         write(
             "build-tools/tool.json",
             "{\"path\":\"" + "com/" + "microsoft/agentframework/internal\"}");
+    Path futureConfiguration =
+        write(
+            "samples/dependencies.toml",
+            "legacy = \"" + "com." + "microsoft.agentframework.Legacy\"");
     Path workflow =
         write(
             ".github/workflows/legacy.yml",
@@ -489,7 +493,9 @@ class SourcePackagesTest {
                 ownedDirectoryName, SourcePackages.microsoftReferenceProblem()),
             new SourcePackages.Violation(catalog, SourcePackages.microsoftReferenceProblem()),
             new SourcePackages.Violation(
-                verificationMetadata, SourcePackages.microsoftReferenceProblem()));
+                verificationMetadata, SourcePackages.microsoftReferenceProblem()),
+            new SourcePackages.Violation(
+                futureConfiguration, SourcePackages.microsoftReferenceProblem()));
   }
 
   @Test
@@ -511,6 +517,8 @@ class SourcePackagesTest {
               assertThat(violation.source()).isEqualTo(source);
               assertThat(violation.problem()).startsWith("source must be readable as UTF-8:");
             });
+    assertThat(SourcePackages.violations(repository))
+        .containsExactlyElementsOf(report.scanFailures());
   }
 
   @Test

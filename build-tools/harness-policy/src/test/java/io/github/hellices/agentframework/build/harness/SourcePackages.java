@@ -91,7 +91,10 @@ final class SourcePackages {
   }
 
   static List<Violation> violations(Path repository) throws IOException {
-    return inspect(repository).violations();
+    Report report = inspect(repository);
+    List<Violation> failuresAndViolations = new ArrayList<>(report.scanFailures());
+    failuresAndViolations.addAll(report.violations());
+    return List.copyOf(failuresAndViolations);
   }
 
   static Report inspect(Path repository) throws IOException {
@@ -212,15 +215,14 @@ final class SourcePackages {
     if (name.endsWith(".md")) {
       return isOwnedMarkdown(path);
     }
-    return isOwnedConfiguration(path)
-        && (name.equals(".gitignore")
-            || name.equals(".gitattributes")
-            || name.endsWith(".properties")
-            || name.endsWith(".json")
-            || name.endsWith(".xml")
-            || name.endsWith(".yml")
-            || name.endsWith(".yaml")
-            || name.endsWith(".toml"));
+    return name.equals(".gitignore")
+        || name.equals(".gitattributes")
+        || name.endsWith(".properties")
+        || name.endsWith(".json")
+        || name.endsWith(".xml")
+        || name.endsWith(".yml")
+        || name.endsWith(".yaml")
+        || name.endsWith(".toml");
   }
 
   private static boolean isOwnedMarkdown(Path relativePath) {
@@ -229,18 +231,6 @@ final class SourcePackages {
     }
     String topLevel = relativePath.getName(0).toString();
     return topLevel.equals(".github") || topLevel.equals("docs");
-  }
-
-  private static boolean isOwnedConfiguration(Path relativePath) {
-    if (relativePath.getNameCount() == 1) {
-      return true;
-    }
-    String topLevel = relativePath.getName(0).toString();
-    return topLevel.equals(".github")
-        || topLevel.equals("build-logic")
-        || topLevel.equals("build-tools")
-        || topLevel.equals("gradle")
-        || topLevel.startsWith("agent-framework-");
   }
 
   private static boolean allowsRetiredNamespaceForMigration(Path path, String text) {
