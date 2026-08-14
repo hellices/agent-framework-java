@@ -53,6 +53,9 @@ class SourcePackagesTest {
         ".worktrees/other/src/main/java/io/github/hellices/agentframework/Other.java",
         "package io.github.hellices.agentframework;");
     write(
+        ".superpowers/notes.md",
+        "Legacy " + "com." + "microsoft.agentframework reference in a local artifact.");
+    write(
         "module/build/src/main/java/io/github/hellices/agentframework/Generated.java",
         "package io.github.hellices.agentframework;");
 
@@ -399,6 +402,26 @@ class SourcePackagesTest {
     assertThat(SourcePackages.violations(repository))
         .containsExactly(
             new SourcePackages.Violation(buildScript, SourcePackages.microsoftReferenceProblem()));
+  }
+
+  @Test
+  void checksConfigurationAndDocumentationAssetsAsRawText() throws Exception {
+    Path catalog =
+        write(
+            "gradle/libs.versions.toml",
+            "legacy = \"" + "com." + "microsoft.agentframework.Legacy\"");
+    Path workflow =
+        write(
+            ".github/workflows/legacy.yml",
+            "path: " + "com/" + "microsoft/agentframework/internal");
+    Path documentation =
+        write("docs/legacy.md", "Do not use `" + "com." + "microsoft.agentframework.Legacy`.");
+
+    assertThat(SourcePackages.violations(repository))
+        .containsExactly(
+            new SourcePackages.Violation(workflow, SourcePackages.microsoftReferenceProblem()),
+            new SourcePackages.Violation(documentation, SourcePackages.microsoftReferenceProblem()),
+            new SourcePackages.Violation(catalog, SourcePackages.microsoftReferenceProblem()));
   }
 
   @Test

@@ -50,7 +50,7 @@ final class SourcePackages {
               + "(?=$|/|[^A-Za-z0-9_.-])");
 
   private static final Set<String> EXCLUDED_BEFORE_SOURCE_ROOT =
-      Set.of(".git", ".gradle", ".worktrees", "build", "out");
+      Set.of(".git", ".gradle", ".superpowers", ".worktrees", "build", "out");
 
   private SourcePackages() {}
 
@@ -84,6 +84,13 @@ final class SourcePackages {
       } catch (IOException cause) {
         violations.add(
             new Violation(source, "source must be readable as UTF-8: " + cause.getMessage()));
+        continue;
+      }
+
+      if (isTextAsset(source)) {
+        if (referencesMicrosoftNamespaceRaw(text)) {
+          violations.add(new Violation(source, microsoftReferenceProblem()));
+        }
         continue;
       }
 
@@ -121,7 +128,10 @@ final class SourcePackages {
 
           @Override
           public FileVisitResult visitFile(Path file, BasicFileAttributes attributes) {
-            if (isJavaOrKotlin(file) || isKotlinScript(file) || isBuildScript(file)) {
+            if (isJavaOrKotlin(file)
+                || isKotlinScript(file)
+                || isBuildScript(file)
+                || isTextAsset(file)) {
               sources.add(file);
             }
             return FileVisitResult.CONTINUE;
@@ -166,6 +176,21 @@ final class SourcePackages {
     }
     String name = fileName.toString();
     return name.endsWith(".gradle.kts") || name.endsWith(".gradle");
+  }
+
+  private static boolean isTextAsset(Path path) {
+    Path fileName = path.getFileName();
+    if (fileName == null) {
+      return false;
+    }
+    String name = fileName.toString();
+    return name.equals(".gitignore")
+        || name.equals(".gitattributes")
+        || name.endsWith(".properties")
+        || name.endsWith(".yml")
+        || name.endsWith(".yaml")
+        || name.endsWith(".toml")
+        || name.endsWith(".md");
   }
 
   private static Syntax syntax(Path path) {
@@ -221,6 +246,11 @@ final class SourcePackages {
   private static boolean referencesMicrosoftNamespace(String source, Syntax syntax) {
     return MICROSOFT_REFERENCE.matcher(withoutCommentsAndLiterals(source, syntax)).find()
         || MICROSOFT_PATH_REFERENCE.matcher(withoutComments(source, syntax)).find();
+  }
+
+  private static boolean referencesMicrosoftNamespaceRaw(String source) {
+    return MICROSOFT_REFERENCE.matcher(source).find()
+        || MICROSOFT_PATH_REFERENCE.matcher(source).find();
   }
 
   private static Optional<String> packageName(String source, Syntax syntax) {
@@ -565,24 +595,26 @@ final class SourcePackages {
   private static int findInterpolationEnd(String source, int index, Syntax syntax) {
     int depth = 1;
     int cursor = index;
+    StringBuilder discard = new StringBuilder();
     while (cursor < source.length()) {
       char current = source.charAt(cursor);
       char next = cursor + 1 < source.length() ? source.charAt(cursor + 1) : '\0';
       if (current == '/' && next == '/') {
-        cursor = maskUntilLineEnd(source, new StringBuilder(), cursor + 2);
+        discard.setLength(0);
+        cursor = maskUntilLineEnd(source, discard, cursor + 2);
       } else if (current == '/' && next == '*') {
-        cursor = maskBlockComment(source, new StringBuilder(), cursor + 2, syntax == Syntax.KOTLIN);
+        discard.setLength(0);
+        cursor = maskBlockComment(source, discard, cursor + 2, syntax == Syntax.KOTLIN);
       } else if (isMultilineLiteral(source, cursor, syntax)) {
         String delimiter = source.substring(cursor, cursor + 3);
-        cursor =
-            copyMultilineLiteral(
-                source, new StringBuilder(), cursor, delimiter, syntax != Syntax.KOTLIN);
+        discard.setLength(0);
+        cursor = copyMultilineLiteral(source, discard, cursor, delimiter, syntax != Syntax.KOTLIN);
       } else if (syntax == Syntax.GROOVY && isGroovySlashyLiteral(source, cursor)) {
-        cursor =
-            maskGroovySlashyLiteral(
-                source, new StringBuilder(), cursor, source.startsWith("$/", cursor));
+        discard.setLength(0);
+        cursor = maskGroovySlashyLiteral(source, discard, cursor, source.startsWith("$/", cursor));
       } else if (current == '"' || current == '\'') {
-        cursor = copyQuotedLiteral(source, new StringBuilder(), cursor, current);
+        discard.setLength(0);
+        cursor = copyQuotedLiteral(source, discard, cursor, current);
       } else {
         if (current == '{') {
           depth++;
