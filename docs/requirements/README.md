@@ -104,12 +104,19 @@ When the two upstream implementations differ, the decision follows this order.
 5. **Do not blur boundaries.** `AgentEngine` does not take over the responsibilities of the host
    runtime.
 
+Java public APIs and extension points also follow the
+[Java API and extension principles](java-api-principles.md). Even when observable upstream
+semantics stay the same, Java does not copy unsafe implementation forms such as null conveniences,
+dynamic dictionaries, implicit global registries, or arbitrary class restoration.
+
 A feature neither upstream provides does not become a requirement. When it is needed, it is
 proposed as a separate design.
 
 ## Related documents
 
 - [Foundation design and roadmap](../design/foundation-design.md)
+- [Java API and extension principles](java-api-principles.md)
+- [Java idiom and extensibility audit](java-api-audit.md)
 - [Upstream snapshot analysis](../upstream/snapshots/d0a4165f/README.md)
 - [Per-feature compatibility matrix](../upstream/snapshots/d0a4165f/compatibility-matrix.md)
 - [Documentation index](../README.md)

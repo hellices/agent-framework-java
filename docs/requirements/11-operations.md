@@ -56,7 +56,8 @@ The `Grade` column in this document is, as [README](README.md#requirement-grades
 ## OPS-001 The OpenTelemetry GenAI conventions are taken as the standard
 
 **Requirement.** The standard semantic convention for observability must be the OpenTelemetry GenAI
-conventions.
+conventions. This selects the standard vocabulary, not OpenTelemetry SDK types for the core public
+API; a telemetry adapter must translate the vocabulary and context.
 
 **Upstream comparison**
 
@@ -71,6 +72,8 @@ immediately.
 
 - The public span and metric names match the OTel GenAI vocabulary.
 - The provider, agent, and workflow identification tags sit on the standard semantics rather than on custom ad-hoc keys.
+- Public signatures in `agent-framework-api` and `agent-framework-engine` contain no OpenTelemetry,
+  Micrometer, or Spring Observation types.
 
 **Evidence** [27 observability](../upstream/snapshots/d0a4165f/features/27-observability.md)
 
@@ -166,8 +169,10 @@ Preventing hidden telemetry and third-party leakage is the safer side.
 
 ## OPS-006 Disabling instrumentation stays sticky
 
-**Requirement.** When an operator switches instrumentation off, framework helpers must not be able to
-switch it on again before a forced re-enable.
+**Requirement.** When an operator switches instrumentation off through application-scoped
+instrumentation control, framework helpers must not be able to switch it on again before a forced
+re-enable. The host owns the state; it must not be shared across application contexts through a
+JVM-global static flag.
 
 **Upstream comparison**
 
@@ -181,6 +186,7 @@ prevent unexpected re-instrumentation.
 
 - After a disable, instrumentation is not switched on again merely by enabling sensitive telemetry or by calling the provider bootstrap.
 - The forced re-enable path is surfaced as a separate API.
+- Two independent application contexts in the same JVM do not share instrumentation state.
 
 **Evidence** [27 observability](../upstream/snapshots/d0a4165f/features/27-observability.md)
 

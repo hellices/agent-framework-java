@@ -232,7 +232,9 @@ checkpoint reproducibility.
 ## WF-008 Serialized callables are not restored without explicit rebinding
 
 **Requirement.** When edges and workflow definitions are serialized, live callables must not be
-stored, and on restore a symbolic name must be used only when it is rebound to an explicit registry.
+stored, and on restore a symbolic name must be used only when it is rebound to an explicit
+instance-scoped callable registry. The registry must be injected through workflow assembly or
+restore options and must not be discovered through a static or global singleton.
 
 **Upstream comparison**
 
@@ -247,6 +249,8 @@ definition quietly performing different routing. Without registry rebinding it m
 - A live lambda or method reference is not stored as such in the serialized definition.
 - If a needed callable cannot be found after restore, an explicit exception is raised on the first call.
 - Automatic fallback routing or a silent no-op restoration is not allowed.
+- Different workflow hosts do not share registry state globally, and registry changes after assembly
+  do not affect the current restore.
 
 **Evidence** [14 state/persistence](../upstream/snapshots/d0a4165f/features/14-workflow-graph.md), [14 Java decisions](../upstream/snapshots/d0a4165f/features/14-workflow-graph.md)
 

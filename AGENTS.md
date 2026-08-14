@@ -7,6 +7,10 @@ The core deliverable is an embeddable `AgentEngine`, not an application server o
 Read the approved designs under `docs/design/`, the requirements under `docs/requirements/`, and
 the pinned upstream metadata under `docs/upstream/` before changing contracts.
 
+This is a community implementation, not an official Microsoft product. Maven coordinates and Java
+packages use `io.github.hellices.agentframework`; do not introduce `com.microsoft.*` production or
+build packages unless ownership transfers to Microsoft through a reviewed migration.
+
 ## Source of truth
 
 Use evidence in this order:

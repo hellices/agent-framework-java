@@ -26,9 +26,9 @@ The `Grade` column in this document is, as [README](README.md#requirement-grades
 | AGT-006 | The agent validates session compatibility only | Required | Required | MVP |
 | AGT-007 | An agent can be wrapped with a decorator | Required | Required | MVP |
 | AGT-008 | The run context is passed explicitly | Required | Required | MVP |
-| AGT-009 | Model calls are separated behind the `ChatClient` port | Required | Required | MVP |
+| AGT-009 | Model calls are separated behind the `ModelClient` port | Required | Required | MVP |
 | AGT-010 | Optional model capabilities are exposed as separate interfaces | Required | Required | MVP |
-| AGT-011 | Request options keep provider-neutral keys as the primary contract | Required | Required | MVP |
+| AGT-011 | Common request options use a typed provider-neutral contract | Required | Required | MVP |
 | AGT-012 | The option merge precedence is fixed | Required | Required | MVP |
 | AGT-013 | The model client can be replaced per run | Required | Recommended | Core+ |
 | AGT-014 | A continuation run cannot carry new input as well | Required | Required | Core+ |
@@ -137,25 +137,36 @@ be "has the stream ended", not "has the final object been read".
 
 ---
 
-## AGT-005 Cancellation is passed as an explicit argument
+## AGT-005 Every run exposes an explicit cancellation signal
 
-**Requirement.** The cancellation signal must be an explicit argument of the public run API.
-Cancellation is not read from a thread local or an implicit execution context.
+**Requirement.** The canonical run request must carry an explicit cancellation signal, and run
+handles created by execution must provide a cancel operation that triggers the same signal.
+Convenience overloads may create the signal on the caller's behalf but must return the connected
+handle. Cancellation is not read from a thread local or an implicit execution context, and the core
+contract must not be tied to a framework-specific cancellation type.
 
 **Upstream comparison**
 
 - .NET: takes a `CancellationToken` as an argument of every run method.
 - Python: relies on the implicit task cancellation of asyncio.
 
-**Decision.** The .NET approach is chosen. Java has no standard implicit cancellation equivalent to
-asyncio. Making cancellation an explicit argument lets a host propagate its request timeout
-unchanged, and a missing cancellation hand-off shows up at compile time or in review.
+**Decision.** The explicitness of the .NET approach is chosen without directly translating
+`CancellationToken`. Java cancellation is split across `Future.cancel`, `Flow.Subscription.cancel`,
+thread interruption, and HTTP client abort. The core signal must bridge these paths so that a host
+can propagate request timeouts and client aborts without loss.
 
 **Acceptance criteria**
 
-- Both the completed run and the streaming run take a cancellation argument.
+- The canonical completed-run and streaming-run requests carry a non-null cancellation signal.
+- A convenience `run(String)` or equivalent delegates to the canonical request with a newly created
+  signal; it does not use a hidden thread-local signal.
+- The run handle returned or exposed by each execution path has a cancel operation that triggers the
+  same cancellation signal.
 - When cancellation fires, it propagates into the model call and the tool calls in flight.
 - A cancelled run is not reported as a success.
+- Cancellation initiated through `Future`, `Flow.Subscription`, or thread interruption can be
+  bridged to the core signal, and core cancellation propagates to the corresponding adapter
+  cancellation path.
 
 **Evidence** [03 Java decisions](../upstream/snapshots/d0a4165f/features/03-model-execution.md)
 
@@ -239,7 +250,7 @@ uses.
 
 ---
 
-## AGT-009 Model calls are separated behind the `ChatClient` port
+## AGT-009 Model calls are separated behind the `ModelClient` port
 
 **Requirement.** The agent must not call a model provider SDK directly; it must call the model only
 through the model call port defined by the core.
@@ -251,7 +262,8 @@ through the model call port defined by the core.
 
 **Decision.** Both upstreams agree. Without this separation, neither provider replacement nor
 deterministic testing is possible. This port is owned by `agent-framework-api` and implemented by
-provider adapters.
+provider adapters. The Java public name is `ModelClient` to avoid an import collision with Spring
+AI's `ChatClient`.
 
 **Acceptance criteria**
 
@@ -286,26 +298,31 @@ mismatch rather than a failed runtime string lookup.
 
 ---
 
-## AGT-011 Request options keep provider-neutral keys as the primary contract
+## AGT-011 Common request options use a typed provider-neutral contract
 
-**Requirement.** Common request options such as temperature and maximum tokens must be defined as
-core types, and provider-specific options must be held in a separate area. Provider-specific keys
-are not mixed into the same plane as the common options.
+**Requirement.** Common request options such as temperature and maximum tokens must be defined in a
+typed, immutable core contract, and provider-specific options must be held in adapter-owned types.
+Provider-specific keys and `Map<String, Object>` values are not mixed into the same plane as the
+common options.
 
 **Upstream comparison**
 
 - .NET: provides a rich `ChatOptions` and merge rules.
 - Python: has common options and enforces constraints with a separate validation function.
 
-**Decision.** Both upstreams keep the common options as the primary contract. Java takes the same
-structure but separates provider-specific options so that swapping an adapter immediately reveals
-which settings do not carry over.
+**Decision.** Both upstreams keep the common options as the primary contract. Java combines .NET's
+typed properties with Python's extensibility. A builder validates the types and ranges of common
+values, while adapter-owned immutable options keep provider-only settings separate so that the
+compiler and IDE reveal which settings do not carry over when an adapter is replaced.
 
 **Acceptance criteria**
 
 - A run that uses only common options keeps working when the provider is changed.
 - A provider-specific option can be told apart by the provider it belongs to.
 - Giving a provider-specific option to a provider that does not support it is not silently ignored.
+- Supplying an invalid Java type for temperature or maximum tokens either does not compile or fails
+  with `IllegalArgumentException` when the builder constructs the options, rather than being
+  deferred to a cast inside an adapter.
 
 **Evidence** [03 Request options](../upstream/snapshots/d0a4165f/features/03-model-execution.md)
 

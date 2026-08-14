@@ -95,22 +95,29 @@ dual ownership easily conflicts with external automatic execution in Java.
 
 ## TOOL-003 Input schema is inferred but an explicit schema wins
 
-**Requirement.** The tool input schema is inferred from the function signature by default, but
-when an explicit schema is provided it must completely overwrite the inferred result.
+**Requirement.** The tool input schema is inferred from trustworthy Java type and parameter
+metadata, but when an exact name or generic type is unavailable the implementation must not guess
+and must require an explicit schema. When an explicit schema is provided, it must completely
+overwrite the inferred result.
 
 **Upstream comparison**
 
 - .NET: no first-class schema inference helper exists; externally prepared tool definitions are accepted.
 - Python: supports both signature inference and explicit Pydantic/JSON Schema overrides.
 
-**Decision.** The Python approach is chosen. Java can infer from annotations and type information.
-However, a human-authored explicit schema is more trustworthy, so its precedence is fixed.
+**Decision.** Python's convenience is adopted without making runtime reflection the only standard
+path. Java parameter names are not guaranteed without `-parameters` or an explicit annotation, and
+generic types may be erased. Annotation processors, explicit metadata, and pluggable schema
+generators fit the same contract, while insufficient metadata fails closed.
 
 **Acceptance criteria**
 
 - A simple function definition alone produces an object-type input schema.
 - When an explicit schema is provided, descriptions, required fields, and constraints come from the explicit values rather than inferred values.
 - Explicit and inferred schemas are not partially merged.
+- When a parameter name or generic type is not trustworthy, no guessed schema such as `arg0` is
+  exposed and an explicit schema is required.
+- The core schema API exposes no Jackson, Spring, or provider SDK type token.
 
 **Evidence** [05 Function tool definition / decorator / schema generation](../upstream/snapshots/d0a4165f/features/05-function-tools.md)
 
@@ -262,7 +269,8 @@ fix documentation and tests together.
 
 - When configuration is omitted, `enabled=true` and `includeDetailedErrors=false` are populated.
 - `maxIterations` and `maxConsecutiveErrorsPerRequest` reject values less than 1.
-- `maxFunctionCalls` accepts only `null` or a positive number.
+- `maxFunctionCalls` may be omitted or set to a positive number. The Java public API does not use
+  `null` as a valid option value.
 
 **Evidence** [05 Public API and types](../upstream/snapshots/d0a4165f/features/05-function-tools.md),
 [05 Invocation configuration / layers / budgets](../upstream/snapshots/d0a4165f/features/05-function-tools.md)
@@ -346,23 +354,28 @@ makes the control flow ambiguous.
 
 ## TOOL-013 Tool results are normalized to a `Content` list
 
-**Requirement.** Tool return values must be normalized to a `Content` list by default, and raw
-result bypass must be allowed only as an explicit opt-in.
+**Requirement.** Tool return values must be normalized to a `Content` list or explicit `ToolResult`
+by default, and raw result bypass must be allowed only as an explicit opt-in. A `null` return from a
+typed handler is not a successful result.
 
 **Upstream comparison**
 
 - .NET: repo-local core focuses on the underlying function call seam rather than result normalization rules.
 - Python: normalizes `None`, strings, a single `Content`, and arbitrary objects to `list[Content]`, with `SKIP_PARSING` as a separate opt-in.
 
-**Decision.** The Python approach is chosen. The model and session layers must operate
-content-first. Allowing raw results only as an exception path for debug or special adapters is
-safer.
+**Decision.** Python's content-first semantics are retained without directly translating `None` to
+Java `null`. A `void`/`Consumer` convenience adapter makes the upstream `None` to `[""]` behavior
+explicit, while a `null` from a typed `ToolHandler` is an implementation error. Engine assembly
+provides a default result mapper that converts arbitrary objects to JSON-safe content, and an
+adapter may replace it.
 
 **Acceptance criteria**
 
-- A `null` return is normalized to a single empty-string text result.
+- A `void` convenience handler is normalized to one empty-string text content.
+- A typed handler that returns `null` fails with `IllegalStateException`.
 - A string return becomes a single text content.
-- An arbitrary object return is normalized to JSON text or an equivalent structured text.
+- An arbitrary object return is normalized through the default result mapper to JSON text or an
+  equivalent JSON-safe structured content, and an explicit mapper replaces the default.
 - Unless raw result bypass is enabled, a raw JVM object does not propagate up to the outer loop as-is.
 
 **Evidence** [05 Parallel calls and execution result semantics](../upstream/snapshots/d0a4165f/features/05-function-tools.md)

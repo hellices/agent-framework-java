@@ -120,9 +120,10 @@ tools, and workflows.
 
 ### 4.3 Spring and Spring AI integration
 
-Spring Boot is used as an actual host runtime. The starter composes `AgentEngine`, the port
-implementations, and the interceptors as beans, while the core never references
-`ApplicationContext`.
+Spring Boot is used as an actual host runtime. The auto-configuration module composes `AgentEngine`,
+`AgentFactory`, the port implementations, and the interceptors as beans. The starter aggregates the
+auto-configuration and its dependencies but contains no production classes. The core never
+references `ApplicationContext`.
 
 Spring AI is not a required dependency. Only the following capabilities are connected optionally,
 after the core contract is stable.
@@ -142,9 +143,10 @@ store.
 and a Spring AI conversation ID are merely internal session metadata and are not used as an
 authorization boundary or an external identifier.
 
-A session store implementation must be able to handle optimistic concurrency control, tenant and
-user ownership, expiration, and the serialization version. The storage technology and the
-transactions are decided by the host and the infrastructure adapter.
+A session store implementation declares its concurrency semantics, tenant and user ownership,
+expiration, and serialization version. A file store preserves atomic-replace last-writer-wins;
+database adapters may expose optimistic compare-and-save as a capability. The storage technology and
+transactions are decided by the host and infrastructure adapter.
 
 ### 4.5 Observability
 
@@ -180,8 +182,13 @@ agent-framework-java/
 │   ├── agent-framework-mcp
 │   ├── agent-framework-spring-ai
 │   └── agent-framework-spring-boot-autoconfigure
+├── hosting/
+│   ├── agent-framework-hosting-core
+│   └── agent-framework-standalone
 ├── starters/
 │   └── agent-framework-spring-boot-starter
+├── protocols/
+├── workflow/
 ├── compatibility-tests/
 └── samples/
     ├── standalone-agent
@@ -197,7 +204,8 @@ modules are not created as empty modules in the initial repository.
 - The API does not depend on an external application framework.
 - The engine depends only on the API and does not depend on Spring.
 - Provider and integration modules implement public ports and do not reference engine internals.
-- Spring Boot autoconfigure is responsible for composition, and the core never references a starter in return.
+- Standalone or framework-native auto-configuration is responsible for composition, and the core
+  never references a starter in return.
 - Samples are not referenced from a product artifact.
 - Compatibility tests verify product behavior only through the public API.
 
@@ -219,7 +227,8 @@ is evidence that the actual release cadence and the compatibility requirements h
 - one OpenAI-compatible or Azure OpenAI family provider
 - direct integration with the MCP Java SDK
 - OpenTelemetry observability
-- a minimal starter that composes the engine in Spring Boot
+- Spring Boot auto-configuration that composes the engine/factory/default Agent, plus a
+  dependency-only starter
 - standalone and Spring Boot samples
 
 ### 6.2 Excluded from the MVP
@@ -269,7 +278,10 @@ pass the contract tests.
 ### Stage 3: a direct provider and Spring Boot hosting
 
 - Connect one provider adapter end to end.
-- Have Spring Boot autoconfigure and the starter compose the engine from host resources.
+- Prove the semantic kernel first with the direct provider and standalone assembly; the provider
+  owns protocol translation, not the tool/session/interceptor loop.
+- Have Spring Boot auto-configuration compose the engine, model catalog, factory, and conditional
+  default Agent from host resources; the starter only aggregates dependencies.
 - Use the same agent definition in the standalone and Spring Boot samples.
 
 The exit condition is that the same golden scenarios pass on both hosts without changing the agent

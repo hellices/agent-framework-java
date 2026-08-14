@@ -26,13 +26,13 @@ The `Grade` column in this document is, as [README](README.md#requirement-grades
 | HOST-001 | The hosting model and the wire protocol are separated | Required | Required | Core+ |
 | HOST-002 | The session contracts are owned by the API and the engine | Required | Required | Core+ |
 | HOST-003 | The hosting core is responsible only for binding and state coordination | Required | Required | Core+ |
-| HOST-004 | Target resolution supports instances, factories, async factories, and builders | Required | Required | Core+ |
+| HOST-004 | Target resolution uses one framework-neutral async resolver contract | Required | Required | Core+ |
 | HOST-005 | Session continuity guarantees a working copy and a single-creation rule | Required | Required | Core+ |
 | HOST-006 | Workflow continuation follows restore-then-run with a durable fallback | Required | Required | Workflow |
 | HOST-007 | In-memory continuity is kept as a development convenience only | Required | Required | Hosting |
 | HOST-008 | Authentication, authorization, the single writer, and scaling are the host's responsibility | Required | Required | Hosting |
 | HOST-009 | A raw service session identifier is not an authorization boundary | Required | Required | Hosting |
-| HOST-010 | The Spring host binder is split into an optional module | Required | Required | Hosting |
+| HOST-010 | Host framework binders are split into optional framework-specific modules | Required | Required | Hosting |
 | HOST-011 | The Responses adapter separates request parsing from session key extraction | Optional | Required | Hosting |
 | HOST-012 | The default Responses mapping strictly rejects caller overrides | Optional | Required | Hosting |
 | HOST-013 | Responses continuation distinguishes a branch pointer from a mutable head | Optional | Required | Hosting |
@@ -129,22 +129,28 @@ responsibilities.
 
 ---
 
-## HOST-004 Target resolution supports instances, factories, async factories, and builders
+## HOST-004 Target resolution uses one framework-neutral async resolver contract
 
-**Requirement.** The hosting core must support target resolution based on a direct instance, a sync
-factory, an async factory, and a builder, together with an explicit cache policy.
+**Requirement.** The hosting core must resolve agent and workflow targets through one
+framework-neutral `TargetResolver<T>` or equivalent async contract. Direct instances, sync
+factories, async factories, and builders must be accepted through convenience adapters, while cache
+and lifecycle policies remain separate from the resolver's input form.
 
 **Upstream comparison**
 
 - .NET: AddAIAgent/AddWorkflow provide a custom factory and a lifetime choice.
 - Python: AgentState/WorkflowState support instances, callables, awaitables, SupportsBuild, and cache_target on/off.
 
-**Decision.** Both solve the same problem. Java adopts Python's breadth of input shapes together
-with .NET's lifecycle selectivity to lower the cost of host assembly.
+**Decision.** Both solve the same problem, but fixing four input forms as public overloads or a union
+would duplicate support for Spring `ObjectProvider`, Quarkus and Jakarta CDI `Instance<T>`, and
+plain Java `Supplier<T>`. One resolver port with small adapter factories better preserves interface
+segregation and DI-container neutrality.
 
 **Acceptance criteria**
 
-- The same agent or workflow can be registered as an instance, a factory, an async factory, or a builder.
+- The same agent or workflow can be registered from an instance, a `Supplier`, a
+  completion-returning factory, or a builder through resolver adapters.
+- The hosting execution path does not branch on the resolver's concrete source.
 - The difference between the cache on and off settings is observable across repeated runs.
 
 **Evidence** [20 hosting](../upstream/snapshots/d0a4165f/features/20-hosting.md)
@@ -269,23 +275,34 @@ requirement.
 
 ---
 
-## HOST-010 The Spring host binder is split into an optional module
+## HOST-010 Host framework binders are split into optional framework-specific modules
 
-**Requirement.** Spring MVC/WebFlux route binding, the SSE writer, HTTP error mapping, and the
-principal-derived isolation helpers must live in an optional module separate from the hosting core.
+**Requirement.** Route binding, streaming writers, HTTP error mapping, and principal-derived
+isolation helpers for Spring MVC/WebFlux, Quarkus REST, and Jakarta REST/CDI must live in optional,
+framework-specific modules separate from the hosting core. Plain Java assembly must use the same
+hosting ports through builders and constructors.
 
 **Upstream comparison**
 
 - .NET: Keeps the host seam in separate packages such as Hosting.AspNetCore, Hosting.A2A.AspNetCore, and Hosting.AGUI.AspNetCore.
 - Python: Prefers a helper-first seam that minimizes the framework package or writes app-owned routes directly.
 
-**Decision.** In the Java ecosystem the Spring dependency is heavy. The .NET structure of a separate
-host seam is therefore taken, while the generic core stays framework-independent as in Python.
+**Decision.** Java adopts .NET's separate host seam without making one Java container the standard.
+Spring Boot uses auto-configuration and a starter, Jakarta EE uses CDI producers or a portable
+extension, and Quarkus is a first-class extension with stable runtime and deployment artifacts. The
+runtime artifact owns the extension descriptor and consumer API; the deployment artifact owns build
+steps and native or other build-time integration.
 
 **Acceptance criteria**
 
-- The hosting core module does not carry a Spring dependency directly.
-- Removing the Spring binder module still leaves the protocol adapters and the core tests intact.
+- The hosting core module has no direct Spring, Quarkus, or Jakarta EE dependency.
+- Removing any binder module still leaves the protocol adapters and core tests intact.
+- A framework adapter does not pass a container-owned request scope, security context, executor, or
+  transaction lifecycle into the core.
+- Reactor and Mutiny types are converted in adapters to `Flow.Publisher` or an equivalent core
+  streaming port and do not appear in the core API.
+- Quarkus runtime/deployment siblings and the extension descriptor exist from the first release so
+  that CLI and platform tooling recognize the integration as an extension.
 
 **Evidence** [20 hosting](../upstream/snapshots/d0a4165f/features/20-hosting.md),
 [22 a2a](../upstream/snapshots/d0a4165f/features/22-a2a.md),
@@ -506,7 +523,8 @@ meaning of task resume and refinement ambiguous.
 ## HOST-020 The A2A host distinguishes the message, task, and artifact lifecycles
 
 **Requirement.** The A2A host must surface immediate messages, in-progress tasks, and artifact updates
-as different lifecycles.
+as different lifecycles and must preserve protocol or local cancellation as the terminal
+`CANCELED` task state.
 
 **Upstream comparison**
 
@@ -520,6 +538,8 @@ long-running work and partial artifacts disappear.
 
 - An immediately completed response can end on the message surface, while work in progress exposes the task state and continuation information.
 - Streaming chunks of the same logical response keep append semantics under a stable artifact id.
+- An A2A cancel request or local cancellation ends as task `CANCELED`, not as an ordinary failure.
+- No event or artifact update is published after the terminal `CANCELED` state.
 
 **Evidence** [22 a2a](../upstream/snapshots/d0a4165f/features/22-a2a.md)
 
@@ -743,7 +763,7 @@ maturity differ per protocol, optional artifacts fit Java too.
 
 | Topic | Owning document |
 | --- | --- |
-| The execution contract of Agent and ChatClient | [01 Agent execution and model calls](01-agent-execution.md) |
+| The execution contract of Agent and ModelClient | [01 Agent execution and model calls](01-agent-execution.md) |
 | The session serialization format and the internal structure of the stores | [06 Sessions and conversation state](06-sessions.md) |
 | Workflow graphs and checkpoint semantics | [09 Workflows and orchestration](09-workflows.md) |
 | Observability, the error taxonomy, packaging policy | [11 Operational quality](11-operations.md) |

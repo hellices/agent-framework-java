@@ -37,7 +37,7 @@ The `Grade` column in this document is, as [README](README.md#requirement-grades
 | HAR-014 | Skills keep progressive disclosure and the three tool surfaces | Deferred | Recommended | Optional |
 | HAR-015 | Skill script execution requires approval by default | Deferred | Required | Optional |
 | HAR-016 | File-based skills and detailed errors are handled so they do not cross the trust boundary | Deferred | Required | Optional |
-| HAR-017 | Background agents are left out of the MVP and start from a polling registry even later | Deferred | Recommended | Optional |
+| HAR-017 | Background agents are left out of the MVP and start from an instance-scoped polling store | Deferred | Recommended | Optional |
 | HAR-018 | Shell execution is assembled manually from a separate tools module | Deferred | Optional | Optional |
 | HAR-019 | The denylists of shell and local execution are documented as guardrails only | Deferred | Required | Optional |
 | HAR-020 | LocalCodeAct is not treated as a sandbox and is excluded from the core | Deferred | Optional | Optional |
@@ -425,11 +425,12 @@ Java keeps detailed errors as an optional feature only and keeps the default on 
 
 ---
 
-## HAR-017 Background agents are left out of the MVP and start from a polling registry even later
+## HAR-017 Background agents are left out of the MVP and start from an instance-scoped polling store
 
 **Requirement.** Background agents must not be included in the Java core harness MVP, and even when
-they are introduced in a later stage they must start from a polling task registry contract rather
-than real-time push.
+they are introduced in a later stage they must start from a polling task store contract rather than
+real-time push. The store must be an instance-scoped resource injected by the harness or host, not a
+static or global registry.
 
 **Upstream comparison**
 
@@ -445,6 +446,8 @@ be designed together, which makes it hard to put in Core+.
 - The core harness module does not provide background task tools by default.
 - Even when a later module is added, the default status query contract is a polling API.
 - A task that has lost its runtime reference transitions to an explicit `LOST` state.
+- Two harness instances do not share background task state globally; the injected store
+  implementation determines durability and lifecycle.
 
 **Evidence** [13 Background agents](../upstream/snapshots/d0a4165f/features/13-skills-background-code.md)
 

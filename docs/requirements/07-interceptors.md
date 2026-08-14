@@ -23,7 +23,7 @@ The `Grade` column in this document is, as [README](README.md#requirement-grades
 | INT-001 | The public extension points are fixed as typed interceptors, one per responsibility | Required | Required | MVP |
 | INT-002 | Interceptors do not reimplement DI, transactions, security, or AOP | Required | Required | MVP |
 | INT-003 | Registration order determines pre-processing order and wrapping direction | Required | Required | MVP |
-| INT-004 | The interceptor context is explicit and mutable | Required | Required | MVP |
+| INT-004 | The interceptor context is explicit with controlled typed mutations | Required | Required | MVP |
 | INT-005 | Installing on an unsupported seam fails immediately | Required | Required | MVP |
 | INT-006 | Not calling `next` short-circuits the execution | Required | Required | MVP |
 | INT-007 | Post-processing can replace the result | Required | Required | MVP |
@@ -124,25 +124,32 @@ both the builder and the runtime.
 
 ---
 
-## INT-004 The interceptor context is explicit and mutable
+## INT-004 The interceptor context is explicit with controlled typed mutations
 
 **Requirement.** Each seam must use an explicit context object carrying the messages, options,
-session, metadata, result, and stream hooks, and must not depend on a global thread local.
+session, metadata, result, and stream hooks, and must not depend on a global thread local. Inputs and
+core-owned state must be immutable; result replacement and extension-attribute mutation are allowed
+only through typed APIs.
 
 **Upstream comparison**
 
 - .NET: Decorator and callback shapes are more central than a typed context object, but execution options and the function context are passed explicitly.
 - Python: `AgentContext`, `ChatContext`, and `FunctionInvocationContext` keep metadata and a mutable result on a shared surface.
 
-**Decision.** Python's explicit context model is adopted. In Java asynchronous execution and
-streaming, a context object is safer than global state. The `.NET` callback experience is used only
-as a reference for designing the context fields.
+**Decision.** Python's explicit context semantics are adopted without translating its context into
+a shared mutable object. In Java asynchronous execution and streaming, arbitrary setters and
+`Map<String, Object>` create race conditions and namespace collisions. An immutable request
+snapshot, controlled result replacement, and typed `ContextKey<T>` provide the same extensibility
+more safely.
 
 **Acceptance criteria**
 
 - There is a public context type corresponding to each seam.
 - An interceptor can read and replace the result through the context.
 - Reading the metadata needed during execution does not require calling a thread-local API.
+- An interceptor cannot change core-owned inputs or session identity through arbitrary setters.
+- Extension attributes use a `ContextKey<T>` that identifies the value type, and a key collision
+  fails explicitly; the public extension surface does not expose `Map<String, Object>`.
 
 **Evidence** [10 API/types](../upstream/snapshots/d0a4165f/features/10-middleware.md),
 [10 state](../upstream/snapshots/d0a4165f/features/10-middleware.md),

@@ -51,7 +51,7 @@ core, adding long-tail providers and writing test doubles becomes sharply harder
 **Acceptance criteria**
 
 - No specific provider SDK enters the core build classpath directly.
-- A provider adapter connects to the core by implementing the neutral ChatClient or an equivalent SPI.
+- A provider adapter connects to the core by implementing the neutral `ModelClient` or an equivalent SPI.
 
 **Evidence** [31 provider-integrations](../upstream/snapshots/d0a4165f/features/31-provider-integrations.md)
 
@@ -193,7 +193,7 @@ together.
 
 **Acceptance criteria**
 
-- The common ChatClient or Agent SPI does not directly require option fields specific to a particular provider.
+- The common `ModelClient` or Agent SPI does not directly require option fields specific to a particular provider.
 - Whether a dedicated feature is used is stated through a capability query or an adapter-specific type.
 
 **Evidence** [31 provider-integrations](../upstream/snapshots/d0a4165f/features/31-provider-integrations.md)

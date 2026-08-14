@@ -86,22 +86,24 @@ and allowing custom values does not block provider extensions or intermediate re
 
 ## MSG-003 Input is normalized to a message list
 
-**Requirement.** The core must normalize `null`, a string, a single `Content`, a single
-`Message`, and a message sequence into a consistent `List<Message>`, promoting strings and single
-`Content` values to a single user message.
+**Requirement.** The core must normalize a string, a single `Content`, a single `Message`, and a
+message sequence into a consistent `List<Message>`, promoting strings and single `Content` values
+to a single user message. No input is represented by a dedicated no-input entry point or an empty
+list; `null` is rejected.
 
 **Upstream comparison**
 
 - .NET: The string execution overload wraps the string into a single `user` message.
 - Python: `normalize_messages()` normalizes `None`, `str`, `Content`, `Message`, and mixed sequences.
 
-**Decision.** The broader normalization scope from Python is adopted. Java also allows convenience
-inputs, but the internal canonical form must be a single type so that interceptors, sessions, and
-tests always see the same data type.
+**Decision.** Python's range of convenience inputs is adopted, but `None` is not translated to Java
+`null`. Converting `null` to an empty list would hide caller mistakes. A no-input overload and
+`List.of()` express the same intent while preserving a non-null contract.
 
 **Acceptance criteria**
 
-- Normalizing a `null` input yields an empty list.
+- The no-input entry point and an empty-list input both normalize to an empty list.
+- A `null` input fails immediately at the public boundary.
 - Normalizing a string input yields a single text message with the `user` role.
 - Normalizing a single `Content` input yields a single message with the `user` role.
 - An existing `Message` list input is preserved without reordering.
@@ -147,16 +149,17 @@ distinct kinds.
 - .NET: The core does not define its own taxonomy and preserves the external `AIContent` hierarchy opaquely.
 - Python: A single `Content` union model directly represents text, media, tool calls, usage, hosted assets, and more.
 
-**Decision.** Python's breadth is adopted, but it is resolved in a Java-idiomatic way using a
-sealed hierarchy or tagged union. If the core does not know the basic kinds and passes everything
-opaquely, common semantics like tool results, usage, and hosted assets cannot be fixed as test and
-serialization contracts.
+**Decision.** Python's breadth is adopted, but Java combines known core kinds with a provider
+extension envelope. A purely sealed hierarchy would require a core change for every new provider
+content kind. The core must understand common kinds while preserving unknown kinds without loss.
 
 **Acceptance criteria**
 
 - The six categories above are represented as distinct discriminators or subtypes.
 - Text content and tool call content are not mixed within the same type branch.
 - Each content's own kind can be identified in the core JSON representation.
+- New provider content round-trips in a typed extension envelope without changing the core
+  hierarchy or registering a global factory.
 
 **Evidence** [02 Content model and multimodal representation](../upstream/snapshots/d0a4165f/features/02-message-content.md),
 [02 Java decision](../upstream/snapshots/d0a4165f/features/02-message-content.md)
@@ -190,24 +193,29 @@ correct.
 
 ## MSG-007 Additional properties and the raw representation are preserved
 
-**Requirement.** All message, content, response, and update types must preserve
-`additionalProperties` and `rawRepresentation`, and the core must treat these two fields only as
-public escape hatches.
+**Requirement.** All message, content, response, and update types must separately preserve
+JSON-safe additional properties and an optional raw provider representation. Additional properties
+are durable typed extension values. A raw representation is an adapter-local, transient diagnostic
+handle and is not serialized into a session unless a codec has been registered for it.
 
 **Upstream comparison**
 
 - .NET: `AgentResponse` and `AgentResponseUpdate` have `AdditionalProperties` and `RawRepresentation`.
 - Python: `Message`, `Content`, `ChatResponse`, `AgentResponse`, and update types all have the same two fields.
 
-**Decision.** Both upstreams agree. An escape hatch is needed to avoid losing provider-specific
-metadata and debug-purpose raw objects. However, core semantic rules must not depend on these
-fields.
+**Decision.** Both upstreams agree on preserving provider metadata and debug-purpose originals.
+However, directly translating a Python or .NET SDK object into one Java `Object` field creates
+class-loader, native-image, and serialization-safety problems. Durable extension values and
+transient native handles therefore have separate lifetimes.
 
 **Acceptance criteria**
 
 - An `additionalProperties` key/value set by an adapter can be read back from the same object.
 - The presence of `rawRepresentation` does not change text projection or response reconstruction rules.
 - Core public requirements do not assume the concrete type of `rawRepresentation`.
+- An unregistered provider SDK object is not automatically serialized into a session snapshot.
+- An additional-property key identifies its namespace and value type, and a collision with another
+  adapter fails explicitly.
 
 **Evidence** [02 State and persistence](../upstream/snapshots/d0a4165f/features/02-message-content.md),
 [02 Java decision](../upstream/snapshots/d0a4165f/features/02-message-content.md)

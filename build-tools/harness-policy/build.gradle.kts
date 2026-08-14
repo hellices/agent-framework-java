@@ -1,4 +1,4 @@
-import com.microsoft.agentframework.build.logic.RepositoryPolicyInputs
+import io.github.hellices.agentframework.build.logic.RepositoryPolicyInputs
 
 plugins {
     id("agentframework.java-library-conventions")
@@ -20,7 +20,7 @@ dependencies {
 //
 // `RepositoryPolicyInputs` removes build output by location: only a directory that actually is a
 // Gradle project root loses its own `build` directory. Removing it by name would also remove
-// `build-tools/harness-policy/src/test/java/com/microsoft/agentframework/build/harness`, where
+// `build-tools/harness-policy/src/test/java/io/github/hellices/agentframework/build/harness`, where
 // these policies live; removing it by depth would also remove `docs/build/` and `docs/*/build/`,
 // so a canonical document under a `build` path segment would stop invalidating the policies.
 val repositoryPolicySources = RepositoryPolicyInputs.repositoryPolicySources(project)

@@ -16,7 +16,8 @@ agent-framework-testkit/        Deterministic fixtures
 agent-framework-bom/            Version alignment
 
 providers/                      Model provider adapters
-integrations/                   MCP, Spring AI, memory, storage adapters
+integrations/                   MCP, Spring AI, memory, storage, and executable framework adapters
+hosting/                        Framework-neutral target/session/checkpoint coordination
 starters/                       Host framework starters
 protocols/                      Responses, A2A, AG-UI, MCP server hosting
 workflow/                       Workflow graph and orchestration
@@ -29,7 +30,7 @@ config/                         Checkstyle, PMD, SpotBugs configuration
 docs/                           Requirements, design, upstream analysis
 ```
 
-Planned grouping directories are `providers/`, `integrations/`, `starters/`, `protocols/`,
+Planned grouping directories are `providers/`, `integrations/`, `hosting/`, `starters/`, `protocols/`,
 `workflow/`, `compatibility-tests/`, and `samples/`. `build-tools/` already exists for harness code.
 This list is closed and mirrored in `ModuleCompositionPolicyTest`; a project registered outside it,
 or nested more than one level deep, fails `policyCheck`.
@@ -54,9 +55,11 @@ This project's planned modules are heterogeneous: a provider adapter, a protocol
 starter, and a sample have almost nothing in common. At 20 to 30 modules a flat root would force a
 reader to infer families from name prefixes alone.
 
-Deeper nesting is rejected. Quarkus splits each extension into `runtime/` and `deployment/`, which
-earns its complexity because a Quarkus extension genuinely executes in two build phases. This
-project has no such split, so a second level would add path depth without adding meaning.
+Deeper nesting is rejected. Quarkus splits each extension into runtime and deployment artifacts,
+which earns its complexity because a Quarkus extension genuinely executes in two build phases. This
+project uses sibling `quarkus-agent-framework` and `quarkus-agent-framework-deployment` leaf modules
+from the first release so Quarkus CLI/platform tooling recognises a real extension. A second directory
+level would add path depth without adding published identity.
 
 ## Product projects
 
@@ -82,6 +85,20 @@ project has no such split, so a second level would add path depth without adding
 - Samples use a `sample-` prefix and are never published, so an artifact search never returns one.
 - Compatibility modules name the surface they verify, such as `compatibility-tests/openai-responses`.
 
+### Namespace ownership
+
+This repository is a community implementation and does not own Microsoft's Maven or Java namespace.
+
+- Maven group: `io.github.hellices.agentframework`
+- Java package root: `io.github.hellices.agentframework`
+- artifact ids retain the neutral `agent-framework-*` naming
+
+Do not publish `com.microsoft.*` classes or coordinates unless the project is formally transferred to
+Microsoft and the namespace migration is reviewed. Before the first public release, a transfer may
+rename the namespace directly. After a public release, an official namespace uses a new major line
+and an explicit compatibility/migration artifact; it never creates split packages or silently changes
+the package of an existing coordinate.
+
 ## Rules
 
 1. Every library project applies `agentframework.java-library-conventions`,
@@ -93,9 +110,9 @@ project has no such split, so a second level would add path depth without adding
 5. No product project depends on `:build-tools:harness-policy`.
 6. Every project registered in `settings.gradle.kts` exists on disk with a build file.
 7. Dependency versions come from `gradle/libs.versions.toml`. Build files declare no inline version.
-8. The group is `com.microsoft.agentframework` and the version is repository wide.
-9. Java packages start with `com.microsoft.agentframework`. Harness build code uses
-   `com.microsoft.agentframework.build.harness`.
+8. The group is `io.github.hellices.agentframework` and the version is repository wide.
+9. Java packages start with `io.github.hellices.agentframework`. Harness build code uses
+   `io.github.hellices.agentframework.build.harness`.
 
 ## Why the graph points this way
 

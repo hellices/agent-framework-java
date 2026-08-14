@@ -23,9 +23,9 @@ The `Grade` column in this document is, as [README](README.md#requirement-grades
 | SES-002 | The service conversation identifier is not an authorization boundary | Required | Required | MVP |
 | SES-003 | The session is the single source of truth for persisted conversation state | Required | Required | MVP |
 | SES-004 | Durable snapshots enforce a type-and-version envelope | Required | Required | Core+ |
-| SES-005 | Session state is serialized via a stable type registry | Required | Required | Core+ |
+| SES-005 | Session state is serialized via an immutable instance-scoped codec registry | Required | Required | Core+ |
 | SES-006 | State values are strictly validated before durable storage | Required | Required | Core+ |
-| SES-007 | The in-memory store returns branch-safe copies | Required | Required | Core+ |
+| SES-007 | The in-memory store returns branch-safe independent snapshots | Required | Required | Core+ |
 | SES-008 | The file store replaces atomically and last writer wins | Required | Recommended | Core+ |
 | SES-009 | The file-based session store prevents path traversal | Required | Required | Core+ |
 | SES-010 | Parsing corruption and schema mismatch are distinguished for recovery | Required | Required | Core+ |
@@ -143,24 +143,30 @@ long-term compatibility.
 
 ---
 
-## SES-005 Session state is serialized via a stable type registry
+## SES-005 Session state is serialized via an immutable instance-scoped codec registry
 
-**Requirement.** Custom session state must be serialized through a registry that registers stable
-type ID and codec pairs, and framework-owned default types must be pre-registered.
+**Requirement.** Custom session state must be serialized through an instance-scoped registry of
+stable type ID and codec pairs. Framework-owned default types must be registered during assembly,
+and the registry must become immutable when assembly completes. A process-global registry,
+class-name-based automatic restoration, and `Class.forName` must not be used.
 
 **Upstream comparison**
 
 - .NET: `StateBag` provides typed access, but no Python-style public type-id registry is confirmed in the inspected core path.
 - Python: `register_state_type()` enforces stable type id, codec pair, and framework default type pre-registration.
 
-**Decision.** The Python approach is adopted. The default Java JSON mapper alone cannot safely
-restore types during cold-start recovery. An explicit registry is more predictable.
+**Decision.** Python's explicit type IDs are adopted without translating its registry into a
+process-global function. The same registry instance is injected by a Java DI container or a plain
+Java builder and frozen after assembly, which keeps class-loader and native-image behavior
+predictable.
 
 **Acceptance criteria**
 
 - The same type cannot be registered under two different type ids.
 - The same type id cannot be reused for a different type.
 - Framework default message types are serialized and restored without additional registration.
+- Registries owned by different engine instances do not share state.
+- A runtime class is not loaded solely from a class name found in a snapshot.
 
 **Evidence** [08 public API/types](../upstream/snapshots/d0a4165f/features/08-sessions.md),
 [08 extension points](../upstream/snapshots/d0a4165f/features/08-sessions.md),
@@ -192,25 +198,28 @@ snapshots explode belatedly in production environments. The safer default is rej
 
 ---
 
-## SES-007 The in-memory store returns branch-safe copies
+## SES-007 The in-memory store returns branch-safe independent snapshots
 
-**Requirement.** The in-memory session store must use copies at both save time and retrieval time
-and must not return live references directly.
+**Requirement.** At both save time and retrieval time, the in-memory session store must use
+immutable values or structurally independent snapshots and must not return live mutable references.
+Absence must be represented by `Optional` or an equivalent explicit result, not by `null`.
 
 **Upstream comparison**
 
 - .NET: An equivalent public in-memory session store contract is not confirmed in the inspected scope.
 - Python: Both `SessionStore.set()` and `get()` use deepcopy to isolate branch-like continuations.
 
-**Decision.** The Python approach is adopted. In Java too, the most common bug is corrupting the
-stored value by modifying the retrieval result directly. Copy semantics must be the default for
-safe session-branch re-execution.
+**Decision.** Python's branch-isolation semantics are adopted without requiring a literal
+`deepcopy`. Java implementations may use immutable snapshots, codec round-trips, or copy-on-write
+according to their needs. `Cloneable` and arbitrary reflection-based deep copying are not part of
+the contract.
 
 **Acceptance criteria**
 
-- Modifying a session object after saving does not change the value inside the store.
-- Modifying a `get()` result and calling `get()` again returns the originally stored state.
-- Querying a non-existent key returns `null` or an explicit absence indicator, not an empty copy.
+- Modifying the mutable source or builder used for a save does not change the value inside the store.
+- Creating and modifying a new builder from a retrieval result does not change the state returned by
+  a later retrieval.
+- Querying a non-existent key returns `Optional.empty()` or an equivalent explicit absence result.
 
 **Evidence** [08 detailed execution flow](../upstream/snapshots/d0a4165f/features/08-sessions.md),
 [08 concurrency/cancellation](../upstream/snapshots/d0a4165f/features/08-sessions.md),

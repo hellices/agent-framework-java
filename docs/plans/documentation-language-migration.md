@@ -44,7 +44,7 @@ by a stale suppression; the list is deleted in the final task.
 - The five bold labels inside every requirement section keep a fixed order and render exactly as `**Requirement.**`, `**Upstream comparison**`, `**Decision.**`, `**Acceptance criteria**`, `**Evidence**`. The document header label renders as `**Prefix**` and `**Upstream features**`.
 - This plan file lives under `docs/` and is therefore governed by the same no-Korean rule. It must stay free of Korean characters, which is why Korean source strings are described by their role and by shell patterns instead of being quoted.
 - No new Gradle dependency. `build-tools/harness-policy/gradle.lockfile` must be unchanged at the end of every task. If a task changes it, the task took a wrong turn.
-- New Java code lives in package `com.microsoft.agentframework.build.harness` under `build-tools/harness-policy/src/test/java/`, matches google-java-format (2-space indent, 100-column target), and passes Checkstyle's 120-column limit.
+- New Java code lives in package `io.github.hellices.agentframework.build.harness` under `build-tools/harness-policy/src/test/java/`, matches google-java-format (2-space indent, 100-column target), and passes Checkstyle's 120-column limit.
 - Verification entry points are `./gradlew policyCheck`, `./gradlew quality`, `./gradlew testJava17 testJava21 testJava25`, and `./gradlew check`. `testJava21` and `testJava25` fail with a toolchain error when Temurin 21 or 25 is absent locally; report that instead of hiding it.
 - Never use `@Disabled`, a broad `catch`, a deleted assertion, or a widened allowlist to make a check pass.
 - Every commit message in this plan ends with a blank line and then:
@@ -101,9 +101,9 @@ rg -l '\p{Hangul}' --glob '*.md' .
 | Path | Responsibility |
 | --- | --- |
 | `docs/README.md` | Role-based English documentation map and source-of-truth statement |
-| `build-tools/harness-policy/src/test/java/com/microsoft/agentframework/build/harness/MarkdownDocuments.java` | Repository-owned Markdown discovery, Korean detection, link extraction, GitHub-style anchor generation |
-| `build-tools/harness-policy/src/test/java/com/microsoft/agentframework/build/harness/DocumentationLanguagePolicyTest.java` | Canonical-language scan, companion uniqueness, bidirectional entry links, shrinking migration list |
-| `build-tools/harness-policy/src/test/java/com/microsoft/agentframework/build/harness/MarkdownLinkPolicyTest.java` | Relative link resolution, heading fragment resolution, repository-escape rejection, anchor unit tests |
+| `build-tools/harness-policy/src/test/java/io/github/hellices/agentframework/build/harness/MarkdownDocuments.java` | Repository-owned Markdown discovery, Korean detection, link extraction, GitHub-style anchor generation |
+| `build-tools/harness-policy/src/test/java/io/github/hellices/agentframework/build/harness/DocumentationLanguagePolicyTest.java` | Canonical-language scan, companion uniqueness, bidirectional entry links, shrinking migration list |
+| `build-tools/harness-policy/src/test/java/io/github/hellices/agentframework/build/harness/MarkdownLinkPolicyTest.java` | Relative link resolution, heading fragment resolution, repository-escape rejection, anchor unit tests |
 | `docs/plans/documentation-language-migration.md` | This plan |
 
 **Modified**
@@ -150,15 +150,15 @@ rg -l '\p{Hangul}' --glob '*.md' .
 ### Task 1: English documentation hub and executable language, link, and companion policy
 
 **Files:**
-- Create: `build-tools/harness-policy/src/test/java/com/microsoft/agentframework/build/harness/MarkdownDocuments.java`
-- Create: `build-tools/harness-policy/src/test/java/com/microsoft/agentframework/build/harness/MarkdownDocumentsTest.java`
-- Create: `build-tools/harness-policy/src/test/java/com/microsoft/agentframework/build/harness/DocumentationLanguagePolicyTest.java`
-- Create: `build-tools/harness-policy/src/test/java/com/microsoft/agentframework/build/harness/MarkdownLinkPolicyTest.java`
+- Create: `build-tools/harness-policy/src/test/java/io/github/hellices/agentframework/build/harness/MarkdownDocuments.java`
+- Create: `build-tools/harness-policy/src/test/java/io/github/hellices/agentframework/build/harness/MarkdownDocumentsTest.java`
+- Create: `build-tools/harness-policy/src/test/java/io/github/hellices/agentframework/build/harness/DocumentationLanguagePolicyTest.java`
+- Create: `build-tools/harness-policy/src/test/java/io/github/hellices/agentframework/build/harness/MarkdownLinkPolicyTest.java`
 - Create: `docs/README.md`
-- Create: `build-logic/src/main/kotlin/com/microsoft/agentframework/build/logic/RepositoryPolicyInputs.kt`
-- Create: `build-logic/src/test/kotlin/com/microsoft/agentframework/build/logic/RepositoryPolicyInputsTest.kt`
+- Create: `build-logic/src/main/kotlin/io/github/hellices/agentframework/build/logic/RepositoryPolicyInputs.kt`
+- Create: `build-logic/src/test/kotlin/io/github/hellices/agentframework/build/logic/RepositoryPolicyInputsTest.kt`
 - Modify: `build-tools/harness-policy/build.gradle.kts`
-- Modify: `build-tools/harness-policy/src/test/java/com/microsoft/agentframework/build/harness/BuildContractPolicyTest.java` (one added case)
+- Modify: `build-tools/harness-policy/src/test/java/io/github/hellices/agentframework/build/harness/BuildContractPolicyTest.java` (one added case)
 - Modify: `README.md`
 - Modify: `docs/operations/getting-started.md`
 - Modify: `docs/requirements/README.md` (one added link line only)
@@ -167,7 +167,7 @@ rg -l '\p{Hangul}' --glob '*.md' .
 - Test: the four Java sources above are the tests; they run under `./gradlew :build-tools:harness-policy:test` and `./gradlew policyCheck`
 
 **Interfaces:**
-- Consumes: `RepositoryPaths.root()` from `build-tools/harness-policy/src/main/java/com/microsoft/agentframework/build/harness/RepositoryPaths.java`, which returns the closest ancestor holding both `settings.gradle.kts` and `gradle/libs.versions.toml`.
+- Consumes: `RepositoryPaths.root()` from `build-tools/harness-policy/src/main/java/io/github/hellices/agentframework/build/harness/RepositoryPaths.java`, which returns the closest ancestor holding both `settings.gradle.kts` and `gradle/libs.versions.toml`.
 - Produces, used by Tasks 2 through 8:
   - `MarkdownDocuments.KOREAN_COMPANION` — `String`, value `docs/ko/README.md`
   - `MarkdownDocuments.DOCUMENTATION_INDEX` — `String`, value `docs/README.md`
@@ -193,10 +193,10 @@ rg -l '\p{Hangul}' --glob '*.md' .
 
 - [x] **Step 1: Write the Markdown scanner helper**
 
-Create `build-tools/harness-policy/src/test/java/com/microsoft/agentframework/build/harness/MarkdownDocuments.java`:
+Create `build-tools/harness-policy/src/test/java/io/github/hellices/agentframework/build/harness/MarkdownDocuments.java`:
 
 ```java
-package com.microsoft.agentframework.build.harness;
+package io.github.hellices.agentframework.build.harness;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -227,7 +227,7 @@ import java.util.stream.Stream;
  * can widen the canonical document set.
  *
  * <p>Ownership is decided by location alone, never by a directory name. A rule such as "skip every
- * directory called {@code build}" also skips {@code com/microsoft/agentframework/build/harness},
+ * directory called {@code build}" also skips {@code io/github/hellices/agentframework/build/harness},
  * which is why {@code .gitignore} pins project output with {@code /build/}, {@code /*}{@code
  * /build/}, and {@code /*}{@code /*}{@code /build/} instead of a bare {@code build/}. A {@code
  * build}, {@code bin}, or {@code out} path segment inside an owned location is scanned like any
@@ -512,10 +512,10 @@ final class MarkdownDocuments {
 
 - [x] **Step 2: Write the failing language, companion, and navigation policy test**
 
-Create `build-tools/harness-policy/src/test/java/com/microsoft/agentframework/build/harness/DocumentationLanguagePolicyTest.java`. `ORIGINAL_PENDING_TRANSLATION` and `PENDING_TRANSLATION` below both list exactly the 52 documents Tasks 2 through 6 translate; copy them verbatim. The two sets start identical and then diverge: only `PENDING_TRANSLATION` shrinks, while `ORIGINAL_PENDING_TRANSLATION` stays frozen as the evidence of what the ratchet was installed with. Pinning the size alone would accept a one-for-one swap that translates one document and exempts a different one, so membership is pinned too.
+Create `build-tools/harness-policy/src/test/java/io/github/hellices/agentframework/build/harness/DocumentationLanguagePolicyTest.java`. `ORIGINAL_PENDING_TRANSLATION` and `PENDING_TRANSLATION` below both list exactly the 52 documents Tasks 2 through 6 translate; copy them verbatim. The two sets start identical and then diverge: only `PENDING_TRANSLATION` shrinks, while `ORIGINAL_PENDING_TRANSLATION` stays frozen as the evidence of what the ratchet was installed with. Pinning the size alone would accept a one-for-one swap that translates one document and exempts a different one, so membership is pinned too.
 
 ```java
-package com.microsoft.agentframework.build.harness;
+package io.github.hellices.agentframework.build.harness;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -850,10 +850,10 @@ class DocumentationLanguagePolicyTest {
 
 - [x] **Step 3: Write the failing link integrity test**
 
-Create `build-tools/harness-policy/src/test/java/com/microsoft/agentframework/build/harness/MarkdownLinkPolicyTest.java`:
+Create `build-tools/harness-policy/src/test/java/io/github/hellices/agentframework/build/harness/MarkdownLinkPolicyTest.java`:
 
 ```java
-package com.microsoft.agentframework.build.harness;
+package io.github.hellices.agentframework.build.harness;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.tuple;
@@ -986,7 +986,7 @@ class MarkdownLinkPolicyTest {
 
 `files()` decides which documents every other policy reads, so its scope needs a direct test.
 Create
-`build-tools/harness-policy/src/test/java/com/microsoft/agentframework/build/harness/MarkdownDocumentsTest.java`
+`build-tools/harness-policy/src/test/java/io/github/hellices/agentframework/build/harness/MarkdownDocumentsTest.java`
 with `@TempDir` cases that build a fake repository and assert `MarkdownDocuments.filesUnder(root)`
 returns exactly the canonical locations of policy section 8.1:
 
@@ -1168,7 +1168,7 @@ The policy tasks read repository files, so the declared input tree decides wheth
 policy at all. Two hazards have to be excluded at once, and a single glob cannot do both:
 
 - a rule that matches a `build` segment anywhere also removes
-  `build-tools/harness-policy/src/test/java/com/microsoft/agentframework/build/harness`, where these
+  `build-tools/harness-policy/src/test/java/io/github/hellices/agentframework/build/harness`, where these
   policies live, so an edit to a policy source would drop out of the declared inputs;
 - a depth-limited rule such as `*`/`build/**` and `*`/`*`/`build/**` still removes `docs/build/` and
   `docs/*`/`build/`, which the scanner deliberately owns, so a canonical document under a `build`
@@ -1182,10 +1182,10 @@ because a policy never reads from them and an untracked agent plugin directory m
 or feed a policy task. The rule is shared build behaviour, so it lives in the `build-logic` included
 build and is never copied into a project script.
 
-Create `build-logic/src/main/kotlin/com/microsoft/agentframework/build/logic/RepositoryPolicyInputs.kt`:
+Create `build-logic/src/main/kotlin/io/github/hellices/agentframework/build/logic/RepositoryPolicyInputs.kt`:
 
 ```kotlin
-package com.microsoft.agentframework.build.logic
+package io.github.hellices.agentframework.build.logic
 
 import java.io.File
 import java.util.ArrayDeque
@@ -1201,7 +1201,7 @@ import org.gradle.api.file.FileTree
  *
  * Build output is removed by location, never by name and never by depth. A rule matching a `build`
  * segment anywhere also removes
- * `build-tools/harness-policy/src/test/java/com/microsoft/agentframework/build/harness`, where the
+ * `build-tools/harness-policy/src/test/java/io/github/hellices/agentframework/build/harness`, where the
  * policies themselves live. A depth-limited rule still removes `docs/build/`, so a canonical
  * document under a `build` path segment would stop invalidating the policies. Only a directory that
  * is a Gradle project root - it holds a `build.gradle.kts` or a `settings.gradle.kts` - contributes
@@ -1303,20 +1303,20 @@ Then, in `build-tools/harness-policy/build.gradle.kts`, replace the inline `matc
 tree with the shared declaration:
 
 ```kotlin
-import com.microsoft.agentframework.build.logic.RepositoryPolicyInputs
+import io.github.hellices.agentframework.build.logic.RepositoryPolicyInputs
 
 // ...
 
 val repositoryPolicySources = RepositoryPolicyInputs.repositoryPolicySources(project)
 ```
 
-Create `build-logic/src/test/kotlin/com/microsoft/agentframework/build/logic/RepositoryPolicyInputsTest.kt`.
+Create `build-logic/src/test/kotlin/io/github/hellices/agentframework/build/logic/RepositoryPolicyInputsTest.kt`.
 The unit cases pin which directories contribute an exclusion; the Gradle TestKit cases run a task
 that declares the same tree twice and prove that a Markdown edit under `docs/build/` re-runs it
 while a project-output edit does not:
 
 ```kotlin
-package com.microsoft.agentframework.build.logic
+package io.github.hellices.agentframework.build.logic
 
 import java.io.File
 import org.assertj.core.api.Assertions.assertThat
@@ -1419,7 +1419,7 @@ class RepositoryPolicyInputsTest {
             }
 
             val repositoryPolicySources =
-                com.microsoft.agentframework.build.logic.RepositoryPolicyInputs
+                io.github.hellices.agentframework.build.logic.RepositoryPolicyInputs
                     .repositoryPolicySources(project)
             val marker = layout.buildDirectory.file("policy-probe.txt")
 
@@ -1508,13 +1508,13 @@ Expected: no output, because no dependency changed.
 - [x] **Step 12: Commit**
 
 ```bash
-git add build-tools/harness-policy/src/test/java/com/microsoft/agentframework/build/harness/MarkdownDocuments.java \
-  build-tools/harness-policy/src/test/java/com/microsoft/agentframework/build/harness/MarkdownDocumentsTest.java \
-  build-tools/harness-policy/src/test/java/com/microsoft/agentframework/build/harness/DocumentationLanguagePolicyTest.java \
-  build-tools/harness-policy/src/test/java/com/microsoft/agentframework/build/harness/MarkdownLinkPolicyTest.java \
-  build-tools/harness-policy/src/test/java/com/microsoft/agentframework/build/harness/BuildContractPolicyTest.java \
-  build-logic/src/main/kotlin/com/microsoft/agentframework/build/logic/RepositoryPolicyInputs.kt \
-  build-logic/src/test/kotlin/com/microsoft/agentframework/build/logic/RepositoryPolicyInputsTest.kt \
+git add build-tools/harness-policy/src/test/java/io/github/hellices/agentframework/build/harness/MarkdownDocuments.java \
+  build-tools/harness-policy/src/test/java/io/github/hellices/agentframework/build/harness/MarkdownDocumentsTest.java \
+  build-tools/harness-policy/src/test/java/io/github/hellices/agentframework/build/harness/DocumentationLanguagePolicyTest.java \
+  build-tools/harness-policy/src/test/java/io/github/hellices/agentframework/build/harness/MarkdownLinkPolicyTest.java \
+  build-tools/harness-policy/src/test/java/io/github/hellices/agentframework/build/harness/BuildContractPolicyTest.java \
+  build-logic/src/main/kotlin/io/github/hellices/agentframework/build/logic/RepositoryPolicyInputs.kt \
+  build-logic/src/test/kotlin/io/github/hellices/agentframework/build/logic/RepositoryPolicyInputsTest.kt \
   build-tools/harness-policy/build.gradle.kts docs/README.md README.md \
   docs/operations/getting-started.md docs/requirements/README.md docs/upstream/README.md docs/ko/README.md
 git commit -m "docs: add the English documentation index and language policy tests" -m "Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
@@ -1528,7 +1528,7 @@ git commit -m "docs: add the English documentation index and language policy tes
 - Modify: `docs/design/foundation-design.md`
 - Modify: `docs/design/engineering-harness-design.md`
 - Modify: `docs/design/gradle-kotlin-arc-foundation-design.md`
-- Modify: `build-tools/harness-policy/src/test/java/com/microsoft/agentframework/build/harness/DocumentationLanguagePolicyTest.java` (remove three `PENDING_TRANSLATION` entries)
+- Modify: `build-tools/harness-policy/src/test/java/io/github/hellices/agentframework/build/harness/DocumentationLanguagePolicyTest.java` (remove three `PENDING_TRANSLATION` entries)
 - Test: `./gradlew :build-tools:harness-policy:test --tests '*DocumentationLanguagePolicyTest*' --tests '*MarkdownLinkPolicyTest*'`
 
 **Interfaces:**
@@ -1627,7 +1627,7 @@ Expected: PASS.
 - [x] **Step 9: Commit**
 
 ```bash
-git add docs/design build-tools/harness-policy/src/test/java/com/microsoft/agentframework/build/harness/DocumentationLanguagePolicyTest.java
+git add docs/design build-tools/harness-policy/src/test/java/io/github/hellices/agentframework/build/harness/DocumentationLanguagePolicyTest.java
 git commit -m "docs: translate the foundation, harness, and build design documents" -m "Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
 ```
 
@@ -1644,7 +1644,7 @@ git commit -m "docs: translate the foundation, harness, and build design documen
 - Modify: `docs/requirements/05-mcp.md`
 - Modify: `docs/requirements/06-sessions.md`
 - Modify: `docs/requirements/07-interceptors.md` … `docs/requirements/12-providers.md` (link target only, see Step 6)
-- Modify: `build-tools/harness-policy/src/test/java/com/microsoft/agentframework/build/harness/DocumentationLanguagePolicyTest.java` (remove seven `PENDING_TRANSLATION` entries)
+- Modify: `build-tools/harness-policy/src/test/java/io/github/hellices/agentframework/build/harness/DocumentationLanguagePolicyTest.java` (remove seven `PENDING_TRANSLATION` entries)
 - Test: `./gradlew :build-tools:harness-policy:test --tests '*DocumentationLanguagePolicyTest*' --tests '*MarkdownLinkPolicyTest*'`
 
 **Interfaces:**
@@ -1796,7 +1796,7 @@ from all twelve documents.
 - [x] **Step 9: Commit**
 
 ```bash
-git add docs/requirements build-tools/harness-policy/src/test/java/com/microsoft/agentframework/build/harness/DocumentationLanguagePolicyTest.java
+git add docs/requirements build-tools/harness-policy/src/test/java/io/github/hellices/agentframework/build/harness/DocumentationLanguagePolicyTest.java
 git commit -m "docs: translate the requirements index and requirements 01-06" -m "Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
 ```
 
@@ -1811,7 +1811,7 @@ git commit -m "docs: translate the requirements index and requirements 01-06" -m
 - Modify: `docs/requirements/10-hosting.md`
 - Modify: `docs/requirements/11-operations.md`
 - Modify: `docs/requirements/12-providers.md`
-- Modify: `build-tools/harness-policy/src/test/java/com/microsoft/agentframework/build/harness/DocumentationLanguagePolicyTest.java` (remove six `PENDING_TRANSLATION` entries)
+- Modify: `build-tools/harness-policy/src/test/java/io/github/hellices/agentframework/build/harness/DocumentationLanguagePolicyTest.java` (remove six `PENDING_TRANSLATION` entries)
 - Test: `./gradlew :build-tools:harness-policy:test --tests '*DocumentationLanguagePolicyTest*' --tests '*MarkdownLinkPolicyTest*'`
 
 **Interfaces:**
@@ -1932,7 +1932,7 @@ Expected: PASS.
 - [x] **Step 7: Commit**
 
 ```bash
-git add docs/requirements build-tools/harness-policy/src/test/java/com/microsoft/agentframework/build/harness/DocumentationLanguagePolicyTest.java
+git add docs/requirements build-tools/harness-policy/src/test/java/io/github/hellices/agentframework/build/harness/DocumentationLanguagePolicyTest.java
 git commit -m "docs: translate requirements 10-12 and enforce English requirements" -m "Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
 ```
 
@@ -1947,7 +1947,7 @@ git commit -m "docs: translate requirements 10-12 and enforce English requiremen
 - Modify: `docs/upstream/snapshots/d0a4165f/coverage-ledger.md`
 - Modify: `docs/upstream/snapshots/d0a4165f/compatibility-matrix.md`
 - Modify: `docs/upstream/snapshots/d0a4165f/features/01-agent-lifecycle.md` through `features/15-workflow-runtime.md` (fifteen files)
-- Modify: `build-tools/harness-policy/src/test/java/com/microsoft/agentframework/build/harness/DocumentationLanguagePolicyTest.java` (remove twenty `PENDING_TRANSLATION` entries)
+- Modify: `build-tools/harness-policy/src/test/java/io/github/hellices/agentframework/build/harness/DocumentationLanguagePolicyTest.java` (remove twenty `PENDING_TRANSLATION` entries)
 - Test: `./gradlew :build-tools:harness-policy:test --tests '*DocumentationLanguagePolicyTest*' --tests '*MarkdownLinkPolicyTest*'`
 
 **Interfaces:**
@@ -2130,7 +2130,7 @@ Expected: PASS.
 - [x] **Step 10: Commit**
 
 ```bash
-git add docs/upstream build-tools/harness-policy/src/test/java/com/microsoft/agentframework/build/harness/DocumentationLanguagePolicyTest.java
+git add docs/upstream build-tools/harness-policy/src/test/java/io/github/hellices/agentframework/build/harness/DocumentationLanguagePolicyTest.java
 git commit -m "docs: translate upstream features 09-15" -m "Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
 ```
 
@@ -2141,7 +2141,7 @@ git commit -m "docs: translate upstream features 09-15" -m "Co-authored-by: Copi
 **Files:**
 - Modify: `docs/upstream/snapshots/d0a4165f/features/16-workflow-checkpoint-hitl.md` through `features/31-provider-integrations.md` (sixteen files)
 - Modify: `docs/upstream/snapshots/d0a4165f/coverage-ledger.md` (one title cell, see Step 5)
-- Modify: `build-tools/harness-policy/src/test/java/com/microsoft/agentframework/build/harness/DocumentationLanguagePolicyTest.java` (remove sixteen `PENDING_TRANSLATION` entries)
+- Modify: `build-tools/harness-policy/src/test/java/io/github/hellices/agentframework/build/harness/DocumentationLanguagePolicyTest.java` (remove sixteen `PENDING_TRANSLATION` entries)
 - Test: `./gradlew :build-tools:harness-policy:test --tests '*DocumentationLanguagePolicyTest*' --tests '*MarkdownLinkPolicyTest*'`
 
 **Interfaces:**
@@ -2290,7 +2290,7 @@ canonical document scanned.
 - [x] **Step 8: Commit**
 
 ```bash
-git add docs/upstream build-tools/harness-policy/src/test/java/com/microsoft/agentframework/build/harness/DocumentationLanguagePolicyTest.java
+git add docs/upstream build-tools/harness-policy/src/test/java/io/github/hellices/agentframework/build/harness/DocumentationLanguagePolicyTest.java
 git commit -m "docs: translate upstream features 24-31" -m "Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
 ```
 
@@ -2394,7 +2394,7 @@ git commit -m "docs: expand the Korean companion and documentation navigation" -
 ### Task 8: Remove the migration list and run the final regression and review
 
 **Files:**
-- Modify: `build-tools/harness-policy/src/test/java/com/microsoft/agentframework/build/harness/DocumentationLanguagePolicyTest.java` (delete `PENDING_TRANSLATION` and its guard test)
+- Modify: `build-tools/harness-policy/src/test/java/io/github/hellices/agentframework/build/harness/DocumentationLanguagePolicyTest.java` (delete `PENDING_TRANSLATION` and its guard test)
 - Modify: any document a check in this task proves wrong
 - Test: `./gradlew policyCheck`, `./gradlew quality`, `./gradlew testJava17 testJava21 testJava25`, `./gradlew check`
 
@@ -2404,7 +2404,7 @@ git commit -m "docs: expand the Korean companion and documentation navigation" -
 
 - [x] **Step 1: Prove the migration list is empty of live entries**
 
-Run: `rg -n 'PENDING_TRANSLATION' build-tools/harness-policy/src/test/java/com/microsoft/agentframework/build/harness/DocumentationLanguagePolicyTest.java`
+Run: `rg -n 'PENDING_TRANSLATION' build-tools/harness-policy/src/test/java/io/github/hellices/agentframework/build/harness/DocumentationLanguagePolicyTest.java`
 
 Expected: the constant is declared and referenced, and `Set.of(` is followed immediately by `)` with
 no remaining document paths. If any path remains, the task that owned it is unfinished; stop and
@@ -2553,7 +2553,7 @@ document.
 - [x] **Step 11: Commit**
 
 ```bash
-git add build-tools/harness-policy/src/test/java/com/microsoft/agentframework/build/harness/DocumentationLanguagePolicyTest.java docs README.md
+git add build-tools/harness-policy/src/test/java/io/github/hellices/agentframework/build/harness/DocumentationLanguagePolicyTest.java docs README.md
 git commit -m "docs: enforce the English documentation policy without a migration list" -m "Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
 ```
 
