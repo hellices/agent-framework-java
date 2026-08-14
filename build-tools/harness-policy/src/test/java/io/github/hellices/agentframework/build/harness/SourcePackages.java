@@ -50,7 +50,22 @@ final class SourcePackages {
               + "(?=$|/|[^A-Za-z0-9_.-])");
 
   private static final Set<String> EXCLUDED_BEFORE_SOURCE_ROOT =
-      Set.of(".git", ".gradle", ".superpowers", ".worktrees", "build", "out");
+      Set.of(
+          ".git",
+          ".gradle",
+          ".idea",
+          ".kotlin",
+          ".superpowers",
+          ".venv",
+          ".vscode",
+          ".worktrees",
+          "bin",
+          "build",
+          "node_modules",
+          "out");
+
+  private static final String MARKDOWN_MIGRATION_MARKER =
+      "<!-- allow-retired-namespace: migration guidance -->";
 
   private SourcePackages() {}
 
@@ -88,7 +103,8 @@ final class SourcePackages {
       }
 
       if (isTextAsset(source)) {
-        if (referencesMicrosoftNamespaceRaw(text)) {
+        if (!allowsRetiredNamespaceForMigration(source, text)
+            && referencesMicrosoftNamespaceRaw(text)) {
           violations.add(new Violation(source, microsoftReferenceProblem()));
         }
         continue;
@@ -193,6 +209,13 @@ final class SourcePackages {
         || name.endsWith(".md");
   }
 
+  private static boolean allowsRetiredNamespaceForMigration(Path path, String text) {
+    Path fileName = path.getFileName();
+    return fileName != null
+        && fileName.toString().endsWith(".md")
+        && text.contains(MARKDOWN_MIGRATION_MARKER);
+  }
+
   private static Syntax syntax(Path path) {
     Path fileName = path.getFileName();
     if (fileName == null) {
@@ -244,8 +267,9 @@ final class SourcePackages {
   }
 
   private static boolean referencesMicrosoftNamespace(String source, Syntax syntax) {
-    return MICROSOFT_REFERENCE.matcher(withoutCommentsAndLiterals(source, syntax)).find()
-        || MICROSOFT_PATH_REFERENCE.matcher(withoutComments(source, syntax)).find();
+    String visible = withoutComments(source, syntax);
+    return MICROSOFT_REFERENCE.matcher(visible).find()
+        || MICROSOFT_PATH_REFERENCE.matcher(visible).find();
   }
 
   private static boolean referencesMicrosoftNamespaceRaw(String source) {

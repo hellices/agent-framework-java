@@ -56,6 +56,12 @@ class SourcePackagesTest {
         ".superpowers/notes.md",
         "Legacy " + "com." + "microsoft.agentframework reference in a local artifact.");
     write(
+        ".idea/notes.md",
+        "Legacy " + "com." + "microsoft.agentframework reference in IDE metadata.");
+    write(
+        "node_modules/dependency/README.md",
+        "Legacy " + "com." + "microsoft.agentframework reference in dependencies.");
+    write(
         "module/build/src/main/java/io/github/hellices/agentframework/Generated.java",
         "package io.github.hellices.agentframework;");
 
@@ -102,23 +108,25 @@ class SourcePackagesTest {
   }
 
   @Test
-  void ignoresPackageLikeTextInsideCommentsAndTextBlocks() {
+  void ignoresPackageLikeTextInsideCommentsButDetectsTextBlocks() {
     String source =
         """
         /*
-        package com.microsoft.agentframework.comment;
+        package __COMMENT_NAMESPACE__;
         */
         package io.github.hellices.agentframework.example;
         final class Example {
           String text = \"\"\"
-              package com.microsoft.agentframework.text;
+              package __TEXT_NAMESPACE__;
               \"\"\";
         }
-        """;
+        """
+            .replace("__COMMENT_NAMESPACE__", "com." + "microsoft.agentframework.comment")
+            .replace("__TEXT_NAMESPACE__", "com." + "microsoft.agentframework.text");
 
     assertThat(SourcePackages.packageName(source))
         .hasValue("io.github.hellices.agentframework.example");
-    assertThat(SourcePackages.referencesMicrosoftNamespace(source)).isFalse();
+    assertThat(SourcePackages.referencesMicrosoftNamespace(source)).isTrue();
     assertThat(
             SourcePackages.referencesMicrosoftNamespace(
                 "/* Path: " + "com/" + "microsoft/agentframework/comment */"))
@@ -174,7 +182,7 @@ class SourcePackagesTest {
             + "microsoft/agentframework/internal\n"
             + "\"\"\";\n";
 
-    assertThat(SourcePackages.referencesMicrosoftNamespace(dottedText)).isFalse();
+    assertThat(SourcePackages.referencesMicrosoftNamespace(dottedText)).isTrue();
     assertThat(SourcePackages.referencesMicrosoftNamespace(slashPath)).isTrue();
   }
 
@@ -217,12 +225,15 @@ class SourcePackagesTest {
   }
 
   @Test
-  void ignoresForbiddenNamespaceInsideGroovyMultilineStrings() throws Exception {
-    write(
-        "module/legacy.gradle",
-        "def text = '''\n" + "com." + "microsoft.agentframework.Text\n" + "'''\n");
+  void detectsForbiddenNamespaceInsideGroovyMultilineStrings() throws Exception {
+    Path source =
+        write(
+            "module/legacy.gradle",
+            "def text = '''\n" + "com." + "microsoft.agentframework.Text\n" + "'''\n");
 
-    assertThat(SourcePackages.violations(repository)).isEmpty();
+    assertThat(SourcePackages.violations(repository))
+        .containsExactly(
+            new SourcePackages.Violation(source, SourcePackages.microsoftReferenceProblem()));
   }
 
   @Test
@@ -243,41 +254,47 @@ class SourcePackagesTest {
   }
 
   @Test
-  void ignoresDottedTextInsideGroovyLiteralForms() throws Exception {
-    write(
-        "module/literals.gradle",
-        "def slashy = /"
-            + "com."
-            + "microsoft.agentframework.Slashy/\n"
-            + "def dollarSlashy = $/"
-            + "com."
-            + "microsoft.agentframework.DollarSlashy/$\n"
-            + "def triple = \"\"\"inside \\\"\"\" "
-            + "com."
-            + "microsoft.agentframework.Triple still literal\"\"\"\n"
-            + "def literal() { return /"
-            + "com."
-            + "microsoft.agentframework.Returned/ }\n"
-            + "def pattern = ~/"
-            + "com."
-            + "microsoft.agentframework.Pattern/\n"
-            + "def combined = prefix + /"
-            + "com."
-            + "microsoft.agentframework.Combined/\n"
-            + "def single = '$"
-            + "com."
-            + "microsoft.agentframework.Single'\n");
+  void detectsDottedTextInsideGroovyLiteralForms() throws Exception {
+    Path source =
+        write(
+            "module/literals.gradle",
+            "def slashy = /"
+                + "com."
+                + "microsoft.agentframework.Slashy/\n"
+                + "def dollarSlashy = $/"
+                + "com."
+                + "microsoft.agentframework.DollarSlashy/$\n"
+                + "def triple = \"\"\"inside \\\"\"\" "
+                + "com."
+                + "microsoft.agentframework.Triple still literal\"\"\"\n"
+                + "def literal() { return /"
+                + "com."
+                + "microsoft.agentframework.Returned/ }\n"
+                + "def pattern = ~/"
+                + "com."
+                + "microsoft.agentframework.Pattern/\n"
+                + "def combined = prefix + /"
+                + "com."
+                + "microsoft.agentframework.Combined/\n"
+                + "def single = '$"
+                + "com."
+                + "microsoft.agentframework.Single'\n");
 
-    assertThat(SourcePackages.violations(repository)).isEmpty();
+    assertThat(SourcePackages.violations(repository))
+        .containsExactly(
+            new SourcePackages.Violation(source, SourcePackages.microsoftReferenceProblem()));
   }
 
   @Test
-  void ignoresDottedStringLiteralInsideInterpolation() throws Exception {
-    write(
-        "scripts/LiteralInterpolation.kt",
-        "val value = \"${\"" + "com." + "microsoft.agentframework.Text" + "\"}\"\n");
+  void detectsDottedStringLiteralInsideInterpolation() throws Exception {
+    Path source =
+        write(
+            "scripts/LiteralInterpolation.kt",
+            "val value = \"${\"" + "com." + "microsoft.agentframework.Text" + "\"}\"\n");
 
-    assertThat(SourcePackages.violations(repository)).isEmpty();
+    assertThat(SourcePackages.violations(repository))
+        .containsExactly(
+            new SourcePackages.Violation(source, SourcePackages.microsoftReferenceProblem()));
   }
 
   @Test
@@ -416,6 +433,12 @@ class SourcePackagesTest {
             "path: " + "com/" + "microsoft/agentframework/internal");
     Path documentation =
         write("docs/legacy.md", "Do not use `" + "com." + "microsoft.agentframework.Legacy`.");
+    write(
+        "docs/migration.md",
+        "<!-- allow-retired-namespace: migration guidance -->\n"
+            + "Migrate from `"
+            + "com."
+            + "microsoft.agentframework.Legacy`.");
 
     assertThat(SourcePackages.violations(repository))
         .containsExactly(
