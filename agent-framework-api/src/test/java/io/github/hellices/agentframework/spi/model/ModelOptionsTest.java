@@ -78,6 +78,20 @@ class ModelOptionsTest {
   }
 
   @Test
+  void legacyOptionMapConstructorRemainsAvailable() {
+    ModelRequest request =
+        new ModelRequest(
+            List.of(new Message(Role.USER, List.of(new TextContent("hello")))),
+            Map.of("temperature", 0.6, "maxOutputTokens", 128, "toolChoice", "none"),
+            Map.of());
+
+    assertThat(request.options().temperature()).hasValue(0.6);
+    assertThat(request.options().maxOutputTokens()).hasValue(128);
+    assertThat(request.options().providerOption("legacy"))
+        .contains(Map.of("toolChoice", "none"));
+  }
+
+  @Test
   void streamingCapabilityIsOptInInterface() {
     ModelClient basicClient = request -> null;
     StreamingModelClient streamingClient =

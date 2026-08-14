@@ -16,4 +16,9 @@ public record ModelRequest(
       Objects.requireNonNull(message, "messages must not contain null entries");
     }
   }
+
+  public ModelRequest(
+      List<Message> messages, Map<String, Object> legacyOptions, Map<String, Object> metadata) {
+    this(messages, ModelRequestOptions.fromLegacyOptions(legacyOptions), metadata);
+  }
 }

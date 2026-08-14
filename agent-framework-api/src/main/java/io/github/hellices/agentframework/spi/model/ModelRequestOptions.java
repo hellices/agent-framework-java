@@ -27,6 +27,26 @@ public final class ModelRequestOptions {
     return builder().build();
   }
 
+  public static ModelRequestOptions fromLegacyOptions(Map<String, Object> legacyOptions) {
+    if (legacyOptions == null || legacyOptions.isEmpty()) {
+      return empty();
+    }
+    Builder builder = builder();
+    Map<String, Object> legacyProviderOptions = new LinkedHashMap<>(legacyOptions);
+    Object temperature = legacyProviderOptions.remove("temperature");
+    if (temperature instanceof Number number) {
+      builder.temperature(number.doubleValue());
+    }
+    Object maxOutputTokens = legacyProviderOptions.remove("maxOutputTokens");
+    if (maxOutputTokens instanceof Number number) {
+      builder.maxOutputTokens(number.intValue());
+    }
+    if (!legacyProviderOptions.isEmpty()) {
+      builder.providerOption(ModelProviderOption.of("legacy", legacyProviderOptions));
+    }
+    return builder.build();
+  }
+
   public Optional<Double> temperature() {
     return Optional.ofNullable(temperature);
   }
