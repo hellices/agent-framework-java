@@ -53,8 +53,10 @@ final class SourcePackages {
       Set.of(
           ".git",
           ".gradle",
+          ".fleet",
           ".idea",
           ".kotlin",
+          ".mvn",
           ".superpowers",
           ".venv",
           ".vscode",
@@ -62,10 +64,13 @@ final class SourcePackages {
           "bin",
           "build",
           "node_modules",
-          "out");
+          "out",
+          "target");
 
   private static final String MARKDOWN_MIGRATION_MARKER =
       "<!-- allow-retired-namespace: migration guidance -->";
+
+  private static final Set<String> MARKDOWN_MIGRATION_PATHS = Set.of("docs/migration/namespace.md");
 
   private SourcePackages() {}
 
@@ -102,8 +107,9 @@ final class SourcePackages {
         continue;
       }
 
-      if (isTextAsset(source)) {
-        if (!allowsRetiredNamespaceForMigration(source, text)
+      Path relativeSource = repository.relativize(source);
+      if (isTextAsset(relativeSource)) {
+        if (!allowsRetiredNamespaceForMigration(relativeSource, text)
             && referencesMicrosoftNamespaceRaw(text)) {
           violations.add(new Violation(source, microsoftReferenceProblem()));
         }
@@ -147,7 +153,7 @@ final class SourcePackages {
             if (isJavaOrKotlin(file)
                 || isKotlinScript(file)
                 || isBuildScript(file)
-                || isTextAsset(file)) {
+                || isTextAsset(repository.relativize(file))) {
               sources.add(file);
             }
             return FileVisitResult.CONTINUE;
@@ -200,19 +206,41 @@ final class SourcePackages {
       return false;
     }
     String name = fileName.toString();
-    return name.equals(".gitignore")
-        || name.equals(".gitattributes")
-        || name.endsWith(".properties")
-        || name.endsWith(".yml")
-        || name.endsWith(".yaml")
-        || name.endsWith(".toml")
-        || name.endsWith(".md");
+    if (name.endsWith(".md")) {
+      return isOwnedMarkdown(path);
+    }
+    return isOwnedConfiguration(path)
+        && (name.equals(".gitignore")
+            || name.equals(".gitattributes")
+            || name.endsWith(".properties")
+            || name.endsWith(".yml")
+            || name.endsWith(".yaml")
+            || name.endsWith(".toml"));
+  }
+
+  private static boolean isOwnedMarkdown(Path relativePath) {
+    if (relativePath.getNameCount() == 1) {
+      return true;
+    }
+    String topLevel = relativePath.getName(0).toString();
+    return topLevel.equals(".github") || topLevel.equals("docs");
+  }
+
+  private static boolean isOwnedConfiguration(Path relativePath) {
+    if (relativePath.getNameCount() == 1) {
+      return true;
+    }
+    String topLevel = relativePath.getName(0).toString();
+    return topLevel.equals(".github")
+        || topLevel.equals("build-logic")
+        || topLevel.equals("build-tools")
+        || topLevel.equals("gradle")
+        || topLevel.startsWith("agent-framework-");
   }
 
   private static boolean allowsRetiredNamespaceForMigration(Path path, String text) {
-    Path fileName = path.getFileName();
-    return fileName != null
-        && fileName.toString().endsWith(".md")
+    return MARKDOWN_MIGRATION_PATHS.contains(
+            path.toString().replace(path.getFileSystem().getSeparator(), "/"))
         && text.contains(MARKDOWN_MIGRATION_MARKER);
   }
 
@@ -230,7 +258,8 @@ final class SourcePackages {
 
   private static boolean shouldSkipSubtree(Path relativeDirectory) {
     if (isUnderCanonicalSourceRoot(relativeDirectory)
-        || isPotentialSourceRootPrefix(relativeDirectory)) {
+        || isPotentialSourceRootPrefix(relativeDirectory)
+        || isUnderOwnedMarkdownTree(relativeDirectory)) {
       return false;
     }
     for (Path part : relativeDirectory) {
@@ -246,6 +275,14 @@ final class SourcePackages {
     return nameCount >= 2
         && "src".equals(relativePath.getName(nameCount - 2).toString())
         && !relativePath.getName(nameCount - 1).toString().isEmpty();
+  }
+
+  private static boolean isUnderOwnedMarkdownTree(Path relativePath) {
+    if (relativePath.getNameCount() == 0) {
+      return false;
+    }
+    String topLevel = relativePath.getName(0).toString();
+    return topLevel.equals(".github") || topLevel.equals("docs");
   }
 
   private static boolean isCanonicalSource(Path relativePath) {

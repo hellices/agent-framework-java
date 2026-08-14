@@ -62,6 +62,9 @@ class SourcePackagesTest {
         "node_modules/dependency/README.md",
         "Legacy " + "com." + "microsoft.agentframework reference in dependencies.");
     write(
+        "scratch/notes.md",
+        "Legacy " + "com." + "microsoft.agentframework reference in unowned notes.");
+    write(
         "module/build/src/main/java/io/github/hellices/agentframework/Generated.java",
         "package io.github.hellices.agentframework;");
 
@@ -433,17 +436,31 @@ class SourcePackagesTest {
             "path: " + "com/" + "microsoft/agentframework/internal");
     Path documentation =
         write("docs/legacy.md", "Do not use `" + "com." + "microsoft.agentframework.Legacy`.");
+    Path ownedDirectoryName =
+        write(
+            "docs/target/legacy.md", "Do not use `" + "com." + "microsoft.agentframework.Legacy`.");
     write(
-        "docs/migration.md",
+        "docs/migration/namespace.md",
         "<!-- allow-retired-namespace: migration guidance -->\n"
             + "Migrate from `"
             + "com."
             + "microsoft.agentframework.Legacy`.");
+    Path unapprovedMigration =
+        write(
+            "docs/other-migration.md",
+            "<!-- allow-retired-namespace: migration guidance -->\n"
+                + "Migrate from `"
+                + "com."
+                + "microsoft.agentframework.Legacy`.");
 
     assertThat(SourcePackages.violations(repository))
         .containsExactly(
             new SourcePackages.Violation(workflow, SourcePackages.microsoftReferenceProblem()),
             new SourcePackages.Violation(documentation, SourcePackages.microsoftReferenceProblem()),
+            new SourcePackages.Violation(
+                unapprovedMigration, SourcePackages.microsoftReferenceProblem()),
+            new SourcePackages.Violation(
+                ownedDirectoryName, SourcePackages.microsoftReferenceProblem()),
             new SourcePackages.Violation(catalog, SourcePackages.microsoftReferenceProblem()));
   }
 
