@@ -30,6 +30,25 @@ class SourcePackagesTest {
             "future-module/src/generated/src/main/java/"
                 + "io/github/hellices/agentframework/future/Nested.java",
             "package io.github.hellices.agentframework.future;");
+    Path integrationTestSource =
+        write(
+            "future-module/src/integrationTest/java/"
+                + "io/github/hellices/agentframework/future/Integration.java",
+            "package io.github.hellices.agentframework.future;");
+    Path buildSourceSet =
+        write(
+            "future-module/src/build/java/"
+                + "io/github/hellices/agentframework/future/BuildSource.java",
+            "package io.github.hellices.agentframework.future;");
+    Path outSourceSet =
+        write(
+            "future-module/src/out/kotlin/"
+                + "io/github/hellices/agentframework/future/OutSource.kt",
+            "package io.github.hellices.agentframework.future");
+    Path kotlinScript =
+        write(
+            "scripts/check.kts",
+            "import io.github.hellices.agentframework.build.logic.RepositoryPolicyInputs");
     write(
         ".worktrees/other/src/main/java/io/github/hellices/agentframework/Other.java",
         "package io.github.hellices.agentframework;");
@@ -39,7 +58,14 @@ class SourcePackagesTest {
 
     assertThat(SourcePackages.discover(repository))
         .containsExactlyInAnyOrder(
-            harnessSource, unregisteredSource, buildScript, nestedCanonicalSource);
+            harnessSource,
+            unregisteredSource,
+            buildScript,
+            nestedCanonicalSource,
+            integrationTestSource,
+            buildSourceSet,
+            outSourceSet,
+            kotlinScript);
   }
 
   @Test
@@ -65,6 +91,10 @@ class SourcePackagesTest {
     assertThat(SourcePackages.packageName(source))
         .hasValue("io.github.hellices.agentframework.example");
     assertThat(SourcePackages.referencesMicrosoftNamespace(source)).isTrue();
+    assertThat(
+            SourcePackages.referencesMicrosoftNamespace(
+                "import " + "com." + "microsoft.agentframeworkish.Unrelated;"))
+        .isFalse();
     assertThat(SourcePackages.packageName("final class PackageLess {}")).isEmpty();
   }
 
@@ -85,6 +115,264 @@ class SourcePackagesTest {
 
     assertThat(SourcePackages.packageName(source))
         .hasValue("io.github.hellices.agentframework.example");
+    assertThat(SourcePackages.referencesMicrosoftNamespace(source)).isFalse();
+    assertThat(
+            SourcePackages.referencesMicrosoftNamespace(
+                "/* Path: " + "com/" + "microsoft/agentframework/comment */"))
+        .isFalse();
+  }
+
+  @Test
+  void anUnterminatedSingleLineLiteralDoesNotHideFollowingReferences() {
+    String source =
+        "package io.github.hellices.agentframework.example;\n"
+            + "String broken = \"unterminated\n"
+            + "import "
+            + "com."
+            + "microsoft.agentframework.Hidden;\n";
+
+    assertThat(SourcePackages.referencesMicrosoftNamespace(source)).isTrue();
+  }
+
+  @Test
+  void detectsRetiredSlashSeparatedNamespaceInsideAString() {
+    String source =
+        "package io.github.hellices.agentframework.example;\n"
+            + "String path = \""
+            + "com/"
+            + "microsoft/agentframework/internal"
+            + "\";\n";
+
+    assertThat(SourcePackages.referencesMicrosoftNamespace(source)).isTrue();
+    assertThat(
+            SourcePackages.referencesMicrosoftNamespace(
+                "String path = \"" + "com/" + "microsoft/agentframeworkish\";"))
+        .isFalse();
+    assertThat(
+            SourcePackages.referencesMicrosoftNamespace(
+                "String url = \"https://example." + "com/" + "microsoft/agentframework/status\";"))
+        .isFalse();
+  }
+
+  @Test
+  void escapedTextBlockDelimiterDoesNotExposeDottedTextOrHideSlashPaths() {
+    String dottedText =
+        "String text = \"\"\"\n"
+            + "  escaped delimiter: \\\"\"\"\n"
+            + "  import "
+            + "com."
+            + "microsoft.agentframework.Hidden;\n"
+            + "\"\"\";\n";
+    String slashPath =
+        "String text = \"\"\"\n"
+            + "  escaped delimiter: \\\"\"\"\n"
+            + "  // "
+            + "com/"
+            + "microsoft/agentframework/internal\n"
+            + "\"\"\";\n";
+
+    assertThat(SourcePackages.referencesMicrosoftNamespace(dottedText)).isFalse();
+    assertThat(SourcePackages.referencesMicrosoftNamespace(slashPath)).isTrue();
+  }
+
+  @Test
+  void checksStandaloneKotlinScriptsWithoutRequiringAPackageDeclaration() throws Exception {
+    Path script =
+        write(
+            "scripts/legacy.kts", "val path = \"" + "com/" + "microsoft/agentframework/internal\"");
+
+    assertThat(SourcePackages.violations(repository))
+        .containsExactly(
+            new SourcePackages.Violation(script, SourcePackages.microsoftReferenceProblem()));
+  }
+
+  @Test
+  void kotlinRawStringDelimiterClosesEvenWhenPrecededByABackslash() throws Exception {
+    Path source =
+        write(
+            "scripts/RawString.kt",
+            "val text = \"\"\"value\\\"\"\";\n"
+                + "import "
+                + "com."
+                + "microsoft.agentframework.Hidden\n");
+
+    assertThat(SourcePackages.violations(repository))
+        .containsExactly(
+            new SourcePackages.Violation(source, SourcePackages.microsoftReferenceProblem()));
+  }
+
+  @Test
+  void ignoresForbiddenNamespaceInsideNestedKotlinComments() throws Exception {
+    write(
+        "scripts/NestedComment.kt",
+        "/* outer /* nested */ "
+            + "com."
+            + "microsoft.agentframework.Commented */\n"
+            + "val valid = true\n");
+
+    assertThat(SourcePackages.violations(repository)).isEmpty();
+  }
+
+  @Test
+  void ignoresForbiddenNamespaceInsideGroovyMultilineStrings() throws Exception {
+    write(
+        "module/legacy.gradle",
+        "def text = '''\n" + "com." + "microsoft.agentframework.Text\n" + "'''\n");
+
+    assertThat(SourcePackages.violations(repository)).isEmpty();
+  }
+
+  @Test
+  void detectsForbiddenNamespaceInsideKotlinAndGroovyInterpolation() throws Exception {
+    Path kotlin =
+        write(
+            "scripts/Interpolation.kt",
+            "val value = \"${" + "com." + "microsoft.agentframework.Legacy.VALUE" + "}\"\n");
+    Path groovy =
+        write(
+            "module/interpolation.gradle",
+            "def value = \"${" + "com." + "microsoft.agentframework.Legacy.VALUE" + "}\"\n");
+
+    assertThat(SourcePackages.violations(repository))
+        .containsExactly(
+            new SourcePackages.Violation(groovy, SourcePackages.microsoftReferenceProblem()),
+            new SourcePackages.Violation(kotlin, SourcePackages.microsoftReferenceProblem()));
+  }
+
+  @Test
+  void ignoresDottedTextInsideGroovyLiteralForms() throws Exception {
+    write(
+        "module/literals.gradle",
+        "def slashy = /"
+            + "com."
+            + "microsoft.agentframework.Slashy/\n"
+            + "def dollarSlashy = $/"
+            + "com."
+            + "microsoft.agentframework.DollarSlashy/$\n"
+            + "def triple = \"\"\"inside \\\"\"\" "
+            + "com."
+            + "microsoft.agentframework.Triple still literal\"\"\"\n"
+            + "def literal() { return /"
+            + "com."
+            + "microsoft.agentframework.Returned/ }\n"
+            + "def pattern = ~/"
+            + "com."
+            + "microsoft.agentframework.Pattern/\n"
+            + "def combined = prefix + /"
+            + "com."
+            + "microsoft.agentframework.Combined/\n"
+            + "def single = '$"
+            + "com."
+            + "microsoft.agentframework.Single'\n");
+
+    assertThat(SourcePackages.violations(repository)).isEmpty();
+  }
+
+  @Test
+  void ignoresDottedStringLiteralInsideInterpolation() throws Exception {
+    write(
+        "scripts/LiteralInterpolation.kt",
+        "val value = \"${\"" + "com." + "microsoft.agentframework.Text" + "\"}\"\n");
+
+    assertThat(SourcePackages.violations(repository)).isEmpty();
+  }
+
+  @Test
+  void kotlinRawStringBackslashDoesNotEscapeInterpolation() throws Exception {
+    Path source =
+        write(
+            "scripts/RawInterpolation.kt",
+            "val value = \"\"\"\\${"
+                + "com."
+                + "microsoft.agentframework.Legacy.VALUE"
+                + "}\"\"\"\n");
+
+    assertThat(SourcePackages.violations(repository))
+        .containsExactly(
+            new SourcePackages.Violation(source, SourcePackages.microsoftReferenceProblem()));
+  }
+
+  @Test
+  void detectsGroovyUnbracedInterpolationAcrossGStringForms() throws Exception {
+    Path source =
+        write(
+            "module/gstrings.gradle",
+            "def regular = \"$"
+                + "com."
+                + "microsoft.agentframework.Regular\"\n"
+                + "def triple = \"\"\"$"
+                + "com."
+                + "microsoft.agentframework.Triple\"\"\"\n"
+                + "def slashy = /$"
+                + "com."
+                + "microsoft.agentframework.Slashy/\n"
+                + "def dollarSlashy = $/$"
+                + "com."
+                + "microsoft.agentframework.DollarSlashy/$\n");
+
+    assertThat(SourcePackages.violations(repository))
+        .containsExactly(
+            new SourcePackages.Violation(source, SourcePackages.microsoftReferenceProblem()));
+  }
+
+  @Test
+  void slashPathCommentsInsideInterpolationRemainIgnored() throws Exception {
+    write(
+        "scripts/CommentedInterpolation.kt",
+        "val value = \"${ /* " + "com/" + "microsoft/agentframework/comment */ 1 }\"\n");
+
+    assertThat(SourcePackages.violations(repository)).isEmpty();
+  }
+
+  @Test
+  void slashPathsInsideDollarSlashyStringsRemainVisible() throws Exception {
+    Path source =
+        write(
+            "module/dollar-slashy.gradle",
+            "def path = $/prefix // " + "com/" + "microsoft/agentframework/internal/$\n");
+
+    assertThat(SourcePackages.violations(repository))
+        .containsExactly(
+            new SourcePackages.Violation(source, SourcePackages.microsoftReferenceProblem()));
+  }
+
+  @Test
+  void backslashDoesNotEscapeInterpolationInsideGroovySlashyStrings() throws Exception {
+    Path source =
+        write(
+            "module/slashy-interpolation.gradle",
+            "def value = /\\${" + "com." + "microsoft.agentframework.Legacy.VALUE" + "}/\n");
+
+    assertThat(SourcePackages.violations(repository))
+        .containsExactly(
+            new SourcePackages.Violation(source, SourcePackages.microsoftReferenceProblem()));
+  }
+
+  @Test
+  void escapedDollarSlashyDelimiterDoesNotHideFollowingSlashPath() throws Exception {
+    Path source =
+        write(
+            "module/escaped-dollar-slashy.gradle",
+            "def path = $/before $/$ // " + "com/" + "microsoft/agentframework/internal /$\n");
+
+    assertThat(SourcePackages.violations(repository))
+        .containsExactly(
+            new SourcePackages.Violation(source, SourcePackages.microsoftReferenceProblem()));
+  }
+
+  @Test
+  void escapedDollarBeforeRealDelimiterDoesNotHideFollowingCode() throws Exception {
+    Path source =
+        write(
+            "module/dollar-parity.gradle",
+            "def value = $/literal$$/$\n"
+                + "import "
+                + "com."
+                + "microsoft.agentframework.Hidden\n");
+
+    assertThat(SourcePackages.violations(repository))
+        .containsExactly(
+            new SourcePackages.Violation(source, SourcePackages.microsoftReferenceProblem()));
   }
 
   @Test
@@ -130,6 +418,27 @@ class SourcePackagesTest {
               assertThat(violation.source()).isEqualTo(source);
               assertThat(violation.problem()).startsWith("source must be readable as UTF-8:");
             });
+  }
+
+  @Test
+  void inspectReturnsSourcesAndViolationsFromOneReport() throws Exception {
+    Path good =
+        write(
+            "module/src/main/java/io/github/hellices/agentframework/Good.java",
+            "package io.github.hellices.agentframework;");
+    Path bad =
+        write(
+            "module/src/jmh/java/example/Bad.java",
+            "package " + "com." + "microsoft.agentframework.bad;");
+
+    SourcePackages.Report report = SourcePackages.inspect(repository);
+
+    assertThat(report.sources()).containsExactlyInAnyOrder(good, bad);
+    assertThat(report.violations())
+        .containsExactly(
+            new SourcePackages.Violation(
+                bad, "package must start with io.github.hellices.agentframework"),
+            new SourcePackages.Violation(bad, SourcePackages.microsoftReferenceProblem()));
   }
 
   private Path write(String relativePath, String contents) throws Exception {

@@ -300,9 +300,9 @@ class ModuleCompositionPolicyTest {
 
   @Test
   void communitySourcesUseOwnedNamespaceAndDoNotReferenceMicrosoftPackages() throws IOException {
-    List<Path> sources = SourcePackages.discover(RepositoryPaths.root());
-    assertThat(sources).isNotEmpty();
-    assertThat(SourcePackages.violations(RepositoryPaths.root())).isEmpty();
+    SourcePackages.Report report = SourcePackages.inspect(RepositoryPaths.root());
+    assertThat(report.sources()).isNotEmpty();
+    assertThat(report.violations()).isEmpty();
   }
 
   private static String moduleCompositionContract() throws IOException {
