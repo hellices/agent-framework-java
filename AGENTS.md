@@ -53,6 +53,13 @@ Do not mix current upstream `main` behavior into the pinned snapshot without a r
 Reuse existing helpers and fixtures. Keep edits inside the affected projects. Do not hide failures
 with broad catches, silent fallbacks, deleted assertions, or `@Disabled`.
 
+## Merge policy
+
+Pull requests are merged with squash merge so `main` receives one coherent commit per pull request.
+Intermediate branch commits may be used during development. Before merging, ensure the pull request
+title describes the final squashed commit and the pull request body records the completed change.
+Merge commits and rebase merges are not used.
+
 ## Review loop
 
 Every push to a pull request branch requests a Copilot review, and the loop continues until a
