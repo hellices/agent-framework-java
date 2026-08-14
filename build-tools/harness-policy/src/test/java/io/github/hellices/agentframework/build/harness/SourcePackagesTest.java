@@ -25,6 +25,11 @@ class SourcePackagesTest {
         write(
             "future-module/build.gradle.kts",
             "import io.github.hellices.agentframework.build.logic.RepositoryPolicyInputs");
+    Path nestedCanonicalSource =
+        write(
+            "future-module/src/generated/src/main/java/"
+                + "io/github/hellices/agentframework/future/Nested.java",
+            "package io.github.hellices.agentframework.future;");
     write(
         ".worktrees/other/src/main/java/io/github/hellices/agentframework/Other.java",
         "package io.github.hellices.agentframework;");
@@ -33,7 +38,8 @@ class SourcePackagesTest {
         "package io.github.hellices.agentframework;");
 
     assertThat(SourcePackages.discover(repository))
-        .containsExactlyInAnyOrder(harnessSource, unregisteredSource, buildScript);
+        .containsExactlyInAnyOrder(
+            harnessSource, unregisteredSource, buildScript, nestedCanonicalSource);
   }
 
   @Test

@@ -154,8 +154,10 @@ final class SourcePackages {
       }
       String sourceSet = relativePath.getName(index + 1).toString();
       String language = relativePath.getName(index + 2).toString();
-      return Set.of("main", "test").contains(sourceSet)
-          && Set.of("java", "kotlin").contains(language);
+      if (Set.of("main", "test").contains(sourceSet)
+          && Set.of("java", "kotlin").contains(language)) {
+        return true;
+      }
     }
     return false;
   }
