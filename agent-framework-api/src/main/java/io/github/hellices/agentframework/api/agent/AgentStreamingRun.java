@@ -3,8 +3,8 @@ package io.github.hellices.agentframework.api.agent;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
-import java.util.concurrent.SubmissionPublisher;
 import java.util.concurrent.Flow;
+import java.util.concurrent.SubmissionPublisher;
 
 public final class AgentStreamingRun {
 
@@ -13,7 +13,10 @@ public final class AgentStreamingRun {
   private final CancellationSignal cancellationSignal;
 
   public AgentStreamingRun(AgentResponseUpdate update) {
-    this(toPublisher(update), CompletableFuture.completedFuture(toResponse(update)), new CancellationSignal());
+    this(
+        toPublisher(update),
+        CompletableFuture.completedFuture(toResponse(update)),
+        new CancellationSignal());
   }
 
   public AgentStreamingRun(
@@ -22,7 +25,8 @@ public final class AgentStreamingRun {
       CancellationSignal cancellationSignal) {
     this.updates = Objects.requireNonNull(updates, "updates must not be null");
     this.response = Objects.requireNonNull(response, "response must not be null");
-    this.cancellationSignal = cancellationSignal == null ? new CancellationSignal() : cancellationSignal;
+    this.cancellationSignal =
+        cancellationSignal == null ? new CancellationSignal() : cancellationSignal;
   }
 
   public Flow.Publisher<AgentResponseUpdate> updates() {

@@ -30,7 +30,8 @@ class MessageTest {
 
   @Test
   void textProjectionUsesOnlyTextFragments() {
-    Message message = new Message(Role.USER, List.of(new TextContent("hello "), new TextContent("world")));
+    Message message =
+        new Message(Role.USER, List.of(new TextContent("hello "), new TextContent("world")));
 
     assertThat(message.text()).isEqualTo("hello world");
   }
@@ -38,32 +39,34 @@ class MessageTest {
   @Test
   void usageAndResponseMetadataArePreserved() {
     Usage usage = new Usage(10L, 20L, 30L);
-    AgentResponse response = new AgentResponse(
-        "agent-1",
-        "response-1",
-        "message-1",
-        "assistant",
-        null,
-        FinishReason.STOP,
-        List.of(new Message(Role.ASSISTANT, List.of(new TextContent("hello")))),
-        usage,
-        null,
-        null);
+    AgentResponse response =
+        new AgentResponse(
+            "agent-1",
+            "response-1",
+            "message-1",
+            "assistant",
+            null,
+            FinishReason.STOP,
+            List.of(new Message(Role.ASSISTANT, List.of(new TextContent("hello")))),
+            usage,
+            null,
+            null);
 
     assertThat(response.usage()).isEqualTo(usage);
     assertThat(response.text()).isEqualTo("hello");
 
-    AgentResponseUpdate update = new AgentResponseUpdate(
-        "agent-1",
-        "response-1",
-        "message-1",
-        "assistant",
-        null,
-        FinishReason.STOP,
-        List.of(new Message(Role.ASSISTANT, List.of(new TextContent("hello")))),
-        usage,
-        null,
-        null);
+    AgentResponseUpdate update =
+        new AgentResponseUpdate(
+            "agent-1",
+            "response-1",
+            "message-1",
+            "assistant",
+            null,
+            FinishReason.STOP,
+            List.of(new Message(Role.ASSISTANT, List.of(new TextContent("hello")))),
+            usage,
+            null,
+            null);
 
     assertThat(update.text()).isEqualTo("hello");
   }

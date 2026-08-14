@@ -4,7 +4,6 @@ import io.github.hellices.agentframework.api.message.FinishReason;
 import io.github.hellices.agentframework.api.message.Message;
 import io.github.hellices.agentframework.api.message.Usage;
 import java.time.Instant;
-import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -26,7 +25,8 @@ public record AgentResponseUpdate(
     Objects.requireNonNull(responseId, "responseId must not be null");
     Objects.requireNonNull(finishReason, "finishReason must not be null");
     messages = messages == null ? List.of() : List.copyOf(messages);
-    additionalProperties = additionalProperties == null ? Map.of() : Collections.unmodifiableMap(new java.util.HashMap<>(additionalProperties));
+    additionalProperties =
+        additionalProperties == null ? Map.of() : Map.copyOf(additionalProperties);
   }
 
   public String text() {

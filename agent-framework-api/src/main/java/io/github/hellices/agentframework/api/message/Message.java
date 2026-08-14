@@ -1,7 +1,6 @@
 package io.github.hellices.agentframework.api.message;
 
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -31,9 +30,10 @@ public final class Message {
         normalizedContent.add(Objects.requireNonNull(item, "content items must not be null"));
       }
     }
-    this.content = Collections.unmodifiableList(normalizedContent);
+    this.content = List.copyOf(normalizedContent);
     this.attribution = attribution;
-    this.additionalProperties = additionalProperties == null ? Map.of() : Collections.unmodifiableMap(new java.util.HashMap<>(additionalProperties));
+    this.additionalProperties =
+        additionalProperties == null ? Map.of() : Map.copyOf(additionalProperties);
     this.rawRepresentation = rawRepresentation;
   }
 
@@ -60,12 +60,14 @@ public final class Message {
         } else if (item instanceof String text) {
           messages.add(new Message(Role.USER, List.of(new TextContent(text))));
         } else {
-          throw new IllegalArgumentException("Unsupported message input type: " + item.getClass().getName());
+          throw new IllegalArgumentException(
+              "Unsupported message input type: " + item.getClass().getName());
         }
       }
       return List.copyOf(messages);
     }
-    throw new IllegalArgumentException("Unsupported message input type: " + input.getClass().getName());
+    throw new IllegalArgumentException(
+        "Unsupported message input type: " + input.getClass().getName());
   }
 
   public Role role() {

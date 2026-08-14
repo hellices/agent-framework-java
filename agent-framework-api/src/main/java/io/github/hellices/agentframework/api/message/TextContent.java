@@ -11,7 +11,8 @@ public final class TextContent extends Content {
     this(text, Map.of(), null);
   }
 
-  public TextContent(String text, Map<String, Object> additionalProperties, Object rawRepresentation) {
+  public TextContent(
+      String text, Map<String, Object> additionalProperties, Object rawRepresentation) {
     super(additionalProperties, rawRepresentation);
     this.text = Objects.requireNonNull(text, "text must not be null");
   }

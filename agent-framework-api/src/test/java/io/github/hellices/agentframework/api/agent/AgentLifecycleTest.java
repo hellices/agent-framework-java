@@ -45,32 +45,34 @@ class AgentLifecycleTest {
 
     @Override
     public AgentRun run(AgentRunRequest request) {
-      return new AgentRun(new AgentResponse(
-          id(),
-          "response-1",
-          "message-1",
-          name(),
-          null,
-          io.github.hellices.agentframework.api.message.FinishReason.STOP,
-          List.of(new Message(Role.ASSISTANT, List.of(new TextContent("ok")))),
-          null,
-          Map.of(),
-          null));
+      return new AgentRun(
+          new AgentResponse(
+              id(),
+              "response-1",
+              "message-1",
+              name(),
+              null,
+              io.github.hellices.agentframework.api.message.FinishReason.STOP,
+              List.of(new Message(Role.ASSISTANT, List.of(new TextContent("ok")))),
+              null,
+              Map.of(),
+              null));
     }
 
     @Override
     public AgentStreamingRun runStreaming(AgentRunRequest request) {
-      return new AgentStreamingRun(new AgentResponseUpdate(
-          id(),
-          "response-1",
-          "message-1",
-          name(),
-          null,
-          io.github.hellices.agentframework.api.message.FinishReason.STOP,
-          List.of(new Message(Role.ASSISTANT, List.of(new TextContent("ok")))),
-          null,
-          Map.of(),
-          null));
+      return new AgentStreamingRun(
+          new AgentResponseUpdate(
+              id(),
+              "response-1",
+              "message-1",
+              name(),
+              null,
+              io.github.hellices.agentframework.api.message.FinishReason.STOP,
+              List.of(new Message(Role.ASSISTANT, List.of(new TextContent("ok")))),
+              null,
+              Map.of(),
+              null));
     }
   }
 }
