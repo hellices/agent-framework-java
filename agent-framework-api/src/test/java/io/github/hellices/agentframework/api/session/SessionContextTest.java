@@ -75,6 +75,22 @@ class SessionContextTest {
     assertThat(sessionContext.response()).isEmpty();
   }
 
+  @Test
+  void normalizesANullCancellationSignalToAFreshOne() {
+    SessionContext sessionContext = new SessionContext(null, List.of(), Map.of(), null);
+
+    assertThat(sessionContext.cancellationSignal()).isNotNull();
+    assertThat(sessionContext.cancellationSignal().isCancelled()).isFalse();
+  }
+
+  @Test
+  void normalizedCancellationSignalIsFreshPerInstance() {
+    SessionContext first = new SessionContext(null, List.of(), Map.of(), null);
+    SessionContext second = new SessionContext(null, List.of(), Map.of(), null);
+
+    assertThat(first.cancellationSignal()).isNotSameAs(second.cancellationSignal());
+  }
+
   private static AgentResponse sampleResponse() {
     return new AgentResponse(
         "agent-1",

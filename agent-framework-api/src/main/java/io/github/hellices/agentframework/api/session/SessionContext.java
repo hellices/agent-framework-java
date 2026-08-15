@@ -42,7 +42,7 @@ public final class SessionContext {
     this.inputMessages = List.copyOf(normalizedInputMessages);
     this.metadata = metadata == null ? Map.of() : Map.copyOf(metadata);
     this.cancellationSignal =
-        Objects.requireNonNull(cancellationSignal, "cancellationSignal must not be null");
+        cancellationSignal == null ? new CancellationSignal() : cancellationSignal;
   }
 
   public AgentSession session() {

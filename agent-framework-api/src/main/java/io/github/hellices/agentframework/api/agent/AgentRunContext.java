@@ -14,5 +14,8 @@ public record AgentRunContext(
     Objects.requireNonNull(agent, "agent must not be null");
     attributes = attributes == null ? Map.of() : Map.copyOf(attributes);
     Objects.requireNonNull(sessionContext, "sessionContext must not be null");
+    if (!Objects.equals(session, sessionContext.session())) {
+      throw new IllegalArgumentException("session must match sessionContext.session()");
+    }
   }
 }
