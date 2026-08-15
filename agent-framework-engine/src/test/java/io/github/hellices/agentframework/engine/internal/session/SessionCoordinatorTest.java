@@ -130,15 +130,54 @@ class SessionCoordinatorTest {
   }
 
   @Test
-  void theDefaultInMemoryHistoryAvoidsAConfiguredSourceIdCollisionDeterministically() {
+  void aConfiguredProviderOwningTheDefaultHistoryNamespaceFailsAnEligibleSessionRun() {
+    RecordingStore store = new RecordingStore();
+    AtomicReference<ModelRequest> captured = new AtomicReference<>();
+    AgentEngine engine =
+        engineWithStore(
+            store,
+            capturingClient(captured, "hello"),
+            new InMemoryHistoryProvider(
+                InMemoryHistoryProvider.DEFAULT_SOURCE_ID,
+                HistoryPolicy.builder().loadMessages(false).storeOutputs(false).build()));
+
+    assertThatThrownBy(() -> run(engine, new AgentSession("session-1", null, Map.of()), "hi"))
+        .hasRootCauseInstanceOf(IllegalStateException.class)
+        .hasRootCauseMessage(
+            "context provider sourceId '"
+                + InMemoryHistoryProvider.DEFAULT_SOURCE_ID
+                + "' is reserved for the default in-memory chat history of a session run; "
+                + "configure a load-enabled HistoryProvider or a different sourceId");
+    assertThat(captured.get()).isNull();
+    assertThat(store.log).containsExactly("load:session-1");
+  }
+
+  @Test
+  void aConfiguredProviderOwningTheDefaultHistoryNamespaceLeavesOtherRunsUntouched() {
+    RecordingStore store = new RecordingStore();
+    AgentEngine engine =
+        engineWithStore(
+            store,
+            fixedClient("hello"),
+            new InMemoryHistoryProvider(
+                InMemoryHistoryProvider.DEFAULT_SOURCE_ID,
+                HistoryPolicy.builder().loadMessages(false).storeOutputs(false).build()));
+
+    engine.run("hi").response().toCompletableFuture().join();
+    run(engine, new AgentSession("session-1", "service-1", Map.of()), "hi");
+
+    assertThat(store.log).containsExactly("load:session-1", "save:session-1");
+  }
+
+  @Test
+  void aLoadEnabledHistoryProviderOnTheDefaultNamespaceSuppressesTheDefaultNormally() {
     ProbeProvider probe = new ProbeProvider("probe");
     AgentEngine engine =
         AgentEngine.builder()
             .modelClient(fixedClient("hello"))
             .contextProviders(
                 new InMemoryHistoryProvider(
-                    InMemoryHistoryProvider.DEFAULT_SOURCE_ID,
-                    HistoryPolicy.builder().loadMessages(false).storeOutputs(false).build()),
+                    InMemoryHistoryProvider.DEFAULT_SOURCE_ID, HistoryPolicy.defaults()),
                 probe)
             .build();
 
@@ -146,10 +185,25 @@ class SessionCoordinatorTest {
 
     assertThat(probe.storedHistory(InMemoryHistoryProvider.DEFAULT_SOURCE_ID))
         .extracting(Message::text)
-        .containsExactly("hi");
-    assertThat(probe.storedHistory(InMemoryHistoryProvider.DEFAULT_SOURCE_ID + "-2"))
-        .extracting(Message::text)
         .containsExactly("hi", "hello");
+  }
+
+  @Test
+  void theDefaultHistoryNamespaceIsStableAcrossConfigurationChanges() {
+    RecordingStore store = new RecordingStore();
+    run(
+        engineWithStore(store, fixedClient("hello")),
+        new AgentSession("session-1", null, Map.of()),
+        "first");
+
+    AtomicReference<ModelRequest> captured = new AtomicReference<>();
+    AgentEngine reconfigured =
+        engineWithStore(store, capturingClient(captured, "answer"), new ProbeProvider("probe"));
+    run(reconfigured, new AgentSession("session-1", null, Map.of()), "second");
+
+    assertThat(captured.get().messages())
+        .extracting(Message::text)
+        .containsExactly("first", "hello", "second");
   }
 
   @Test
@@ -169,6 +223,92 @@ class SessionCoordinatorTest {
     assertThat(saved.serviceSessionId()).isEqualTo("service-1");
     assertThat(saved.revision()).isEqualTo(4);
     assertThat(saved.state()).containsOnlyKeys("probe");
+  }
+
+  // --- SES-001/SES-002: the caller's service conversation handle is never silently replaced
+  // -------
+
+  @Test
+  void aRequestedServiceHandleTheStoredSessionDoesNotCarryFailsTheRunBeforeTheModelCall() {
+    RecordingStore store = new RecordingStore();
+    store.seed(
+        registry.snapshot(new AgentSession("session-1", null, Map.of()), 0, SEEDED_CREATED_AT));
+    AtomicReference<ModelRequest> captured = new AtomicReference<>();
+    AgentEngine engine = engineWithStore(store, capturingClient(captured, "hello"));
+
+    assertThatThrownBy(
+            () -> run(engine, new AgentSession("session-1", "service-9", Map.of()), "hi"))
+        .hasRootCauseInstanceOf(IllegalArgumentException.class)
+        .hasRootCauseMessage("hydrated service session id must be service-9");
+    assertThat(captured.get()).isNull();
+    assertThat(store.log).containsExactly("load:session-1");
+    assertThat(store.saved("session-1").serviceSessionId()).isNull();
+    assertThat(store.saved("session-1").revision()).isZero();
+  }
+
+  @Test
+  void aRequestedServiceHandleThatDisagreesWithTheStoredOneFailsTheRun() {
+    RecordingStore store = new RecordingStore();
+    store.seed(
+        registry.snapshot(
+            new AgentSession("session-1", "service-old", Map.of()), 0, SEEDED_CREATED_AT));
+    AgentEngine engine = engineWithStore(store, fixedClient("hello"));
+
+    assertThatThrownBy(
+            () -> run(engine, new AgentSession("session-1", "service-new", Map.of()), "hi"))
+        .hasRootCauseInstanceOf(IllegalArgumentException.class)
+        .hasRootCauseMessage("hydrated service session id must be service-new");
+    assertThat(store.log).containsExactly("load:session-1");
+    assertThat(store.saved("session-1").serviceSessionId()).isEqualTo("service-old");
+  }
+
+  @Test
+  void aMatchingServiceHandleRunsWithTheStoredSessionAndNoLocalHistory() {
+    RecordingStore store = new RecordingStore();
+    store.seed(
+        registry.snapshot(
+            new AgentSession("session-1", "service-1", Map.of()), 2, SEEDED_CREATED_AT));
+    AgentEngine engine = engineWithStore(store, fixedClient("hello"));
+
+    run(engine, new AgentSession("session-1", "service-1", Map.of()), "hi");
+
+    SessionSnapshot saved = store.saved("session-1");
+    assertThat(saved.serviceSessionId()).isEqualTo("service-1");
+    assertThat(saved.revision()).isEqualTo(3);
+    assertThat(saved.state()).isEmpty();
+  }
+
+  @Test
+  void anAbsentSnapshotKeepsTheRequestedServiceHandleAndInjectsNoLocalHistory() {
+    RecordingStore store = new RecordingStore();
+    AgentEngine engine = engineWithStore(store, fixedClient("hello"));
+
+    run(engine, new AgentSession("session-1", "service-9", Map.of()), "hi");
+
+    SessionSnapshot saved = store.saved("session-1");
+    assertThat(saved.serviceSessionId()).isEqualTo("service-9");
+    assertThat(saved.revision()).isZero();
+    assertThat(saved.state()).isEmpty();
+  }
+
+  @Test
+  void aServiceManagedSessionIsStillSnapshottedSoItsHandleAndStateSurvive() {
+    RecordingStore store = new RecordingStore();
+    AgentEngine engine = engineWithStore(store, fixedClient("hello"));
+    AgentSession session =
+        new AgentSession(
+            "session-1", "service-9", Map.of("audit", MessageHistory.of(List.of(user("kept")))));
+
+    run(engine, session, "hi");
+    run(engine, new AgentSession("session-1", null, Map.of()), "again");
+
+    assertThat(store.log)
+        .containsExactly("load:session-1", "save:session-1", "load:session-1", "save:session-1");
+    SessionSnapshot saved = store.saved("session-1");
+    assertThat(saved.serviceSessionId()).isEqualTo("service-9");
+    assertThat(saved.revision()).isEqualTo(1);
+    assertThat(saved.state()).containsOnlyKeys("audit");
+    assertThat(historyOf(saved, "audit")).extracting(Message::text).containsExactly("kept");
   }
 
   @Test
@@ -202,6 +342,29 @@ class SessionCoordinatorTest {
     run(engine, new AgentSession("session-1", null, Map.of()), "hi");
 
     assertThat(probe.updatedState()).containsKey("writer").doesNotContainKey("ghost");
+  }
+
+  @Test
+  void bothHookDirectionsSeeTheSameBindingsAndTheWriteBackAllowListStaysExact() {
+    RecordingStore store = new RecordingStore();
+    store.seed(
+        registry.snapshot(
+            new AgentSession(
+                "session-1", null, Map.of("legacy", MessageHistory.of(List.of(user("kept"))))),
+            0,
+            SEEDED_CREATED_AT));
+    ProbeProvider probe = new ProbeProvider("probe");
+    AgentEngine engine =
+        engineWithStore(
+            store, fixedClient("hello"), probe, new SiblingWritingProvider("writer", "ghost"));
+
+    run(engine, new AgentSession("session-1", null, Map.of()), "hi");
+
+    assertThat(probe.beforeRunState.get()).isSameAs(probe.afterRunState.get());
+    assertThat(probe.beforeRunDefaultHistoryState.get())
+        .isSameAs(probe.afterRunDefaultHistoryState.get());
+    assertThat(store.saved("session-1").state())
+        .containsOnlyKeys("legacy", "probe", "writer", InMemoryHistoryProvider.DEFAULT_SOURCE_ID);
   }
 
   @Test
@@ -537,6 +700,223 @@ class SessionCoordinatorTest {
     assertThat(store.log).isEmpty();
   }
 
+  // --- concurrency: the store, not the coordinator, resolves overlapping runs --------------------
+
+  @Test
+  void twoOverlappingRunsOnOneSessionResolveAsLastWriterWins() {
+    RecordingStore store = new RecordingStore();
+    CompletableFuture<ModelResponse> firstModel = new CompletableFuture<>();
+    CompletableFuture<ModelResponse> secondModel = new CompletableFuture<>();
+    AtomicReference<CompletableFuture<ModelResponse>> next = new AtomicReference<>(firstModel);
+    AgentEngine engine = engineWithStore(store, request -> next.getAndSet(secondModel));
+
+    AgentRun first = start(engine, new AgentSession("session-1", null, Map.of()), "a");
+    AgentRun second = start(engine, new AgentSession("session-1", null, Map.of()), "b");
+    firstModel.complete(modelResponse("A"));
+    first.response().toCompletableFuture().join();
+    secondModel.complete(modelResponse("B"));
+    second.response().toCompletableFuture().join();
+
+    assertThat(store.log)
+        .containsExactly("load:session-1", "load:session-1", "save:session-1", "save:session-1");
+    SessionSnapshot saved = store.saved("session-1");
+    assertThat(saved.revision()).isZero();
+    assertThat(historyOf(saved, InMemoryHistoryProvider.DEFAULT_SOURCE_ID))
+        .extracting(Message::text)
+        .containsExactly("b", "B");
+  }
+
+  // --- I2: the caller-visible failure shape of a client that throws -----------------------------
+
+  @Test
+  void aSessionlessRunWithNoProvidersFailsSynchronouslyWhenTheClientThrows() {
+    AgentEngine engine =
+        AgentEngine.builder()
+            .modelClient(
+                request -> {
+                  throw new IllegalStateException("boom");
+                })
+            .build();
+
+    assertThatThrownBy(() -> engine.run("hi"))
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessage("boom");
+  }
+
+  @Test
+  void aSessionRunReportsAClientThatThrowsOnTheResponseAndSessionStages() {
+    AgentEngine engine =
+        AgentEngine.builder()
+            .modelClient(
+                request -> {
+                  throw new IllegalStateException("boom");
+                })
+            .build();
+
+    AgentRun agentRun = start(engine, new AgentSession("session-1", null, Map.of()), "hi");
+
+    assertThatThrownBy(() -> agentRun.response().toCompletableFuture().join())
+        .hasRootCauseInstanceOf(IllegalStateException.class)
+        .hasRootCauseMessage("boom");
+    assertThatThrownBy(() -> agentRun.session().toCompletableFuture().join())
+        .hasRootCauseInstanceOf(IllegalStateException.class)
+        .hasRootCauseMessage("boom");
+  }
+
+  // --- I3: the updated session is observable without a configured store -------------------------
+
+  @Test
+  void aStoreLessSessionRunPublishesTheUpdatedSessionWithItsDefaultHistory() {
+    AgentEngine engine = AgentEngine.builder().modelClient(fixedClient("hello")).build();
+
+    AgentRun agentRun = start(engine, new AgentSession("session-1", null, Map.of()), "hi");
+    agentRun.response().toCompletableFuture().join();
+
+    AgentSession updated = agentRun.session().toCompletableFuture().join().orElseThrow();
+    assertThat(updated.sessionId()).isEqualTo("session-1");
+    assertThat(historyIn(updated, InMemoryHistoryProvider.DEFAULT_SOURCE_ID))
+        .extracting(Message::text)
+        .containsExactly("hi", "hello");
+  }
+
+  @Test
+  void aStoreLessSecondTurnReplaysTheHistoryOfThePublishedSession() {
+    AtomicReference<ModelRequest> captured = new AtomicReference<>();
+    AgentEngine engine =
+        AgentEngine.builder().modelClient(capturingClient(captured, "answer")).build();
+
+    AgentRun first = start(engine, new AgentSession("session-1", null, Map.of()), "first");
+    first.response().toCompletableFuture().join();
+    AgentSession carried = first.session().toCompletableFuture().join().orElseThrow();
+    AgentRun second = start(engine, carried, "second");
+    second.response().toCompletableFuture().join();
+
+    assertThat(captured.get().messages())
+        .extracting(Message::text)
+        .containsExactly("first", "answer", "second");
+  }
+
+  @Test
+  void aStoreLessStreamingSessionRunPublishesTheUpdatedSession() {
+    AgentEngine engine =
+        AgentEngine.builder()
+            .modelClient(new LoggingStreamingClient(new ArrayList<>(), "hello"))
+            .build();
+
+    AgentStreamingRun<AgentResponseUpdate> streamingRun =
+        engine.runStreaming(
+            new AgentRunRequest(
+                Message.normalize("hi"),
+                new AgentSession("session-1", null, Map.of()),
+                new AgentRunOptions(),
+                new CancellationSignal(),
+                Map.of()));
+    consume(streamingRun);
+
+    AgentSession updated = streamingRun.session().toCompletableFuture().join().orElseThrow();
+    assertThat(historyIn(updated, InMemoryHistoryProvider.DEFAULT_SOURCE_ID))
+        .extracting(Message::text)
+        .containsExactly("hi", "hello");
+  }
+
+  @Test
+  void aSessionRunThatChangesNothingPublishesTheEffectiveSession() {
+    AgentEngine engine = AgentEngine.builder().modelClient(fixedClient("hello")).build();
+    AgentSession requested =
+        new AgentSession(
+            "session-1", "service-9", Map.of("audit", MessageHistory.of(List.of(user("kept")))));
+
+    AgentRun agentRun = start(engine, requested, "hi");
+    agentRun.response().toCompletableFuture().join();
+
+    assertThat(agentRun.session().toCompletableFuture().join()).contains(requested);
+  }
+
+  @Test
+  void aStoredRunPublishesTheStoredSessionRatherThanTheRequestedOne() {
+    RecordingStore store = new RecordingStore();
+    store.seed(
+        registry.snapshot(
+            new AgentSession(
+                "session-1", null, Map.of("legacy", MessageHistory.of(List.of(user("stored"))))),
+            0,
+            SEEDED_CREATED_AT));
+    AgentEngine engine = engineWithStore(store, fixedClient("hello"));
+
+    AgentRun agentRun =
+        start(
+            engine,
+            new AgentSession(
+                "session-1", null, Map.of("legacy", MessageHistory.of(List.of(user("request"))))),
+            "hi");
+    AgentSession updated = agentRun.session().toCompletableFuture().join().orElseThrow();
+
+    assertThat(historyIn(updated, "legacy")).extracting(Message::text).containsExactly("stored");
+    assertThat(historyIn(updated, InMemoryHistoryProvider.DEFAULT_SOURCE_ID))
+        .extracting(Message::text)
+        .containsExactly("hi", "hello");
+  }
+
+  @Test
+  void aStoredRunPublishesTheUpdatedSessionOnlyAfterTheSaveSucceeded() {
+    List<String> log = new ArrayList<>();
+    RecordingStore store = new RecordingStore(log);
+    AgentEngine engine = engineWithStore(store, loggingClient(log, "hello"));
+
+    AgentRun agentRun = start(engine, new AgentSession("session-1", null, Map.of()), "hi");
+    AgentSession updated = agentRun.session().toCompletableFuture().join().orElseThrow();
+
+    assertThat(log).containsExactly("load:session-1", "model", "save:session-1");
+    assertThat(historyIn(updated, InMemoryHistoryProvider.DEFAULT_SOURCE_ID))
+        .extracting(Message::text)
+        .containsExactly("hi", "hello");
+  }
+
+  @Test
+  void aFailingSaveFailsTheSessionStageInsteadOfPublishingUnpersistedState() {
+    RecordingStore store = new RecordingStore();
+    store.failSaveWith(new IllegalStateException("store read only"));
+    AgentEngine engine = engineWithStore(store, fixedClient("hello"));
+
+    AgentRun agentRun = start(engine, new AgentSession("session-1", null, Map.of()), "hi");
+
+    assertThatThrownBy(() -> agentRun.session().toCompletableFuture().join())
+        .hasRootCauseMessage("store read only");
+  }
+
+  @Test
+  void aCancelledRunFailsTheSessionStage() {
+    RecordingStore store = new RecordingStore();
+    CompletableFuture<ModelResponse> pending = new CompletableFuture<>();
+    CancellationSignal signal = new CancellationSignal();
+    AgentEngine engine = engineWithStore(store, request -> pending);
+
+    AgentRun agentRun =
+        engine.run(
+            new AgentRunRequest(
+                Message.normalize("hi"),
+                new AgentSession("session-1", null, Map.of()),
+                new AgentRunOptions(),
+                signal,
+                Map.of()));
+    signal.cancel();
+    pending.complete(modelResponse("hello"));
+
+    assertThatThrownBy(() -> agentRun.session().toCompletableFuture().join())
+        .hasRootCauseInstanceOf(CancellationException.class);
+    assertThat(store.log).containsExactly("load:session-1");
+  }
+
+  @Test
+  void aSessionlessRunPublishesNoUpdatedSession() {
+    AgentEngine engine = AgentEngine.builder().modelClient(fixedClient("hello")).build();
+
+    AgentRun agentRun = engine.run("hi");
+    agentRun.response().toCompletableFuture().join();
+
+    assertThat(agentRun.session().toCompletableFuture().join()).isEmpty();
+  }
+
   // --- builder configuration
   // -----------------------------------------------------------------------
 
@@ -598,17 +978,17 @@ class SessionCoordinatorTest {
   }
 
   private static void run(AgentEngine engine, AgentSession session, String input) {
-    engine
-        .run(
-            new AgentRunRequest(
-                Message.normalize(input),
-                session,
-                new AgentRunOptions(),
-                new CancellationSignal(),
-                Map.of()))
-        .response()
-        .toCompletableFuture()
-        .join();
+    start(engine, session, input).response().toCompletableFuture().join();
+  }
+
+  private static AgentRun start(AgentEngine engine, AgentSession session, String input) {
+    return engine.run(
+        new AgentRunRequest(
+            Message.normalize(input),
+            session,
+            new AgentRunOptions(),
+            new CancellationSignal(),
+            Map.of()));
   }
 
   private static void runStreaming(AgentEngine engine, AgentSession session, String input) {
@@ -652,6 +1032,10 @@ class SessionCoordinatorTest {
 
   private List<Message> historyOf(SessionSnapshot snapshot, String namespace) {
     return ((MessageHistory) registry.restore(snapshot).state().get(namespace)).messages();
+  }
+
+  private static List<Message> historyIn(AgentSession session, String namespace) {
+    return ((MessageHistory) session.state().get(namespace)).messages();
   }
 
   private static ModelClient fixedClient(String text) {
@@ -759,6 +1143,12 @@ class SessionCoordinatorTest {
     private final AtomicReference<SessionContext> context = new AtomicReference<>();
     private final AtomicReference<List<Message>> beforeRunDefaultHistory = new AtomicReference<>();
     private final AtomicReference<List<Message>> afterRunDefaultHistory = new AtomicReference<>();
+    private final AtomicReference<ProviderSessionState> beforeRunState = new AtomicReference<>();
+    private final AtomicReference<ProviderSessionState> afterRunState = new AtomicReference<>();
+    private final AtomicReference<ProviderSessionState> beforeRunDefaultHistoryState =
+        new AtomicReference<>();
+    private final AtomicReference<ProviderSessionState> afterRunDefaultHistoryState =
+        new AtomicReference<>();
     private final AtomicReference<Map<String, Object>> updatedState = new AtomicReference<>();
 
     private ProbeProvider(String sourceId) {
@@ -773,12 +1163,18 @@ class SessionCoordinatorTest {
     @Override
     public CompletionStage<Void> beforeRun(SessionContext runContext, ProviderSessionState state) {
       context.set(runContext);
+      beforeRunState.set(state);
+      beforeRunDefaultHistoryState.set(
+          runContext.providerState(InMemoryHistoryProvider.DEFAULT_SOURCE_ID));
       beforeRunDefaultHistory.set(historyIn(runContext, InMemoryHistoryProvider.DEFAULT_SOURCE_ID));
       return completedFuture(null);
     }
 
     @Override
     public CompletionStage<Void> afterRun(SessionContext runContext, ProviderSessionState state) {
+      afterRunState.set(state);
+      afterRunDefaultHistoryState.set(
+          runContext.providerState(InMemoryHistoryProvider.DEFAULT_SOURCE_ID));
       afterRunDefaultHistory.set(historyIn(runContext, InMemoryHistoryProvider.DEFAULT_SOURCE_ID));
       state.set(MessageHistory.of(runContext.inputMessages()));
       updatedState.set(

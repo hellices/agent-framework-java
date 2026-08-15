@@ -525,6 +525,76 @@ class SessionContextTest {
   }
 
   @Test
+  void hydrateAcceptsAStoredServiceHandleWhenTheRequestDeclaredNone() {
+    SessionContext sessionContext =
+        new SessionContext(
+            new AgentSession("session-1", null, Map.of()),
+            List.of(),
+            Map.of(),
+            new CancellationSignal());
+    AgentSession stored = new AgentSession("session-1", "service-1", Map.of());
+
+    sessionContext.hydrate(
+        stored, new SessionSnapshotMetadata(0, Instant.parse("2026-01-01T00:00:00Z")));
+
+    assertThat(sessionContext.session().serviceSessionId()).isEqualTo("service-1");
+  }
+
+  @Test
+  void hydrateAcceptsAStoredServiceHandleThatMatchesTheRequestedOne() {
+    SessionContext sessionContext =
+        new SessionContext(
+            new AgentSession("session-1", "service-1", Map.of()),
+            List.of(),
+            Map.of(),
+            new CancellationSignal());
+    AgentSession stored = new AgentSession("session-1", "service-1", Map.of("history", "stored"));
+
+    sessionContext.hydrate(
+        stored, new SessionSnapshotMetadata(0, Instant.parse("2026-01-01T00:00:00Z")));
+
+    assertThat(sessionContext.session()).isSameAs(stored);
+  }
+
+  @Test
+  void hydrateRejectsAStoredSessionThatDropsTheRequestedServiceHandle() {
+    SessionContext sessionContext =
+        new SessionContext(
+            new AgentSession("session-1", "service-9", Map.of()),
+            List.of(),
+            Map.of(),
+            new CancellationSignal());
+    AgentSession stored = new AgentSession("session-1", null, Map.of());
+    SessionSnapshotMetadata metadata =
+        new SessionSnapshotMetadata(0, Instant.parse("2026-01-01T00:00:00Z"));
+
+    assertThatThrownBy(() -> sessionContext.hydrate(stored, metadata))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessage("hydrated service session id must be service-9");
+    assertThat(sessionContext.session().serviceSessionId()).isEqualTo("service-9");
+    assertThat(sessionContext.snapshotMetadata()).isEmpty();
+  }
+
+  @Test
+  void hydrateRejectsAStoredSessionWithADifferentServiceHandle() {
+    SessionContext sessionContext =
+        new SessionContext(
+            new AgentSession("session-1", "service-a", Map.of()),
+            List.of(),
+            Map.of(),
+            new CancellationSignal());
+    AgentSession stored = new AgentSession("session-1", "service-b", Map.of());
+    SessionSnapshotMetadata metadata =
+        new SessionSnapshotMetadata(0, Instant.parse("2026-01-01T00:00:00Z"));
+
+    assertThatThrownBy(() -> sessionContext.hydrate(stored, metadata))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessage("hydrated service session id must be service-a");
+    assertThat(sessionContext.session().serviceSessionId()).isEqualTo("service-a");
+    assertThat(sessionContext.snapshotMetadata()).isEmpty();
+  }
+
+  @Test
   void snapshotMetadataIsEmptyUntilHydrated() {
     SessionContext sessionContext =
         new SessionContext(

@@ -1,13 +1,16 @@
 package io.github.hellices.agentframework.api.agent;
 
 import java.util.Objects;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.function.BiConsumer;
+import java.util.function.Supplier;
 
 public final class AgentRun {
 
   private final CompletionStage<AgentResponse> response;
+  private final CompletionStage<Optional<AgentSession>> session;
   private final CancellationSignal cancellationSignal;
   private final Runnable cancellationAction;
 
@@ -24,14 +27,17 @@ public final class AgentRun {
     this.cancellationSignal =
         cancellationSignal == null ? new CancellationSignal() : cancellationSignal;
     this.response = CancellationAwareResponse.wrap(source, this.cancellationSignal);
+    this.session = noSession();
     this.cancellationAction = this.cancellationSignal::cancel;
   }
 
   private AgentRun(
       CompletionStage<AgentResponse> response,
+      CompletionStage<Optional<AgentSession>> session,
       CancellationSignal cancellationSignal,
       Runnable cancellationAction) {
     this.response = Objects.requireNonNull(response, "response must not be null");
+    this.session = Objects.requireNonNull(session, "session must not be null");
     this.cancellationSignal =
         Objects.requireNonNull(cancellationSignal, "cancellationSignal must not be null");
     this.cancellationAction =
@@ -40,6 +46,24 @@ public final class AgentRun {
 
   public CompletionStage<AgentResponse> response() {
     return response;
+  }
+
+  /**
+   * Returns the session this run produced, or empty when the run carried no session.
+   *
+   * <p>{@link AgentSession} is immutable, so a run that changes session state — a context provider
+   * appending this turn to the conversation history, for example — cannot report it through the
+   * session object the caller passed in. This stage is that report: passing its value to the next
+   * run is what replays the conversation when no {@code SessionStore} is configured, and it is the
+   * effective session (the stored one, when a run loaded one) even for a run that changed nothing.
+   *
+   * <p>It resolves from the same authoritative outcome {@link #response()} carries, so it completes
+   * only after the run's post-run lifecycle succeeded — including the session save of an agent with
+   * a configured store. A run that failed, was cancelled, or could not be persisted therefore fails
+   * this stage too, rather than publishing state that was never durably written.
+   */
+  public CompletionStage<Optional<AgentSession>> session() {
+    return session;
   }
 
   public void cancel() {
@@ -75,11 +99,41 @@ public final class AgentRun {
    * are preserved, so cancellation keeps reaching the same underlying run.
    */
   AgentRun withResponse(CompletionStage<AgentResponse> derivedResponse) {
-    return new AgentRun(
+    return copy(derivedResponse, null);
+  }
+
+  /**
+   * Package-private copy used by {@link Agent} for the final run it hands back, adding the
+   * authoritative {@link #session()} stage on top of {@link #withResponse(CompletionStage)}.
+   *
+   * <p>{@code updatedSession} is read from the caller-visible response stage rather than from the
+   * run's own stage, so the published session is exactly the one that existed when the run's whole
+   * lifecycle — including an agent's post-run persistence — succeeded, and a lifecycle failure
+   * fails both stages identically instead of publishing state the run never committed.
+   */
+  AgentRun withResponse(
+      CompletionStage<AgentResponse> derivedResponse,
+      Supplier<Optional<AgentSession>> updatedSession) {
+    return copy(
+        derivedResponse, Objects.requireNonNull(updatedSession, "updatedSession must not be null"));
+  }
+
+  private AgentRun copy(
+      CompletionStage<AgentResponse> derivedResponse,
+      Supplier<Optional<AgentSession>> updatedSession) {
+    CompletionStage<AgentResponse> wrapped =
         CancellationAwareResponse.wrap(
             Objects.requireNonNull(derivedResponse, "response must not be null"),
-            cancellationSignal),
+            cancellationSignal);
+    return new AgentRun(
+        wrapped,
+        updatedSession == null ? session : wrapped.thenApply(ignored -> updatedSession.get()),
         cancellationSignal,
         cancellationAction);
+  }
+
+  static CompletionStage<Optional<AgentSession>> noSession() {
+    return CompletableFuture.<Optional<AgentSession>>completedFuture(Optional.empty())
+        .minimalCompletionStage();
   }
 }

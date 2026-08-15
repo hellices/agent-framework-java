@@ -24,9 +24,17 @@ import java.util.concurrent.CompletionStage;
  *
  * <p>The order is deliberate and fails closed: a run that cannot load, cannot restore, or cannot
  * run its hooks never reaches {@link #save(SessionContext)}, so a failed run leaves the stored
- * session exactly as it was. Concurrency between runs is the store's concern: this class always
- * writes the revision that follows the one it read, and a store that wants stricter guarantees than
- * last-writer-wins enforces them in {@link SessionStore#save(SessionSnapshot)}.
+ * session exactly as it was.
+ *
+ * <p>Concurrency between runs is last-writer-wins, and this class does not pretend otherwise. It
+ * writes the revision that follows the one its own run read, so two runs that loaded the same
+ * revision write the same next revision and the second write replaces the first: the later run's
+ * session state wins whole, and the earlier run's turn is lost. That matches the design's file
+ * store, whose atomic replace is last-writer-wins. Detecting the conflict instead would need a
+ * conditional write, which {@link SessionStore} does not model — its {@code save} takes a snapshot
+ * and nothing else — so a store cannot add optimistic concurrency behind this interface. Callers
+ * that need it serialise runs on a session themselves until the SPI grows a compare-and-save
+ * operation.
  */
 public final class SessionCoordinator {
 

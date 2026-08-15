@@ -96,16 +96,26 @@ public final class SessionContext {
    * views.
    *
    * <p>The seam is deliberately narrow and fails closed. The session identity is immutable, so a
-   * snapshot for a different session is rejected instead of silently redirecting the run; hydration
+   * snapshot for a different session is rejected instead of silently redirecting the run; a
+   * caller-declared service conversation handle is never replaced or dropped, so a run bound to a
+   * provider-side conversation cannot be silently turned into a locally stored one; hydration
    * happens at most once; and it is refused once any {@link #providerState(String)} view exists,
    * because a view already reflects the pre-hydration state and swapping the session underneath it
    * would make a provider observe state that was never persisted for it.
+   *
+   * <p>The service handle is reconciled rather than overwritten. A request that declares no handle
+   * accepts whichever handle the snapshot carries, because the store is the authority for a session
+   * the caller only named. A request that declares a handle requires the stored one to be exactly
+   * equal: a stored {@code null} or a different handle means the caller and the store disagree
+   * about who owns the conversation, and continuing would either mix service-managed and local
+   * history in one run or erase the caller's handle from durable storage on the next save.
    *
    * @param restored the session restored from the loaded snapshot; must not be {@code null} and
    *     must carry this run's session id
    * @param metadata the loaded snapshot's persistence bookkeeping; must not be {@code null}
    * @throws NullPointerException if {@code restored} or {@code metadata} is {@code null}
-   * @throws IllegalArgumentException if {@code restored} carries a different session id
+   * @throws IllegalArgumentException if {@code restored} carries a different session id, or this
+   *     run declared a service session id that {@code restored} does not carry
    * @throws IllegalStateException if this run is sessionless, has already been hydrated, or has
    *     already created a provider state view
    */
@@ -121,6 +131,12 @@ public final class SessionContext {
     requireNoStateViews();
     if (!session.sessionId().equals(restored.sessionId())) {
       throw new IllegalArgumentException("hydrated session id must be " + session.sessionId());
+    }
+    String requestedServiceSessionId = session.serviceSessionId();
+    if (requestedServiceSessionId != null
+        && !requestedServiceSessionId.equals(restored.serviceSessionId())) {
+      throw new IllegalArgumentException(
+          "hydrated service session id must be " + requestedServiceSessionId);
     }
     session = restored;
     snapshotMetadata = metadata;

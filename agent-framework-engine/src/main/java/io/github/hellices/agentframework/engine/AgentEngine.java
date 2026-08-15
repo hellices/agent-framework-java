@@ -62,7 +62,7 @@ public final class AgentEngine extends Agent {
   private final Map<String, FunctionTool> tools;
   private final List<ToolDefinition> toolDefinitions;
   private final List<ProviderBinding> configuredProviders;
-  private final ProviderBinding defaultHistoryBinding;
+  private final DefaultHistory defaultHistory;
   private final SessionCoordinator sessionCoordinator;
   private final int maxIterations;
 
@@ -87,7 +87,7 @@ public final class AgentEngine extends Agent {
     this.tools = Map.copyOf(indexedTools);
     this.toolDefinitions = indexedTools.values().stream().map(FunctionTool::definition).toList();
     this.configuredProviders = bindContextProviders(contextProviders);
-    this.defaultHistoryBinding = bindDefaultHistory(this.configuredProviders);
+    this.defaultHistory = bindDefaultHistory(this.configuredProviders);
     this.sessionCoordinator = sessionCoordinator;
     this.maxIterations = maxIterations;
   }
@@ -115,7 +115,7 @@ public final class AgentEngine extends Agent {
 
   /**
    * Decides once, when the agent is built, whether this agent owns a default in-memory chat history
-   * and which namespace it would use (SES-014).
+   * (SES-014).
    *
    * <p>A configured {@link HistoryProvider} that loads messages already answers "what did we say
    * before?" for every run, so injecting a second history on top of it would replay the same
@@ -123,30 +123,45 @@ public final class AgentEngine extends Agent {
    * evaluation sink with {@code loadMessages(false)} — answers nothing, so it does not suppress the
    * default: without it a session would silently lose multi-turn behaviour.
    *
-   * <p>The namespace is resolved here too, so it is stable for the agent's lifetime: it is the
-   * default source id, or the first {@code in_memory-N} suffix that no configured provider owns.
-   * Picking it at build time rather than per run means the same session state slot is used by every
-   * run of this agent, which is what makes the stored history readable again after a restart.
+   * <p>The namespace is always {@link InMemoryHistoryProvider#DEFAULT_SOURCE_ID}. Deriving it from
+   * the configuration instead — picking the first free {@code in_memory-N} — would make a stored
+   * conversation unreadable the moment a provider is added on that name: the run would load nothing
+   * and append into a second namespace while the durable conversation stayed orphaned under the
+   * first. A stable namespace makes the collision a configuration error instead, reported by {@link
+   * #resolveProviders(SessionContext)} for the runs that would actually need the default.
    *
-   * @return the binding to append for eligible runs, or {@code null} when this agent never injects
-   *     one
+   * @return the binding to append for eligible runs, or a conflicting or suppressed marker
    */
-  private static ProviderBinding bindDefaultHistory(List<ProviderBinding> configured) {
-    Set<String> configuredSourceIds = new LinkedHashSet<>();
+  private static DefaultHistory bindDefaultHistory(List<ProviderBinding> configured) {
     for (ProviderBinding binding : configured) {
       if (binding.provider() instanceof HistoryProvider history
           && history.policy().loadMessages()) {
-        return null;
+        return new DefaultHistory(null, false);
       }
-      configuredSourceIds.add(binding.sourceId());
     }
-    String sourceId = InMemoryHistoryProvider.DEFAULT_SOURCE_ID;
-    for (int suffix = 2; configuredSourceIds.contains(sourceId); suffix++) {
-      sourceId = InMemoryHistoryProvider.DEFAULT_SOURCE_ID + "-" + suffix;
+    for (ProviderBinding binding : configured) {
+      if (InMemoryHistoryProvider.DEFAULT_SOURCE_ID.equals(binding.sourceId())) {
+        return new DefaultHistory(null, true);
+      }
     }
-    return new ProviderBinding(
-        sourceId, new InMemoryHistoryProvider(sourceId, HistoryPolicy.defaults()));
+    return new DefaultHistory(
+        new ProviderBinding(
+            InMemoryHistoryProvider.DEFAULT_SOURCE_ID,
+            new InMemoryHistoryProvider(
+                InMemoryHistoryProvider.DEFAULT_SOURCE_ID, HistoryPolicy.defaults())),
+        false);
   }
+
+  /**
+   * The agent's build-time answer to "does this agent have a default in-memory chat history, and
+   * can it use its namespace?".
+   *
+   * @param binding the provider to append for eligible runs, or {@code null} when a configured
+   *     load-enabled history provider already covers history or the namespace is taken
+   * @param namespaceConflict whether the default namespace is owned by a configured provider that
+   *     does not load history, which makes an otherwise eligible run a configuration error
+   */
+  private record DefaultHistory(ProviderBinding binding, boolean namespaceConflict) {}
 
   /**
    * Resolves the provider list for one run: the configured providers, plus the default in-memory
@@ -157,6 +172,12 @@ public final class AgentEngine extends Agent {
    * session carries a {@code serviceSessionId} has the conversation kept by the model service, so
    * in both cases injecting a history would either lose it or duplicate it.
    *
+   * <p>An eligible run whose default namespace is owned by a configured provider fails here, before
+   * the model is called and before anything is saved, rather than quietly moving the default
+   * elsewhere: the alternative orphans whatever conversation is already stored under that name. The
+   * failure is scoped to the runs that need the default, so a sessionless or service-managed run of
+   * the same agent is unaffected.
+   *
    * <p>The decision reads the run's effective session, which is the stored one once the coordinator
    * hydrated the context. Because hydration happens before this is ever called and is set-once, and
    * because the configured list and the default binding are both fixed at build time, this function
@@ -165,12 +186,22 @@ public final class AgentEngine extends Agent {
    */
   private List<ProviderBinding> resolveProviders(SessionContext sessionContext) {
     AgentSession session = sessionContext.session();
-    if (defaultHistoryBinding == null || session == null || session.serviceSessionId() != null) {
+    if (session == null || session.serviceSessionId() != null) {
+      return configuredProviders;
+    }
+    if (defaultHistory.namespaceConflict()) {
+      throw new IllegalStateException(
+          "context provider sourceId '"
+              + InMemoryHistoryProvider.DEFAULT_SOURCE_ID
+              + "' is reserved for the default in-memory chat history of a session run; "
+              + "configure a load-enabled HistoryProvider or a different sourceId");
+    }
+    if (defaultHistory.binding() == null) {
       return configuredProviders;
     }
     List<ProviderBinding> resolved = new ArrayList<>(configuredProviders.size() + 1);
     resolved.addAll(configuredProviders);
-    resolved.add(defaultHistoryBinding);
+    resolved.add(defaultHistory.binding());
     return List.copyOf(resolved);
   }
 
@@ -202,15 +233,25 @@ public final class AgentEngine extends Agent {
   }
 
   /**
-   * Starts an ordinary run. Without an asynchronous gate — no configured session store for a run
-   * with a session, and no resolved context providers — there is nothing to wait for, so the tool
+   * Starts an ordinary run. Without an asynchronous gate — no resolved context providers and no
+   * configured session store for a run with a session — there is nothing to wait for, so the tool
    * loop's first model call is started eagerly and a client that throws or returns {@code null}
    * fails this call synchronously, exactly as it did before the context provider pipeline existed.
    * With a gate the first model call must happen after the session was loaded and every {@code
    * beforeRun} hook completed, so the tool loop is started only once the composed stage completes,
-   * and the same failures are instead reported on the run's response stage. This mirrors {@link
-   * #runStreamingInternal} exactly, without duplicating its tool-loop-specific cancellation
-   * re-check (below), which streaming has no equivalent of because it has no loop.
+   * and the same failures are instead reported on the run's response and session stages. This
+   * mirrors {@link #runStreamingInternal} exactly, without duplicating its tool-loop-specific
+   * cancellation re-check (below), which streaming has no equivalent of because it has no loop.
+   *
+   * <p>Which shape a run gets is a property of the run, not of the client: a sessionless run of an
+   * agent with no context providers is eager, and any run that carries a session has a gate,
+   * because such a run always resolves at least the default in-memory chat history (SES-014) unless
+   * its session is service-managed. Passing a session to an agent whose model client throws
+   * synchronously therefore moves that failure from {@code run(...)} to {@link AgentRun#response()}
+   * — source-compatible, but visible to caller code that wraps {@code run(...)} in {@code
+   * try}/{@code catch}. The rule is deliberately a function of the configuration and the request
+   * alone: making it depend on whether the store or a hook happened to complete before the check
+   * would make the same code throw synchronously or asynchronously from one run to the next.
    */
   @Override
   protected AgentRun runInternal(AgentRunContext context, AgentRunRequest request) {
@@ -282,7 +323,9 @@ public final class AgentEngine extends Agent {
    *
    * <p>Returning {@code null} rather than a completed stage is what preserves the synchronous
    * failure shape of a run with no gate at all: a model client that throws must still fail the
-   * caller's {@code run} call, not the response stage.
+   * caller's {@code run} call, not the response stage. Only a run that resolves no provider and
+   * touches no store reaches that branch — see {@link #runInternal} for what that means for a run
+   * that carries a session.
    */
   private CompletionStage<Void> runGate(
       SessionContext sessionContext, CancellationSignal cancellationSignal) {
@@ -308,7 +351,8 @@ public final class AgentEngine extends Agent {
    * creation is deferred and the same failures are instead delivered to the update subscriber as a
    * terminal {@code onError}, which the run's response stage reports. Failures that do not depend
    * on the gate (unsupported tools, a client lacking the streaming or streaming-continuation
-   * capability) stay synchronous in both shapes.
+   * capability) stay synchronous in both shapes. Which shape applies follows the same rule {@link
+   * #runInternal} documents: a run that carries a session always has a gate.
    */
   @Override
   protected AgentStreamingRun<AgentResponseUpdate> runStreamingInternal(
@@ -391,6 +435,13 @@ public final class AgentEngine extends Agent {
    * resolution is a pure function of the agent's build-time configuration and the run's set-once
    * effective session: this recomputation yields the same bindings, in the same order, that {@code
    * beforeRun} used.
+   *
+   * <p>A run with a session and a configured store saves even when it owns no session state
+   * namespace at all — a service-managed conversation with no configured provider, for example. The
+   * snapshot is the durable record of the session itself: skipping it would leave a session the
+   * caller created with a service handle unrecorded, so a later run could not tell "never stored"
+   * from "stored with no local state" and would accept any service handle for it. The cost is one
+   * revision and one write per run of such a session.
    */
   @Override
   protected CompletionStage<Void> afterRun(SessionContext sessionContext) {

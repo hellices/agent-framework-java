@@ -59,9 +59,4 @@ public record MessageHistory(List<Message> messages) {
     combined.addAll(additional);
     return new MessageHistory(combined);
   }
-
-  @Override
-  public List<Message> messages() {
-    return messages;
-  }
 }

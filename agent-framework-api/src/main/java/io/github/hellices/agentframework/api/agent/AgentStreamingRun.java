@@ -3,6 +3,7 @@ package io.github.hellices.agentframework.api.agent;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
@@ -21,6 +22,7 @@ public final class AgentStreamingRun<T> {
 
   private final Flow.Publisher<T> updates;
   private final CompletionStage<AgentResponse> response;
+  private final CompletionStage<Optional<AgentSession>> session;
   private final CancellationSignal cancellationSignal;
   private final Runnable cancellationAction;
   private final Predicate<Throwable> failureAction;
@@ -31,6 +33,7 @@ public final class AgentStreamingRun<T> {
       CancellationSignal cancellationSignal) {
     this.updates = Objects.requireNonNull(updates, "updates must not be null");
     this.response = Objects.requireNonNull(response, "response must not be null");
+    this.session = AgentRun.noSession();
     this.cancellationSignal =
         cancellationSignal == null ? new CancellationSignal() : cancellationSignal;
     this.cancellationAction = this.cancellationSignal::cancel;
@@ -40,11 +43,13 @@ public final class AgentStreamingRun<T> {
   private AgentStreamingRun(
       Flow.Publisher<T> updates,
       CompletionStage<AgentResponse> response,
+      CompletionStage<Optional<AgentSession>> session,
       CancellationSignal cancellationSignal,
       Runnable cancellationAction,
       Predicate<Throwable> failureAction) {
     this.updates = Objects.requireNonNull(updates, "updates must not be null");
     this.response = Objects.requireNonNull(response, "response must not be null");
+    this.session = Objects.requireNonNull(session, "session must not be null");
     this.cancellationSignal =
         cancellationSignal == null ? new CancellationSignal() : cancellationSignal;
     this.cancellationAction =
@@ -67,6 +72,7 @@ public final class AgentStreamingRun<T> {
     return new AgentStreamingRun<>(
         publisher,
         response.minimalCompletionStage(),
+        AgentRun.noSession(),
         signal,
         () -> {
           signal.cancel();
@@ -85,6 +91,7 @@ public final class AgentStreamingRun<T> {
     return new AgentStreamingRun<>(
         publisher,
         response.minimalCompletionStage(),
+        AgentRun.noSession(),
         signal,
         () -> {
           signal.cancel();
@@ -111,6 +118,7 @@ public final class AgentStreamingRun<T> {
     return new AgentStreamingRun<>(
         publisher,
         response.minimalCompletionStage(),
+        AgentRun.noSession(),
         signal,
         () -> {
           signal.cancel();
@@ -133,6 +141,18 @@ public final class AgentStreamingRun<T> {
     return response;
   }
 
+  /**
+   * Returns the session this run produced, or empty when the run carried no session.
+   *
+   * <p>It carries the same contract as {@link AgentRun#session()}: it resolves from the run's
+   * authoritative outcome, so it completes only after {@link #response()} completed successfully,
+   * not when {@link #updates()} reached its terminal signal, and it fails whenever the run's
+   * lifecycle — including an agent's post-run session save — failed.
+   */
+  public CompletionStage<Optional<AgentSession>> session() {
+    return session;
+  }
+
   public void cancel() {
     cancellationAction.run();
   }
@@ -142,6 +162,7 @@ public final class AgentStreamingRun<T> {
     return new AgentStreamingRun<>(
         new MappingPublisher<>(updates, mapper, failureAction),
         response,
+        session,
         cancellationSignal,
         cancellationAction,
         failureAction);
@@ -178,11 +199,34 @@ public final class AgentStreamingRun<T> {
    * the underlying stream and update-mapping failure handling keeps working exactly as before.
    */
   AgentStreamingRun<T> withResponse(CompletionStage<AgentResponse> derivedResponse) {
-    return new AgentStreamingRun<>(
-        updates,
+    return copy(derivedResponse, null);
+  }
+
+  /**
+   * Package-private copy used by {@link Agent} for the final run it hands back, adding the
+   * authoritative {@link #session()} stage on top of {@link #withResponse(CompletionStage)}. The
+   * published session is read from the caller-visible response stage, so it is exactly the session
+   * that existed once the whole run lifecycle succeeded, and a lifecycle failure fails the session
+   * stage identically instead of publishing state the run never committed.
+   */
+  AgentStreamingRun<T> withResponse(
+      CompletionStage<AgentResponse> derivedResponse,
+      Supplier<Optional<AgentSession>> updatedSession) {
+    return copy(
+        derivedResponse, Objects.requireNonNull(updatedSession, "updatedSession must not be null"));
+  }
+
+  private AgentStreamingRun<T> copy(
+      CompletionStage<AgentResponse> derivedResponse,
+      Supplier<Optional<AgentSession>> updatedSession) {
+    CompletionStage<AgentResponse> wrapped =
         CancellationAwareResponse.wrap(
             Objects.requireNonNull(derivedResponse, "response must not be null"),
-            cancellationSignal),
+            cancellationSignal);
+    return new AgentStreamingRun<>(
+        updates,
+        wrapped,
+        updatedSession == null ? session : wrapped.thenApply(ignored -> updatedSession.get()),
         cancellationSignal,
         cancellationAction,
         failureAction);
