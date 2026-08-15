@@ -46,12 +46,12 @@ public abstract class Agent {
         new AgentRunContext(this, session, normalizedRequest.attributes()), normalizedRequest);
   }
 
-  public final AgentStreamingRun runStreaming(String input) {
+  public final AgentStreamingRun<AgentResponseUpdate> runStreaming(String input) {
     Objects.requireNonNull(input, "input must not be null");
     return runStreaming(AgentRunRequest.of(input));
   }
 
-  public final AgentStreamingRun runStreaming(AgentRunRequest request) {
+  public final AgentStreamingRun<AgentResponseUpdate> runStreaming(AgentRunRequest request) {
     AgentRunRequest normalizedRequest = Objects.requireNonNull(request, "request must not be null");
     AgentSession session = normalizedRequest.session();
     if (session != null) {
@@ -67,6 +67,6 @@ public abstract class Agent {
 
   protected abstract AgentRun runInternal(AgentRunContext context, AgentRunRequest request);
 
-  protected abstract AgentStreamingRun runStreamingInternal(
+  protected abstract AgentStreamingRun<AgentResponseUpdate> runStreamingInternal(
       AgentRunContext context, AgentRunRequest request);
 }
