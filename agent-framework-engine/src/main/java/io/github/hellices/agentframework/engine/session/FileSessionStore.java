@@ -32,10 +32,9 @@ import java.util.concurrent.CompletionStage;
 
 public final class FileSessionStore implements SessionStore {
 
-  private static final Object[] ROOT_LOCKS = createRootLocks();
+  private static final Object[] OPERATION_LOCKS = createOperationLocks();
 
   private final Path root;
-  private final Object rootLock;
   private final boolean directoryForceSupported;
   private final SessionSnapshotCodec codec;
 
@@ -45,7 +44,6 @@ public final class FileSessionStore implements SessionStore {
     try {
       Files.createDirectories(configuredRoot);
       this.root = configuredRoot.toRealPath();
-      this.rootLock = ROOT_LOCKS[Math.floorMod(this.root.hashCode(), ROOT_LOCKS.length)];
       this.directoryForceSupported = File.separatorChar != '\\';
     } catch (IOException failure) {
       throw new FileSessionStoreException("failed to initialize session store root", failure);
@@ -54,7 +52,7 @@ public final class FileSessionStore implements SessionStore {
 
   @Override
   public CompletionStage<Optional<SessionSnapshot>> load(String sessionId) {
-    synchronized (rootLock) {
+    synchronized (operationLock(sessionId)) {
       return loadLocked(sessionId);
     }
   }
@@ -79,7 +77,8 @@ public final class FileSessionStore implements SessionStore {
 
   @Override
   public CompletionStage<Void> save(SessionSnapshot snapshot) {
-    synchronized (rootLock) {
+    String sessionId = snapshot == null ? null : snapshot.sessionId();
+    synchronized (operationLock(sessionId)) {
       return saveLocked(snapshot);
     }
   }
@@ -118,7 +117,7 @@ public final class FileSessionStore implements SessionStore {
 
   @Override
   public CompletionStage<Void> delete(String sessionId) {
-    synchronized (rootLock) {
+    synchronized (operationLock(sessionId)) {
       return deleteLocked(sessionId);
     }
   }
@@ -256,7 +255,12 @@ public final class FileSessionStore implements SessionStore {
     return new FileSessionStoreException(operation, failure);
   }
 
-  private static Object[] createRootLocks() {
+  private Object operationLock(String sessionId) {
+    int hash = 31 * root.hashCode() + Objects.hashCode(sessionId);
+    return OPERATION_LOCKS[Math.floorMod(hash, OPERATION_LOCKS.length)];
+  }
+
+  private static Object[] createOperationLocks() {
     Object[] locks = new Object[64];
     for (int index = 0; index < locks.length; index++) {
       locks[index] = new Object();
