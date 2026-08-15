@@ -61,6 +61,13 @@ class MessageHistoryTest {
   }
 
   @Test
+  void appendRejectsNullAdditionalMessagesClearly() {
+    assertThatThrownBy(() -> assertThat(MessageHistory.empty().append(null)).isNotNull())
+        .isInstanceOf(NullPointerException.class)
+        .hasMessage("additional messages must not be null");
+  }
+
+  @Test
   void aNullMessageEntryIsRejected() {
     List<Message> messages = Arrays.asList(message("first"), null);
 

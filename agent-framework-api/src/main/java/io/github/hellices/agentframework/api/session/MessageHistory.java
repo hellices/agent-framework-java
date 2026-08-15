@@ -53,7 +53,7 @@ public record MessageHistory(List<Message> messages) {
    * history is left unchanged.
    */
   public MessageHistory append(List<? extends Message> additional) {
-    Objects.requireNonNull(additional, "messages must not be null");
+    Objects.requireNonNull(additional, "additional messages must not be null");
     List<Message> combined = new ArrayList<>(messages.size() + additional.size());
     combined.addAll(messages);
     combined.addAll(additional);
