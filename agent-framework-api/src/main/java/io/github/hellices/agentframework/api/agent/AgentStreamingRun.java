@@ -3,12 +3,18 @@ package io.github.hellices.agentframework.api.agent;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.Flow;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Function;
+import java.util.function.Predicate;
+import java.util.function.Supplier;
 
 public final class AgentStreamingRun<T> {
 
@@ -16,6 +22,7 @@ public final class AgentStreamingRun<T> {
   private final CompletionStage<AgentResponse> response;
   private final CancellationSignal cancellationSignal;
   private final Runnable cancellationAction;
+  private final Predicate<Throwable> failureAction;
 
   public AgentStreamingRun(
       Flow.Publisher<T> updates,
@@ -26,19 +33,22 @@ public final class AgentStreamingRun<T> {
     this.cancellationSignal =
         cancellationSignal == null ? new CancellationSignal() : cancellationSignal;
     this.cancellationAction = this.cancellationSignal::cancel;
+    this.failureAction = ignored -> false;
   }
 
   private AgentStreamingRun(
       Flow.Publisher<T> updates,
       CompletionStage<AgentResponse> response,
       CancellationSignal cancellationSignal,
-      Runnable cancellationAction) {
+      Runnable cancellationAction,
+      Predicate<Throwable> failureAction) {
     this.updates = Objects.requireNonNull(updates, "updates must not be null");
     this.response = Objects.requireNonNull(response, "response must not be null");
     this.cancellationSignal =
         cancellationSignal == null ? new CancellationSignal() : cancellationSignal;
     this.cancellationAction =
         Objects.requireNonNull(cancellationAction, "cancellationAction must not be null");
+    this.failureAction = Objects.requireNonNull(failureAction, "failureAction must not be null");
   }
 
   public static AgentStreamingRun<AgentResponseUpdate> fromUpdate(AgentResponseUpdate update) {
@@ -52,15 +62,16 @@ public final class AgentStreamingRun<T> {
         cancellationSignal == null ? new CancellationSignal() : cancellationSignal;
     CompletableFuture<AgentResponse> response = new CompletableFuture<>();
     FinalizingPublisher publisher =
-        new FinalizingPublisher(new SingleValuePublisher<>(update), response, signal);
+        new FinalizingPublisher(new SingleValuePublisher<>(update), response, signal, null);
     return new AgentStreamingRun<>(
         publisher,
         response.minimalCompletionStage(),
         signal,
         () -> {
           signal.cancel();
-          publisher.cancel();
-        });
+          publisher.cancel(false);
+        },
+        publisher::fail);
   }
 
   public static AgentStreamingRun<AgentResponseUpdate> fromUpdates(
@@ -69,15 +80,42 @@ public final class AgentStreamingRun<T> {
     CancellationSignal signal =
         cancellationSignal == null ? new CancellationSignal() : cancellationSignal;
     CompletableFuture<AgentResponse> response = new CompletableFuture<>();
-    FinalizingPublisher publisher = new FinalizingPublisher(updates, response, signal);
+    FinalizingPublisher publisher = new FinalizingPublisher(updates, response, signal, null);
     return new AgentStreamingRun<>(
         publisher,
         response.minimalCompletionStage(),
         signal,
         () -> {
           signal.cancel();
-          publisher.cancel();
-        });
+          publisher.cancel(false);
+        },
+        publisher::fail);
+  }
+
+  public static AgentStreamingRun<AgentResponseUpdate> fromUpdates(
+      Flow.Publisher<AgentResponseUpdate> updates,
+      CancellationSignal cancellationSignal,
+      Supplier<AgentResponse> emptyResponseSupplier) {
+    Objects.requireNonNull(updates, "updates must not be null");
+    CancellationSignal signal =
+        cancellationSignal == null ? new CancellationSignal() : cancellationSignal;
+    CompletableFuture<AgentResponse> response = new CompletableFuture<>();
+    FinalizingPublisher publisher =
+        new FinalizingPublisher(
+            updates,
+            response,
+            signal,
+            Objects.requireNonNull(
+                emptyResponseSupplier, "emptyResponseSupplier must not be null"));
+    return new AgentStreamingRun<>(
+        publisher,
+        response.minimalCompletionStage(),
+        signal,
+        () -> {
+          signal.cancel();
+          publisher.cancel(false);
+        },
+        publisher::fail);
   }
 
   public Flow.Publisher<T> updates() {
@@ -95,35 +133,228 @@ public final class AgentStreamingRun<T> {
   public <R> AgentStreamingRun<R> mapUpdates(Function<? super T, ? extends R> mapper) {
     Objects.requireNonNull(mapper, "mapper must not be null");
     return new AgentStreamingRun<>(
-        new MappingPublisher<>(updates, mapper), response, cancellationSignal, cancellationAction);
+        new MappingPublisher<>(updates, mapper, failureAction),
+        response,
+        cancellationSignal,
+        cancellationAction,
+        failureAction);
   }
 
   private static final class FinalizingPublisher implements Flow.Publisher<AgentResponseUpdate> {
     private final Flow.Publisher<AgentResponseUpdate> source;
     private final CompletableFuture<AgentResponse> response;
     private final CancellationSignal cancellationSignal;
+    private final Supplier<AgentResponse> emptyResponseSupplier;
     private final AtomicBoolean subscribed = new AtomicBoolean();
     private final AtomicReference<Flow.Subscription> subscription = new AtomicReference<>();
     private final AtomicReference<StreamState> state = new AtomicReference<>(StreamState.ACTIVE);
+    private final AtomicReference<Flow.Subscriber<? super AgentResponseUpdate>> downstream =
+        new AtomicReference<>();
+    private final AtomicReference<CancellationException> cancellationFailure =
+        new AtomicReference<>();
+    private final AtomicBoolean downstreamSubscribed = new AtomicBoolean();
+    private final AtomicBoolean cancellationNotificationRequested = new AtomicBoolean();
+    private final AtomicBoolean cancellationTerminalSent = new AtomicBoolean();
+    private final ConcurrentLinkedQueue<StreamSignal> signals = new ConcurrentLinkedQueue<>();
+    private final AtomicInteger drainWork = new AtomicInteger();
+    private final ReentrantLock signalLock = new ReentrantLock();
+    private final AtomicReference<Runnable> removeCancellationListener =
+        new AtomicReference<>(() -> {});
 
     private FinalizingPublisher(
         Flow.Publisher<AgentResponseUpdate> source,
         CompletableFuture<AgentResponse> response,
-        CancellationSignal cancellationSignal) {
+        CancellationSignal cancellationSignal,
+        Supplier<AgentResponse> emptyResponseSupplier) {
       this.source = source;
       this.response = response;
       this.cancellationSignal = cancellationSignal;
+      this.emptyResponseSupplier = emptyResponseSupplier;
+      this.removeCancellationListener.set(cancellationSignal.onCancel(() -> cancel(true)));
     }
 
-    private boolean cancel() {
-      if (state.compareAndSet(StreamState.ACTIVE, StreamState.CANCELLED)) {
-        Flow.Subscription activeSubscription = subscription.get();
-        if (activeSubscription != null) {
-          activeSubscription.cancel();
+    private boolean cancel(boolean notifyDownstream) {
+      CancellationException failure;
+      signalLock.lock();
+      try {
+        if (!state.compareAndSet(StreamState.ACTIVE, StreamState.CANCELLED)) {
+          return false;
         }
-        return true;
+        failure = new CancellationException("run was cancelled");
+        cancellationFailure.set(failure);
+        if (notifyDownstream) {
+          cancellationNotificationRequested.set(true);
+          enqueueCancellationIfReady();
+        }
+      } finally {
+        signalLock.unlock();
       }
-      return false;
+      unregisterCancellationListener();
+      response.completeExceptionally(failure);
+      Flow.Subscription activeSubscription = subscription.get();
+      if (activeSubscription != null) {
+        try {
+          activeSubscription.cancel();
+        } catch (RuntimeException cleanupFailure) {
+          failure.addSuppressed(cleanupFailure);
+        }
+      }
+      drainSignals();
+      return true;
+    }
+
+    private void notifyCancellation() {
+      signalLock.lock();
+      try {
+        enqueueCancellationIfReady();
+      } finally {
+        signalLock.unlock();
+      }
+      drainSignals();
+    }
+
+    private void enqueueCancellationIfReady() {
+      CancellationException failure = cancellationFailure.get();
+      if (downstream.get() != null
+          && failure != null
+          && downstreamSubscribed.get()
+          && cancellationNotificationRequested.get()
+          && cancellationTerminalSent.compareAndSet(false, true)) {
+        signals.add(new ErrorSignal(failure));
+      }
+    }
+
+    private void recordCancellationFailure(RuntimeException failure) {
+      CancellationException cancellation = cancellationFailure.get();
+      if (cancellation != null) {
+        cancellation.addSuppressed(failure);
+      }
+    }
+
+    private boolean fail(Throwable failure) {
+      Throwable value = Objects.requireNonNull(failure, "failure must not be null");
+      if (!state.compareAndSet(StreamState.ACTIVE, StreamState.TERMINATED)) {
+        return false;
+      }
+      unregisterCancellationListener();
+      response.completeExceptionally(value);
+      try {
+        cancellationSignal.cancel();
+      } catch (RuntimeException cleanupFailure) {
+        value.addSuppressed(cleanupFailure);
+      }
+      Flow.Subscription activeSubscription = subscription.get();
+      if (activeSubscription != null) {
+        try {
+          activeSubscription.cancel();
+        } catch (RuntimeException cleanupFailure) {
+          value.addSuppressed(cleanupFailure);
+        }
+      }
+      return true;
+    }
+
+    private void emitNext(AgentResponseUpdate item, List<AgentResponseUpdate> bufferedUpdates) {
+      signalLock.lock();
+      try {
+        if (state.get() != StreamState.ACTIVE) {
+          return;
+        }
+        AgentResponseUpdate value = Objects.requireNonNull(item, "updates must not contain null");
+        bufferedUpdates.add(value);
+        signals.add(new NextSignal(value));
+      } finally {
+        signalLock.unlock();
+      }
+      drainSignals();
+    }
+
+    private void emitError(Throwable failure) {
+      signalLock.lock();
+      try {
+        if (!state.compareAndSet(StreamState.ACTIVE, StreamState.TERMINATED)) {
+          return;
+        }
+        signals.add(new ErrorSignal(failure));
+      } finally {
+        signalLock.unlock();
+      }
+      unregisterCancellationListener();
+      response.completeExceptionally(failure);
+      drainSignals();
+    }
+
+    private void emitComplete(List<AgentResponseUpdate> bufferedUpdates) {
+      signalLock.lock();
+      try {
+        if (!state.compareAndSet(StreamState.ACTIVE, StreamState.TERMINATED)) {
+          return;
+        }
+      } finally {
+        signalLock.unlock();
+      }
+      unregisterCancellationListener();
+      StreamSignal terminalSignal;
+      try {
+        AgentResponse assembledResponse =
+            bufferedUpdates.isEmpty() && emptyResponseSupplier != null
+                ? Objects.requireNonNull(
+                    emptyResponseSupplier.get(), "emptyResponseSupplier must not return null")
+                : AgentResponse.fromUpdates(bufferedUpdates);
+        response.complete(assembledResponse);
+        terminalSignal = CompleteSignal.INSTANCE;
+      } catch (RuntimeException failure) {
+        response.completeExceptionally(failure);
+        terminalSignal = new ErrorSignal(failure);
+      }
+      signalLock.lock();
+      try {
+        signals.add(terminalSignal);
+      } finally {
+        signalLock.unlock();
+      }
+      drainSignals();
+    }
+
+    private void unregisterCancellationListener() {
+      removeCancellationListener.getAndSet(() -> {}).run();
+    }
+
+    private void drainSignals() {
+      if (drainWork.getAndIncrement() != 0) {
+        return;
+      }
+      int missed = 1;
+      try {
+        while (true) {
+          StreamSignal signal;
+          while ((signal = signals.poll()) != null) {
+            Flow.Subscriber<? super AgentResponseUpdate> subscriber = downstream.get();
+            if (subscriber == null) {
+              continue;
+            }
+            if (signal instanceof NextSignal next) {
+              subscriber.onNext(next.update());
+            } else if (signal instanceof ErrorSignal error) {
+              subscriber.onError(error.failure());
+              signals.clear();
+              return;
+            } else {
+              subscriber.onComplete();
+              signals.clear();
+              return;
+            }
+          }
+          missed = drainWork.addAndGet(-missed);
+          if (missed == 0) {
+            return;
+          }
+        }
+      } catch (RuntimeException failure) {
+        signals.clear();
+        drainWork.set(0);
+        throw failure;
+      }
     }
 
     @Override
@@ -134,9 +365,11 @@ public final class AgentStreamingRun<T> {
         subscriber.onError(new IllegalStateException("updates can only be consumed once"));
         return;
       }
+      downstream.set(subscriber);
       if (cancellationSignal.isCancelled()) {
         subscriber.onSubscribe(EmptySubscription.INSTANCE);
-        subscriber.onComplete();
+        downstreamSubscribed.set(true);
+        notifyCancellation();
         return;
       }
 
@@ -147,9 +380,14 @@ public final class AgentStreamingRun<T> {
             public void onSubscribe(Flow.Subscription upstreamSubscription) {
               subscription.set(upstreamSubscription);
               if (state.get() != StreamState.ACTIVE) {
-                upstreamSubscription.cancel();
+                try {
+                  upstreamSubscription.cancel();
+                } catch (RuntimeException cleanupFailure) {
+                  recordCancellationFailure(cleanupFailure);
+                }
                 subscriber.onSubscribe(EmptySubscription.INSTANCE);
-                subscriber.onComplete();
+                downstreamSubscribed.set(true);
+                notifyCancellation();
                 return;
               }
               subscriber.onSubscribe(
@@ -161,62 +399,61 @@ public final class AgentStreamingRun<T> {
 
                     @Override
                     public void cancel() {
-                      if (FinalizingPublisher.this.cancel()) {
-                        cancellationSignal.cancel();
+                      if (FinalizingPublisher.this.cancel(false)) {
+                        try {
+                          cancellationSignal.cancel();
+                        } catch (RuntimeException cleanupFailure) {
+                          recordCancellationFailure(cleanupFailure);
+                        }
                       }
                     }
                   });
+              downstreamSubscribed.set(true);
+              if (state.get() == StreamState.CANCELLED) {
+                notifyCancellation();
+              }
             }
 
             @Override
             public void onNext(AgentResponseUpdate item) {
-              if (state.get() != StreamState.ACTIVE) {
-                return;
-              }
-              bufferedUpdates.add(Objects.requireNonNull(item, "updates must not contain null"));
-              if (state.get() != StreamState.ACTIVE) {
-                bufferedUpdates.remove(bufferedUpdates.size() - 1);
-                return;
-              }
-              subscriber.onNext(item);
+              emitNext(item, bufferedUpdates);
             }
 
             @Override
             public void onError(Throwable throwable) {
-              if (!state.compareAndSet(StreamState.ACTIVE, StreamState.TERMINATED)) {
-                return;
-              }
-              response.completeExceptionally(throwable);
-              subscriber.onError(throwable);
+              emitError(throwable);
             }
 
             @Override
             public void onComplete() {
-              if (!state.compareAndSet(StreamState.ACTIVE, StreamState.TERMINATED)) {
-                return;
-              }
-              AgentResponse assembledResponse;
-              try {
-                assembledResponse = AgentResponse.fromUpdates(bufferedUpdates);
-              } catch (RuntimeException exception) {
-                response.completeExceptionally(exception);
-                subscriber.onError(exception);
-                return;
-              }
-              response.complete(assembledResponse);
-              subscriber.onComplete();
+              emitComplete(bufferedUpdates);
             }
           });
+    }
+
+    private interface StreamSignal {}
+
+    private record NextSignal(AgentResponseUpdate update) implements StreamSignal {}
+
+    private record ErrorSignal(Throwable failure) implements StreamSignal {}
+
+    private enum CompleteSignal implements StreamSignal {
+      INSTANCE
     }
   }
 
   private static final class MappingPublisher<T, R> implements Flow.Publisher<R> {
     private final Flow.Publisher<T> source;
     private final Function<? super T, ? extends R> mapper;
+    private final Predicate<Throwable> failureAction;
 
-    private MappingPublisher(Flow.Publisher<T> source, Function<? super T, ? extends R> mapper) {
+    private MappingPublisher(
+        Flow.Publisher<T> source,
+        Function<? super T, ? extends R> mapper,
+        Predicate<Throwable> failureAction) {
       this.source = source;
       this.mapper = mapper;
+      this.failureAction = failureAction;
     }
 
     @Override
@@ -243,7 +480,9 @@ public final class AgentStreamingRun<T> {
                 mapped = Objects.requireNonNull(mapper.apply(item), "mapper must not return null");
               } catch (RuntimeException exception) {
                 terminated = true;
-                subscription.cancel();
+                if (!failureAction.test(exception)) {
+                  subscription.cancel();
+                }
                 subscriber.onError(exception);
                 return;
               }

@@ -3,9 +3,8 @@ package io.github.hellices.agentframework.engine;
 /**
  * Identifies the embedded execution engine surface.
  *
- * <p>The engine ships no run loop yet. Requirement documents drive what lands here, one feature at
- * a time, so this type exists to give the module a compiled, documented, and publishable surface
- * from the first commit.
+ * <p>Requirement documents drive what lands here one feature at a time. This marker remains the
+ * stable module identifier while {@link AgentEngine} provides the embedded execution surface.
  */
 public final class EngineContract {
 

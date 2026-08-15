@@ -1,6 +1,7 @@
 package io.github.hellices.agentframework.api.agent;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.github.hellices.agentframework.api.message.FinishReason;
@@ -10,11 +11,13 @@ import io.github.hellices.agentframework.api.message.TextContent;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Flow;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 
@@ -73,7 +76,7 @@ class AgentStreamingRunTest {
             });
 
     assertThat(signal.isCancelled()).isTrue();
-    assertThat(run.response().toCompletableFuture()).isNotDone();
+    assertThat(run.response().toCompletableFuture()).isCompletedExceptionally();
   }
 
   @Test
@@ -109,8 +112,8 @@ class AgentStreamingRunTest {
             });
 
     assertThat(signal.isCancelled()).isTrue();
-    assertThat(signals).containsExactly("onComplete");
-    assertThat(run.response().toCompletableFuture()).isNotDone();
+    assertThat(signals).containsExactly("onError");
+    assertThat(run.response().toCompletableFuture()).isCompletedExceptionally();
   }
 
   @Test
@@ -130,7 +133,10 @@ class AgentStreamingRunTest {
         .hasCauseInstanceOf(IllegalStateException.class)
         .hasMessageContaining("mapping failed");
     assertThat(signal.isCancelled()).isTrue();
-    assertThat(run.response().toCompletableFuture()).isNotDone();
+    assertThatThrownBy(() -> run.response().toCompletableFuture().join())
+        .isInstanceOf(CompletionException.class)
+        .hasCauseInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("mapping failed");
   }
 
   @Test
@@ -308,7 +314,7 @@ class AgentStreamingRunTest {
 
     assertThat(signal.isCancelled()).isTrue();
     assertThat(downstreamSignals).containsExactly("partial");
-    assertThat(run.response().toCompletableFuture()).isNotDone();
+    assertThat(run.response().toCompletableFuture()).isCompletedExceptionally();
   }
 
   @Test
@@ -317,31 +323,39 @@ class AgentStreamingRunTest {
         new AtomicReference<>();
     AgentStreamingRun<AgentResponseUpdate> run =
         AgentStreamingRun.fromUpdates(sourceSubscriber::set, new CancellationSignal());
-    AtomicReference<Flow.Subscription> downstreamSubscription = new AtomicReference<>();
     CountDownLatch callbackStarted = new CountDownLatch(1);
     CountDownLatch releaseCallback = new CountDownLatch(1);
     CountDownLatch cancellationReturned = new CountDownLatch(1);
+    AtomicBoolean inOnNext = new AtomicBoolean();
+    AtomicBoolean terminalWasConcurrent = new AtomicBoolean();
+    CountDownLatch terminalReceived = new CountDownLatch(1);
     run.updates()
         .subscribe(
             new Flow.Subscriber<>() {
               @Override
               public void onSubscribe(Flow.Subscription subscription) {
-                downstreamSubscription.set(subscription);
+                subscription.request(Long.MAX_VALUE);
               }
 
               @Override
               public void onNext(AgentResponseUpdate item) {
+                inOnNext.set(true);
                 callbackStarted.countDown();
                 try {
                   releaseCallback.await();
                 } catch (InterruptedException exception) {
                   Thread.currentThread().interrupt();
                   throw new IllegalStateException(exception);
+                } finally {
+                  inOnNext.set(false);
                 }
               }
 
               @Override
-              public void onError(Throwable throwable) {}
+              public void onError(Throwable throwable) {
+                terminalWasConcurrent.set(inOnNext.get());
+                terminalReceived.countDown();
+              }
 
               @Override
               public void onComplete() {}
@@ -361,7 +375,7 @@ class AgentStreamingRunTest {
 
     CompletableFuture.runAsync(
         () -> {
-          downstreamSubscription.get().cancel();
+          run.cancel();
           cancellationReturned.countDown();
         });
     try {
@@ -370,6 +384,8 @@ class AgentStreamingRunTest {
       releaseCallback.countDown();
       producer.join();
     }
+    assertThat(terminalReceived.await(1, TimeUnit.SECONDS)).isTrue();
+    assertThat(terminalWasConcurrent).isFalse();
   }
 
   @Test
@@ -462,6 +478,91 @@ class AgentStreamingRunTest {
   }
 
   @Test
+  void externalSignalCancellationCompletesTheResponseExceptionally() {
+    CancellationSignal signal = new CancellationSignal();
+    AtomicBoolean upstreamCancelled = new AtomicBoolean();
+    List<Throwable> downstreamErrors = new ArrayList<>();
+    AgentStreamingRun<AgentResponseUpdate> run =
+        AgentStreamingRun.fromUpdates(
+            subscriber ->
+                subscriber.onSubscribe(
+                    new Flow.Subscription() {
+                      @Override
+                      public void request(long n) {}
+
+                      @Override
+                      public void cancel() {
+                        upstreamCancelled.set(true);
+                      }
+                    }),
+            signal);
+    run.updates()
+        .subscribe(
+            new Flow.Subscriber<>() {
+              @Override
+              public void onSubscribe(Flow.Subscription subscription) {
+                subscription.request(Long.MAX_VALUE);
+              }
+
+              @Override
+              public void onNext(AgentResponseUpdate item) {}
+
+              @Override
+              public void onError(Throwable throwable) {
+                downstreamErrors.add(throwable);
+              }
+
+              @Override
+              public void onComplete() {}
+            });
+
+    signal.cancel();
+
+    assertThat(upstreamCancelled).isTrue();
+    assertThat(downstreamErrors).singleElement().isInstanceOf(CancellationException.class);
+    assertThat(run.response().toCompletableFuture()).isCompletedExceptionally();
+  }
+
+  @Test
+  void subscriptionCancellationDoesNotThrowWhenUpstreamCancellationFails() {
+    AgentStreamingRun<AgentResponseUpdate> run =
+        AgentStreamingRun.fromUpdates(
+            subscriber ->
+                subscriber.onSubscribe(
+                    new Flow.Subscription() {
+                      @Override
+                      public void request(long n) {}
+
+                      @Override
+                      public void cancel() {
+                        throw new IllegalStateException("upstream cancel failed");
+                      }
+                    }),
+            new CancellationSignal());
+    AtomicReference<Flow.Subscription> subscription = new AtomicReference<>();
+    run.updates()
+        .subscribe(
+            new Flow.Subscriber<>() {
+              @Override
+              public void onSubscribe(Flow.Subscription value) {
+                subscription.set(value);
+              }
+
+              @Override
+              public void onNext(AgentResponseUpdate item) {}
+
+              @Override
+              public void onError(Throwable throwable) {}
+
+              @Override
+              public void onComplete() {}
+            });
+
+    assertThatCode(() -> subscription.get().cancel()).doesNotThrowAnyException();
+    assertThat(run.response().toCompletableFuture()).isCompletedExceptionally();
+  }
+
+  @Test
   void cancellationBeforeSubscriptionDoesNotTouchTheSource() {
     int[] subscriptions = {0};
     AgentStreamingRun<AgentResponseUpdate> run =
@@ -494,8 +595,78 @@ class AgentStreamingRunTest {
             });
 
     assertThat(subscriptions[0]).isZero();
-    assertThat(downstreamSignals).containsExactly("onSubscribe", "onComplete");
-    assertThat(run.response().toCompletableFuture()).isNotDone();
+    assertThat(downstreamSignals).containsExactly("onSubscribe", "onError");
+    assertThat(run.response().toCompletableFuture()).isCompletedExceptionally();
+  }
+
+  @Test
+  void factoryAcceptsAnAlreadyCancelledSignal() {
+    CancellationSignal signal = new CancellationSignal();
+    signal.cancel();
+
+    AgentStreamingRun<AgentResponseUpdate> run =
+        AgentStreamingRun.fromUpdate(update("message-1", "unused"), signal);
+    List<String> downstreamSignals = new ArrayList<>();
+    run.updates()
+        .subscribe(
+            new Flow.Subscriber<>() {
+              @Override
+              public void onSubscribe(Flow.Subscription subscription) {
+                downstreamSignals.add("onSubscribe");
+              }
+
+              @Override
+              public void onNext(AgentResponseUpdate item) {
+                downstreamSignals.add("onNext");
+              }
+
+              @Override
+              public void onError(Throwable throwable) {
+                downstreamSignals.add("onError");
+              }
+
+              @Override
+              public void onComplete() {
+                downstreamSignals.add("onComplete");
+              }
+            });
+
+    assertThat(downstreamSignals).containsExactly("onSubscribe", "onError");
+    assertThat(run.response().toCompletableFuture()).isCompletedExceptionally();
+  }
+
+  @Test
+  void responseContinuationDoesNotBlockCancellation() throws Exception {
+    AgentStreamingRun<AgentResponseUpdate> run =
+        AgentStreamingRun.fromUpdate(update("message-1", "done"));
+    CountDownLatch continuationStarted = new CountDownLatch(1);
+    CountDownLatch releaseContinuation = new CountDownLatch(1);
+    CountDownLatch cancellationReturned = new CountDownLatch(1);
+    run.response()
+        .thenRun(
+            () -> {
+              continuationStarted.countDown();
+              try {
+                releaseContinuation.await();
+              } catch (InterruptedException exception) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException(exception);
+              }
+            });
+    CompletableFuture<Void> producer = CompletableFuture.runAsync(() -> consume(run.updates()));
+    assertThat(continuationStarted.await(1, TimeUnit.SECONDS)).isTrue();
+
+    CompletableFuture.runAsync(
+        () -> {
+          run.cancel();
+          cancellationReturned.countDown();
+        });
+    try {
+      assertThat(cancellationReturned.await(1, TimeUnit.SECONDS)).isTrue();
+    } finally {
+      releaseContinuation.countDown();
+      producer.join();
+    }
   }
 
   private static AgentResponseUpdate update(String messageId, String text) {
