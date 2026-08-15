@@ -430,12 +430,13 @@ class AgentEngineTest {
                   null));
         };
     AgentEngine engine =
-        AgentEngine.builder().modelClient(client).tools(tool).maxIterations(1).build();
+        AgentEngine.builder().modelClient(client).tools(tool).maxIterations(2).build();
 
     var response = engine.run("loop").response().toCompletableFuture().join();
 
-    assertThat(requests).hasSize(1);
-    assertThat(requests.get(0).tools()).isEmpty();
+    assertThat(requests).hasSize(2);
+    assertThat(requests.get(0).tools()).isNotEmpty();
+    assertThat(requests.get(1).tools()).isEmpty();
     assertThat(response.text()).contains("finished");
   }
 
