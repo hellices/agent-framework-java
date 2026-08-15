@@ -13,6 +13,7 @@ import io.github.hellices.agentframework.spi.model.ModelResponse;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.stream.Collectors;
 
 public final class StandaloneAgentApplication {
 
@@ -21,7 +22,8 @@ public final class StandaloneAgentApplication {
   public static Agent createAgent() {
     ModelClient modelClient =
         request -> {
-          String input = request.messages().stream().map(Message::text).reduce("", String::concat);
+          String input =
+              request.messages().stream().map(Message::text).collect(Collectors.joining());
           Message output =
               new Message(
                   Role.ASSISTANT, List.of(new TextContent("Standalone agent received: " + input)));
