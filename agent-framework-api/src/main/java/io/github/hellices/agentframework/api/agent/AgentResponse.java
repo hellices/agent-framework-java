@@ -75,6 +75,7 @@ public record AgentResponse(
         Objects.requireNonNull(updates.get(0), "updates must not contain null entries");
     List<Message> messages = new ArrayList<>();
     String currentMessageId = null;
+    String lastMessageId = null;
     String messageId = null;
     String authorName = null;
     Instant createdAt = null;
@@ -115,17 +116,20 @@ public record AgentResponse(
             firstMessageInUpdate
                 && !messages.isEmpty()
                 && messages.get(messages.size() - 1).role().equals(message.role())
-                && (update.messageId() == null || update.messageId().equals(currentMessageId));
+                && (update.messageId() != null
+                    ? update.messageId().equals(currentMessageId)
+                    : Objects.equals(currentMessageId, lastMessageId));
         if (continuesCurrentMessage) {
           Message current = messages.remove(messages.size() - 1);
           messages.add(combineMessages(current, message));
         } else {
           messages.add(message);
         }
-        if (update.messageId() != null) {
-          currentMessageId = update.messageId();
-        }
+        lastMessageId = update.messageId() == null ? currentMessageId : update.messageId();
         firstMessageInUpdate = false;
+      }
+      if (update.messageId() != null) {
+        currentMessageId = update.messageId();
       }
     }
     return new AgentResponse(

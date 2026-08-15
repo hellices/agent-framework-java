@@ -245,6 +245,31 @@ class AgentResponseAssemblyTest {
     assertThat(response.messages()).singleElement().extracting(Message::text).isEqualTo("Hello!");
   }
 
+  @Test
+  void metadataOnlyUpdateAdvancesTheMessageBoundary() {
+    AgentResponseUpdate boundary =
+        new AgentResponseUpdate(
+            "agent-1",
+            "response-1",
+            "message-2",
+            "assistant",
+            null,
+            null,
+            List.of(),
+            null,
+            Map.of(),
+            null);
+
+    AgentResponse response =
+        AgentResponse.fromUpdates(
+            List.of(
+                update("message-1", Role.ASSISTANT, "first"),
+                boundary,
+                update(null, Role.ASSISTANT, "second")));
+
+    assertThat(response.messages()).extracting(Message::text).containsExactly("first", "second");
+  }
+
   private static AgentResponseUpdate update(String messageId, Role role, String text) {
     return update(messageId, role, text, null);
   }
