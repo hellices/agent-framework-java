@@ -43,9 +43,9 @@ public record MessageHistory(List<Message> messages) {
   }
 
   /** Returns a history holding an ordered copy of {@code messages}. */
-  public static MessageHistory of(List<? extends Message> messages) {
+  public static MessageHistory of(List<Message> messages) {
     Objects.requireNonNull(messages, "messages must not be null");
-    return new MessageHistory(new ArrayList<Message>(messages));
+    return new MessageHistory(messages);
   }
 
   /**
