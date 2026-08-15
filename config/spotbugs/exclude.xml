@@ -3,7 +3,7 @@
   <Match>
     <Class name="~.*\.generated\..*"/>
   </Match>
-  <!-- Map.copyOf creates the immutable representation returned by this accessor. -->
+  <!-- Map.copyOf creates an unmodifiable shallow copy; the accessor exposes no mutable map. -->
   <Match>
     <Class name="io.github.hellices.agentframework.api.message.Message"/>
     <Method name="additionalProperties"/>
