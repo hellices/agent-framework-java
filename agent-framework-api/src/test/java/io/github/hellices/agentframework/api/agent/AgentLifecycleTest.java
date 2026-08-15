@@ -6,7 +6,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import io.github.hellices.agentframework.api.message.Message;
 import io.github.hellices.agentframework.api.message.Role;
 import io.github.hellices.agentframework.api.message.TextContent;
+import io.github.hellices.agentframework.api.session.SessionContext;
 import java.lang.reflect.Modifier;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -180,6 +182,70 @@ class AgentLifecycleTest {
   }
 
   @Test
+  void eachRunReceivesADistinctSessionContextAndFillsItOnSuccess() {
+    SessionContextCapturingAgent agent = new SessionContextCapturingAgent("ctx-agent");
+
+    AgentRun first = agent.run(AgentRunRequest.of("one"));
+    AgentRun second = agent.run(AgentRunRequest.of("two"));
+
+    assertThat(agent.contexts).hasSize(2);
+    assertThat(agent.contexts.get(0)).isNotSameAs(agent.contexts.get(1));
+    assertThat(first.response().toCompletableFuture().join())
+        .isSameAs(agent.contexts.get(0).response().orElseThrow());
+    assertThat(second.response().toCompletableFuture().join())
+        .isSameAs(agent.contexts.get(1).response().orElseThrow());
+  }
+
+  @Test
+  void sessionContextCopiesInputMessagesSessionAndMetadata() {
+    SessionContextCapturingAgent agent = new SessionContextCapturingAgent("ctx-agent");
+    AgentSession session = new AgentSession("session-42", "service-42", Map.of());
+    AgentRunRequest request =
+        new AgentRunRequest(
+            Message.normalize("hello"),
+            session,
+            new AgentRunOptions(),
+            new CancellationSignal(),
+            Map.of("traceId", "trace-42"));
+
+    agent.run(request);
+
+    SessionContext sessionContext = agent.contexts.get(0);
+    assertThat(sessionContext.session()).isEqualTo(session);
+    assertThat(sessionContext.inputMessages()).isEqualTo(request.messages());
+    assertThat(sessionContext.metadata()).containsEntry("traceId", "trace-42");
+    assertThat(sessionContext.contextMessages()).isEmpty();
+    assertThat(sessionContext.cancellationSignal()).isEqualTo(request.cancellationSignal());
+  }
+
+  @Test
+  void streamingRunFillsSessionContextResponseSlotOnlyAfterTerminalCompletion() {
+    SessionContextCapturingAgent agent = new SessionContextCapturingAgent("ctx-agent");
+
+    AgentStreamingRun<AgentResponseUpdate> streamingRun = agent.runStreaming("hello");
+    SessionContext sessionContext = agent.contexts.get(0);
+    assertThat(sessionContext.response()).isEmpty();
+
+    consume(streamingRun.updates());
+
+    assertThat(sessionContext.response()).isPresent();
+    assertThat(streamingRun.response().toCompletableFuture().join())
+        .isSameAs(sessionContext.response().orElseThrow());
+  }
+
+  @Test
+  void runDoesNotFillSessionContextResponseSlotOnFailure() {
+    FailingAgent agent = new FailingAgent("failing-agent");
+
+    AgentRun run = agent.run("hello");
+
+    assertThatThrownBy(() -> run.response().toCompletableFuture().join())
+        .hasCauseInstanceOf(IllegalStateException.class);
+    assertThat(agent.contexts).hasSize(1);
+    assertThat(agent.contexts.get(0).response()).isEmpty();
+  }
+
+  @Test
   void cancellationListenerCanBeRemoved() {
     CancellationSignal signal = new CancellationSignal();
     boolean[] called = {false};
@@ -274,6 +340,43 @@ class AgentLifecycleTest {
         AgentRunContext context, AgentRunRequest request) {
       executedStreamingRun = true;
       return super.runStreamingInternal(context, request);
+    }
+  }
+
+  private static final class SessionContextCapturingAgent extends TestAgent {
+    private final List<SessionContext> contexts = new ArrayList<>();
+
+    private SessionContextCapturingAgent(String id) {
+      super(id);
+    }
+
+    @Override
+    protected AgentRun runInternal(AgentRunContext context, AgentRunRequest request) {
+      contexts.add(context.sessionContext());
+      return super.runInternal(context, request);
+    }
+
+    @Override
+    protected AgentStreamingRun<AgentResponseUpdate> runStreamingInternal(
+        AgentRunContext context, AgentRunRequest request) {
+      contexts.add(context.sessionContext());
+      return super.runStreamingInternal(context, request);
+    }
+  }
+
+  private static final class FailingAgent extends TestAgent {
+    private final List<SessionContext> contexts = new ArrayList<>();
+
+    private FailingAgent(String id) {
+      super(id);
+    }
+
+    @Override
+    protected AgentRun runInternal(AgentRunContext context, AgentRunRequest request) {
+      contexts.add(context.sessionContext());
+      CompletableFuture<AgentResponse> failed = new CompletableFuture<>();
+      failed.completeExceptionally(new IllegalStateException("model failure"));
+      return new AgentRun(failed, request.cancellationSignal());
     }
   }
 
