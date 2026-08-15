@@ -20,6 +20,7 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.BasicFileAttributes;
+import java.nio.file.attribute.FileTime;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
@@ -35,6 +36,8 @@ public final class FileSessionStore implements SessionStore {
   private static final Object[] OPERATION_LOCKS = createOperationLocks();
 
   private final Path root;
+  private final Object rootFileKey;
+  private final FileTime rootCreationTime;
   private final boolean directoryForceSupported;
   private final SessionSnapshotCodec codec;
 
@@ -44,6 +47,10 @@ public final class FileSessionStore implements SessionStore {
     try {
       Files.createDirectories(configuredRoot);
       this.root = configuredRoot.toRealPath();
+      BasicFileAttributes rootAttributes =
+          Files.readAttributes(this.root, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+      this.rootFileKey = rootAttributes.fileKey();
+      this.rootCreationTime = rootAttributes.creationTime();
       this.directoryForceSupported = File.separatorChar != '\\';
     } catch (IOException failure) {
       throw new FileSessionStoreException("failed to initialize session store root", failure);
@@ -59,16 +66,21 @@ public final class FileSessionStore implements SessionStore {
 
   private CompletionStage<Optional<SessionSnapshot>> loadLocked(String sessionId) {
     try {
-      Path target = target(sessionId);
+      String targetFileName = fileName(sessionId);
+      Path target = targetFile(targetFileName);
       verifyRoot();
       rejectSymbolicLink(target);
       try {
-        return CompletableFuture.completedFuture(Optional.of(codec.decode(readNoFollow(target))));
+        byte[] encoded = readNoFollow(target);
+        verifyRoot();
+        SessionSnapshot snapshot = codec.decode(encoded);
+        verifyRoot();
+        return CompletableFuture.completedFuture(Optional.of(snapshot));
       } catch (NoSuchFileException failure) {
         verifyRoot();
         return CompletableFuture.completedFuture(Optional.empty());
       } catch (SessionSnapshotParseException failure) {
-        quarantine(target, fileName(sessionId), failure);
+        quarantine(target, targetFileName, failure);
         return CompletableFuture.failedFuture(failure);
       }
     } catch (IOException | RuntimeException failure) {
@@ -95,6 +107,7 @@ public final class FileSessionStore implements SessionStore {
       rejectSymbolicLink(target);
       temporary = root.resolve(targetFileName + "." + UUID.randomUUID() + ".temporary");
       writeDurably(temporary, encoded);
+      verifyRoot();
       try {
         Files.move(
             temporary, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
@@ -102,6 +115,7 @@ public final class FileSessionStore implements SessionStore {
         throw new FileSessionStoreException(
             "atomic replacement is not supported for the session store root", failure);
       }
+      verifyRoot();
       forceDirectory(root);
       return CompletableFuture.completedFuture(null);
     } catch (IOException | RuntimeException failure) {
@@ -129,6 +143,7 @@ public final class FileSessionStore implements SessionStore {
       verifyRoot();
       rejectSymbolicLink(target);
       if (Files.deleteIfExists(target)) {
+        verifyRoot();
         forceDirectory(root);
       } else {
         verifyRoot();
@@ -196,6 +211,12 @@ public final class FileSessionStore implements SessionStore {
       throw new FileSessionStoreException(
           "session store root must be a directory and not a symbolic link");
     }
+    if (rootFileKey != null && !Objects.equals(rootFileKey, attributes.fileKey())) {
+      throw new FileSessionStoreException("session store root was replaced after initialization");
+    }
+    if (rootFileKey == null && !Objects.equals(rootCreationTime, attributes.creationTime())) {
+      throw new FileSessionStoreException("session store root was replaced after initialization");
+    }
   }
 
   private static byte[] readNoFollow(Path target) throws IOException {
@@ -229,21 +250,25 @@ public final class FileSessionStore implements SessionStore {
     if (!directoryForceSupported) {
       return;
     }
+    verifyRoot();
     try (FileChannel channel =
         FileChannel.open(directory, StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS)) {
       channel.force(true);
     }
+    verifyRoot();
   }
 
   private void quarantine(
       Path target, String targetFileName, SessionSnapshotParseException parseFailure) {
     try {
+      verifyRoot();
       Path quarantined = root.resolve(targetFileName + "." + UUID.randomUUID() + ".corrupt");
       try {
         Files.move(target, quarantined, StandardCopyOption.ATOMIC_MOVE);
       } catch (AtomicMoveNotSupportedException failure) {
         Files.move(target, quarantined);
       }
+      verifyRoot();
       forceDirectory(root);
     } catch (IOException | FileSessionStoreException | SecurityException failure) {
       parseFailure.addSuppressed(

@@ -232,6 +232,12 @@ class FileSessionStoreTest {
     assertThatThrownBy(() -> store.delete("session-1").toCompletableFuture().join())
         .isInstanceOf(CompletionException.class)
         .hasCauseInstanceOf(FileSessionStoreException.class);
+
+    Files.createDirectory(root);
+    assertThatThrownBy(() -> store.load("session-1").toCompletableFuture().join())
+        .isInstanceOf(CompletionException.class)
+        .hasCauseInstanceOf(FileSessionStoreException.class)
+        .hasRootCauseMessage("session store root was replaced after initialization");
   }
 
   @Test
