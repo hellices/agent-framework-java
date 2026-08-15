@@ -3,6 +3,8 @@ package io.github.hellices.agentframework.api.agent;
 import io.github.hellices.agentframework.api.session.SessionContext;
 import java.util.Objects;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 import java.util.function.BiConsumer;
 
 public abstract class Agent {
@@ -49,7 +51,8 @@ public abstract class Agent {
         runInternal(
             new AgentRunContext(this, session, normalizedRequest.attributes(), sessionContext),
             normalizedRequest);
-    return run.withCompletion(completionAction(sessionContext));
+    AgentRun completed = run.withCompletion(completionAction(sessionContext));
+    return completed.withResponse(afterRunStage(sessionContext, completed.response()));
   }
 
   public final AgentStreamingRun<AgentResponseUpdate> runStreaming(String input) {
@@ -68,7 +71,9 @@ public abstract class Agent {
         runStreamingInternal(
             new AgentRunContext(this, session, normalizedRequest.attributes(), sessionContext),
             normalizedRequest);
-    return run.withCompletion(completionAction(sessionContext));
+    AgentStreamingRun<AgentResponseUpdate> completed =
+        run.withCompletion(completionAction(sessionContext));
+    return completed.withResponse(afterRunStage(sessionContext, completed.response()));
   }
 
   protected void validateSessionCompatibility(AgentSession session) {
@@ -80,9 +85,54 @@ public abstract class Agent {
   protected abstract AgentStreamingRun<AgentResponseUpdate> runStreamingInternal(
       AgentRunContext context, AgentRunRequest request);
 
+  /**
+   * Framework lifecycle seam invoked exactly once per run, only after the run's terminal response
+   * stage completed successfully and the run's {@link SessionContext} response slot was filled, and
+   * always before the caller-visible response stage of the returned {@link AgentRun} / {@link
+   * AgentStreamingRun} completes.
+   *
+   * <p>It exists so an implementation (for example the engine's context provider pipeline) can
+   * observe the finished run through the same per-run {@code SessionContext} the run started with,
+   * without the run's response slot being completed twice and without the ordering caller code sees
+   * being changed. A failed or cancelled run never reaches this seam, so no success-only work is
+   * performed for it. A stage returned here that fails, or a {@code null} stage, fails the run
+   * rather than being swallowed.
+   *
+   * <p>On a streaming run the seam necessarily runs after the update stream reached its terminal
+   * signal, since the response it observes only exists once streaming finished. A failure here
+   * therefore fails {@link AgentStreamingRun#response()} while the update subscriber has already
+   * seen {@code onComplete}. That is the deliberate contract: the update stream signals model
+   * transport completion, and the authoritative run outcome is the response stage. The alternative
+   * would require emitting a second terminal signal on an already-terminated stream, which Reactive
+   * Streams forbids.
+   *
+   * @param sessionContext the completed per-run session context
+   * @return a stage completing when the post-run work is done; must not be {@code null}
+   */
+  protected CompletionStage<Void> afterRun(SessionContext sessionContext) {
+    return CompletableFuture.completedFuture(null);
+  }
+
   private static SessionContext newSessionContext(AgentRunRequest request) {
     return new SessionContext(
         request.session(), request.messages(), request.attributes(), request.cancellationSignal());
+  }
+
+  /**
+   * Extends a run's already-completing response stage (the one that fills the {@link
+   * SessionContext} response slot) with the {@link #afterRun(SessionContext)} lifecycle seam,
+   * republishing the same {@link AgentResponse} once the seam's stage completed. Because the seam
+   * is composed onto the stage callers actually observe, joining a run cannot return before the
+   * session context was filled and the seam finished, and neither a completion failure nor a seam
+   * failure can be lost. A failed or cancelled run short-circuits the composition, so the seam is
+   * skipped and the original failure reaches the caller unchanged.
+   */
+  private CompletionStage<AgentResponse> afterRunStage(
+      SessionContext sessionContext, CompletionStage<AgentResponse> completedResponse) {
+    return completedResponse.thenCompose(
+        value ->
+            Objects.requireNonNull(afterRun(sessionContext), "afterRun stage must not be null")
+                .thenApply(ignored -> value));
   }
 
   /**
@@ -94,7 +144,8 @@ public abstract class Agent {
    * {@code Agent} subclass (including custom ones) gets the same completion semantics regardless of
    * how {@code runInternal}/{@code runStreamingInternal} are implemented, and any exception this
    * action throws (for example a pre-filled or already-completed response slot) propagates through
-   * the returned run's response stage instead of being swallowed.
+   * the returned run's response stage instead of being swallowed, skipping {@link
+   * #afterRun(SessionContext)}.
    */
   private static BiConsumer<AgentResponse, Throwable> completionAction(
       SessionContext sessionContext) {

@@ -4,11 +4,14 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.github.hellices.agentframework.api.agent.AgentResponse;
+import io.github.hellices.agentframework.api.agent.AgentSession;
 import io.github.hellices.agentframework.api.agent.CancellationSignal;
 import io.github.hellices.agentframework.api.message.FinishReason;
 import io.github.hellices.agentframework.api.message.Message;
+import io.github.hellices.agentframework.api.message.MessageAttribution;
 import io.github.hellices.agentframework.api.message.Role;
 import io.github.hellices.agentframework.api.message.TextContent;
+import io.github.hellices.agentframework.spi.session.ProviderSessionState;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -171,6 +174,249 @@ class SessionContextTest {
         .hasMessage("contextMessages must not contain null entries");
     // The rejected call must not partially append entries before the null was found.
     assertThat(sessionContext.contextMessages()).containsExactly(first);
+  }
+
+  @Test
+  void providerStateStartsFromTheSessionStateNamespaceOfItsOwnSourceId() {
+    AgentSession session =
+        new AgentSession("session-1", null, Map.of("memory", 7, "history", List.of("kept")));
+    SessionContext sessionContext =
+        new SessionContext(session, List.of(), Map.of(), new CancellationSignal());
+
+    ProviderSessionState memory = sessionContext.providerState("memory");
+
+    assertThat(memory.sourceId()).isEqualTo("memory");
+    assertThat(memory.value()).contains(7);
+    assertThat(memory.value(Integer.class)).contains(7);
+  }
+
+  @Test
+  void providerStateIsTheSameViewForTheSameSourceIdAcrossHookPhases() {
+    AgentSession session = new AgentSession("session-1", null, Map.of());
+    SessionContext sessionContext =
+        new SessionContext(session, List.of(), Map.of(), new CancellationSignal());
+
+    assertThat(sessionContext.providerState("memory"))
+        .isSameAs(sessionContext.providerState("memory"));
+  }
+
+  @Test
+  void providerStateSlotsAreIsolatedBetweenSourceIds() {
+    AgentSession session = new AgentSession("session-1", null, Map.of("memory", 7));
+    SessionContext sessionContext =
+        new SessionContext(session, List.of(), Map.of(), new CancellationSignal());
+
+    ProviderSessionState memory = sessionContext.providerState("memory");
+    ProviderSessionState history = sessionContext.providerState("history");
+    memory.set(9);
+
+    assertThat(history.value()).isEmpty();
+    assertThat(memory.value()).contains(9);
+  }
+
+  @Test
+  void providerStateRejectsABlankSourceId() {
+    SessionContext sessionContext =
+        new SessionContext(null, List.of(), Map.of(), new CancellationSignal());
+
+    assertThatThrownBy(() -> sessionContext.providerState("  "))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessage("sourceId must not be blank");
+  }
+
+  @Test
+  void typedProviderStateValueRejectsAMismatchedType() {
+    AgentSession session = new AgentSession("session-1", null, Map.of("memory", "text"));
+    SessionContext sessionContext =
+        new SessionContext(session, List.of(), Map.of(), new CancellationSignal());
+
+    assertThatThrownBy(() -> sessionContext.providerState("memory").value(Integer.class))
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessage("provider state for source 'memory' is not a java.lang.Integer");
+  }
+
+  @Test
+  void providerStateStartsEmptyForASessionlessRun() {
+    SessionContext sessionContext =
+        new SessionContext(null, List.of(), Map.of(), new CancellationSignal());
+
+    assertThat(sessionContext.providerState("memory").value()).isEmpty();
+    assertThat(sessionContext.updatedSession()).isEmpty();
+  }
+
+  @Test
+  void updatedSessionCarriesProviderStateWithoutMutatingTheOriginalSession() {
+    AgentSession session =
+        new AgentSession("session-1", "service-1", Map.of("memory", 1, "keep", "as-is"));
+    SessionContext sessionContext =
+        new SessionContext(session, List.of(), Map.of(), new CancellationSignal());
+
+    sessionContext.providerState("memory").set(2);
+    AgentSession updated = sessionContext.updatedSession().orElseThrow();
+
+    assertThat(updated.sessionId()).isEqualTo("session-1");
+    assertThat(updated.serviceSessionId()).isEqualTo("service-1");
+    assertThat(updated.state()).containsEntry("memory", 2).containsEntry("keep", "as-is");
+    assertThat(session.state()).containsEntry("memory", 1);
+  }
+
+  @Test
+  void updatedSessionDropsAClearedProviderNamespace() {
+    AgentSession session =
+        new AgentSession("session-1", null, Map.of("memory", 1, "keep", "as-is"));
+    SessionContext sessionContext =
+        new SessionContext(session, List.of(), Map.of(), new CancellationSignal());
+
+    sessionContext.providerState("memory").clear();
+
+    assertThat(sessionContext.updatedSession().orElseThrow().state())
+        .doesNotContainKey("memory")
+        .containsEntry("keep", "as-is");
+  }
+
+  @Test
+  void providerStateSetRejectsANullValue() {
+    SessionContext sessionContext =
+        new SessionContext(null, List.of(), Map.of(), new CancellationSignal());
+    ProviderSessionState state = sessionContext.providerState("memory");
+
+    assertThatThrownBy(() -> state.set(null))
+        .isInstanceOf(NullPointerException.class)
+        .hasMessage("value must not be null");
+  }
+
+  @Test
+  void sourceBoundContextMessagesAreStampedWithTheProviderAttribution() {
+    AgentSession session = new AgentSession("session-1", null, Map.of());
+    SessionContext sessionContext =
+        new SessionContext(session, List.of(), Map.of(), new CancellationSignal());
+
+    sessionContext.addContextMessages("memory", List.of(sampleMessage("remembered")));
+
+    assertThat(sessionContext.contextMessages())
+        .extracting(Message::attribution)
+        .containsExactly(new MessageAttribution("AIContextProvider", "memory", "session-1"));
+  }
+
+  @Test
+  void sourceBoundContextMessagesUseThePinnedProviderSourceTypeName() {
+    SessionContext sessionContext =
+        new SessionContext(null, List.of(), Map.of(), new CancellationSignal());
+
+    sessionContext.addContextMessages("memory", List.of(sampleMessage("remembered")));
+
+    // The pinned snapshot's known source types are External, AIContextProvider, and ChatHistory;
+    // a provider contribution must be readable as the upstream name, not a Java-only alias.
+    assertThat(sessionContext.contextMessages())
+        .extracting(message -> message.attribution().sourceType())
+        .containsExactly("AIContextProvider");
+  }
+
+  @Test
+  void sourceBoundContextMessagesTreatABlankExistingSourceIdAsAbsent() {
+    AgentSession session = new AgentSession("session-1", null, Map.of());
+    SessionContext sessionContext =
+        new SessionContext(session, List.of(), Map.of(), new CancellationSignal());
+    Message blankSource =
+        new Message(
+            Role.USER,
+            List.of(new TextContent("remembered")),
+            new MessageAttribution("Memory", "   ", "origin-9"),
+            Map.of(),
+            null);
+
+    sessionContext.addContextMessages("memory", List.of(blankSource));
+
+    assertThat(sessionContext.contextMessages())
+        .extracting(Message::attribution)
+        .containsExactly(new MessageAttribution("Memory", "memory", "origin-9"));
+  }
+
+  @Test
+  void sourceBoundContextMessagesKeepAnExplicitProviderAttribution() {
+    SessionContext sessionContext =
+        new SessionContext(null, List.of(), Map.of(), new CancellationSignal());
+    Message attributed =
+        new Message(
+            Role.USER,
+            List.of(new TextContent("remembered")),
+            new MessageAttribution("Memory", "other-session-source", "origin-9"),
+            Map.of(),
+            null);
+
+    sessionContext.addContextMessages("memory", List.of(attributed));
+
+    assertThat(sessionContext.contextMessages()).containsExactly(attributed);
+  }
+
+  @Test
+  void sourceBoundContextMessagesKeepAPreExistingOriginSessionId() {
+    AgentSession session = new AgentSession("session-1", null, Map.of());
+    SessionContext sessionContext =
+        new SessionContext(session, List.of(), Map.of(), new CancellationSignal());
+    Message retrievedElsewhere =
+        new Message(
+            Role.USER,
+            List.of(new TextContent("remembered")),
+            new MessageAttribution("Memory", null, "origin-9"),
+            Map.of(),
+            null);
+
+    sessionContext.addContextMessages("memory", List.of(retrievedElsewhere));
+
+    assertThat(sessionContext.contextMessages())
+        .extracting(Message::attribution)
+        .containsExactly(new MessageAttribution("Memory", "memory", "origin-9"));
+  }
+
+  @Test
+  void sourceBoundContextMessagesUseThisRunsSessionIdOnlyWhenNoOriginIsCarried() {
+    AgentSession session = new AgentSession("session-1", null, Map.of());
+    SessionContext sessionContext =
+        new SessionContext(session, List.of(), Map.of(), new CancellationSignal());
+    Message withoutOrigin =
+        new Message(
+            Role.USER,
+            List.of(new TextContent("remembered")),
+            new MessageAttribution("Memory", null, null),
+            Map.of(),
+            null);
+
+    sessionContext.addContextMessages("memory", List.of(withoutOrigin));
+
+    assertThat(sessionContext.contextMessages())
+        .extracting(Message::attribution)
+        .containsExactly(new MessageAttribution("Memory", "memory", "session-1"));
+  }
+
+  @Test
+  void sourceBoundContextMessagesKeepAPreExistingOriginSessionIdOnASessionlessRun() {
+    SessionContext sessionContext =
+        new SessionContext(null, List.of(), Map.of(), new CancellationSignal());
+    Message retrievedElsewhere =
+        new Message(
+            Role.USER,
+            List.of(new TextContent("remembered")),
+            new MessageAttribution("Memory", null, "origin-9"),
+            Map.of(),
+            null);
+
+    sessionContext.addContextMessages("memory", List.of(retrievedElsewhere));
+
+    assertThat(sessionContext.contextMessages())
+        .extracting(Message::attribution)
+        .containsExactly(new MessageAttribution("Memory", "memory", "origin-9"));
+  }
+
+  @Test
+  void sourceBoundContextMessagesRejectABlankSourceId() {
+    SessionContext sessionContext =
+        new SessionContext(null, List.of(), Map.of(), new CancellationSignal());
+    List<Message> messages = List.of(sampleMessage("remembered"));
+
+    assertThatThrownBy(() -> sessionContext.addContextMessages("", messages))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessage("sourceId must not be blank");
   }
 
   private static Message sampleMessage(String text) {

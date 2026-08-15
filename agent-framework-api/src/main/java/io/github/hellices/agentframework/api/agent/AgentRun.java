@@ -1,7 +1,6 @@
 package io.github.hellices.agentframework.api.agent;
 
 import java.util.Objects;
-import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.function.BiConsumer;
@@ -24,20 +23,7 @@ public final class AgentRun {
         Objects.requireNonNull(response, "response must not be null");
     this.cancellationSignal =
         cancellationSignal == null ? new CancellationSignal() : cancellationSignal;
-    CompletableFuture<AgentResponse> result = new CompletableFuture<>();
-    Runnable removeCancellationListener =
-        this.cancellationSignal.onCancel(
-            () -> result.completeExceptionally(new CancellationException("run was cancelled")));
-    source.whenComplete(
-        (value, failure) -> {
-          removeCancellationListener.run();
-          if (failure == null) {
-            result.complete(value);
-          } else {
-            result.completeExceptionally(failure);
-          }
-        });
-    this.response = result.minimalCompletionStage();
+    this.response = CancellationAwareResponse.wrap(source, this.cancellationSignal);
     this.cancellationAction = this.cancellationSignal::cancel;
   }
 
@@ -72,6 +58,28 @@ public final class AgentRun {
    */
   AgentRun withCompletion(BiConsumer<? super AgentResponse, ? super Throwable> completion) {
     Objects.requireNonNull(completion, "completion must not be null");
-    return new AgentRun(response.whenComplete(completion), cancellationSignal, cancellationAction);
+    return withResponse(response.whenComplete(completion));
+  }
+
+  /**
+   * Package-private copy used by {@link Agent} to expose a response stage it derived from this
+   * run's own stage (session context completion followed by the {@code afterRun} lifecycle seam),
+   * while keeping the original cancellation wiring. Because the derived stage is the one callers
+   * observe, every lifecycle step composed into it has finished before a caller's join returns, and
+   * any failure it carries is surfaced instead of swallowed.
+   *
+   * <p>The derived stage is re-wrapped with the same cancellation handling the public constructor
+   * applies, so {@link #cancel()} stays effective for the whole window in which callers are still
+   * waiting - including after this run's own stage completed successfully while a lifecycle step
+   * such as {@code afterRun} is still pending. The original {@code cancellationAction} and signal
+   * are preserved, so cancellation keeps reaching the same underlying run.
+   */
+  AgentRun withResponse(CompletionStage<AgentResponse> derivedResponse) {
+    return new AgentRun(
+        CancellationAwareResponse.wrap(
+            Objects.requireNonNull(derivedResponse, "response must not be null"),
+            cancellationSignal),
+        cancellationSignal,
+        cancellationAction);
   }
 }

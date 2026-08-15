@@ -123,6 +123,12 @@ public final class AgentStreamingRun<T> {
     return updates;
   }
 
+  /**
+   * Returns the run's authoritative outcome. It completes only after every lifecycle step of the
+   * run finished, so it can still fail after {@link #updates()} completed normally: the update
+   * stream signals model transport completion, while post-stream work (for example a context
+   * provider's {@code afterRun} hook) is reported here.
+   */
   public CompletionStage<AgentResponse> response() {
     return response;
   }
@@ -154,9 +160,29 @@ public final class AgentStreamingRun<T> {
   AgentStreamingRun<T> withCompletion(
       BiConsumer<? super AgentResponse, ? super Throwable> completion) {
     Objects.requireNonNull(completion, "completion must not be null");
+    return withResponse(response.whenComplete(completion));
+  }
+
+  /**
+   * Package-private copy used by {@link Agent} to expose a response stage it derived from this
+   * run's own stage (session context completion followed by the {@code afterRun} lifecycle seam),
+   * while keeping the original update publisher, cancellation wiring, and failure action. The
+   * updates publisher is untouched, so update delivery keeps its existing ordering and terminal
+   * signalling; only the caller-visible response stage waits for the lifecycle steps.
+   *
+   * <p>The derived stage is re-wrapped with the same cancellation handling {@link AgentRun}
+   * applies, so {@link #cancel()} stays effective for the whole window in which callers are still
+   * waiting - including after the update stream terminated and this run's own stage completed
+   * successfully while a lifecycle step such as {@code afterRun} is still pending. The original
+   * {@code cancellationAction} and {@code failureAction} are preserved, so cancelling still cancels
+   * the underlying stream and update-mapping failure handling keeps working exactly as before.
+   */
+  AgentStreamingRun<T> withResponse(CompletionStage<AgentResponse> derivedResponse) {
     return new AgentStreamingRun<>(
         updates,
-        response.whenComplete(completion),
+        CancellationAwareResponse.wrap(
+            Objects.requireNonNull(derivedResponse, "response must not be null"),
+            cancellationSignal),
         cancellationSignal,
         cancellationAction,
         failureAction);
