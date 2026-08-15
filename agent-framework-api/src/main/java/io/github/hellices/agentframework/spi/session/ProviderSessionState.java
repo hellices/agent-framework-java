@@ -20,6 +20,8 @@ import java.util.Optional;
  * The per-run {@code SessionContext} that carries these views is itself public and exposes the
  * whole session through {@code session().state()}, matching upstream .NET and Python, so
  * cross-namespace access remains framework plumbing that is simply outside the provider contract.
+ * What the framework does bound is durability: a run writes back only the namespaces of the
+ * providers it actually resolved, so a cross-namespace write cannot survive the run that made it.
  */
 public interface ProviderSessionState {
 

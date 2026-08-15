@@ -5,6 +5,16 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
+/**
+ * The per-call context handed to an {@code Agent} implementation's internal run methods.
+ *
+ * <p>{@link #session()} is the session the caller passed on the request. A run that loads a stored
+ * session replaces the session on {@link #sessionContext()} instead, because {@link SessionContext}
+ * is the single per-run object every hook and every state view already shares. The consistency
+ * invariant below is therefore a construction-time check, not a lifetime one: after a run hydrated
+ * its context, {@code sessionContext().session()} is the run's effective session and this record's
+ * {@code session} component still reports what the request asked for.
+ */
 public record AgentRunContext(
     Agent agent,
     AgentSession session,

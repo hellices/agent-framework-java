@@ -8,6 +8,7 @@ import io.github.hellices.agentframework.api.message.Role;
 import io.github.hellices.agentframework.api.message.TextContent;
 import io.github.hellices.agentframework.api.message.ToolCallContent;
 import io.github.hellices.agentframework.api.message.ToolResultContent;
+import io.github.hellices.agentframework.api.session.MessageHistory;
 import io.github.hellices.agentframework.api.session.SessionSnapshot;
 import io.github.hellices.agentframework.api.session.SessionStateEntry;
 import java.time.Instant;
@@ -30,7 +31,7 @@ public final class StateCodecRegistry {
   }
 
   public static Builder builder() {
-    return new Builder().register(new MessageStateCodec());
+    return new Builder().register(new MessageStateCodec()).register(new MessageHistoryStateCodec());
   }
 
   public SessionSnapshot snapshot(AgentSession session, long revision, Instant createdAt) {
@@ -157,7 +158,58 @@ public final class StateCodecRegistry {
     }
   }
 
+  /**
+   * Encodes a whole conversation history as an array of the framework message payload, so the
+   * durable form of a history is exactly the durable form of its messages and the two stay in step.
+   *
+   * <p>It is keyed on {@link MessageHistory} rather than on {@code List}, so the exact-class lookup
+   * resolves it with no ambiguity: a codec registered for {@code List} would claim every
+   * list-shaped state value in every namespace and would make the assignable-codec fallback
+   * ambiguous as soon as a second collection-shaped state type were registered.
+   */
+  private static final class MessageHistoryStateCodec implements StateCodec<MessageHistory> {
+
+    private final MessageStateCodec messageCodec = new MessageStateCodec();
+
+    @Override
+    public String typeId() {
+      return "core.message_history";
+    }
+
+    @Override
+    public int version() {
+      return 1;
+    }
+
+    @Override
+    public Class<MessageHistory> javaType() {
+      return MessageHistory.class;
+    }
+
+    @Override
+    public Object encode(MessageHistory value) {
+      List<Object> encoded = new ArrayList<>(value.messages().size());
+      for (Message message : value.messages()) {
+        encoded.add(messageCodec.encode(message));
+      }
+      return encoded;
+    }
+
+    @Override
+    public MessageHistory decode(Object payload) {
+      if (!(payload instanceof List<?> entries)) {
+        throw new IllegalArgumentException("message history payload must be an array");
+      }
+      List<Message> messages = new ArrayList<>(entries.size());
+      for (Object entry : entries) {
+        messages.add(messageCodec.decode(entry));
+      }
+      return new MessageHistory(messages);
+    }
+  }
+
   private static final class MessageStateCodec implements StateCodec<Message> {
+
     @Override
     public String typeId() {
       return "core.message";

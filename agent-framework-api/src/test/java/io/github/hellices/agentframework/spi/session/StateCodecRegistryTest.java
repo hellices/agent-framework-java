@@ -9,6 +9,7 @@ import io.github.hellices.agentframework.api.message.MessageAttribution;
 import io.github.hellices.agentframework.api.message.Role;
 import io.github.hellices.agentframework.api.message.TextContent;
 import io.github.hellices.agentframework.api.message.ToolCallContent;
+import io.github.hellices.agentframework.api.session.MessageHistory;
 import io.github.hellices.agentframework.api.session.SessionSnapshot;
 import io.github.hellices.agentframework.api.session.SessionStateEntry;
 import java.math.BigDecimal;
@@ -92,6 +93,84 @@ class StateCodecRegistryTest {
               assertThat(((ToolCallContent) value.content().get(1)).arguments())
                   .containsEntry("filter", null);
             });
+  }
+
+  @Test
+  void frameworkMessageHistoryCodecIsRegisteredByDefault() {
+    StateCodecRegistry registry = StateCodecRegistry.builder().build();
+    MessageHistory history =
+        MessageHistory.of(
+            List.of(
+                new Message(
+                    Role.USER,
+                    List.of(new TextContent("hello")),
+                    new MessageAttribution("memory", "source-1", "origin-1"),
+                    Map.of("retries", 1),
+                    new Object()),
+                new Message(Role.ASSISTANT, List.of(new TextContent("hi")))));
+    SessionSnapshot snapshot =
+        registry.snapshot(
+            new AgentSession("session-1", null, Map.of("in_memory", history)), 0, Instant.EPOCH);
+
+    AgentSession restored = registry.restore(snapshot);
+
+    assertThat(snapshot.state().get("in_memory").typeId()).isEqualTo("core.message_history");
+    assertThat(snapshot.state().get("in_memory").codecVersion()).isEqualTo(1);
+    assertThat(restored.state().get("in_memory"))
+        .isInstanceOfSatisfying(
+            MessageHistory.class,
+            value -> {
+              assertThat(value.messages()).extracting(Message::text).containsExactly("hello", "hi");
+              assertThat(value.messages().get(0).attribution())
+                  .isEqualTo(new MessageAttribution("memory", "source-1", "origin-1"));
+              assertThat(value.messages().get(0).additionalProperties())
+                  .containsEntry("retries", 1L);
+              assertThat(value.messages().get(0).rawRepresentation()).isNull();
+            });
+  }
+
+  @Test
+  void anEmptyMessageHistoryRoundTripsWithoutBeingConfusedForAList() {
+    StateCodecRegistry registry = StateCodecRegistry.builder().build();
+
+    AgentSession restored =
+        registry.restore(
+            registry.snapshot(
+                new AgentSession("session-1", null, Map.of("in_memory", MessageHistory.empty())),
+                0,
+                Instant.EPOCH));
+
+    assertThat(restored.state().get("in_memory")).isEqualTo(MessageHistory.empty());
+  }
+
+  @Test
+  void aPlainListOfMessagesIsStillAnUnregisteredStateType() {
+    StateCodecRegistry registry = StateCodecRegistry.builder().build();
+    Map<String, Object> state =
+        Map.of("in_memory", List.of(new Message(Role.USER, List.of(new TextContent("hello")))));
+    AgentSession session = new AgentSession("session-1", null, state);
+
+    assertThatThrownBy(() -> registry.snapshot(session, 0, Instant.EPOCH))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageStartingWith("unregistered session state type for source 'in_memory'");
+  }
+
+  @Test
+  void corruptBuiltInMessageHistoryPayloadHasAClassifiedFailure() {
+    StateCodecRegistry registry = StateCodecRegistry.builder().build();
+    SessionSnapshot snapshot =
+        new SessionSnapshot(
+            "session",
+            "1.0",
+            "session-1",
+            null,
+            0,
+            Instant.EPOCH,
+            Map.of("in_memory", new SessionStateEntry("core.message_history", 1, "not-a-list")));
+
+    assertThatThrownBy(() -> registry.restore(snapshot))
+        .isInstanceOf(SessionStateDecodingException.class)
+        .hasMessage("failed to decode session state key in_memory with type core.message_history");
   }
 
   @Test

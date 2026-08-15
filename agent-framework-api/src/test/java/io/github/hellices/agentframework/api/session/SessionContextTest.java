@@ -12,6 +12,7 @@ import io.github.hellices.agentframework.api.message.MessageAttribution;
 import io.github.hellices.agentframework.api.message.Role;
 import io.github.hellices.agentframework.api.message.TextContent;
 import io.github.hellices.agentframework.spi.session.ProviderSessionState;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -501,6 +502,231 @@ class SessionContextTest {
         .isInstanceOf(NullPointerException.class)
         .hasMessage("message must not be null");
     assertThatThrownBy(() -> new ContextMessageContribution("  ", message))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessage("sourceId must not be blank");
+  }
+
+  @Test
+  void hydrateReplacesTheSessionAndRecordsThePersistenceMetadata() {
+    AgentSession requested =
+        new AgentSession("session-1", null, Map.of("history", List.of("request")));
+    SessionContext sessionContext =
+        new SessionContext(requested, List.of(), Map.of(), new CancellationSignal());
+    AgentSession stored =
+        new AgentSession("session-1", "service-1", Map.of("history", List.of("stored")));
+
+    sessionContext.hydrate(
+        stored, new SessionSnapshotMetadata(7, Instant.parse("2026-01-01T00:00:00Z")));
+
+    assertThat(sessionContext.session()).isSameAs(stored);
+    assertThat(sessionContext.snapshotMetadata())
+        .contains(new SessionSnapshotMetadata(7, Instant.parse("2026-01-01T00:00:00Z")));
+    assertThat(sessionContext.providerState("history").value()).contains(List.of("stored"));
+  }
+
+  @Test
+  void snapshotMetadataIsEmptyUntilHydrated() {
+    SessionContext sessionContext =
+        new SessionContext(
+            new AgentSession("session-1", null, Map.of()),
+            List.of(),
+            Map.of(),
+            new CancellationSignal());
+
+    assertThat(sessionContext.snapshotMetadata()).isEmpty();
+  }
+
+  @Test
+  void hydrateRejectsASessionWithADifferentIdentity() {
+    SessionContext sessionContext =
+        new SessionContext(
+            new AgentSession("session-1", null, Map.of()),
+            List.of(),
+            Map.of(),
+            new CancellationSignal());
+    AgentSession other = new AgentSession("session-2", null, Map.of());
+    SessionSnapshotMetadata metadata =
+        new SessionSnapshotMetadata(0, Instant.parse("2026-01-01T00:00:00Z"));
+
+    assertThatThrownBy(() -> sessionContext.hydrate(other, metadata))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessage("hydrated session id must be session-1");
+  }
+
+  @Test
+  void hydrateHappensAtMostOncePerRun() {
+    SessionContext sessionContext =
+        new SessionContext(
+            new AgentSession("session-1", null, Map.of()),
+            List.of(),
+            Map.of(),
+            new CancellationSignal());
+    AgentSession stored = new AgentSession("session-1", null, Map.of());
+    SessionSnapshotMetadata metadata =
+        new SessionSnapshotMetadata(0, Instant.parse("2026-01-01T00:00:00Z"));
+    sessionContext.hydrate(stored, metadata);
+
+    assertThatThrownBy(() -> sessionContext.hydrate(stored, metadata))
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessage("session context is already hydrated");
+  }
+
+  @Test
+  void hydrateIsRejectedOnceAProviderStateViewExists() {
+    SessionContext sessionContext =
+        new SessionContext(
+            new AgentSession("session-1", null, Map.of()),
+            List.of(),
+            Map.of(),
+            new CancellationSignal());
+    sessionContext.providerState("history");
+    AgentSession stored = new AgentSession("session-1", null, Map.of());
+    SessionSnapshotMetadata metadata =
+        new SessionSnapshotMetadata(0, Instant.parse("2026-01-01T00:00:00Z"));
+
+    assertThatThrownBy(() -> sessionContext.hydrate(stored, metadata))
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessage("session context state views already exist");
+  }
+
+  @Test
+  void hydrateRejectsANullSessionAndNullMetadata() {
+    SessionContext sessionContext =
+        new SessionContext(
+            new AgentSession("session-1", null, Map.of()),
+            List.of(),
+            Map.of(),
+            new CancellationSignal());
+    AgentSession stored = new AgentSession("session-1", null, Map.of());
+    SessionSnapshotMetadata metadata =
+        new SessionSnapshotMetadata(0, Instant.parse("2026-01-01T00:00:00Z"));
+
+    assertThatThrownBy(() -> sessionContext.hydrate(null, metadata))
+        .isInstanceOf(NullPointerException.class)
+        .hasMessage("session must not be null");
+    assertThatThrownBy(() -> sessionContext.hydrate(stored, null))
+        .isInstanceOf(NullPointerException.class)
+        .hasMessage("metadata must not be null");
+  }
+
+  @Test
+  void hydrateIsRejectedForASessionlessRun() {
+    SessionContext sessionContext =
+        new SessionContext(null, List.of(), Map.of(), new CancellationSignal());
+    AgentSession stored = new AgentSession("session-1", null, Map.of());
+    SessionSnapshotMetadata metadata =
+        new SessionSnapshotMetadata(0, Instant.parse("2026-01-01T00:00:00Z"));
+
+    assertThatThrownBy(() -> sessionContext.hydrate(stored, metadata))
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessage("a sessionless run cannot be hydrated");
+  }
+
+  @Test
+  void anUnrestrictedContextWritesBackEveryTouchedNamespace() {
+    SessionContext sessionContext =
+        new SessionContext(
+            new AgentSession("session-1", null, Map.of()),
+            List.of(),
+            Map.of(),
+            new CancellationSignal());
+
+    sessionContext.providerState("bound").set("kept");
+    sessionContext.providerState("sibling").set("kept too");
+
+    assertThat(sessionContext.updatedSession().orElseThrow().state())
+        .containsOnlyKeys("bound", "sibling");
+  }
+
+  @Test
+  void restrictPersistedSourcesDropsWritesToUnboundNamespaces() {
+    SessionContext sessionContext =
+        new SessionContext(
+            new AgentSession("session-1", null, Map.of("stored", "untouched")),
+            List.of(),
+            Map.of(),
+            new CancellationSignal());
+    sessionContext.restrictPersistedSources(List.of("bound"));
+
+    sessionContext.providerState("bound").set("kept");
+    sessionContext.providerState("sibling").set("dropped");
+
+    assertThat(sessionContext.updatedSession().orElseThrow().state())
+        .containsExactlyInAnyOrderEntriesOf(Map.of("stored", "untouched", "bound", "kept"));
+  }
+
+  @Test
+  void restrictPersistedSourcesAlsoDropsClearsOfUnboundNamespaces() {
+    SessionContext sessionContext =
+        new SessionContext(
+            new AgentSession("session-1", null, Map.of("sibling", "untouched")),
+            List.of(),
+            Map.of(),
+            new CancellationSignal());
+    sessionContext.restrictPersistedSources(List.of("bound"));
+
+    sessionContext.providerState("sibling").clear();
+
+    assertThat(sessionContext.updatedSession().orElseThrow().state())
+        .containsExactlyInAnyOrderEntriesOf(Map.of("sibling", "untouched"));
+  }
+
+  @Test
+  void anEmptyRestrictionPersistsNoProviderWrites() {
+    SessionContext sessionContext =
+        new SessionContext(
+            new AgentSession("session-1", null, Map.of()),
+            List.of(),
+            Map.of(),
+            new CancellationSignal());
+    sessionContext.restrictPersistedSources(List.of());
+
+    sessionContext.providerState("bound").set("dropped");
+
+    assertThat(sessionContext.updatedSession().orElseThrow().state()).isEmpty();
+  }
+
+  @Test
+  void restrictPersistedSourcesHappensAtMostOnceAndBeforeAnyStateView() {
+    SessionContext sessionContext =
+        new SessionContext(
+            new AgentSession("session-1", null, Map.of()),
+            List.of(),
+            Map.of(),
+            new CancellationSignal());
+    sessionContext.restrictPersistedSources(List.of("bound"));
+
+    assertThatThrownBy(() -> sessionContext.restrictPersistedSources(List.of("other")))
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessage("session context persisted sources are already restricted");
+
+    SessionContext viewed =
+        new SessionContext(
+            new AgentSession("session-1", null, Map.of()),
+            List.of(),
+            Map.of(),
+            new CancellationSignal());
+    viewed.providerState("bound");
+
+    assertThatThrownBy(() -> viewed.restrictPersistedSources(List.of("bound")))
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessage("session context state views already exist");
+  }
+
+  @Test
+  void restrictPersistedSourcesRejectsNullAndBlankSourceIds() {
+    SessionContext sessionContext =
+        new SessionContext(
+            new AgentSession("session-1", null, Map.of()),
+            List.of(),
+            Map.of(),
+            new CancellationSignal());
+    List<String> blank = List.of("  ");
+
+    assertThatThrownBy(() -> sessionContext.restrictPersistedSources(null))
+        .isInstanceOf(NullPointerException.class)
+        .hasMessage("sourceIds must not be null");
+    assertThatThrownBy(() -> sessionContext.restrictPersistedSources(blank))
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessage("sourceId must not be blank");
   }

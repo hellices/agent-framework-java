@@ -14,6 +14,7 @@ import io.github.hellices.agentframework.api.message.Message;
 import io.github.hellices.agentframework.api.message.MessageAttribution;
 import io.github.hellices.agentframework.api.message.Role;
 import io.github.hellices.agentframework.api.message.TextContent;
+import io.github.hellices.agentframework.api.session.MessageHistory;
 import io.github.hellices.agentframework.api.session.SessionContext;
 import io.github.hellices.agentframework.engine.AgentEngine;
 import io.github.hellices.agentframework.spi.model.ModelClient;
@@ -376,7 +377,7 @@ class InMemoryHistoryProviderTest {
   }
 
   @Test
-  void aHistoryNamespaceCannotBeSnapshottedByTheDefaultStateCodecRegistry() {
+  void aHistoryNamespaceRoundTripsThroughTheDefaultStateCodecRegistry() {
     SessionContext context =
         contextWith(new AgentSession("session-1", null, Map.of()), List.of(user("hi")));
     context.complete(response("hello"));
@@ -384,11 +385,16 @@ class InMemoryHistoryProviderTest {
     AgentSession stored = context.updatedSession().orElseThrow();
     StateCodecRegistry registry = StateCodecRegistry.builder().build();
 
-    // SES-014 owns the message-list codec. Until it lands, the failure must at least name the
-    // history namespace instead of only a JDK immutable list implementation class.
-    assertThatThrownBy(() -> registry.snapshot(stored, 0, Instant.EPOCH))
-        .isInstanceOf(IllegalArgumentException.class)
-        .hasMessageStartingWith("unregistered session state type for source 'in_memory': ");
+    AgentSession restored = registry.restore(registry.snapshot(stored, 0, Instant.EPOCH));
+
+    SessionContext restoredContext = contextWith(restored, List.of(user("again")));
+    assertThat(
+            new InMemoryHistoryProvider()
+                .getMessages(restoredContext, restoredContext.providerState("in_memory"))
+                .toCompletableFuture()
+                .join())
+        .extracting(Message::text)
+        .containsExactly("hi", "hello");
   }
 
   @Test
@@ -500,9 +506,9 @@ class InMemoryHistoryProviderTest {
 
     afterRun(new InMemoryHistoryProvider(), context);
 
-    List<?> storedBefore = (List<?>) session.state().get("in_memory");
-    assertThat(storedBefore).hasSize(1);
-    List<?> storedAfter = (List<?>) context.updatedSession().orElseThrow().state().get("in_memory");
+    MessageHistory storedBefore = (MessageHistory) session.state().get("in_memory");
+    assertThat(storedBefore.messages()).hasSize(1);
+    List<Message> storedAfter = storedHistory(context, "in_memory");
     assertThat(storedAfter).hasSize(3);
     assertThatThrownBy(storedAfter::clear).isInstanceOf(UnsupportedOperationException.class);
   }
@@ -627,7 +633,7 @@ class InMemoryHistoryProviderTest {
   }
 
   @Test
-  void aHistoryNamespaceHoldingSomethingOtherThanAListFails() {
+  void aHistoryNamespaceHoldingSomethingOtherThanAMessageHistoryFails() {
     SessionContext context =
         contextWith(
             new AgentSession("session-1", null, Map.of("in_memory", "corrupted")),
@@ -635,21 +641,23 @@ class InMemoryHistoryProviderTest {
 
     assertThatThrownBy(() -> beforeRun(new InMemoryHistoryProvider(), context))
         .isInstanceOf(IllegalStateException.class)
-        .hasMessage("history state for source 'in_memory' is not a java.util.List");
+        .hasMessage(
+            "history state for source 'in_memory' is not a"
+                + " io.github.hellices.agentframework.api.session.MessageHistory");
   }
 
   @Test
-  void aHistoryListHoldingSomethingOtherThanAMessageFails() {
+  void aPlainMessageListLeftInTheHistoryNamespaceFails() {
     SessionContext context =
         contextWith(
-            new AgentSession("session-1", null, Map.of("in_memory", List.of("corrupted"))),
+            new AgentSession("session-1", null, Map.of("in_memory", List.of(user("one")))),
             List.of(user("hi")));
 
     assertThatThrownBy(() -> beforeRun(new InMemoryHistoryProvider(), context))
         .isInstanceOf(IllegalStateException.class)
         .hasMessage(
-            "history state for source 'in_memory' must contain only"
-                + " io.github.hellices.agentframework.api.message.Message entries");
+            "history state for source 'in_memory' is not a"
+                + " io.github.hellices.agentframework.api.session.MessageHistory");
   }
 
   @Test
@@ -777,17 +785,13 @@ class InMemoryHistoryProviderTest {
   }
 
   private static AgentSession sessionWithHistory(String sessionId, List<Message> history) {
-    return new AgentSession(sessionId, null, Map.of("in_memory", List.copyOf(history)));
+    return new AgentSession(sessionId, null, Map.of("in_memory", MessageHistory.of(history)));
   }
 
   private static List<Message> storedHistory(SessionContext context, String sourceId) {
     Object value = context.updatedSession().orElseThrow().state().get(sourceId);
-    assertThat(value).isInstanceOf(List.class);
-    List<Message> messages = new ArrayList<>();
-    for (Object entry : (List<?>) value) {
-      messages.add((Message) entry);
-    }
-    return messages;
+    assertThat(value).isInstanceOf(MessageHistory.class);
+    return ((MessageHistory) value).messages();
   }
 
   private static Message user(String text) {
