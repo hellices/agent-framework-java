@@ -74,7 +74,7 @@ public final class JacksonSessionSnapshotCodec implements SessionSnapshotCodec {
       objectMapper.writeValue(output, envelope);
       return output.toByteArray();
     } catch (SnapshotSizeLimitException failure) {
-      throw new SessionSnapshotSchemaException("session snapshot exceeds the 1 MiB limit", failure);
+      throw new SessionSnapshotSchemaException(SessionSnapshotLimits.exceededMessage(), failure);
     } catch (IOException failure) {
       throw new SessionSnapshotParseException("failed to encode session snapshot", failure);
     }
@@ -84,7 +84,7 @@ public final class JacksonSessionSnapshotCodec implements SessionSnapshotCodec {
   public SessionSnapshot decode(byte[] encoded) {
     Objects.requireNonNull(encoded, "encoded must not be null");
     if (encoded.length > SessionSnapshotLimits.MAX_BYTES) {
-      throw new SessionSnapshotSchemaException("session snapshot exceeds the 1 MiB limit");
+      throw new SessionSnapshotSchemaException(SessionSnapshotLimits.exceededMessage());
     }
     JsonNode root;
     try {

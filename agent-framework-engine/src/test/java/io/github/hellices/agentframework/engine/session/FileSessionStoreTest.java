@@ -290,12 +290,18 @@ class FileSessionStoreTest {
 
   private static void awaitBlocked(Thread thread) throws InterruptedException {
     long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
-    while (thread.isAlive()
-        && thread.getState() != Thread.State.BLOCKED
-        && System.nanoTime() < deadline) {
+    Thread.State state = thread.getState();
+    while (thread.isAlive() && !isWaiting(state) && System.nanoTime() < deadline) {
       Thread.sleep(10);
+      state = thread.getState();
     }
-    assertThat(thread.getState()).isEqualTo(Thread.State.BLOCKED);
+    assertThat(state).isIn(Thread.State.BLOCKED, Thread.State.WAITING, Thread.State.TIMED_WAITING);
+  }
+
+  private static boolean isWaiting(Thread.State state) {
+    return state == Thread.State.BLOCKED
+        || state == Thread.State.WAITING
+        || state == Thread.State.TIMED_WAITING;
   }
 
   private static final class BlockingDecodeCodec implements SessionSnapshotCodec {

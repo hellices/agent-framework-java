@@ -204,7 +204,7 @@ public final class FileSessionStore implements SessionStore {
         InputStream input = Channels.newInputStream(channel)) {
       byte[] encoded = input.readNBytes(SessionSnapshotLimits.MAX_BYTES + 1);
       if (encoded.length > SessionSnapshotLimits.MAX_BYTES) {
-        throw new SessionSnapshotSchemaException("session snapshot exceeds the 1 MiB limit");
+        throw new SessionSnapshotSchemaException(SessionSnapshotLimits.exceededMessage());
       }
       return encoded;
     }

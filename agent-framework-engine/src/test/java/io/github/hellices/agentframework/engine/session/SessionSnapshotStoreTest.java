@@ -98,7 +98,7 @@ class SessionSnapshotStoreTest {
         .hasMessageContaining("length limit");
     assertThatThrownBy(() -> codec.decode(new byte[1_048_577]))
         .isInstanceOf(SessionSnapshotSchemaException.class)
-        .hasMessageContaining("1 MiB");
+        .hasMessageContaining("1048576-byte limit");
     assertThatThrownBy(
             () ->
                 codec.decode(snapshotJson(nestedArrayPayload(65)).getBytes(StandardCharsets.UTF_8)))
@@ -116,7 +116,7 @@ class SessionSnapshotStoreTest {
                 "value", new SessionStateEntry("test", 1, Map.of("text", "x".repeat(1_048_576)))));
     assertThatThrownBy(() -> codec.encode(oversized))
         .isInstanceOf(SessionSnapshotSchemaException.class)
-        .hasMessageContaining("1 MiB");
+        .hasMessageContaining("1048576-byte limit");
     assertThatThrownBy(
             () -> new SessionStateEntry("test", 1, Map.of("decimal", new BigDecimal("1E-10001"))))
         .isInstanceOf(IllegalArgumentException.class)
