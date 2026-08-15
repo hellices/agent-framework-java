@@ -127,9 +127,7 @@ public final class JacksonSessionSnapshotCodec implements SessionSnapshotCodec {
           "session",
           "1.0",
           text(root, "sessionId"),
-          root.path("serviceSessionId").isNull()
-              ? null
-              : root.path("serviceSessionId").asText(null),
+          optionalText(root, "serviceSessionId"),
           revision(root),
           Instant.parse(text(root, "createdAt")),
           state);
@@ -278,6 +276,18 @@ public final class JacksonSessionSnapshotCodec implements SessionSnapshotCodec {
     JsonNode value = node.get(field);
     if (value == null || !value.isTextual() || value.asText().isBlank()) {
       throw new SessionSnapshotSchemaException("snapshot field must be text: " + field);
+    }
+    return value.asText();
+  }
+
+  private static String optionalText(JsonNode node, String field) {
+    JsonNode value = node.get(field);
+    if (value == null || value.isNull()) {
+      return null;
+    }
+    if (!value.isTextual() || value.asText().isBlank()) {
+      throw new SessionSnapshotSchemaException(
+          "snapshot optional field must be non-blank text: " + field);
     }
     return value.asText();
   }

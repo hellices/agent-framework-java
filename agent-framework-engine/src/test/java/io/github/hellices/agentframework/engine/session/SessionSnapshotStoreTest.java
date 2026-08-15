@@ -143,6 +143,11 @@ class SessionSnapshotStoreTest {
     assertThat(((Map<?, ?>) first.state().get("preference").payload()).get("theme"))
         .isEqualTo("dark");
     assertThat(store.load("missing").toCompletableFuture().join()).isEmpty();
+
+    store.delete("session-1").toCompletableFuture().join();
+
+    assertThat(store.load("session-1").toCompletableFuture().join()).isEmpty();
+    assertThat(store.delete(" ").toCompletableFuture()).isCompletedExceptionally();
   }
 
   private static String snapshotJson(String payload) {

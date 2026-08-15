@@ -193,12 +193,14 @@ public final class StateCodecRegistry {
         content.add(decodeContent(requireMap(item, "message content item")));
       }
       MessageAttribution attribution = null;
-      if (encoded.get("attribution") instanceof Map<?, ?> value) {
+      Object encodedAttribution = encoded.get("attribution");
+      if (encodedAttribution != null) {
+        Map<?, ?> value = requireMap(encodedAttribution, "message attribution");
         attribution =
             new MessageAttribution(
-                (String) value.get("sourceType"),
-                (String) value.get("sourceId"),
-                (String) value.get("originSessionId"));
+                requireString(value, "sourceType"),
+                nullableString(value, "sourceId"),
+                nullableString(value, "originSessionId"));
       }
       return new Message(
           Role.of(requireString(encoded, "role")),
@@ -324,6 +326,17 @@ public final class StateCodecRegistry {
       Object item = value.get(key);
       if (!(item instanceof String text)) {
         throw new IllegalArgumentException(key + " must be text");
+      }
+      return text;
+    }
+
+    private static String nullableString(Map<?, ?> value, String key) {
+      Object item = value.get(key);
+      if (item == null) {
+        return null;
+      }
+      if (!(item instanceof String text)) {
+        throw new IllegalArgumentException(key + " must be text or null");
       }
       return text;
     }
