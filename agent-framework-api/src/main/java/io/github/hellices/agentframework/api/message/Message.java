@@ -82,6 +82,22 @@ public final class Message {
     return attribution;
   }
 
+  /**
+   * Returns a copy of this message carrying {@code attribution}, leaving this message untouched.
+   *
+   * <p>Role, content, additional properties, and raw representation are carried over unchanged, so
+   * a caller that has to re-attribute a message it did not create (a history provider stamping
+   * loaded history, for example) never has to rebuild the message field by field and never mutates
+   * the message another holder observes.
+   *
+   * @param attribution the attribution the copy carries; must not be {@code null}
+   * @throws NullPointerException if {@code attribution} is {@code null}
+   */
+  public Message withAttribution(MessageAttribution attribution) {
+    Objects.requireNonNull(attribution, "attribution must not be null");
+    return new Message(role, content, attribution, additionalProperties, rawRepresentation);
+  }
+
   public Map<String, Object> additionalProperties() {
     return additionalProperties;
   }
