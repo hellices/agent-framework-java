@@ -8,5 +8,5 @@ public interface AgentFactory {
 
   AgentBuilder builder(String modelName);
 
-  AgentBuilder builder(ModelClient modelClient);
+  AgentBuilder builderWithClient(ModelClient modelClient);
 }

@@ -114,7 +114,7 @@ general users do not interact directly with `AgentEngineBuilder`.
 - `builder()`: uses the catalog's default model; fails with actionable guidance if there is no
   default
 - `builder(name)`: resolves a named model
-- `builder(ModelClient)`: uses an explicit model
+- `builderWithClient(ModelClient)`: uses an explicit model without a null-ambiguous Java overload
 
 ### 3.2 AgentEngine
 

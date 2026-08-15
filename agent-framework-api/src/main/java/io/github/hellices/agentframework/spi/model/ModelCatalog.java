@@ -60,7 +60,7 @@ public final class ModelCatalog {
     }
 
     public Builder defaultModel(String modelName) {
-      this.defaultModelName = requireName(modelName, "defaultModelName");
+      this.defaultModelName = requireName(modelName, "default model name");
       return this;
     }
 

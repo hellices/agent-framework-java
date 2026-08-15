@@ -16,16 +16,16 @@ final class CatalogAgentFactory implements AgentFactory {
 
   @Override
   public AgentBuilder builder() {
-    return builder(catalog.defaultClient());
+    return builderWithClient(catalog.defaultClient());
   }
 
   @Override
   public AgentBuilder builder(String modelName) {
-    return builder(catalog.resolve(modelName));
+    return builderWithClient(catalog.resolve(modelName));
   }
 
   @Override
-  public AgentBuilder builder(ModelClient modelClient) {
+  public AgentBuilder builderWithClient(ModelClient modelClient) {
     return AgentEngine.builder()
         .modelClient(Objects.requireNonNull(modelClient, "modelClient must not be null"));
   }

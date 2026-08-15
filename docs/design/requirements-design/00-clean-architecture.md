@@ -159,7 +159,7 @@ AgentEngine.builder()
   -> build()
 
 AgentFactory(engine, modelCatalog)
-  -> builder() / builder(modelName) / builder(ModelClient)
+  -> builder() / builder(modelName) / builderWithClient(ModelClient)
 ```
 
 Every feature provided by a framework adapter must also be expressible through this builder.

@@ -53,7 +53,7 @@ class AgentFactoryTest {
         .isEqualTo("named");
     assertThat(
             factory
-                .builder(explicit)
+                .builderWithClient(explicit)
                 .build()
                 .run("hi")
                 .response()
