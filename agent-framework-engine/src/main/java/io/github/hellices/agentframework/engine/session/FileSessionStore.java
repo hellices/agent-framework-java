@@ -61,6 +61,7 @@ public final class FileSessionStore implements SessionStore {
     try {
       Path target = target(sessionId);
       verifyRoot();
+      rejectSymbolicLink(target);
       try {
         return CompletableFuture.completedFuture(Optional.of(codec.decode(readNoFollow(target))));
       } catch (NoSuchFileException failure) {
@@ -87,12 +88,12 @@ public final class FileSessionStore implements SessionStore {
     Path temporary = null;
     try {
       SessionSnapshot value = Objects.requireNonNull(snapshot, "snapshot must not be null");
+      String targetFileName = fileName(value.sessionId());
+      Path target = targetFile(targetFileName);
       byte[] encoded = codec.encode(value);
-      Path target = target(value.sessionId());
       verifyRoot();
       rejectSymbolicLink(target);
-      temporary =
-          root.resolve(fileName(value.sessionId()) + "." + UUID.randomUUID() + ".temporary");
+      temporary = root.resolve(targetFileName + "." + UUID.randomUUID() + ".temporary");
       writeDurably(temporary, encoded);
       try {
         Files.move(
@@ -139,7 +140,11 @@ public final class FileSessionStore implements SessionStore {
   }
 
   private Path target(String sessionId) {
-    Path target = root.resolve(fileName(sessionId)).normalize();
+    return targetFile(fileName(sessionId));
+  }
+
+  private Path targetFile(String targetFileName) {
+    Path target = root.resolve(targetFileName).normalize();
     if (!target.startsWith(root)) {
       throw new FileSessionStoreException("session path escapes the configured root");
     }
