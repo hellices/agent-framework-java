@@ -34,6 +34,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Flow;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 
@@ -250,15 +251,22 @@ class AgentEngineSessionContextTest {
   @Test
   void beforeRunNullStageFailsTheRun() {
     List<String> log = new ArrayList<>();
+    CountingClient client = new CountingClient("hello");
+    RecordingProvider later = new RecordingProvider("later", log);
     AgentEngine engine =
         AgentEngine.builder()
-            .modelClient(fixedClient("hello"))
-            .contextProviders(new NullStageProvider("memory"))
+            .modelClient(client)
+            .contextProviders(new NullStageProvider("memory"), later)
             .build();
 
     assertThatThrownBy(() -> engine.run("hi").response().toCompletableFuture().join())
         .hasRootCauseInstanceOf(NullPointerException.class)
         .hasRootCauseMessage("context provider before-run stage must not be null");
+    // A null before-run stage short-circuits the run, so the model is never called and no later
+    // provider hook - neither the following before-run hook nor any after-run hook - is reached.
+    assertThat(client.invocations.get()).isZero();
+    assertThat(later.beforeRunContexts).isEmpty();
+    assertThat(later.afterRunContexts).isEmpty();
     assertThat(log).isEmpty();
   }
 
@@ -630,6 +638,22 @@ class AgentEngineSessionContextTest {
 
   private static ModelClient fixedClient(String text) {
     return request -> completedFuture(response(text));
+  }
+
+  /** Counts model invocations so a test can prove a run never reached the model client. */
+  private static final class CountingClient implements ModelClient {
+    private final String text;
+    private final AtomicInteger invocations = new AtomicInteger();
+
+    private CountingClient(String text) {
+      this.text = text;
+    }
+
+    @Override
+    public CompletionStage<ModelResponse> run(ModelRequest request) {
+      invocations.incrementAndGet();
+      return completedFuture(response(text));
+    }
   }
 
   private static ModelResponse response(String text) {
