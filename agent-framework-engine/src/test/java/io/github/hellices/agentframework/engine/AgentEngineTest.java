@@ -16,6 +16,7 @@ import io.github.hellices.agentframework.api.message.Role;
 import io.github.hellices.agentframework.api.message.TextContent;
 import io.github.hellices.agentframework.api.message.ToolCallContent;
 import io.github.hellices.agentframework.api.message.ToolResultContent;
+import io.github.hellices.agentframework.api.message.Usage;
 import io.github.hellices.agentframework.api.tool.FunctionTool;
 import io.github.hellices.agentframework.api.tool.ToolResult;
 import io.github.hellices.agentframework.spi.model.ContinuationModelClient;
@@ -480,6 +481,70 @@ class AgentEngineTest {
     assertThatThrownBy(() -> engine.run(request))
         .isInstanceOf(UnsupportedOperationException.class)
         .hasMessage("continuation tool execution is not supported");
+  }
+
+  @Test
+  void toolsEnabledRunRejectsAContinuationTokenReturnedByTheModel() {
+    FunctionTool tool =
+        FunctionTool.create(
+            "tool",
+            "tool",
+            Map.of(),
+            (arguments, context) -> completedFuture(ToolResult.success(new TextContent("done"))));
+    ModelClient client =
+        request ->
+            completedFuture(
+                new ModelResponse(
+                    List.of(message("pending")),
+                    null,
+                    FinishReason.STOP,
+                    "continuation-1",
+                    Map.of(),
+                    null));
+    AgentEngine engine = AgentEngine.builder().modelClient(client).tools(tool).build();
+
+    assertThatThrownBy(() -> engine.run("hi").response().toCompletableFuture().join())
+        .hasRootCauseInstanceOf(UnsupportedOperationException.class)
+        .hasRootCauseMessage("model continuation with tool execution is not supported");
+  }
+
+  @Test
+  void toolLoopAccumulatesUsageAcrossModelCalls() {
+    int[] calls = {0};
+    FunctionTool tool =
+        FunctionTool.create(
+            "tool",
+            "tool",
+            Map.of(),
+            (arguments, context) -> completedFuture(ToolResult.success(new TextContent("done"))));
+    ModelClient client =
+        request -> {
+          calls[0]++;
+          if (calls[0] == 1) {
+            return completedFuture(
+                new ModelResponse(
+                    List.of(
+                        new Message(
+                            Role.ASSISTANT,
+                            List.of(new ToolCallContent("call-1", "tool", Map.of())))),
+                    new Usage(1, 2, 3, Map.of("cachedTokens", 1L)),
+                    FinishReason.TOOL_CALLS,
+                    Map.of(),
+                    null));
+          }
+          return completedFuture(
+              new ModelResponse(
+                  List.of(message("done")),
+                  new Usage(4, 5, 9, Map.of("cachedTokens", 2L)),
+                  FinishReason.STOP,
+                  Map.of(),
+                  null));
+        };
+    AgentEngine engine = AgentEngine.builder().modelClient(client).tools(tool).build();
+
+    var usage = engine.run("hi").response().toCompletableFuture().join().usage();
+
+    assertThat(usage).isEqualTo(new Usage(5, 7, 12, Map.of("cachedTokens", 3L)));
   }
 
   private static ModelResponse response(String text) {
