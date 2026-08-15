@@ -244,7 +244,7 @@ public final class StateCodecRegistry {
                 null);
         case "tool_result" -> {
           List<Content> nested = new ArrayList<>();
-          for (Object item : requireList(encoded.get("content"), "tool result content")) {
+          for (Object item : nullableList(encoded.get("content"), "tool result content")) {
             nested.add(decodeContent(requireMap(item, "tool result content item")));
           }
           yield new ToolResultContent(
@@ -279,6 +279,9 @@ public final class StateCodecRegistry {
     }
 
     private static Map<String, Object> castNullableMap(Object value, String label) {
+      if (value == null) {
+        return Map.of();
+      }
       Map<?, ?> source = requireMap(value, label);
       Map<String, Object> copy = new LinkedHashMap<>();
       source.forEach(
@@ -303,6 +306,10 @@ public final class StateCodecRegistry {
         throw new IllegalArgumentException(label + " must be an array");
       }
       return list;
+    }
+
+    private static List<?> nullableList(Object value, String label) {
+      return value == null ? List.of() : requireList(value, label);
     }
 
     private static String requireString(Map<?, ?> value, String key) {

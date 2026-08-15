@@ -20,24 +20,37 @@ public final class InMemorySessionStore implements SessionStore {
 
   @Override
   public CompletionStage<Optional<SessionSnapshot>> load(String sessionId) {
-    String key = requireSessionId(sessionId);
-    byte[] encoded = snapshots.get(key);
-    return CompletableFuture.completedFuture(
-        encoded == null ? Optional.empty() : Optional.of(codec.decode(encoded.clone())));
+    try {
+      String key = requireSessionId(sessionId);
+      byte[] encoded = snapshots.get(key);
+      return CompletableFuture.completedFuture(
+          encoded == null ? Optional.empty() : Optional.of(codec.decode(encoded.clone())));
+    } catch (RuntimeException failure) {
+      return CompletableFuture.failedFuture(failure);
+    }
   }
 
   @Override
   public CompletionStage<Void> save(SessionSnapshot snapshot) {
-    SessionSnapshot value = java.util.Objects.requireNonNull(snapshot, "snapshot must not be null");
-    byte[] encoded = codec.encode(value);
-    snapshots.put(value.sessionId(), encoded.clone());
-    return CompletableFuture.completedFuture(null);
+    try {
+      SessionSnapshot value =
+          java.util.Objects.requireNonNull(snapshot, "snapshot must not be null");
+      byte[] encoded = codec.encode(value);
+      snapshots.put(value.sessionId(), encoded.clone());
+      return CompletableFuture.completedFuture(null);
+    } catch (RuntimeException failure) {
+      return CompletableFuture.failedFuture(failure);
+    }
   }
 
   @Override
   public CompletionStage<Void> delete(String sessionId) {
-    snapshots.remove(requireSessionId(sessionId));
-    return CompletableFuture.completedFuture(null);
+    try {
+      snapshots.remove(requireSessionId(sessionId));
+      return CompletableFuture.completedFuture(null);
+    } catch (RuntimeException failure) {
+      return CompletableFuture.failedFuture(failure);
+    }
   }
 
   private static String requireSessionId(String sessionId) {

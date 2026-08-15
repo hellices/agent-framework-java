@@ -7,4 +7,8 @@ public final class SessionSnapshotSchemaException extends RuntimeException {
   public SessionSnapshotSchemaException(String message) {
     super(message);
   }
+
+  public SessionSnapshotSchemaException(String message, Throwable cause) {
+    super(message, cause);
+  }
 }

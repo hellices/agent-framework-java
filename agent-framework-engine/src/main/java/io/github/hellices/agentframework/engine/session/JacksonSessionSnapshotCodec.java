@@ -136,7 +136,8 @@ public final class JacksonSessionSnapshotCodec implements SessionSnapshotCodec {
     } catch (SessionSnapshotSchemaException failure) {
       throw failure;
     } catch (RuntimeException failure) {
-      throw new SessionSnapshotSchemaException("invalid session snapshot: " + failure.getMessage());
+      throw new SessionSnapshotSchemaException(
+          "invalid session snapshot: " + failure.getMessage(), failure);
     }
   }
 
