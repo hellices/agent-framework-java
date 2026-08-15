@@ -3,6 +3,7 @@ package io.github.hellices.agentframework.spi.model;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import io.github.hellices.agentframework.api.agent.CancellationSignal;
 import io.github.hellices.agentframework.api.message.FinishReason;
 import io.github.hellices.agentframework.api.message.Message;
 import io.github.hellices.agentframework.api.message.Role;
@@ -80,6 +81,25 @@ class ModelOptionsTest {
 
     assertThat(request.options().maxOutputTokens()).hasValue(400);
     assertThat(request.metadata()).containsEntry("traceId", "trace-1");
+  }
+
+  @Test
+  void requestCarriesTheRunCancellationSignal() {
+    CancellationSignal signal = new CancellationSignal();
+
+    ModelRequest request =
+        new ModelRequest(List.of(), ModelRequestOptions.empty(), signal, Map.of());
+
+    assertThat(request.cancellationSignal()).isSameAs(signal);
+  }
+
+  @Test
+  void cancellationSignalDoesNotChangeModelRequestValueEquality() {
+    ModelRequestOptions options = ModelRequestOptions.empty();
+    ModelRequest first = new ModelRequest(List.of(), options, new CancellationSignal(), Map.of());
+    ModelRequest second = new ModelRequest(List.of(), options, new CancellationSignal(), Map.of());
+
+    assertThat(first).isEqualTo(second).hasSameHashCodeAs(second);
   }
 
   @Test

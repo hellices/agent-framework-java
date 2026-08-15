@@ -166,6 +166,47 @@ class AgentLifecycleTest {
     assertThat(signal.isCancelled()).isTrue();
   }
 
+  @Test
+  void runHandleCancelsTheRequestSignalAfterCompletion() {
+    TestAgent agent = new TestAgent("test-agent");
+    CancellationSignal signal = new CancellationSignal();
+    AgentRunRequest request =
+        new AgentRunRequest(
+            Message.normalize("hello"), null, new AgentRunOptions(), signal, Map.of());
+
+    agent.run(request).cancel();
+
+    assertThat(signal.isCancelled()).isTrue();
+  }
+
+  @Test
+  void cancellationListenerCanBeRemoved() {
+    CancellationSignal signal = new CancellationSignal();
+    boolean[] called = {false};
+    Runnable remove = signal.onCancel(() -> called[0] = true);
+
+    remove.run();
+    signal.cancel();
+
+    assertThat(called[0]).isFalse();
+  }
+
+  @Test
+  void cancellationDrainsRemainingListenersAfterAListenerFails() {
+    CancellationSignal signal = new CancellationSignal();
+    boolean[] secondCalled = {false};
+    signal.onCancel(
+        () -> {
+          throw new IllegalStateException("first failed");
+        });
+    signal.onCancel(() -> secondCalled[0] = true);
+
+    assertThatThrownBy(signal::cancel)
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessage("first failed");
+    assertThat(secondCalled[0]).isTrue();
+  }
+
   private static class TestAgent extends Agent {
     private TestAgent(String id) {
       super(id, "TestAgent", "agent test");
@@ -174,17 +215,19 @@ class AgentLifecycleTest {
     @Override
     protected AgentRun runInternal(AgentRunContext context, AgentRunRequest request) {
       return new AgentRun(
-          new AgentResponse(
-              id(),
-              "response-1",
-              "message-1",
-              name(),
-              null,
-              io.github.hellices.agentframework.api.message.FinishReason.STOP,
-              List.of(new Message(Role.ASSISTANT, List.of(new TextContent("ok")))),
-              null,
-              Map.of(),
-              null));
+          CompletableFuture.completedFuture(
+              new AgentResponse(
+                  id(),
+                  "response-1",
+                  "message-1",
+                  name(),
+                  null,
+                  io.github.hellices.agentframework.api.message.FinishReason.STOP,
+                  List.of(new Message(Role.ASSISTANT, List.of(new TextContent("ok")))),
+                  null,
+                  Map.of(),
+                  null)),
+          request.cancellationSignal());
     }
 
     @Override

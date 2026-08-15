@@ -11,6 +11,7 @@ public record ModelResponseUpdate(
     List<Message> messages,
     Usage usage,
     FinishReason finishReason,
+    String continuationToken,
     Map<String, Object> metadata,
     Object rawRepresentation) {
 
@@ -18,5 +19,14 @@ public record ModelResponseUpdate(
     messages = messages == null ? List.of() : List.copyOf(messages);
     metadata = metadata == null ? Map.of() : Map.copyOf(metadata);
     Objects.requireNonNull(finishReason, "finishReason must not be null");
+  }
+
+  public ModelResponseUpdate(
+      List<Message> messages,
+      Usage usage,
+      FinishReason finishReason,
+      Map<String, Object> metadata,
+      Object rawRepresentation) {
+    this(messages, usage, finishReason, null, metadata, rawRepresentation);
   }
 }
