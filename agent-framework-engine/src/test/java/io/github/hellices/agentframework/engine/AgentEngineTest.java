@@ -434,8 +434,8 @@ class AgentEngineTest {
 
     var response = engine.run("loop").response().toCompletableFuture().join();
 
-    assertThat(requests).hasSize(2);
-    assertThat(requests.get(1).tools()).isEmpty();
+    assertThat(requests).hasSize(1);
+    assertThat(requests.get(0).tools()).isEmpty();
     assertThat(response.text()).contains("finished");
   }
 

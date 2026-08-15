@@ -134,7 +134,7 @@ public final class AgentEngine extends Agent {
         request.messages(),
         ModelRequestOptions.empty(),
         request.cancellationSignal(),
-        toolDefinitions,
+        maxIterations > 1 ? toolDefinitions : List.of(),
         request.attributes());
   }
 
@@ -162,6 +162,10 @@ public final class AgentEngine extends Agent {
               if (request.cancellationSignal().isCancelled()) {
                 throw new CancellationException("run was cancelled");
               }
+              if (iteration + 1 >= maxIterations) {
+                throw new IllegalStateException(
+                    "model returned tool calls after tools were disabled");
+              }
               return executeToolCalls(calls, request, 0, List.of())
                   .thenCompose(
                       results -> {
@@ -175,35 +179,8 @@ public final class AgentEngine extends Agent {
                                 nextMessages,
                                 modelRequest.options(),
                                 modelRequest.cancellationSignal(),
-                                modelRequest.tools(),
+                                iteration + 2 < maxIterations ? toolDefinitions : List.of(),
                                 modelRequest.metadata());
-                        if (iteration + 1 >= maxIterations) {
-                          ModelRequest finalRequest =
-                              new ModelRequest(
-                                  nextMessages,
-                                  modelRequest.options(),
-                                  modelRequest.cancellationSignal(),
-                                  List.of(),
-                                  modelRequest.metadata());
-                          return Objects.requireNonNull(
-                                  client.run(finalRequest),
-                                  "model client response stage must not be null")
-                              .thenApply(
-                                  terminal -> {
-                                    validateToolContinuation(terminal);
-                                    if (!toolCalls(terminal).isEmpty()) {
-                                      throw new IllegalStateException(
-                                          "model returned tool calls after tools were disabled");
-                                    }
-                                    List<Message> finalMessages = new ArrayList<>(outputMessages);
-                                    finalMessages.addAll(terminal.messages());
-                                    return new ToolLoopResult(
-                                        terminal,
-                                        List.copyOf(finalMessages),
-                                        combineUsage(usage, terminal.usage()));
-                                  });
-                        }
-
                         return runToolLoop(
                             client,
                             nextRequest,
