@@ -93,6 +93,9 @@ public final class JacksonSessionSnapshotCodec implements SessionSnapshotCodec {
     } catch (IOException failure) {
       throw new SessionSnapshotParseException("failed to parse session snapshot", failure);
     }
+    if (root == null || root.isMissingNode()) {
+      throw new SessionSnapshotParseException("session snapshot contains no JSON content", null);
+    }
     if (!root.isObject()) {
       throw new SessionSnapshotSchemaException("snapshot must be a JSON object");
     }
