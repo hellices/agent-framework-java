@@ -1,5 +1,7 @@
 package io.github.hellices.agentframework.engine.session;
 
+import com.fasterxml.jackson.core.JsonFactory;
+import com.fasterxml.jackson.core.StreamReadConstraints;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.hellices.agentframework.api.session.SessionSnapshot;
@@ -21,11 +23,20 @@ public final class JacksonSessionSnapshotCodec implements SessionSnapshotCodec {
   private static final int MAX_DECIMAL_TEXT_LENGTH = 1_024;
   private static final int MAX_DECIMAL_SCALE = 10_000;
   private static final int MAX_PAYLOAD_DEPTH = 64;
+  private static final int MAX_JSON_NESTING_DEPTH = 256;
 
   private final ObjectMapper objectMapper;
 
   public JacksonSessionSnapshotCodec() {
-    this(new ObjectMapper());
+    this(
+        new ObjectMapper(
+            JsonFactory.builder()
+                .streamReadConstraints(
+                    StreamReadConstraints.builder()
+                        .maxNestingDepth(MAX_JSON_NESTING_DEPTH)
+                        .maxStringLength(MAX_SNAPSHOT_BYTES)
+                        .build())
+                .build()));
   }
 
   JacksonSessionSnapshotCodec(ObjectMapper objectMapper) {
