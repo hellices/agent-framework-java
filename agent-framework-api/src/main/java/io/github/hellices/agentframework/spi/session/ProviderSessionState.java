@@ -11,9 +11,15 @@ import java.util.Optional;
  * breaks session resumption and parallel execution, because the same provider instance is shared by
  * every session it is configured for.
  *
- * <p>The view exposes exactly one namespace. It never exposes the parent session state map and
- * never reaches another provider's {@code sourceId}, so two providers configured on the same agent
- * cannot read or overwrite each other's slot.
+ * <p>The view is bound to exactly one namespace: it declares no operation that takes another
+ * provider's {@code sourceId} and none that returns the parent session state map, so a provider
+ * written against this view has no way to read or overwrite a sibling's slot and needs no
+ * cross-namespace API to do its job.
+ *
+ * <p>That is a contract statement about this view, not a capability boundary around session state.
+ * The per-run {@code SessionContext} that carries these views is itself public and exposes the
+ * whole session through {@code session().state()}, matching upstream .NET and Python, so
+ * cross-namespace access remains framework plumbing that is simply outside the provider contract.
  */
 public interface ProviderSessionState {
 

@@ -6,6 +6,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.github.hellices.agentframework.api.agent.AgentResponse;
 import io.github.hellices.agentframework.api.agent.AgentResponseUpdate;
+import io.github.hellices.agentframework.api.agent.AgentRun;
 import io.github.hellices.agentframework.api.agent.AgentRunOptions;
 import io.github.hellices.agentframework.api.agent.AgentRunRequest;
 import io.github.hellices.agentframework.api.agent.AgentSession;
@@ -314,6 +315,167 @@ class AgentEngineSessionContextTest {
     assertThat(log).isEmpty();
   }
 
+  @Test
+  void cancellingWhileABeforeRunHookIsPendingSkipsTheModelAndEveryAfterRunHook() {
+    List<String> log = new ArrayList<>();
+    ModelClient client =
+        request -> {
+          log.add("model");
+          return completedFuture(response("hello"));
+        };
+    GatedBeforeRunProvider gated = new GatedBeforeRunProvider("slow", log);
+    AgentEngine engine = AgentEngine.builder().modelClient(client).contextProviders(gated).build();
+
+    AgentRun run = engine.run("hi");
+    run.cancel();
+
+    assertThat(log).containsExactly("before:slow");
+    assertThatThrownBy(() -> run.response().toCompletableFuture().join())
+        .hasCauseInstanceOf(CancellationException.class);
+
+    gated.releaseBeforeRun();
+
+    assertThat(log).containsExactly("before:slow");
+    assertThatThrownBy(() -> run.response().toCompletableFuture().join())
+        .hasCauseInstanceOf(CancellationException.class);
+  }
+
+  @Test
+  void everyProviderHookReceivesOnlyTheStateViewBoundToItsOwnSourceId() {
+    List<String> log = new ArrayList<>();
+    RecordingProvider first = new RecordingProvider("first", log);
+    RecordingProvider second = new RecordingProvider("second", log);
+    AgentEngine engine =
+        AgentEngine.builder()
+            .modelClient(fixedClient("hello"))
+            .contextProviders(first, second)
+            .build();
+
+    runWithSession(engine, new AgentSession("session-1", null, Map.of("first", 3, "second", 5)));
+
+    assertThat(first.observedStateSourceIds).containsExactly("first", "first");
+    assertThat(second.observedStateSourceIds).containsExactly("second", "second");
+    assertThat(first.observedStateValues).containsExactly(3);
+    assertThat(second.observedStateValues).containsExactly(5);
+  }
+
+  @Test
+  void aProviderUsingOnlyItsBoundViewCarriesStateIntoTheNextRunOfTheSameSession() {
+    List<String> log = new ArrayList<>();
+    RecordingProvider provider = new RecordingProvider("memory", log);
+    AgentEngine engine =
+        AgentEngine.builder().modelClient(fixedClient("hello")).contextProviders(provider).build();
+
+    runWithSession(engine, new AgentSession("session-1", null, Map.of()));
+    runWithSession(engine, provider.updatedSessions.get(0));
+
+    assertThat(provider.observedStateValues).containsExactly(0, 1);
+    assertThat(provider.updatedSessions)
+        .extracting(session -> session.state().get("memory"))
+        .containsExactly(1, 2);
+  }
+
+  @Test
+  void streamingBeforeRunFailureFailsTheStreamAndTheResponseWithoutCallingTheModel() {
+    List<String> log = new ArrayList<>();
+    StreamingFakeClient client = new StreamingFakeClient(log);
+    RecordingProvider first = new RecordingProvider("first", log);
+    AgentEngine engine =
+        AgentEngine.builder()
+            .modelClient(client)
+            .contextProviders(first, new FailingBeforeRunProvider("second", log))
+            .build();
+
+    AgentStreamingRun<AgentResponseUpdate> run = engine.runStreaming("hi");
+
+    assertThatThrownBy(() -> consume(run.updates()))
+        .hasRootCauseInstanceOf(IllegalStateException.class)
+        .hasRootCauseMessage("before-run failure");
+    assertThatThrownBy(() -> run.response().toCompletableFuture().join())
+        .hasRootCauseInstanceOf(IllegalStateException.class)
+        .hasRootCauseMessage("before-run failure");
+    assertThat(log).containsExactly("before:first", "before:second");
+    assertThat(client.capturedRequest.get()).isNull();
+    assertThat(first.afterRunContexts).isEmpty();
+  }
+
+  @Test
+  void streamingAfterRunObservesTheFinalResponseThroughTheSharedSessionContext() {
+    List<String> log = new ArrayList<>();
+    RecordingProvider provider = new RecordingProvider("memory", log);
+    AgentEngine engine =
+        AgentEngine.builder()
+            .modelClient(new StreamingFakeClient(log))
+            .contextProviders(provider)
+            .build();
+
+    AgentStreamingRun<AgentResponseUpdate> run = engine.runStreaming("hi");
+    consume(run.updates());
+    AgentResponse response = run.response().toCompletableFuture().join();
+
+    assertThat(provider.responseDuringBeforeRun).isEmpty();
+    assertThat(provider.responseDuringAfterRun).containsSame(response);
+    assertThat(provider.afterRunContexts).containsExactly(provider.beforeRunContexts.get(0));
+  }
+
+  @Test
+  void oneProviderInstanceKeepsTwoStreamingSessionsStateSlotsSeparate() {
+    List<String> log = new ArrayList<>();
+    RecordingProvider provider = new RecordingProvider("memory", log);
+    AgentEngine engine =
+        AgentEngine.builder()
+            .modelClient(new StreamingFakeClient(log))
+            .contextProviders(provider)
+            .build();
+
+    runStreamingWithSession(engine, new AgentSession("session-1", null, Map.of()));
+    runStreamingWithSession(engine, new AgentSession("session-2", null, Map.of("memory", 7)));
+
+    assertThat(provider.observedStateValues).containsExactly(0, 7);
+    assertThat(provider.updatedSessions)
+        .extracting(session -> session.state().get("memory"))
+        .containsExactly(1, 8);
+  }
+
+  @Test
+  void cancellingAStreamingRunWhileABeforeRunHookIsPendingTerminatesTheUpdateSubscriber() {
+    List<String> log = new ArrayList<>();
+    StreamingFakeClient client = new StreamingFakeClient(log);
+    GatedBeforeRunProvider gated = new GatedBeforeRunProvider("slow", log);
+    AgentEngine engine = AgentEngine.builder().modelClient(client).contextProviders(gated).build();
+
+    AgentStreamingRun<AgentResponseUpdate> run = engine.runStreaming("hi");
+    RecordingSubscriber<AgentResponseUpdate> subscriber = subscribe(run.updates());
+
+    run.cancel();
+
+    assertThat(subscriber.completion).isCompletedExceptionally();
+    assertThat(subscriber.terminalFailure.get())
+        .isInstanceOf(CancellationException.class)
+        .hasMessage("run was cancelled");
+    assertThat(subscriber.values).isEmpty();
+    assertThatThrownBy(() -> run.response().toCompletableFuture().join())
+        .hasCauseInstanceOf(CancellationException.class);
+
+    gated.releaseBeforeRun();
+
+    assertThat(log).containsExactly("before:slow");
+    assertThat(client.capturedRequest.get()).isNull();
+  }
+
+  private static void runStreamingWithSession(AgentEngine engine, AgentSession session) {
+    AgentStreamingRun<AgentResponseUpdate> run =
+        engine.runStreaming(
+            new AgentRunRequest(
+                Message.normalize("hi"),
+                session,
+                new AgentRunOptions(),
+                new CancellationSignal(),
+                Map.of()));
+    consume(run.updates());
+    run.response().toCompletableFuture().join();
+  }
+
   private static void runWithSession(AgentEngine engine, AgentSession session) {
     engine
         .run(
@@ -342,38 +504,53 @@ class AgentEngineSessionContextTest {
   }
 
   private static <T> List<T> consume(Flow.Publisher<T> publisher) {
-    List<T> values = new ArrayList<>();
-    CompletableFuture<Void> completion = new CompletableFuture<>();
-    publisher.subscribe(
-        new Flow.Subscriber<>() {
-          @Override
-          public void onSubscribe(Flow.Subscription subscription) {
-            subscription.request(Long.MAX_VALUE);
-          }
+    RecordingSubscriber<T> subscriber = subscribe(publisher);
+    subscriber.completion.join();
+    return subscriber.values;
+  }
 
-          @Override
-          public void onNext(T item) {
-            values.add(item);
-          }
+  /**
+   * Subscribes without waiting for a terminal signal, so a test can assert what a subscriber has
+   * (or has not) been told at a chosen point of a run rather than blocking on it.
+   */
+  private static <T> RecordingSubscriber<T> subscribe(Flow.Publisher<T> publisher) {
+    RecordingSubscriber<T> subscriber = new RecordingSubscriber<>();
+    publisher.subscribe(subscriber);
+    return subscriber;
+  }
 
-          @Override
-          public void onError(Throwable throwable) {
-            completion.completeExceptionally(throwable);
-          }
+  private static final class RecordingSubscriber<T> implements Flow.Subscriber<T> {
+    private final List<T> values = new ArrayList<>();
+    private final CompletableFuture<Void> completion = new CompletableFuture<>();
+    private final AtomicReference<Throwable> terminalFailure = new AtomicReference<>();
 
-          @Override
-          public void onComplete() {
-            completion.complete(null);
-          }
-        });
-    completion.join();
-    return values;
+    @Override
+    public void onSubscribe(Flow.Subscription subscription) {
+      subscription.request(Long.MAX_VALUE);
+    }
+
+    @Override
+    public void onNext(T item) {
+      values.add(item);
+    }
+
+    @Override
+    public void onError(Throwable throwable) {
+      terminalFailure.set(throwable);
+      completion.completeExceptionally(throwable);
+    }
+
+    @Override
+    public void onComplete() {
+      completion.complete(null);
+    }
   }
 
   private static class RecordingProvider implements ContextProvider {
     private final String sourceId;
     private final List<String> log;
     private final List<Integer> observedStateValues = new ArrayList<>();
+    private final List<String> observedStateSourceIds = new ArrayList<>();
     private final List<AgentSession> updatedSessions = new ArrayList<>();
     private final List<SessionContext> beforeRunContexts = new ArrayList<>();
     private final List<SessionContext> afterRunContexts = new ArrayList<>();
@@ -395,6 +572,7 @@ class AgentEngineSessionContextTest {
       log.add("before:" + sourceId);
       beforeRunContexts.add(context);
       responseDuringBeforeRun = context.response();
+      observedStateSourceIds.add(state.sourceId());
       int seen = state.value(Integer.class).orElse(0);
       observedStateValues.add(seen);
       state.set(seen + 1);
@@ -409,8 +587,32 @@ class AgentEngineSessionContextTest {
       log.add("after:" + sourceId);
       afterRunContexts.add(context);
       responseDuringAfterRun = context.response();
+      observedStateSourceIds.add(state.sourceId());
       context.updatedSession().ifPresent(updatedSessions::add);
       return completedFuture(null);
+    }
+  }
+
+  /**
+   * A provider whose {@code beforeRun} stays pending until the test releases it, so a run can be
+   * cancelled while the framework is inside the asynchronous window Task 2 opened between the hooks
+   * and the model call.
+   */
+  private static final class GatedBeforeRunProvider extends RecordingProvider {
+    private final CompletableFuture<Void> gate = new CompletableFuture<>();
+
+    private GatedBeforeRunProvider(String sourceId, List<String> log) {
+      super(sourceId, log);
+    }
+
+    @Override
+    public CompletionStage<Void> beforeRun(SessionContext context, ProviderSessionState state) {
+      super.beforeRun(context, state);
+      return gate.minimalCompletionStage();
+    }
+
+    private void releaseBeforeRun() {
+      gate.complete(null);
     }
   }
 

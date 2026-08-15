@@ -316,6 +316,65 @@ class SessionContextTest {
   }
 
   @Test
+  void sourceBoundContextMessagesKeepAPreExistingOriginSessionId() {
+    AgentSession session = new AgentSession("session-1", null, Map.of());
+    SessionContext sessionContext =
+        new SessionContext(session, List.of(), Map.of(), new CancellationSignal());
+    Message retrievedElsewhere =
+        new Message(
+            Role.USER,
+            List.of(new TextContent("remembered")),
+            new MessageAttribution("Memory", null, "origin-9"),
+            Map.of(),
+            null);
+
+    sessionContext.addContextMessages("memory", List.of(retrievedElsewhere));
+
+    assertThat(sessionContext.contextMessages())
+        .extracting(Message::attribution)
+        .containsExactly(new MessageAttribution("Memory", "memory", "origin-9"));
+  }
+
+  @Test
+  void sourceBoundContextMessagesUseThisRunsSessionIdOnlyWhenNoOriginIsCarried() {
+    AgentSession session = new AgentSession("session-1", null, Map.of());
+    SessionContext sessionContext =
+        new SessionContext(session, List.of(), Map.of(), new CancellationSignal());
+    Message withoutOrigin =
+        new Message(
+            Role.USER,
+            List.of(new TextContent("remembered")),
+            new MessageAttribution("Memory", null, null),
+            Map.of(),
+            null);
+
+    sessionContext.addContextMessages("memory", List.of(withoutOrigin));
+
+    assertThat(sessionContext.contextMessages())
+        .extracting(Message::attribution)
+        .containsExactly(new MessageAttribution("Memory", "memory", "session-1"));
+  }
+
+  @Test
+  void sourceBoundContextMessagesKeepAPreExistingOriginSessionIdOnASessionlessRun() {
+    SessionContext sessionContext =
+        new SessionContext(null, List.of(), Map.of(), new CancellationSignal());
+    Message retrievedElsewhere =
+        new Message(
+            Role.USER,
+            List.of(new TextContent("remembered")),
+            new MessageAttribution("Memory", null, "origin-9"),
+            Map.of(),
+            null);
+
+    sessionContext.addContextMessages("memory", List.of(retrievedElsewhere));
+
+    assertThat(sessionContext.contextMessages())
+        .extracting(Message::attribution)
+        .containsExactly(new MessageAttribution("Memory", "memory", "origin-9"));
+  }
+
+  @Test
   void sourceBoundContextMessagesRejectABlankSourceId() {
     SessionContext sessionContext =
         new SessionContext(null, List.of(), Map.of(), new CancellationSignal());

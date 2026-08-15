@@ -14,7 +14,9 @@ import java.util.concurrent.CompletionStage;
  *
  * <p>All persistent per-session state belongs in the {@link ProviderSessionState} view the engine
  * passes in, which is bound to this provider's {@link #sourceId()}. A provider instance is shared
- * across sessions, so state kept in provider fields would leak between sessions.
+ * across sessions, so state kept in provider fields would leak between sessions. Confining session
+ * state access to that view is part of this contract: reaching another namespace through the shared
+ * {@link SessionContext} is framework plumbing, not provider behaviour.
  *
  * <p>Hooks are asynchronous and must never block: return a stage that completes when the work is
  * done. A hook that fails (returned stage completes exceptionally, or the hook throws) fails the

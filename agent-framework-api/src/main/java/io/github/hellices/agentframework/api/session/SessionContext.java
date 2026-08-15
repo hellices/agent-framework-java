@@ -104,8 +104,10 @@ public final class SessionContext {
    *
    * <p>A message that already carries a {@link MessageAttribution} with a source id keeps it, so a
    * provider can preserve cross-session provenance for memory it retrieved elsewhere. Any other
-   * message is stamped with source type {@code "Context"}, the given {@code sourceId}, and this
-   * run's session id as the origin session id.
+   * message is stamped with the given {@code sourceId} and, when it carries no attribution at all,
+   * source type {@code "Context"}. The origin session id is only filled in from this run's session
+   * when the message does not already carry one, so provenance a provider attached for memory
+   * retrieved from another session survives the stamping.
    *
    * <p>Null handling matches {@link #addContextMessages(List)}: a {@code null} collection is a
    * no-op, and a collection containing a {@code null} entry is rejected in full before anything is
@@ -134,9 +136,17 @@ public final class SessionContext {
    * Returns the source-bound session state view for {@code sourceId}, creating it on first use from
    * {@code session().state().get(sourceId)} and memoizing it for the rest of this run.
    *
-   * <p>This is framework plumbing: the engine resolves one view per configured provider and passes
-   * it to that provider's hooks. The returned view exposes only its own namespace, never the parent
-   * session state map or another provider's namespace.
+   * <p>This is framework lifecycle plumbing, not a provider-facing API: the engine resolves one
+   * view per configured provider and passes it to that provider's hooks, which is the only way a
+   * provider is meant to reach session state. The returned view is bound to one namespace and
+   * exposes no operation that names another namespace or the parent state map.
+   *
+   * <p>This method is not an isolation boundary. It is public because the engine lives in another
+   * module, and this class deliberately also exposes {@link #session()}, whose {@code state()} map
+   * is the whole session state. Code holding a {@code SessionContext} can therefore reach any
+   * namespace, exactly as upstream .NET and Python allow through their session state bags. Calling
+   * it from provider or application code is outside the provider contract; making it unreachable
+   * requires module-level encapsulation (a qualified export), which this build does not have yet.
    *
    * @param sourceId the provider's fixed session-state namespace key; must not be blank
    * @throws IllegalArgumentException if {@code sourceId} is blank
@@ -179,13 +189,18 @@ public final class SessionContext {
     if (attribution != null && attribution.sourceId() != null) {
       return message;
     }
+    String currentSessionId = session == null ? null : session.sessionId();
+    String originSessionId =
+        attribution == null || attribution.originSessionId() == null
+            ? currentSessionId
+            : attribution.originSessionId();
     return new Message(
         message.role(),
         message.content(),
         new MessageAttribution(
             attribution == null ? CONTEXT_SOURCE_TYPE : attribution.sourceType(),
             sourceId,
-            session == null ? null : session.sessionId()),
+            originSessionId),
         message.additionalProperties(),
         message.rawRepresentation());
   }
@@ -217,12 +232,16 @@ public final class SessionContext {
 
   /**
    * Fills the set-once response slot on successful terminal completion of the run this context was
-   * created for. This is framework lifecycle completion invoked by {@code Agent}'s internal run
-   * plumbing (see {@code Agent#completionAction}); it is not intended to be called by provider or
-   * application code.
+   * created for. This is framework lifecycle plumbing invoked by {@code Agent}'s internal run
+   * plumbing (see {@code Agent#completionAction}); it is not part of the provider or application
+   * contract and must not be called from a {@link
+   * io.github.hellices.agentframework.spi.session.ContextProvider} hook. It is public only because
+   * the run plumbing and this type live in different modules; like {@link #providerState(String)}
+   * it is a visibility compromise, not a capability boundary.
    *
    * <p>The slot can only be filled once: any second invocation, whether with the same or a
    * different value, is rejected because the response is set-once for the lifetime of this context.
+   * A provider calling it therefore breaks its own run rather than corrupting another one.
    *
    * @param value the terminal response to store; must not be {@code null}
    * @throws NullPointerException if {@code value} is {@code null}
@@ -237,7 +256,7 @@ public final class SessionContext {
 
   /**
    * The one-namespace state view handed to a provider. It holds only its own source id and value,
-   * so there is no path from a provider's view to the parent session state map or to a sibling
+   * so the view itself offers no operation that names the parent session state map or a sibling
    * provider's namespace.
    */
   private static final class ProviderState implements ProviderSessionState {

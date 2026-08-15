@@ -122,18 +122,25 @@ public final class AgentEngine extends Agent {
     SessionContext sessionContext = context.sessionContext();
     String responseId = UUID.randomUUID().toString();
     Instant createdAt = Instant.now();
+    // Providers make the first model call asynchronous, so the run can be cancelled while a hook is
+    // still pending. Re-checking here keeps the ordinary path aligned with the streaming one: once
+    // the caller observed cancellation, no model request is issued when the hook finally completes.
     CompletionStage<AgentResponse> response =
         beforeRun(sessionContext, request.cancellationSignal())
             .thenCompose(
-                ignored ->
-                    runToolLoop(
-                        selectedClient,
-                        modelInvoker,
-                        toModelRequest(request, sessionContext),
-                        request,
-                        0,
-                        List.of(),
-                        null))
+                ignored -> {
+                  if (request.cancellationSignal().isCancelled()) {
+                    throw new CancellationException("run was cancelled");
+                  }
+                  return runToolLoop(
+                      selectedClient,
+                      modelInvoker,
+                      toModelRequest(request, sessionContext),
+                      request,
+                      0,
+                      List.of(),
+                      null);
+                })
             .thenApply(
                 result -> {
                   if (request.cancellationSignal().isCancelled()) {
@@ -171,6 +178,7 @@ public final class AgentEngine extends Agent {
     Flow.Publisher<ModelResponseUpdate> modelUpdates =
         deferUntil(
             beforeRun(sessionContext, request.cancellationSignal()),
+            request.cancellationSignal(),
             () -> {
               if (request.cancellationSignal().isCancelled()) {
                 throw new CancellationException("run was cancelled");
@@ -453,13 +461,34 @@ public final class AgentEngine extends Agent {
    * ordinary path. A failed gate, or a failure while the source publisher is being created, is
    * delivered as a terminal {@code onError} after the mandatory {@code onSubscribe}, which the
    * run's response stage then reports.
+   *
+   * <p>Cancellation races the gate rather than waiting for it. A hook still pending when the run is
+   * cancelled would otherwise leave an already-subscribed consumer without any signal until the
+   * hook completed, so the cancellation terminates the subscription immediately and the model is
+   * never called even if the hook completes afterwards. The listener is removed as soon as either
+   * side wins, so a completed run keeps no registration on the run's cancellation signal.
    */
   private static Flow.Publisher<ModelResponseUpdate> deferUntil(
-      CompletionStage<Void> gate, Supplier<Flow.Publisher<ModelResponseUpdate>> source) {
+      CompletionStage<Void> gate,
+      CancellationSignal cancellationSignal,
+      Supplier<Flow.Publisher<ModelResponseUpdate>> source) {
     return subscriber -> {
       Objects.requireNonNull(subscriber, "subscriber must not be null");
+      CompletableFuture<Void> started = new CompletableFuture<>();
+      Runnable removeCancellationListener =
+          cancellationSignal.onCancel(
+              () -> started.completeExceptionally(new CancellationException("run was cancelled")));
       gate.whenComplete(
           (ignored, failure) -> {
+            if (failure == null) {
+              started.complete(null);
+            } else {
+              started.completeExceptionally(failure);
+            }
+          });
+      started.whenComplete(
+          (ignored, failure) -> {
+            removeCancellationListener.run();
             Flow.Publisher<ModelResponseUpdate> publisher = null;
             Throwable terminalFailure = unwrap(failure);
             if (terminalFailure == null) {
