@@ -174,10 +174,13 @@ public final class JacksonSessionSnapshotCodec implements SessionSnapshotCodec {
     } else if (value instanceof Map<?, ?> map) {
       Map<String, Object> object = new java.util.TreeMap<>();
       map.forEach(
-          (key, item) ->
-              object.put(
-                  Objects.requireNonNull((String) key, "payload key must not be null"),
-                  wireValue(item)));
+          (key, item) -> {
+            if (!(key instanceof String text)) {
+              throw new SessionSnapshotSchemaException(
+                  "snapshot payload object keys must be strings");
+            }
+            object.put(text, wireValue(item));
+          });
       encoded.put("kind", "object");
       encoded.put("value", object);
     } else {

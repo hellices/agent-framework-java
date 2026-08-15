@@ -14,6 +14,7 @@ public record SessionStateEntry(String typeId, int codecVersion, Object payload)
 
   @Override
   public Object payload() {
+    // Null-tolerant map/list wrappers are immutable, but static analysis cannot prove that here.
     return SessionStateValues.immutableCopy(payload);
   }
 }
