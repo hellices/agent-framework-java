@@ -1,7 +1,9 @@
 package io.github.hellices.agentframework.api.agent;
 
+import io.github.hellices.agentframework.api.session.SessionContext;
 import java.util.Objects;
 import java.util.UUID;
+import java.util.function.BiConsumer;
 
 public abstract class Agent {
 
@@ -42,8 +44,12 @@ public abstract class Agent {
     if (session != null) {
       validateSessionCompatibility(session);
     }
-    return runInternal(
-        new AgentRunContext(this, session, normalizedRequest.attributes()), normalizedRequest);
+    SessionContext sessionContext = newSessionContext(normalizedRequest);
+    AgentRun run =
+        runInternal(
+            new AgentRunContext(this, session, normalizedRequest.attributes(), sessionContext),
+            normalizedRequest);
+    return run.withCompletion(completionAction(sessionContext));
   }
 
   public final AgentStreamingRun<AgentResponseUpdate> runStreaming(String input) {
@@ -57,8 +63,12 @@ public abstract class Agent {
     if (session != null) {
       validateSessionCompatibility(session);
     }
-    return runStreamingInternal(
-        new AgentRunContext(this, session, normalizedRequest.attributes()), normalizedRequest);
+    SessionContext sessionContext = newSessionContext(normalizedRequest);
+    AgentStreamingRun<AgentResponseUpdate> run =
+        runStreamingInternal(
+            new AgentRunContext(this, session, normalizedRequest.attributes(), sessionContext),
+            normalizedRequest);
+    return run.withCompletion(completionAction(sessionContext));
   }
 
   protected void validateSessionCompatibility(AgentSession session) {
@@ -69,4 +79,29 @@ public abstract class Agent {
 
   protected abstract AgentStreamingRun<AgentResponseUpdate> runStreamingInternal(
       AgentRunContext context, AgentRunRequest request);
+
+  private static SessionContext newSessionContext(AgentRunRequest request) {
+    return new SessionContext(
+        request.session(), request.messages(), request.attributes(), request.cancellationSignal());
+  }
+
+  /**
+   * Builds the success-only completion action that fills the run's {@link SessionContext} response
+   * slot. Failed or cancelled runs never populate the response slot, so callers can rely on {@code
+   * sessionContext.response()} being present exactly when the run's terminal response stage
+   * completed without error. This action is attached via {@link AgentRun#withCompletion} / {@link
+   * AgentStreamingRun#withCompletion}, which expose a response stage derived from it, so every
+   * {@code Agent} subclass (including custom ones) gets the same completion semantics regardless of
+   * how {@code runInternal}/{@code runStreamingInternal} are implemented, and any exception this
+   * action throws (for example a pre-filled or already-completed response slot) propagates through
+   * the returned run's response stage instead of being swallowed.
+   */
+  private static BiConsumer<AgentResponse, Throwable> completionAction(
+      SessionContext sessionContext) {
+    return (value, failure) -> {
+      if (failure == null) {
+        sessionContext.complete(value);
+      }
+    };
+  }
 }

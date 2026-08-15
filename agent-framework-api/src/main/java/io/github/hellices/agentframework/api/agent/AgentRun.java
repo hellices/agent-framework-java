@@ -4,6 +4,7 @@ import java.util.Objects;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.function.BiConsumer;
 
 public final class AgentRun {
 
@@ -40,11 +41,37 @@ public final class AgentRun {
     this.cancellationAction = this.cancellationSignal::cancel;
   }
 
+  private AgentRun(
+      CompletionStage<AgentResponse> response,
+      CancellationSignal cancellationSignal,
+      Runnable cancellationAction) {
+    this.response = Objects.requireNonNull(response, "response must not be null");
+    this.cancellationSignal =
+        Objects.requireNonNull(cancellationSignal, "cancellationSignal must not be null");
+    this.cancellationAction =
+        Objects.requireNonNull(cancellationAction, "cancellationAction must not be null");
+  }
+
   public CompletionStage<AgentResponse> response() {
     return response;
   }
 
   public void cancel() {
     cancellationAction.run();
+  }
+
+  /**
+   * Package-private copy used by {@link Agent} to observe run completion without losing the
+   * original cancellation wiring. The returned run's exposed response stage is derived via {@link
+   * CompletionStage#whenComplete(BiConsumer)}, so joining it can only return once {@code
+   * completion} has finished running: any exception {@code completion} throws (including {@code
+   * SessionContext} lifecycle violations such as a pre-filled or double-completed response slot)
+   * propagates through the returned run's response stage instead of being swallowed. The original
+   * {@code cancellationAction} is preserved unchanged, so {@link #cancel()} keeps cancelling the
+   * same underlying signal.
+   */
+  AgentRun withCompletion(BiConsumer<? super AgentResponse, ? super Throwable> completion) {
+    Objects.requireNonNull(completion, "completion must not be null");
+    return new AgentRun(response.whenComplete(completion), cancellationSignal, cancellationAction);
   }
 }
