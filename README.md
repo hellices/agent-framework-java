@@ -156,12 +156,12 @@ The repository has a verified foundation and a runnable deterministic single-age
 - CI on the `arc-java-build` ARC scale set with a fork-safe verification path
 - 244 requirements derived from a pinned upstream snapshot
 - Four published product modules with a compiled and tested surface
-- Deterministic `AgentEngine` run and function-tool loops
+- Deterministic `AgentEngine` run and function-tool loops, shared by ordinary and streaming runs
 - Runnable standalone `Agent.run(...)` sample with explicit model-client assembly
 
 **Not started**
 
-- Session persistence, interceptor pipeline, and streaming tool execution
+- Session persistence, interceptor pipeline, and tool approval
 - Workflows, hosting, protocol adapters, and direct provider integrations
 
 The next implementation stages add session restoration, provider adapters, and host integration

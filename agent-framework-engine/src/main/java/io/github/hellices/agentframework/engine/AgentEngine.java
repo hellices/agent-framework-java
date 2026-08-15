@@ -10,20 +10,16 @@ import io.github.hellices.agentframework.api.agent.AgentRunRequest;
 import io.github.hellices.agentframework.api.agent.AgentSession;
 import io.github.hellices.agentframework.api.agent.AgentStreamingRun;
 import io.github.hellices.agentframework.api.agent.CancellationSignal;
-import io.github.hellices.agentframework.api.message.Content;
 import io.github.hellices.agentframework.api.message.Message;
-import io.github.hellices.agentframework.api.message.Role;
 import io.github.hellices.agentframework.api.message.ToolCallContent;
-import io.github.hellices.agentframework.api.message.ToolResultContent;
 import io.github.hellices.agentframework.api.message.Usage;
 import io.github.hellices.agentframework.api.session.SessionContext;
 import io.github.hellices.agentframework.api.tool.FunctionTool;
-import io.github.hellices.agentframework.api.tool.ToolArguments;
-import io.github.hellices.agentframework.api.tool.ToolContext;
-import io.github.hellices.agentframework.api.tool.ToolDefinition;
-import io.github.hellices.agentframework.api.tool.ToolResult;
 import io.github.hellices.agentframework.engine.internal.model.ModelResponseMapper;
+import io.github.hellices.agentframework.engine.internal.model.ResponseIdentity;
 import io.github.hellices.agentframework.engine.internal.session.SessionCoordinator;
+import io.github.hellices.agentframework.engine.internal.tool.StreamingToolLoopPublisher;
+import io.github.hellices.agentframework.engine.internal.tool.ToolLoopPolicy;
 import io.github.hellices.agentframework.engine.session.InMemoryHistoryProvider;
 import io.github.hellices.agentframework.spi.model.ContinuationModelClient;
 import io.github.hellices.agentframework.spi.model.ModelCatalog;
@@ -53,18 +49,17 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Flow;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 import java.util.function.Supplier;
 
 public final class AgentEngine extends Agent {
 
   private final ModelClient modelClient;
-  private final Map<String, FunctionTool> tools;
-  private final List<ToolDefinition> toolDefinitions;
+  private final ToolLoopPolicy toolLoop;
   private final List<ProviderBinding> configuredProviders;
   private final DefaultHistory defaultHistory;
   private final SessionCoordinator sessionCoordinator;
-  private final int maxIterations;
 
   AgentEngine(
       String id,
@@ -77,19 +72,10 @@ public final class AgentEngine extends Agent {
       int maxIterations) {
     super(id, name, description);
     this.modelClient = Objects.requireNonNull(modelClient, "modelClient must not be null");
-    Map<String, FunctionTool> indexedTools = new LinkedHashMap<>();
-    for (FunctionTool tool : tools) {
-      String toolName = tool.definition().name();
-      if (indexedTools.putIfAbsent(toolName, tool) != null) {
-        throw new IllegalArgumentException("duplicate tool name: " + toolName);
-      }
-    }
-    this.tools = Map.copyOf(indexedTools);
-    this.toolDefinitions = indexedTools.values().stream().map(FunctionTool::definition).toList();
+    this.toolLoop = new ToolLoopPolicy(tools, maxIterations);
     this.configuredProviders = bindContextProviders(contextProviders);
     this.defaultHistory = bindDefaultHistory(this.configuredProviders);
     this.sessionCoordinator = sessionCoordinator;
-    this.maxIterations = maxIterations;
   }
 
   /**
@@ -255,7 +241,7 @@ public final class AgentEngine extends Agent {
    */
   @Override
   protected AgentRun runInternal(AgentRunContext context, AgentRunRequest request) {
-    if (!tools.isEmpty() && request.options().continuationToken().isPresent()) {
+    if (toolLoop.hasTools() && request.options().continuationToken().isPresent()) {
       throw new UnsupportedOperationException("continuation tool execution is not supported");
     }
     ModelClient selectedClient = request.options().resolveModelClient(modelClient);
@@ -350,28 +336,41 @@ public final class AgentEngine extends Agent {
    * happen after the session was loaded and every {@code beforeRun} hook completed, so publisher
    * creation is deferred and the same failures are instead delivered to the update subscriber as a
    * terminal {@code onError}, which the run's response stage reports. Failures that do not depend
-   * on the gate (unsupported tools, a client lacking the streaming or streaming-continuation
-   * capability) stay synchronous in both shapes. Which shape applies follows the same rule {@link
-   * #runInternal} documents: a run that carries a session always has a gate.
+   * on the gate (a continuation token combined with tools, a client lacking the streaming or
+   * streaming-continuation capability) stay synchronous in both shapes. Which shape applies follows
+   * the same rule {@link #runInternal} documents: a run that carries a session always has a gate.
+   *
+   * <p>A run with tools streams through {@link StreamingToolLoopPublisher}, which turns the same
+   * tool loop the ordinary run executes into one update stream: every model call's updates are
+   * forwarded live, each tool result is reported as an update the engine synthesised, and the whole
+   * loop assembles into the single response an equivalent ordinary run returns (TOOL-015). A run
+   * without tools keeps mapping the single model stream directly, so nothing about it changed.
    */
   @Override
   protected AgentStreamingRun<AgentResponseUpdate> runStreamingInternal(
       AgentRunContext context, AgentRunRequest request) {
-    if (!tools.isEmpty()) {
-      throw new UnsupportedOperationException("streaming tool execution is not supported");
+    if (toolLoop.hasTools() && request.options().continuationToken().isPresent()) {
+      throw new UnsupportedOperationException("continuation tool execution is not supported");
     }
     ModelClient selectedClient = request.options().resolveModelClient(modelClient);
     Function<ModelRequest, Flow.Publisher<ModelResponseUpdate>> streamingInvoker =
         resolveStreamingInvoker(selectedClient, request);
     SessionContext sessionContext = context.sessionContext();
-    String responseId = UUID.randomUUID().toString();
-    Instant createdAt = Instant.now();
+    ResponseIdentity identity =
+        new ResponseIdentity(id(), UUID.randomUUID().toString(), name(), Instant.now());
     CompletionStage<Void> gate = runGate(sessionContext, request.cancellationSignal());
+    AtomicReference<ModelRequest> firstRequest = new AtomicReference<>();
+    Supplier<Flow.Publisher<ModelResponseUpdate>> firstStream =
+        () -> {
+          ModelRequest modelRequest = toModelRequest(request, sessionContext);
+          firstRequest.set(modelRequest);
+          return Objects.requireNonNull(
+              streamingInvoker.apply(modelRequest),
+              "model client update publisher must not be null");
+        };
     Flow.Publisher<ModelResponseUpdate> modelUpdates =
         gate == null
-            ? Objects.requireNonNull(
-                streamingInvoker.apply(toModelRequest(request, sessionContext)),
-                "model client update publisher must not be null")
+            ? firstStream.get()
             : deferUntil(
                 gate,
                 request.cancellationSignal(),
@@ -379,20 +378,40 @@ public final class AgentEngine extends Agent {
                   if (request.cancellationSignal().isCancelled()) {
                     throw new CancellationException("run was cancelled");
                   }
-                  return Objects.requireNonNull(
-                      streamingInvoker.apply(toModelRequest(request, sessionContext)),
-                      "model client update publisher must not be null");
+                  return firstStream.get();
                 });
     Flow.Publisher<AgentResponseUpdate> agentUpdates =
-        subscriber ->
-            modelUpdates.subscribe(
-                new MappingSubscriber(subscriber, id(), responseId, name(), createdAt));
+        toolLoop.hasTools()
+            ? new StreamingToolLoopPublisher(
+                () -> modelUpdates,
+                firstRequest::get,
+                streamingInvoker,
+                toolLoop,
+                request,
+                identity)
+            : subscriber ->
+                modelUpdates.subscribe(
+                    new MappingSubscriber(
+                        subscriber,
+                        identity.agentId(),
+                        identity.responseId(),
+                        identity.authorName(),
+                        identity.createdAt()));
     return AgentStreamingRun.fromUpdates(
         agentUpdates,
         request.cancellationSignal(),
         () ->
             new AgentResponse(
-                id(), responseId, null, name(), createdAt, null, List.of(), null, Map.of(), null));
+                identity.agentId(),
+                identity.responseId(),
+                null,
+                identity.authorName(),
+                identity.createdAt(),
+                null,
+                List.of(),
+                null,
+                Map.of(),
+                null));
   }
 
   /**
@@ -473,7 +492,7 @@ public final class AgentEngine extends Agent {
         messages,
         ModelRequestOptions.empty(),
         request.cancellationSignal(),
-        maxIterations > 1 ? toolDefinitions : List.of(),
+        toolLoop.toolsForIteration(0),
         request.attributes());
   }
 
@@ -490,11 +509,11 @@ public final class AgentEngine extends Agent {
     return Objects.requireNonNull(responseStage, "model client response stage must not be null")
         .thenCompose(
             response -> {
-              validateToolContinuation(response);
+              toolLoop.validateContinuation(response);
               List<Message> outputMessages = new ArrayList<>(accumulatedMessages);
               outputMessages.addAll(response.messages());
               Usage usage = combineUsage(accumulatedUsage, response.usage());
-              List<ToolCallContent> calls = toolCalls(response);
+              List<ToolCallContent> calls = ToolLoopPolicy.toolCalls(response);
               if (calls.isEmpty()) {
                 return CompletableFuture.completedFuture(
                     new ToolLoopResult(response, List.copyOf(outputMessages), usage));
@@ -502,25 +521,16 @@ public final class AgentEngine extends Agent {
               if (request.cancellationSignal().isCancelled()) {
                 throw new CancellationException("run was cancelled");
               }
-              if (iteration + 1 >= maxIterations) {
-                throw new IllegalStateException(
-                    "model returned tool calls after tools were disabled");
-              }
-              return executeToolCalls(calls, request, 0, List.of())
+              toolLoop.requireIterationBudget(iteration);
+              return toolLoop
+                  .executeToolCalls(calls, request)
                   .thenCompose(
                       results -> {
-                        List<Message> nextMessages = new ArrayList<>(modelRequest.messages());
-                        nextMessages.addAll(response.messages());
-                        Message toolResultMessage = new Message(Role.TOOL, results);
-                        nextMessages.add(toolResultMessage);
-                        outputMessages.add(toolResultMessage);
+                        Message toolResultMessage = ToolLoopPolicy.toolResultMessage(results);
                         ModelRequest nextRequest =
-                            new ModelRequest(
-                                nextMessages,
-                                modelRequest.options(),
-                                modelRequest.cancellationSignal(),
-                                iteration + 2 < maxIterations ? toolDefinitions : List.of(),
-                                modelRequest.metadata());
+                            toolLoop.nextRequest(
+                                modelRequest, response.messages(), toolResultMessage, iteration);
+                        outputMessages.add(toolResultMessage);
                         return runToolLoop(
                             client,
                             modelInvoker,
@@ -531,44 +541,6 @@ public final class AgentEngine extends Agent {
                             usage);
                       });
             });
-  }
-
-  private void validateToolContinuation(ModelResponse response) {
-    if (!tools.isEmpty() && response.continuationToken() != null) {
-      throw new UnsupportedOperationException(
-          "model continuation with tool execution is not supported");
-    }
-  }
-
-  private CompletionStage<List<Content>> executeToolCalls(
-      List<ToolCallContent> calls,
-      AgentRunRequest request,
-      int index,
-      List<Content> accumulatedResults) {
-    if (index >= calls.size()) {
-      return CompletableFuture.completedFuture(accumulatedResults);
-    }
-    if (request.cancellationSignal().isCancelled()) {
-      throw new CancellationException("run was cancelled");
-    }
-    ToolCallContent call = calls.get(index);
-    FunctionTool tool = tools.get(call.name());
-    if (tool == null) {
-      throw new IllegalStateException("unknown tool call: " + call.name());
-    }
-    CompletionStage<ToolResult> resultStage =
-        Objects.requireNonNull(
-            tool.execute(
-                new ToolArguments(call.arguments()),
-                new ToolContext(request.cancellationSignal(), request.attributes())),
-            "tool handler response stage must not be null");
-    return resultStage.thenCompose(
-        result -> {
-          List<Content> nextResults = new ArrayList<>(accumulatedResults);
-          nextResults.add(
-              new ToolResultContent(call.callId(), call.name(), result.content(), result.error()));
-          return executeToolCalls(calls, request, index + 1, List.copyOf(nextResults));
-        });
   }
 
   private static Usage combineUsage(Usage accumulated, Usage update) {
@@ -607,18 +579,6 @@ public final class AgentEngine extends Agent {
         || value instanceof Short
         || value instanceof Integer
         || value instanceof Long;
-  }
-
-  private static List<ToolCallContent> toolCalls(ModelResponse response) {
-    List<ToolCallContent> calls = new ArrayList<>();
-    for (Message message : response.messages()) {
-      for (Content content : message.content()) {
-        if (content instanceof ToolCallContent call) {
-          calls.add(call);
-        }
-      }
-    }
-    return List.copyOf(calls);
   }
 
   private record ToolLoopResult(
