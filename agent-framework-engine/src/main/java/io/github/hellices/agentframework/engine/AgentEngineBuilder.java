@@ -3,6 +3,7 @@ package io.github.hellices.agentframework.engine;
 import io.github.hellices.agentframework.api.agent.AgentBuilder;
 import io.github.hellices.agentframework.api.tool.FunctionTool;
 import io.github.hellices.agentframework.spi.model.ModelClient;
+import io.github.hellices.agentframework.spi.session.ContextProvider;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -13,6 +14,7 @@ public final class AgentEngineBuilder implements AgentBuilder {
   private String description;
   private ModelClient modelClient;
   private final List<FunctionTool> tools = new ArrayList<>();
+  private final List<ContextProvider> contextProviders = new ArrayList<>();
   private int maxIterations = 5;
 
   AgentEngineBuilder() {}
@@ -53,6 +55,31 @@ public final class AgentEngineBuilder implements AgentBuilder {
     return this;
   }
 
+  /**
+   * Configures the context providers that participate in every run of the built agent, in
+   * declaration order: {@code beforeRun} hooks run in this order before the first model call, and
+   * {@code afterRun} hooks run in reverse order after a successful run.
+   *
+   * <p>Each provider's {@link ContextProvider#sourceId()} is read once when the agent is built and
+   * fixes the session state namespace it owns for the agent's lifetime. A blank source id or a
+   * source id shared by two providers is rejected at build time, because both would let one
+   * provider silently read or overwrite another provider's state.
+   *
+   * @param providers the providers to add, in order; may be {@code null}
+   * @throws IllegalArgumentException if {@code providers} contains a {@code null} entry
+   */
+  public AgentEngineBuilder contextProviders(ContextProvider... providers) {
+    if (providers != null) {
+      for (ContextProvider provider : providers) {
+        if (provider == null) {
+          throw new IllegalArgumentException("contextProviders must not contain null entries");
+        }
+        this.contextProviders.add(provider);
+      }
+    }
+    return this;
+  }
+
   @Override
   public AgentEngineBuilder maxIterations(int maxIterations) {
     if (maxIterations < 1) {
@@ -67,6 +94,7 @@ public final class AgentEngineBuilder implements AgentBuilder {
     if (modelClient == null) {
       throw new IllegalStateException("modelClient must be configured");
     }
-    return new AgentEngine(id, name, description, modelClient, tools, maxIterations);
+    return new AgentEngine(
+        id, name, description, modelClient, tools, contextProviders, maxIterations);
   }
 }

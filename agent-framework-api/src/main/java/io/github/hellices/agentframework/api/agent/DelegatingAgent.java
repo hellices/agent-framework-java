@@ -1,6 +1,8 @@
 package io.github.hellices.agentframework.api.agent;
 
+import io.github.hellices.agentframework.api.session.SessionContext;
 import java.util.Objects;
+import java.util.concurrent.CompletionStage;
 
 public abstract class DelegatingAgent extends Agent {
 
@@ -32,5 +34,14 @@ public abstract class DelegatingAgent extends Agent {
   protected AgentStreamingRun<AgentResponseUpdate> runStreamingInternal(
       AgentRunContext context, AgentRunRequest request) {
     return delegate.runStreamingInternal(context, request);
+  }
+
+  /**
+   * Delegates the post-run lifecycle seam so a wrapped agent's own post-run work (for example the
+   * engine's context provider {@code afterRun} pipeline) still runs when the wrapper owns the run.
+   */
+  @Override
+  protected CompletionStage<Void> afterRun(SessionContext sessionContext) {
+    return delegate.afterRun(sessionContext);
   }
 }

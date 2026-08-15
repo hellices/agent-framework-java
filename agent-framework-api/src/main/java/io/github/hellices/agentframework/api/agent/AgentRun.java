@@ -72,6 +72,20 @@ public final class AgentRun {
    */
   AgentRun withCompletion(BiConsumer<? super AgentResponse, ? super Throwable> completion) {
     Objects.requireNonNull(completion, "completion must not be null");
-    return new AgentRun(response.whenComplete(completion), cancellationSignal, cancellationAction);
+    return withResponse(response.whenComplete(completion));
+  }
+
+  /**
+   * Package-private copy used by {@link Agent} to expose a response stage it derived from this
+   * run's own stage (session context completion followed by the {@code afterRun} lifecycle seam),
+   * while keeping the original cancellation wiring. Because the derived stage is the one callers
+   * observe, every lifecycle step composed into it has finished before a caller's join returns, and
+   * any failure it carries is surfaced instead of swallowed.
+   */
+  AgentRun withResponse(CompletionStage<AgentResponse> derivedResponse) {
+    return new AgentRun(
+        Objects.requireNonNull(derivedResponse, "response must not be null"),
+        cancellationSignal,
+        cancellationAction);
   }
 }

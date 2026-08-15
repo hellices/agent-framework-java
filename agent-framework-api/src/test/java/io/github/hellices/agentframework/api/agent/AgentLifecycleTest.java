@@ -398,6 +398,91 @@ class AgentLifecycleTest {
     assertThat(actionFinished.get()).isTrue();
   }
 
+  @Test
+  void afterRunSeamObservesTheFilledResponseSlotBeforeTheRunResponseCompletes() {
+    AfterRunSeamAgent agent = new AfterRunSeamAgent("seam-agent");
+
+    AgentResponse response = agent.run("hello").response().toCompletableFuture().join();
+
+    assertThat(agent.afterRunInvocations).isEqualTo(1);
+    assertThat(agent.afterRunSawResponse).isSameAs(response);
+    assertThat(agent.contexts.get(0).response()).contains(response);
+  }
+
+  @Test
+  void streamingAfterRunSeamRunsBeforeTheStreamingResponseCompletes() {
+    AfterRunSeamAgent agent = new AfterRunSeamAgent("seam-agent");
+
+    AgentStreamingRun<AgentResponseUpdate> run = agent.runStreaming("hello");
+    assertThat(agent.afterRunInvocations).isZero();
+    consume(run.updates());
+    AgentResponse response = run.response().toCompletableFuture().join();
+
+    assertThat(agent.afterRunInvocations).isEqualTo(1);
+    assertThat(agent.afterRunSawResponse).isSameAs(response);
+  }
+
+  @Test
+  void afterRunSeamIsNotInvokedWhenTheRunFails() {
+    FailingAfterRunSeamAgent agent = new FailingAfterRunSeamAgent("seam-agent", false);
+
+    assertThatThrownBy(() -> agent.run("hello").response().toCompletableFuture().join())
+        .hasCauseInstanceOf(IllegalStateException.class)
+        .cause()
+        .hasMessage("model failure");
+    assertThat(agent.afterRunInvocations).isZero();
+  }
+
+  @Test
+  void afterRunSeamIsNotInvokedWhenTheRunIsCancelled() {
+    CompletableFuture<AgentResponse> manualSource = new CompletableFuture<>();
+    ManualCompletionAfterRunSeamAgent agent =
+        new ManualCompletionAfterRunSeamAgent("seam-agent", manualSource);
+
+    AgentRun run = agent.run("hello");
+    run.cancel();
+
+    assertThatThrownBy(() -> run.response().toCompletableFuture().join())
+        .hasCauseInstanceOf(CancellationException.class);
+    assertThat(agent.afterRunInvocations).isZero();
+  }
+
+  @Test
+  void afterRunSeamFailurePropagatesThroughTheRunResponse() {
+    FailingAfterRunSeamAgent agent = new FailingAfterRunSeamAgent("seam-agent", true);
+
+    AgentRun run = agent.run("hello");
+
+    assertThatThrownBy(() -> run.response().toCompletableFuture().join())
+        .hasCauseInstanceOf(IllegalStateException.class)
+        .cause()
+        .hasMessage("after-run failure");
+    // The response slot is still filled: the run itself succeeded and only the lifecycle
+    // continuation failed, so the failure must be surfaced rather than swallowed.
+    assertThat(agent.contexts.get(0).response()).isPresent();
+  }
+
+  @Test
+  void afterRunSeamNullStageFailsTheRun() {
+    NullAfterRunSeamAgent agent = new NullAfterRunSeamAgent("seam-agent");
+
+    assertThatThrownBy(() -> agent.run("hello").response().toCompletableFuture().join())
+        .hasCauseInstanceOf(NullPointerException.class)
+        .cause()
+        .hasMessage("afterRun stage must not be null");
+  }
+
+  @Test
+  void delegatingAgentDelegatesTheAfterRunSeamToItsDelegate() {
+    AfterRunSeamAgent delegate = new AfterRunSeamAgent("seam-agent");
+    Agent wrapper = new DelegatingAgent(delegate) {};
+
+    AgentResponse response = wrapper.run("hello").response().toCompletableFuture().join();
+
+    assertThat(delegate.afterRunInvocations).isEqualTo(1);
+    assertThat(delegate.afterRunSawResponse).isSameAs(response);
+  }
+
   private static void awaitLatch(CountDownLatch latch) {
     try {
       assertThat(latch.await(5, TimeUnit.SECONDS)).isTrue();
@@ -603,6 +688,92 @@ class AgentLifecycleTest {
     protected AgentRun runInternal(AgentRunContext context, AgentRunRequest request) {
       lastContext = context;
       return super.runInternal(context, request);
+    }
+  }
+
+  private static class AfterRunSeamAgent extends TestAgent {
+    final List<SessionContext> contexts = new ArrayList<>();
+    int afterRunInvocations;
+    AgentResponse afterRunSawResponse;
+
+    private AfterRunSeamAgent(String id) {
+      super(id);
+    }
+
+    @Override
+    protected AgentRun runInternal(AgentRunContext context, AgentRunRequest request) {
+      contexts.add(context.sessionContext());
+      return super.runInternal(context, request);
+    }
+
+    @Override
+    protected AgentStreamingRun<AgentResponseUpdate> runStreamingInternal(
+        AgentRunContext context, AgentRunRequest request) {
+      contexts.add(context.sessionContext());
+      return super.runStreamingInternal(context, request);
+    }
+
+    @Override
+    protected CompletionStage<Void> afterRun(SessionContext sessionContext) {
+      afterRunInvocations++;
+      afterRunSawResponse = sessionContext.response().orElse(null);
+      return CompletableFuture.completedFuture(null);
+    }
+  }
+
+  private static final class FailingAfterRunSeamAgent extends AfterRunSeamAgent {
+    private final boolean runSucceeds;
+
+    private FailingAfterRunSeamAgent(String id, boolean runSucceeds) {
+      super(id);
+      this.runSucceeds = runSucceeds;
+    }
+
+    @Override
+    protected AgentRun runInternal(AgentRunContext context, AgentRunRequest request) {
+      if (runSucceeds) {
+        return super.runInternal(context, request);
+      }
+      contexts.add(context.sessionContext());
+      CompletableFuture<AgentResponse> failed = new CompletableFuture<>();
+      failed.completeExceptionally(new IllegalStateException("model failure"));
+      return new AgentRun(failed, request.cancellationSignal());
+    }
+
+    @Override
+    protected CompletionStage<Void> afterRun(SessionContext sessionContext) {
+      super.afterRun(sessionContext);
+      CompletableFuture<Void> failed = new CompletableFuture<>();
+      failed.completeExceptionally(new IllegalStateException("after-run failure"));
+      return failed;
+    }
+  }
+
+  private static final class NullAfterRunSeamAgent extends AfterRunSeamAgent {
+    private NullAfterRunSeamAgent(String id) {
+      super(id);
+    }
+
+    @Override
+    protected CompletionStage<Void> afterRun(SessionContext sessionContext) {
+      super.afterRun(sessionContext);
+      return null;
+    }
+  }
+
+  private static final class ManualCompletionAfterRunSeamAgent extends AfterRunSeamAgent {
+    private final CompletableFuture<AgentResponse> manualSource;
+
+    private ManualCompletionAfterRunSeamAgent(
+        String id, CompletableFuture<AgentResponse> manualSource) {
+      super(id);
+      this.manualSource = manualSource;
+    }
+
+    @Override
+    protected AgentRun runInternal(AgentRunContext context, AgentRunRequest request) {
+      contexts.add(context.sessionContext());
+      return new AgentRun(manualSource, request.cancellationSignal());
     }
   }
 

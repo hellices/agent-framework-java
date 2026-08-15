@@ -154,9 +154,20 @@ public final class AgentStreamingRun<T> {
   AgentStreamingRun<T> withCompletion(
       BiConsumer<? super AgentResponse, ? super Throwable> completion) {
     Objects.requireNonNull(completion, "completion must not be null");
+    return withResponse(response.whenComplete(completion));
+  }
+
+  /**
+   * Package-private copy used by {@link Agent} to expose a response stage it derived from this
+   * run's own stage (session context completion followed by the {@code afterRun} lifecycle seam),
+   * while keeping the original update publisher, cancellation wiring, and failure action. The
+   * updates publisher is untouched, so update delivery keeps its existing ordering; only the
+   * caller-visible response stage waits for the lifecycle steps.
+   */
+  AgentStreamingRun<T> withResponse(CompletionStage<AgentResponse> derivedResponse) {
     return new AgentStreamingRun<>(
         updates,
-        response.whenComplete(completion),
+        Objects.requireNonNull(derivedResponse, "response must not be null"),
         cancellationSignal,
         cancellationAction,
         failureAction);
