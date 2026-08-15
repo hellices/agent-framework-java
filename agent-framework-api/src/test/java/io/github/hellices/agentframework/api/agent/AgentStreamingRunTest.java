@@ -461,6 +461,43 @@ class AgentStreamingRunTest {
     assertThat(run.response().toCompletableFuture().join().text()).isEqualTo("done");
   }
 
+  @Test
+  void cancellationBeforeSubscriptionDoesNotTouchTheSource() {
+    int[] subscriptions = {0};
+    AgentStreamingRun<AgentResponseUpdate> run =
+        AgentStreamingRun.fromUpdates(subscriber -> subscriptions[0]++, new CancellationSignal());
+    List<String> downstreamSignals = new ArrayList<>();
+
+    run.cancel();
+    run.updates()
+        .subscribe(
+            new Flow.Subscriber<>() {
+              @Override
+              public void onSubscribe(Flow.Subscription subscription) {
+                downstreamSignals.add("onSubscribe");
+              }
+
+              @Override
+              public void onNext(AgentResponseUpdate item) {
+                downstreamSignals.add("onNext");
+              }
+
+              @Override
+              public void onError(Throwable throwable) {
+                downstreamSignals.add("onError");
+              }
+
+              @Override
+              public void onComplete() {
+                downstreamSignals.add("onComplete");
+              }
+            });
+
+    assertThat(subscriptions[0]).isZero();
+    assertThat(downstreamSignals).containsExactly("onSubscribe");
+    assertThat(run.response().toCompletableFuture()).isNotDone();
+  }
+
   private static AgentResponseUpdate update(String messageId, String text) {
     return new AgentResponseUpdate(
         "agent-1",

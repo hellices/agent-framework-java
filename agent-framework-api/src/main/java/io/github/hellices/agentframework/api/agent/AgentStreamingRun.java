@@ -134,6 +134,10 @@ public final class AgentStreamingRun<T> {
         subscriber.onError(new IllegalStateException("updates can only be consumed once"));
         return;
       }
+      if (cancellationSignal.isCancelled()) {
+        subscriber.onSubscribe(EmptySubscription.INSTANCE);
+        return;
+      }
 
       List<AgentResponseUpdate> bufferedUpdates = new ArrayList<>();
       source.subscribe(
