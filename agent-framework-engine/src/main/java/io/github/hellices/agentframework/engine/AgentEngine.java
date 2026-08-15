@@ -191,6 +191,10 @@ public final class AgentEngine extends Agent {
                               .thenApply(
                                   terminal -> {
                                     validateToolContinuation(terminal);
+                                    if (!toolCalls(terminal).isEmpty()) {
+                                      throw new IllegalStateException(
+                                          "model returned tool calls after tools were disabled");
+                                    }
                                     List<Message> finalMessages = new ArrayList<>(outputMessages);
                                     finalMessages.addAll(terminal.messages());
                                     return new ToolLoopResult(

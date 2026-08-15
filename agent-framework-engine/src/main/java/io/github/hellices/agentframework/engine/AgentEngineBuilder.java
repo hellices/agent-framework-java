@@ -38,7 +38,12 @@ public final class AgentEngineBuilder {
 
   public AgentEngineBuilder tools(FunctionTool... tools) {
     if (tools != null) {
-      this.tools.addAll(List.of(tools));
+      for (FunctionTool tool : tools) {
+        if (tool == null) {
+          throw new IllegalArgumentException("tools must not contain null entries");
+        }
+        this.tools.add(tool);
+      }
     }
     return this;
   }
