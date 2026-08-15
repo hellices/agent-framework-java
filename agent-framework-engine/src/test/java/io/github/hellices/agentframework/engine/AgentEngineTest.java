@@ -9,10 +9,16 @@ import io.github.hellices.agentframework.api.agent.AgentRunOptions;
 import io.github.hellices.agentframework.api.agent.AgentRunRequest;
 import io.github.hellices.agentframework.api.agent.AgentStreamingRun;
 import io.github.hellices.agentframework.api.agent.CancellationSignal;
+import io.github.hellices.agentframework.api.message.Content;
 import io.github.hellices.agentframework.api.message.FinishReason;
 import io.github.hellices.agentframework.api.message.Message;
 import io.github.hellices.agentframework.api.message.Role;
 import io.github.hellices.agentframework.api.message.TextContent;
+import io.github.hellices.agentframework.api.message.ToolCallContent;
+import io.github.hellices.agentframework.api.message.ToolResultContent;
+import io.github.hellices.agentframework.api.message.Usage;
+import io.github.hellices.agentframework.api.tool.FunctionTool;
+import io.github.hellices.agentframework.api.tool.ToolResult;
 import io.github.hellices.agentframework.spi.model.ContinuationModelClient;
 import io.github.hellices.agentframework.spi.model.ModelClient;
 import io.github.hellices.agentframework.spi.model.ModelRequest;
@@ -296,6 +302,249 @@ class AgentEngineTest {
 
     assertThat(consume(run.updates())).isEmpty();
     assertThat(run.response().toCompletableFuture().join().messages()).isEmpty();
+  }
+
+  @Test
+  void deterministicToolLoopExecutesAndReinjectsToolResults() {
+    List<ModelRequest> requests = new ArrayList<>();
+    ModelClient client =
+        request -> {
+          requests.add(request);
+          if (requests.size() == 1) {
+            return completedFuture(
+                new ModelResponse(
+                    List.of(
+                        new Message(
+                            Role.ASSISTANT,
+                            List.of(
+                                new ToolCallContent(
+                                    "call-1", "weather", Map.of("city", "Seoul"))))),
+                    null,
+                    FinishReason.TOOL_CALLS,
+                    Map.of(),
+                    null));
+          }
+          return completedFuture(response("It is sunny"));
+        };
+    FunctionTool weather =
+        FunctionTool.create(
+            "weather",
+            "Gets weather",
+            Map.of("type", "object"),
+            (arguments, context) ->
+                completedFuture(
+                    ToolResult.success(new TextContent("sunny:" + arguments.get("city")))));
+    AgentEngine engine = AgentEngine.builder().modelClient(client).tools(weather).build();
+
+    var response = engine.run("weather?").response().toCompletableFuture().join();
+
+    assertThat(requests).hasSize(2);
+    assertThat(requests.get(0).tools())
+        .extracting(definition -> definition.name())
+        .containsExactly("weather");
+    assertThat(requests.get(1).messages().get(2).content())
+        .singleElement()
+        .isInstanceOfSatisfying(
+            ToolResultContent.class,
+            result -> {
+              assertThat(result.callId()).isEqualTo("call-1");
+              assertThat(result.content()).extracting(Content::text).containsExactly("sunny:Seoul");
+            });
+    assertThat(response.text()).endsWith("It is sunny");
+    assertThat(response.messages()).hasSize(3);
+    assertThat(response.messages().get(0).content()).first().isInstanceOf(ToolCallContent.class);
+    assertThat(response.messages().get(1).content()).first().isInstanceOf(ToolResultContent.class);
+  }
+
+  @Test
+  void builderRejectsDuplicateToolNames() {
+    FunctionTool first =
+        FunctionTool.create(
+            "weather",
+            "first",
+            Map.of(),
+            (arguments, context) -> completedFuture(ToolResult.success(new TextContent("one"))));
+    FunctionTool second =
+        FunctionTool.create(
+            "weather",
+            "second",
+            Map.of(),
+            (arguments, context) -> completedFuture(ToolResult.success(new TextContent("two"))));
+
+    assertThatThrownBy(
+            () ->
+                AgentEngine.builder()
+                    .modelClient(request -> completedFuture(response("unused")))
+                    .tools(first, second)
+                    .build())
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessage("duplicate tool name: weather");
+  }
+
+  @Test
+  void unknownToolCallFailsTheRun() {
+    AgentEngine engine =
+        AgentEngine.builder()
+            .modelClient(
+                request ->
+                    completedFuture(
+                        new ModelResponse(
+                            List.of(
+                                new Message(
+                                    Role.ASSISTANT,
+                                    List.of(new ToolCallContent("call-1", "missing", Map.of())))),
+                            null,
+                            FinishReason.TOOL_CALLS,
+                            Map.of(),
+                            null)))
+            .build();
+
+    assertThatThrownBy(() -> engine.run("call").response().toCompletableFuture().join())
+        .hasRootCauseInstanceOf(IllegalStateException.class)
+        .hasRootCauseMessage("unknown tool call: missing");
+  }
+
+  @Test
+  void iterationLimitRunsOneFinalModelCallWithoutTools() {
+    List<ModelRequest> requests = new ArrayList<>();
+    FunctionTool tool =
+        FunctionTool.create(
+            "again",
+            "again",
+            Map.of(),
+            (arguments, context) -> completedFuture(ToolResult.success(new TextContent("again"))));
+    ModelClient client =
+        request -> {
+          requests.add(request);
+          if (request.tools().isEmpty()) {
+            return completedFuture(response("finished"));
+          }
+          return completedFuture(
+              new ModelResponse(
+                  List.of(
+                      new Message(
+                          Role.ASSISTANT,
+                          List.of(new ToolCallContent("call-1", "again", Map.of())))),
+                  null,
+                  FinishReason.TOOL_CALLS,
+                  Map.of(),
+                  null));
+        };
+    AgentEngine engine =
+        AgentEngine.builder().modelClient(client).tools(tool).maxIterations(2).build();
+
+    var response = engine.run("loop").response().toCompletableFuture().join();
+
+    assertThat(requests).hasSize(2);
+    assertThat(requests.get(0).tools()).isNotEmpty();
+    assertThat(requests.get(1).tools()).isEmpty();
+    assertThat(response.text()).contains("finished");
+  }
+
+  @Test
+  void streamingWithToolsFailsUntilTheStreamingLoopIsImplemented() {
+    FunctionTool tool =
+        FunctionTool.create(
+            "tool",
+            "tool",
+            Map.of(),
+            (arguments, context) -> completedFuture(ToolResult.success(new TextContent("done"))));
+    AgentEngine engine =
+        AgentEngine.builder().modelClient(new StreamingFakeClient()).tools(tool).build();
+
+    assertThatThrownBy(() -> engine.runStreaming("hi"))
+        .isInstanceOf(UnsupportedOperationException.class)
+        .hasMessage("streaming tool execution is not supported");
+  }
+
+  @Test
+  void continuationWithToolsFailsUntilContinuationLoopSemanticsAreImplemented() {
+    FunctionTool tool =
+        FunctionTool.create(
+            "tool",
+            "tool",
+            Map.of(),
+            (arguments, context) -> completedFuture(ToolResult.success(new TextContent("done"))));
+    AgentEngine engine =
+        AgentEngine.builder()
+            .modelClient(new StreamingContinuationFakeClient())
+            .tools(tool)
+            .build();
+    AgentRunRequest request =
+        new AgentRunRequest(
+            List.of(),
+            null,
+            AgentRunOptions.builder().continuationToken("continuation-1").build(),
+            new CancellationSignal(),
+            Map.of());
+
+    assertThatThrownBy(() -> engine.run(request))
+        .isInstanceOf(UnsupportedOperationException.class)
+        .hasMessage("continuation tool execution is not supported");
+  }
+
+  @Test
+  void toolsEnabledRunRejectsAContinuationTokenReturnedByTheModel() {
+    FunctionTool tool =
+        FunctionTool.create(
+            "tool",
+            "tool",
+            Map.of(),
+            (arguments, context) -> completedFuture(ToolResult.success(new TextContent("done"))));
+    ModelClient client =
+        request ->
+            completedFuture(
+                new ModelResponse(
+                    List.of(message("pending")),
+                    null,
+                    FinishReason.STOP,
+                    "continuation-1",
+                    Map.of(),
+                    null));
+    AgentEngine engine = AgentEngine.builder().modelClient(client).tools(tool).build();
+
+    assertThatThrownBy(() -> engine.run("hi").response().toCompletableFuture().join())
+        .hasRootCauseInstanceOf(UnsupportedOperationException.class)
+        .hasRootCauseMessage("model continuation with tool execution is not supported");
+  }
+
+  @Test
+  void toolLoopAccumulatesUsageAcrossModelCalls() {
+    int[] calls = {0};
+    FunctionTool tool =
+        FunctionTool.create(
+            "tool",
+            "tool",
+            Map.of(),
+            (arguments, context) -> completedFuture(ToolResult.success(new TextContent("done"))));
+    ModelClient client =
+        request -> {
+          calls[0]++;
+          if (calls[0] == 1) {
+            return completedFuture(
+                new ModelResponse(
+                    List.of(
+                        new Message(
+                            Role.ASSISTANT,
+                            List.of(new ToolCallContent("call-1", "tool", Map.of())))),
+                    new Usage(1, 2, 3, Map.of("cachedTokens", 1L)),
+                    FinishReason.TOOL_CALLS,
+                    Map.of(),
+                    null));
+          }
+          return completedFuture(
+              new ModelResponse(
+                  List.of(message("done")),
+                  new Usage(4, 5, 9, Map.of("cachedTokens", 2L)),
+                  FinishReason.STOP,
+                  Map.of(),
+                  null));
+        };
+    AgentEngine engine = AgentEngine.builder().modelClient(client).tools(tool).build();
+
+    var usage = engine.run("hi").response().toCompletableFuture().join().usage();
+
+    assertThat(usage).isEqualTo(new Usage(5, 7, 12, Map.of("cachedTokens", 3L)));
   }
 
   private static ModelResponse response(String text) {
