@@ -6,6 +6,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import io.github.hellices.agentframework.api.session.SessionSnapshot;
 import io.github.hellices.agentframework.api.session.SessionStateEntry;
 import io.github.hellices.agentframework.spi.session.SessionSnapshotCodec;
+import java.nio.file.FileSystemException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
@@ -17,6 +18,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Stream;
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -246,9 +248,13 @@ class FileSessionStoreTest {
         Objects.requireNonNull(temporaryDirectory.getParent())
             .resolve("outside-session-" + UUID.randomUUID() + ".json");
     Files.writeString(outside, "outside");
-    Files.createSymbolicLink(stored, outside);
 
     try {
+      try {
+        Files.createSymbolicLink(stored, outside);
+      } catch (FileSystemException | UnsupportedOperationException failure) {
+        Assumptions.assumeTrue(false, () -> "symbolic links are unavailable: " + failure);
+      }
       assertThatThrownBy(() -> store.load("session-1").toCompletableFuture().join())
           .isInstanceOf(CompletionException.class)
           .hasCauseInstanceOf(FileSessionStoreException.class);
