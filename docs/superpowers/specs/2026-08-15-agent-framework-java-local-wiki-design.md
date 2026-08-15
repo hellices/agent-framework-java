@@ -106,8 +106,15 @@ Exclude Git metadata, worktrees, build outputs, caches, IDE settings, local agen
 environment files, credentials, and untracked files. Reading from `HEAD` rather than the working tree
 also prevents an unfinished local edit from silently becoming wiki evidence.
 
-Synchronization stages an archive in a temporary directory, then checksum-syncs it into
-`raw/sources/repository/`. It removes deleted source files, preserves repository-relative paths, and
+LLM Wiki's source watcher does not directly ingest every source and configuration extension in this
+corpus. Synchronization therefore copies Markdown unchanged and renders every other allowlisted text
+file as a deterministic Markdown wrapper. A wrapper records the original repository-relative path,
+source commit, and source language in frontmatter, then includes the committed content in a fenced
+code block. Its mirror path appends `.md` to the original path, such as
+`agent-framework-api/src/main/java/example/Agent.java.md`.
+
+Synchronization stages the complete mirror in a temporary directory, then checksum-syncs it into
+`raw/sources/repository/`. It removes deleted source files, preserves the repository hierarchy, and
 changes only files whose committed content changed. Temporary files are removed whether the sync
 succeeds or fails.
 
@@ -244,10 +251,10 @@ Setup is complete only when all of the following are true:
 
 ## Security and Privacy
 
-Only committed, allowlisted repository content enters the wiki. Local settings and ignored files are
-never imported. The wiki does not enable web research during initial generation, because external
-material could bypass the pinned-source policy. The application API remains bound to loopback and
-token-protected if it is enabled later.
+Only committed, allowlisted repository content and deterministic provenance wrappers enter the wiki.
+Local settings and ignored files are never imported. The wiki does not enable web research during
+initial generation, because external material could bypass the pinned-source policy. The application
+API remains bound to loopback and token-protected if it is enabled later.
 
 Generated pages must not include raw prompt bodies, unfiled chat transcripts, tool arguments,
 credentials, or personal agent traces. Examples copied into pages must be redacted and traceable to
