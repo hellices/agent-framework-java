@@ -136,6 +136,7 @@ public final class AgentStreamingRun<T> {
       }
       if (cancellationSignal.isCancelled()) {
         subscriber.onSubscribe(EmptySubscription.INSTANCE);
+        subscriber.onComplete();
         return;
       }
 

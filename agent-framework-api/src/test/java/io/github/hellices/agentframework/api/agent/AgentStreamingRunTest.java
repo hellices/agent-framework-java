@@ -494,7 +494,7 @@ class AgentStreamingRunTest {
             });
 
     assertThat(subscriptions[0]).isZero();
-    assertThat(downstreamSignals).containsExactly("onSubscribe");
+    assertThat(downstreamSignals).containsExactly("onSubscribe", "onComplete");
     assertThat(run.response().toCompletableFuture()).isNotDone();
   }
 
