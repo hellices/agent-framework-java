@@ -45,9 +45,11 @@ public final class AgentRun {
       CompletionStage<AgentResponse> response,
       CancellationSignal cancellationSignal,
       Runnable cancellationAction) {
-    this.response = response;
-    this.cancellationSignal = cancellationSignal;
-    this.cancellationAction = cancellationAction;
+    this.response = Objects.requireNonNull(response, "response must not be null");
+    this.cancellationSignal =
+        Objects.requireNonNull(cancellationSignal, "cancellationSignal must not be null");
+    this.cancellationAction =
+        Objects.requireNonNull(cancellationAction, "cancellationAction must not be null");
   }
 
   public CompletionStage<AgentResponse> response() {

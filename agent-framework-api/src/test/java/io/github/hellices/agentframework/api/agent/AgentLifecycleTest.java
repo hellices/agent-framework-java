@@ -240,6 +240,25 @@ class AgentLifecycleTest {
   }
 
   @Test
+  void runFailsWhenSessionContextResponseIsAlreadyCompleteBeforeRunInternalReturns() {
+    PreCompletingSessionContextAgent agent =
+        new PreCompletingSessionContextAgent("pre-completed-agent");
+
+    AgentRun run = agent.run("hello");
+
+    // The exposed run's response stage is derived (via AgentRun.withCompletion /
+    // Agent#completionAction) from the framework calling sessionContext.complete(value) after
+    // runInternal returns. If the SessionContext was already completed beforehand, that call
+    // throws IllegalStateException, and this test guards that the exception genuinely propagates
+    // through join() instead of being lost or masked by a differently-worded failure.
+    assertThatThrownBy(() -> run.response().toCompletableFuture().join())
+        .hasCauseInstanceOf(IllegalStateException.class)
+        .cause()
+        .hasMessage("session context response is already complete");
+    assertThat(agent.contexts).hasSize(1);
+  }
+
+  @Test
   void runDoesNotFillSessionContextResponseSlotOnFailure() {
     FailingAgent agent = new FailingAgent("failing-agent");
 
@@ -515,6 +534,26 @@ class AgentLifecycleTest {
         AgentRunContext context, AgentRunRequest request) {
       contexts.add(context.sessionContext());
       return super.runStreamingInternal(context, request);
+    }
+  }
+
+  private static final class PreCompletingSessionContextAgent extends TestAgent {
+    private final List<SessionContext> contexts = new ArrayList<>();
+
+    private PreCompletingSessionContextAgent(String id) {
+      super(id);
+    }
+
+    @Override
+    protected AgentRun runInternal(AgentRunContext context, AgentRunRequest request) {
+      // Simulates a derived-stage propagation hazard: some code path (e.g. a provider or a
+      // wrapping agent) fills the captured SessionContext's response slot directly, before the
+      // framework's own completionAction runs. The framework must still surface the resulting
+      // "already complete" failure through the exposed run's response stage rather than
+      // swallowing it.
+      context.sessionContext().complete(sampleResponse(id()));
+      contexts.add(context.sessionContext());
+      return super.runInternal(context, request);
     }
   }
 

@@ -69,6 +69,19 @@ public final class SessionContext {
     return Optional.ofNullable(response);
   }
 
+  /**
+   * Fills the set-once response slot on successful terminal completion of the run this context was
+   * created for. This is framework lifecycle completion invoked by {@code Agent}'s internal run
+   * plumbing (see {@code Agent#completionAction}); it is not intended to be called by provider or
+   * application code.
+   *
+   * <p>The slot can only be filled once: any second invocation, whether with the same or a
+   * different value, is rejected because the response is set-once for the lifetime of this context.
+   *
+   * @param value the terminal response to store; must not be {@code null}
+   * @throws NullPointerException if {@code value} is {@code null}
+   * @throws IllegalStateException if the response slot has already been filled
+   */
   public synchronized void complete(AgentResponse value) {
     if (response != null) {
       throw new IllegalStateException("session context response is already complete");
