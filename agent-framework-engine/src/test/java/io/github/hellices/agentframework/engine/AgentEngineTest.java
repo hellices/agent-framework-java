@@ -4,6 +4,7 @@ import static java.util.concurrent.CompletableFuture.completedFuture;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import io.github.hellices.agentframework.api.agent.AgentResponse;
 import io.github.hellices.agentframework.api.agent.AgentResponseUpdate;
 import io.github.hellices.agentframework.api.agent.AgentRunOptions;
 import io.github.hellices.agentframework.api.agent.AgentRunRequest;
@@ -442,19 +443,76 @@ class AgentEngineTest {
   }
 
   @Test
-  void streamingWithToolsFailsUntilTheStreamingLoopIsImplemented() {
+  void streamingRunsExecuteToolsAndAssembleTheSameResponseAsAnOrdinaryRun() {
     FunctionTool tool =
         FunctionTool.create(
             "tool",
             "tool",
             Map.of(),
             (arguments, context) -> completedFuture(ToolResult.success(new TextContent("done"))));
-    AgentEngine engine =
-        AgentEngine.builder().modelClient(new StreamingFakeClient()).tools(tool).build();
+    StreamingModelClient client =
+        new StreamingModelClient() {
+          private final List<ModelRequest> requests = new ArrayList<>();
 
-    assertThatThrownBy(() -> engine.runStreaming("hi"))
-        .isInstanceOf(UnsupportedOperationException.class)
-        .hasMessage("streaming tool execution is not supported");
+          @Override
+          public java.util.concurrent.CompletionStage<ModelResponse> run(ModelRequest request) {
+            requests.add(request);
+            if (requests.size() == 1) {
+              return completedFuture(
+                  new ModelResponse(
+                      List.of(
+                          new Message(
+                              Role.ASSISTANT,
+                              List.of(new ToolCallContent("call-1", "tool", Map.of())))),
+                      null,
+                      FinishReason.TOOL_CALLS,
+                      Map.of(),
+                      null));
+            }
+            return completedFuture(response("finished"));
+          }
+
+          @Override
+          public Flow.Publisher<ModelResponseUpdate> runStreaming(ModelRequest request) {
+            ModelResponse response = run(request).toCompletableFuture().join();
+            return subscriber ->
+                subscriber.onSubscribe(
+                    new Flow.Subscription() {
+                      private boolean completed;
+
+                      @Override
+                      public void request(long n) {
+                        if (completed || n <= 0) {
+                          return;
+                        }
+                        completed = true;
+                        subscriber.onNext(
+                            new ModelResponseUpdate(
+                                response.messages(),
+                                response.usage(),
+                                response.finishReason(),
+                                Map.of(),
+                                null));
+                        subscriber.onComplete();
+                      }
+
+                      @Override
+                      public void cancel() {
+                        completed = true;
+                      }
+                    });
+          }
+        };
+    AgentEngine engine = AgentEngine.builder().modelClient(client).tools(tool).build();
+
+    AgentStreamingRun<AgentResponseUpdate> run = engine.runStreaming("hi");
+
+    assertThat(consume(run.updates())).hasSize(3);
+    AgentResponse response = run.response().toCompletableFuture().join();
+    assertThat(response.messages())
+        .extracting(Message::role)
+        .containsExactly(Role.ASSISTANT, Role.TOOL, Role.ASSISTANT);
+    assertThat(response.text()).isEqualTo("finished");
   }
 
   @Test

@@ -71,7 +71,7 @@ family is an architectural owner, not necessarily a current file path.
 | TOOL-012 | Parallel execution covers only executable batches and preserves order | [01-core-execution.md](01-core-execution.md) | `api.tool`, `spi.tool`, `engine.internal.tool` | `absent` | tool contract + loop golden |
 | TOOL-013 | Tool results are normalized to a `Content` list | [01-core-execution.md](01-core-execution.md) | `api.tool`, `spi.tool`, `engine.internal.tool` | `implemented` | tool contract + loop golden |
 | TOOL-014 | Tool definitions and runtime counters are separated | [01-core-execution.md](01-core-execution.md) | `api.tool`, `spi.tool`, `engine.internal.tool` | `partial` | tool contract + loop golden |
-| TOOL-015 | Streaming uses the same tool loop | [01-core-execution.md](01-core-execution.md) | `api.tool`, `spi.tool`, `engine.internal.tool` | `absent` | tool contract + loop golden |
+| TOOL-015 | Streaming uses the same tool loop | [01-core-execution.md](01-core-execution.md) | `api.tool`, `spi.tool`, `engine.internal.tool` | `implemented` | tool contract + ordinary/streaming parity + cancellation |
 | TOOL-016 | Approval requests and responses are core content | [01-core-execution.md](01-core-execution.md) | `api.tool`, `spi.tool`, `engine.internal.tool` | `absent` | tool contract + loop golden |
 | TOOL-017 | An approval response binds only to its original request | [01-core-execution.md](01-core-execution.md) | `api.tool`, `spi.tool`, `engine.internal.tool` | `absent` | tool contract + loop golden |
 | TOOL-018 | Approval denial leaves a synthetic termination result | [01-core-execution.md](01-core-execution.md) | `api.tool`, `spi.tool`, `engine.internal.tool` | `absent` | tool contract + loop golden |
