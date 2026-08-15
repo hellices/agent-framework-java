@@ -23,4 +23,12 @@
     <Method name="&lt;init&gt;"/>
     <Bug pattern="EI_EXPOSE_REP2"/>
   </Match>
+  <!-- Message is a final value type whose own collection components are defensively copied, and the
+       framework already hands the same instances around as List<Message>. Pairing one with the
+       provider that contributed it therefore stores and exposes no mutable caller state; copying the
+       message here would instead break identity comparisons against the run's context messages. -->
+  <Match>
+    <Class name="io.github.hellices.agentframework.api.session.ContextMessageContribution"/>
+    <Bug pattern="EI_EXPOSE_REP,EI_EXPOSE_REP2"/>
+  </Match>
 </FindBugsFilter>

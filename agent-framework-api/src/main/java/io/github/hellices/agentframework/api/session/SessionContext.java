@@ -25,6 +25,11 @@ import java.util.Optional;
  * AgentSession#state()} and memoized for the lifetime of the run, so a provider's {@code beforeRun}
  * and {@code afterRun} hooks observe one state view, and two runs of the same provider instance
  * over two sessions can never share one.
+ *
+ * <p>Every context message is recorded together with the provider that contributed it, so {@link
+ * #contextContributions()} can answer "who added this?" for a consumer that selects context by
+ * source, while {@link #contextMessages()} stays the plain ordered message list the model request
+ * is built from.
  */
 public final class SessionContext {
 
@@ -38,7 +43,7 @@ public final class SessionContext {
 
   private final AgentSession session;
   private final List<Message> inputMessages;
-  private final List<Message> contextMessages = new ArrayList<>();
+  private final List<ContextMessageContribution> contextContributions = new ArrayList<>();
   private final Map<String, ProviderState> providerStates = new LinkedHashMap<>();
   private final Map<String, Object> metadata;
   private final CancellationSignal cancellationSignal;
@@ -72,7 +77,24 @@ public final class SessionContext {
   }
 
   public synchronized List<Message> contextMessages() {
-    return List.copyOf(contextMessages);
+    List<Message> messages = new ArrayList<>(contextContributions.size());
+    for (ContextMessageContribution contribution : contextContributions) {
+      messages.add(contribution.message());
+    }
+    return List.copyOf(messages);
+  }
+
+  /**
+   * Returns this run's accumulated context messages paired with the provider that contributed each
+   * one, in the same global order {@link #contextMessages()} reports.
+   *
+   * <p>This is the supported way to select context by contributing provider — a history or audit
+   * provider deciding what to store, for example. It reports the run-time fact the framework
+   * observed rather than the message's own {@link Message#attribution()}, which a provider may
+   * preserve from another session or set to any source id.
+   */
+  public synchronized List<ContextMessageContribution> contextContributions() {
+    return List.copyOf(contextContributions);
   }
 
   /**
@@ -87,6 +109,11 @@ public final class SessionContext {
    * contain {@code null} entries. A collection with a {@code null} entry is rejected in full (no
    * partial append) before any of its messages are appended.
    *
+   * <p>Because no provider is named, the resulting {@link ContextMessageContribution} carries no
+   * contributing source id: these messages come from an external, unspecified source, and a
+   * consumer selecting context by contributing provider (a {@code HistoryProvider} filtering on
+   * source ids, for example) can never match them by name.
+   *
    * @param messages the messages to append, in order; may be {@code null}
    * @throws NullPointerException if {@code messages} is non-null and contains a {@code null} entry
    */
@@ -94,12 +121,14 @@ public final class SessionContext {
     if (messages == null) {
       return;
     }
-    List<Message> normalized = new ArrayList<>();
+    List<ContextMessageContribution> normalized = new ArrayList<>();
     for (Message message : messages) {
       normalized.add(
-          Objects.requireNonNull(message, "contextMessages must not contain null entries"));
+          new ContextMessageContribution(
+              null,
+              Objects.requireNonNull(message, "contextMessages must not contain null entries")));
     }
-    contextMessages.addAll(normalized);
+    contextContributions.addAll(normalized);
   }
 
   /**
@@ -120,6 +149,10 @@ public final class SessionContext {
    * no-op, and a collection containing a {@code null} entry is rejected in full before anything is
    * appended.
    *
+   * <p>{@code sourceId} is also recorded as the contributing provider of each appended message, so
+   * {@link #contextContributions()} reports who actually contributed it even when the message keeps
+   * an attribution naming another source.
+   *
    * @param sourceId the contributing provider's fixed source id; must not be blank
    * @param messages the messages to append, in order; may be {@code null}
    * @throws IllegalArgumentException if {@code sourceId} is blank
@@ -131,12 +164,14 @@ public final class SessionContext {
     if (messages == null) {
       return;
     }
-    List<Message> normalized = new ArrayList<>();
+    List<ContextMessageContribution> normalized = new ArrayList<>();
     for (Message message : messages) {
       Objects.requireNonNull(message, "contextMessages must not contain null entries");
-      normalized.add(attribute(message, normalizedSourceId));
+      normalized.add(
+          new ContextMessageContribution(
+              normalizedSourceId, attribute(message, normalizedSourceId)));
     }
-    contextMessages.addAll(normalized);
+    contextContributions.addAll(normalized);
   }
 
   /**

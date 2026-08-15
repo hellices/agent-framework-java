@@ -29,7 +29,12 @@ import java.util.concurrent.CompletionStage;
  * <p>Durable persistence of that namespace is not wired here: a session store must be able to
  * encode a message list through the state codec registry before a snapshot can carry this history,
  * which is the session coordination slice (SES-014). Until then the history survives as long as the
- * session value it lives in.
+ * session value it lives in, and snapshotting a session that holds this namespace fails naming it.
+ *
+ * <p>This is a reference implementation, not a production-scale store: every read and every write
+ * walks and re-validates the whole stored list, and a save copies it, so a turn costs time linear
+ * in the conversation length. That is the price of publishing a fresh immutable list per save,
+ * which is what makes branching and cross-session reuse safe.
  */
 public final class InMemoryHistoryProvider extends HistoryProvider {
 
@@ -55,14 +60,14 @@ public final class InMemoryHistoryProvider extends HistoryProvider {
   }
 
   @Override
-  protected CompletionStage<List<Message>> getMessages(
+  public CompletionStage<List<Message>> getMessages(
       SessionContext context, ProviderSessionState state) {
     Objects.requireNonNull(state, "state must not be null");
     return CompletableFuture.completedFuture(storedMessages(state));
   }
 
   @Override
-  protected CompletionStage<Void> saveMessages(
+  public CompletionStage<Void> saveMessages(
       SessionContext context, ProviderSessionState state, List<Message> messages) {
     Objects.requireNonNull(state, "state must not be null");
     Objects.requireNonNull(messages, "messages must not be null");

@@ -2,6 +2,7 @@ package io.github.hellices.agentframework.spi.session;
 
 import io.github.hellices.agentframework.api.message.Message;
 import io.github.hellices.agentframework.api.message.MessageAttribution;
+import io.github.hellices.agentframework.api.session.ContextMessageContribution;
 import io.github.hellices.agentframework.api.session.SessionContext;
 import java.util.ArrayList;
 import java.util.List;
@@ -23,9 +24,9 @@ import java.util.concurrent.CompletionStage;
  * HistoryPolicy#loadMessages()} is enabled. Loaded messages are injected in the order the storage
  * returned them and are stamped as {@value #HISTORY_SOURCE_TYPE} attribution carrying this
  * provider's {@link #sourceId()}, so history stays distinguishable from the context a memory or
- * retrieval provider contributed. The stamping preserves an {@code originSessionId} the storage
- * already held, so provenance of content produced by another session survives a reload; only when a
- * message carries none is this run's session id filled in.
+ * retrieval provider contributed. Stamping replaces the stored source type and source id; only an
+ * {@code originSessionId} the storage already held is preserved, so a reloaded message still names
+ * the session that produced it, and only a message carrying none gets this run's session id.
  *
  * <p><strong>Storing.</strong> {@link #afterRun} builds exactly one ordered batch and hands it to
  * {@link #saveMessages} once. The batch is the run in conversation order: the selected context
@@ -33,11 +34,23 @@ import java.util.concurrent.CompletionStage;
  * then the run response's messages. Categories the policy disables are left out, and a run that
  * selects nothing does not call {@link #saveMessages} at all.
  *
- * <p><strong>Context selection.</strong> With {@link HistoryPolicy#storeContextFrom()} empty, every
- * context message except this provider's own loaded history is stored — re-storing its own history
- * would duplicate the whole conversation on every run. With source ids configured, exactly those
- * sources are stored. The selection is read only when {@link HistoryPolicy#storeContextMessages()}
- * is enabled.
+ * <p><strong>Context selection.</strong> Selection reads {@link
+ * SessionContext#contextContributions()}, so it keys off the provider that actually contributed a
+ * message rather than the attribution the message carries — attribution may be preserved from
+ * another session or set to any source id by a sibling provider. With {@link
+ * HistoryPolicy#storeContextFrom()} absent ({@code null}), every context message except this
+ * provider's own contributions is stored — re-storing its own loaded history would duplicate the
+ * whole conversation on every run. With source ids configured, exactly those contributing sources
+ * are stored, including this provider's own if it is named; context added without a contributing
+ * provider ({@link SessionContext#addContextMessages(java.util.List)}) is external and can only be
+ * selected by the absent-filter form. The selection is read only when {@link
+ * HistoryPolicy#storeContextMessages()} is enabled.
+ *
+ * <p><strong>Duplication across providers.</strong> Two history providers that both store context
+ * with no source filter each re-store the other's loaded prefix on every run, which grows the
+ * conversation quadratically. Configure the secondary sink with {@link
+ * HistoryPolicy#storeContextFrom()} — or with context storage disabled — when a primary history and
+ * an audit sink observe the same run.
  *
  * <p><strong>Security.</strong> Loaded history is not validated or sanitized by the framework, and
  * neither is context contributed by another provider. A storage backend that can be tampered with
@@ -97,23 +110,31 @@ public abstract class HistoryProvider implements ContextProvider {
   /**
    * Reads this session's stored history, oldest message first.
    *
+   * <p>This is the supported read path for stored history: an application, a middleware, or a
+   * coordinating component reads history through this operation instead of casting an untyped
+   * session state slot. Implementations are storage-only and must not apply the policy.
+   *
    * @param context the per-run context, for a storage backend that keys history by session id
    * @param state this provider's source-bound session state view
    * @return a stage carrying the stored messages; neither the stage, the list, nor an entry may be
    *     {@code null}
    */
-  protected abstract CompletionStage<List<Message>> getMessages(
+  public abstract CompletionStage<List<Message>> getMessages(
       SessionContext context, ProviderSessionState state);
 
   /**
    * Persists one ordered batch for this session, appending it after what is already stored.
+   *
+   * <p>This is the supported write path for stored history, and the counterpart of {@link
+   * #getMessages}. Implementations are storage-only: the batch has already been selected by the
+   * policy, and calling this directly stores exactly what is passed in.
    *
    * @param context the per-run context, for a storage backend that keys history by session id
    * @param state this provider's source-bound session state view
    * @param messages the non-empty ordered batch selected by the policy
    * @return a stage completing when the batch is persisted; must not be {@code null}
    */
-  protected abstract CompletionStage<Void> saveMessages(
+  public abstract CompletionStage<Void> saveMessages(
       SessionContext context, ProviderSessionState state, List<Message> messages);
 
   /**
@@ -190,15 +211,14 @@ public abstract class HistoryProvider implements ContextProvider {
     }
     Set<String> selectedSources = policy.storeContextFrom();
     List<Message> selected = new ArrayList<>();
-    for (Message message : context.contextMessages()) {
-      MessageAttribution attribution = message.attribution();
-      String messageSourceId = attribution == null ? null : attribution.sourceId();
+    for (ContextMessageContribution contribution : context.contextContributions()) {
+      String contributor = contribution.sourceId();
       boolean store =
-          selectedSources.isEmpty()
-              ? !sourceId.equals(messageSourceId)
-              : messageSourceId != null && selectedSources.contains(messageSourceId);
+          selectedSources == null
+              ? !sourceId.equals(contributor)
+              : contributor != null && selectedSources.contains(contributor);
       if (store) {
-        selected.add(message);
+        selected.add(contribution.message());
       }
     }
     return selected;

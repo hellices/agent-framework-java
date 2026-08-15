@@ -23,6 +23,7 @@ import io.github.hellices.agentframework.spi.session.ContextProvider;
 import io.github.hellices.agentframework.spi.session.HistoryPolicy;
 import io.github.hellices.agentframework.spi.session.HistoryProvider;
 import io.github.hellices.agentframework.spi.session.ProviderSessionState;
+import io.github.hellices.agentframework.spi.session.StateCodecRegistry;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
@@ -198,6 +199,196 @@ class InMemoryHistoryProviderTest {
     assertThat(storedHistory(context, "in_memory"))
         .extracting(Message::text)
         .containsExactly("retrieved");
+  }
+
+  @Test
+  void storeContextFromKeepsAMessageItsContributorPreAttributedElsewhere() {
+    SessionContext context =
+        contextWith(new AgentSession("session-1", null, Map.of()), List.of(user("hi")));
+    Message fromVectorStore =
+        new Message(
+            Role.USER,
+            List.of(new TextContent("remembered")),
+            new MessageAttribution("AIContextProvider", "vector-store", "other-session"),
+            Map.of(),
+            null);
+    context.addContextMessages("rag", List.of(fromVectorStore));
+    InMemoryHistoryProvider provider =
+        new InMemoryHistoryProvider(
+            HistoryPolicy.builder()
+                .storeContextMessages(true)
+                .storeContextFrom("rag")
+                .storeInputs(false)
+                .storeOutputs(false)
+                .build());
+
+    afterRun(provider, context);
+
+    // "rag" contributed the message; the cross-session attribution it preserved is content
+    // provenance, not the contributing provider, so the configured filter still selects it.
+    assertThat(storedHistory(context, "in_memory"))
+        .extracting(Message::text)
+        .containsExactly("remembered");
+  }
+
+  @Test
+  void aContextMessageAttributedToThisProviderButContributedByAnotherSourceIsStillStored() {
+    SessionContext context =
+        contextWith(new AgentSession("session-1", null, Map.of()), List.of(user("hi")));
+    Message spoofed =
+        new Message(
+            Role.USER,
+            List.of(new TextContent("spoofed")),
+            new MessageAttribution("ChatHistory", "in_memory", "other-session"),
+            Map.of(),
+            null);
+    context.addContextMessages("rag", List.of(spoofed));
+    InMemoryHistoryProvider provider =
+        new InMemoryHistoryProvider(
+            HistoryPolicy.builder()
+                .storeContextMessages(true)
+                .storeInputs(false)
+                .storeOutputs(false)
+                .build());
+
+    afterRun(provider, context);
+
+    // Self-exclusion protects against re-storing history this provider loaded. It must key off the
+    // contributing provider, otherwise any sibling provider can suppress storage by attribution.
+    assertThat(storedHistory(context, "in_memory"))
+        .extracting(Message::text)
+        .containsExactly("spoofed");
+  }
+
+  @Test
+  void theProvidersOwnContributedHistoryIsExcludedWithoutASourceFilter() {
+    SessionContext context =
+        contextWith(sessionWithHistory("session-1", List.of(user("stored"))), List.of(user("hi")));
+    InMemoryHistoryProvider provider =
+        new InMemoryHistoryProvider(
+            HistoryPolicy.builder()
+                .storeContextMessages(true)
+                .storeInputs(false)
+                .storeOutputs(false)
+                .build());
+
+    beforeRun(provider, context);
+    afterRun(provider, context);
+
+    assertThat(storedHistory(context, "in_memory"))
+        .extracting(Message::text)
+        .containsExactly("stored");
+  }
+
+  @Test
+  void aSourceFilterNamingThisProviderStoresItsOwnLoadedHistory() {
+    SessionContext context =
+        contextWith(sessionWithHistory("session-1", List.of(user("stored"))), List.of(user("hi")));
+    InMemoryHistoryProvider provider =
+        new InMemoryHistoryProvider(
+            HistoryPolicy.builder()
+                .storeContextMessages(true)
+                .storeContextFrom("in_memory")
+                .storeInputs(false)
+                .storeOutputs(false)
+                .build());
+
+    beforeRun(provider, context);
+    afterRun(provider, context);
+
+    // Self-exclusion is the no-filter default, not an override of an explicit selection: a
+    // configuration that names this provider gets exactly what it asked for.
+    assertThat(storedHistory(context, "in_memory"))
+        .extracting(Message::text)
+        .containsExactly("stored", "stored");
+  }
+
+  @Test
+  void interleavedContextSourcesKeepTheirGlobalOrderInTheStoredBatch() {
+    SessionContext context =
+        contextWith(new AgentSession("session-1", null, Map.of()), List.of(user("hi")));
+    context.addContextMessages("rag", List.of(user("rag-one")));
+    context.addContextMessages("notes", List.of(user("notes-one")));
+    context.addContextMessages("rag", List.of(user("rag-two")));
+    InMemoryHistoryProvider provider =
+        new InMemoryHistoryProvider(
+            HistoryPolicy.builder()
+                .storeContextMessages(true)
+                .storeContextFrom("rag", "notes")
+                .storeInputs(false)
+                .storeOutputs(false)
+                .build());
+
+    afterRun(provider, context);
+
+    assertThat(storedHistory(context, "in_memory"))
+        .extracting(Message::text)
+        .containsExactly("rag-one", "notes-one", "rag-two");
+  }
+
+  @Test
+  void contextAddedWithoutAContributingProviderIsStoredOnlyWithoutASourceFilter() {
+    SessionContext unfiltered =
+        contextWith(new AgentSession("session-1", null, Map.of()), List.of(user("hi")));
+    unfiltered.addContextMessages(List.of(user("external")));
+    afterRun(
+        new InMemoryHistoryProvider(
+            HistoryPolicy.builder()
+                .storeContextMessages(true)
+                .storeInputs(false)
+                .storeOutputs(false)
+                .build()),
+        unfiltered);
+
+    SessionContext filtered =
+        contextWith(new AgentSession("session-2", null, Map.of()), List.of(user("hi")));
+    filtered.addContextMessages(List.of(user("external")));
+    afterRun(
+        new InMemoryHistoryProvider(
+            HistoryPolicy.builder()
+                .storeContextMessages(true)
+                .storeContextFrom("rag")
+                .storeInputs(false)
+                .storeOutputs(false)
+                .build()),
+        filtered);
+
+    assertThat(storedHistory(unfiltered, "in_memory"))
+        .extracting(Message::text)
+        .containsExactly("external");
+    assertThat(filtered.updatedSession().orElseThrow().state()).doesNotContainKey("in_memory");
+  }
+
+  @Test
+  void storedHistoryIsReadableAndWritableThroughThePublicStorageOperations() {
+    SessionContext context =
+        contextWith(sessionWithHistory("session-1", List.of(user("one"))), List.of(user("hi")));
+    InMemoryHistoryProvider provider = new InMemoryHistoryProvider();
+    ProviderSessionState state = context.providerState(provider.sourceId());
+
+    List<Message> loaded = provider.getMessages(context, state).toCompletableFuture().join();
+    provider.saveMessages(context, state, List.of(user("two"))).toCompletableFuture().join();
+
+    assertThat(loaded).extracting(Message::text).containsExactly("one");
+    assertThat(provider.getMessages(context, state).toCompletableFuture().join())
+        .extracting(Message::text)
+        .containsExactly("one", "two");
+  }
+
+  @Test
+  void aHistoryNamespaceCannotBeSnapshottedByTheDefaultStateCodecRegistry() {
+    SessionContext context =
+        contextWith(new AgentSession("session-1", null, Map.of()), List.of(user("hi")));
+    context.complete(response("hello"));
+    afterRun(new InMemoryHistoryProvider(), context);
+    AgentSession stored = context.updatedSession().orElseThrow();
+    StateCodecRegistry registry = StateCodecRegistry.builder().build();
+
+    // SES-014 owns the message-list codec. Until it lands, the failure must at least name the
+    // history namespace instead of only a JDK immutable list implementation class.
+    assertThatThrownBy(() -> registry.snapshot(stored, 0, Instant.EPOCH))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageStartingWith("unregistered session state type for source 'in_memory': ");
   }
 
   @Test
@@ -659,13 +850,13 @@ class InMemoryHistoryProviderTest {
     }
 
     @Override
-    protected CompletionStage<List<Message>> getMessages(
+    public CompletionStage<List<Message>> getMessages(
         SessionContext context, ProviderSessionState state) {
       return null;
     }
 
     @Override
-    protected CompletionStage<Void> saveMessages(
+    public CompletionStage<Void> saveMessages(
         SessionContext context, ProviderSessionState state, List<Message> messages) {
       return null;
     }
@@ -682,13 +873,13 @@ class InMemoryHistoryProviderTest {
     }
 
     @Override
-    protected CompletionStage<List<Message>> getMessages(
+    public CompletionStage<List<Message>> getMessages(
         SessionContext context, ProviderSessionState state) {
       return completedFuture(messages);
     }
 
     @Override
-    protected CompletionStage<Void> saveMessages(
+    public CompletionStage<Void> saveMessages(
         SessionContext context, ProviderSessionState state, List<Message> stored) {
       return completedFuture(null);
     }

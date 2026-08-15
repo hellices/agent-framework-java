@@ -22,9 +22,12 @@ import java.util.Set;
  * @param storeContextMessages whether {@code afterRun} stores context messages other providers
  *     contributed to the run
  * @param storeContextFrom the context source ids to store when {@code storeContextMessages} is
- *     enabled; empty means "every source except the provider's own", so a provider never re-stores
- *     the history it just loaded. Order is not significant. The set is ignored entirely when {@code
- *     storeContextMessages} is disabled.
+ *     enabled. {@code null} means "no source filter": every context source except the provider's
+ *     own is stored, so a provider never re-stores the history it just loaded. A non-null value
+ *     must name at least one source and then selects exactly those sources; an empty selection is
+ *     rejected because "store context, but from nothing" is expressed by {@code
+ *     storeContextMessages=false} instead. Order is not significant. The value is ignored entirely
+ *     when {@code storeContextMessages} is disabled.
  * @param storeOutputs whether {@code afterRun} stores the run response's messages
  */
 public record HistoryPolicy(
@@ -35,12 +38,19 @@ public record HistoryPolicy(
     boolean storeOutputs) {
 
   /**
-   * Normalizes the source filter: {@code null} means "no filter", and a source id that carries no
-   * provenance ({@code null} or blank) is rejected rather than silently dropped, because it would
-   * otherwise match nothing and quietly narrow what the provider stores.
+   * Normalizes the source filter and keeps it tri-state: {@code null} stays {@code null} and means
+   * "no filter", an explicitly empty selection is rejected rather than silently widened to "every
+   * source", and a source id that carries no provenance ({@code null} or blank) is rejected rather
+   * than silently dropped, because it would otherwise match nothing and quietly narrow what the
+   * provider stores.
+   *
+   * @throws IllegalArgumentException if {@code storeContextFrom} is non-null and empty, or contains
+   *     a blank entry
+   * @throws NullPointerException if {@code storeContextFrom} contains a {@code null} entry
    */
   public HistoryPolicy {
-    storeContextFrom = Set.copyOf(validatedSources(storeContextFrom));
+    storeContextFrom =
+        storeContextFrom == null ? null : Set.copyOf(validatedSources(storeContextFrom));
   }
 
   /**
@@ -56,8 +66,9 @@ public record HistoryPolicy(
   }
 
   private static Set<String> validatedSources(Collection<String> sources) {
-    if (sources == null) {
-      return Set.of();
+    if (sources.isEmpty()) {
+      throw new IllegalArgumentException(
+          "storeContextFrom must not be empty; use storeContextMessages(false)");
     }
     Set<String> normalized = new LinkedHashSet<>();
     for (String source : sources) {
@@ -76,7 +87,7 @@ public record HistoryPolicy(
     private boolean loadMessages = true;
     private boolean storeInputs = true;
     private boolean storeContextMessages;
-    private Set<String> storeContextFrom = Set.of();
+    private Set<String> storeContextFrom;
     private boolean storeOutputs = true;
 
     private Builder() {}
@@ -101,7 +112,12 @@ public record HistoryPolicy(
 
     /**
      * Restricts stored context to the given source ids, replacing any previously configured
-     * selection. An empty selection stores every context source except the provider's own.
+     * selection.
+     *
+     * @throws IllegalArgumentException if no source id is given, or one of them is blank; storing
+     *     no context at all is configured with {@code storeContextMessages(false)}, and storing
+     *     every other source is configured with {@link #storeContextFromAnySource()}
+     * @throws NullPointerException if {@code sourceIds} is {@code null} or contains a {@code null}
      */
     public Builder storeContextFrom(String... sourceIds) {
       Objects.requireNonNull(sourceIds, "storeContextFrom must not be null");
@@ -110,11 +126,26 @@ public record HistoryPolicy(
 
     /**
      * Restricts stored context to the given source ids, replacing any previously configured
-     * selection. An empty selection stores every context source except the provider's own.
+     * selection.
+     *
+     * @throws IllegalArgumentException if {@code sourceIds} is empty, or contains a blank entry;
+     *     storing no context at all is configured with {@code storeContextMessages(false)}, and
+     *     storing every other source is configured with {@link #storeContextFromAnySource()}
+     * @throws NullPointerException if {@code sourceIds} is {@code null} or contains a {@code null}
      */
     public Builder storeContextFrom(Collection<String> sourceIds) {
       Objects.requireNonNull(sourceIds, "storeContextFrom must not be null");
       this.storeContextFrom = Set.copyOf(validatedSources(sourceIds));
+      return this;
+    }
+
+    /**
+     * Removes any configured source filter, so every context source except the provider's own is
+     * stored when {@link #storeContextMessages(boolean)} is enabled. This is the default, and the
+     * way to express "no filter" without a {@code null} cast at the call site.
+     */
+    public Builder storeContextFromAnySource() {
+      this.storeContextFrom = null;
       return this;
     }
 

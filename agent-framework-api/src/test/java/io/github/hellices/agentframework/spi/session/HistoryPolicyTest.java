@@ -17,7 +17,7 @@ class HistoryPolicyTest {
     assertThat(policy.loadMessages()).isTrue();
     assertThat(policy.storeInputs()).isTrue();
     assertThat(policy.storeContextMessages()).isFalse();
-    assertThat(policy.storeContextFrom()).isEmpty();
+    assertThat(policy.storeContextFrom()).isNull();
     assertThat(policy.storeOutputs()).isTrue();
   }
 
@@ -79,7 +79,40 @@ class HistoryPolicyTest {
   void anAbsentSourceSetMeansEveryOtherSource() {
     HistoryPolicy policy = new HistoryPolicy(true, true, true, null, true);
 
-    assertThat(policy.storeContextFrom()).isEmpty();
+    assertThat(policy.storeContextFrom()).isNull();
+  }
+
+  @Test
+  void anExplicitlyEmptySourceCollectionIsRejected() {
+    assertThatThrownBy(() -> HistoryPolicy.builder().storeContextFrom(List.of()))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessage("storeContextFrom must not be empty; use storeContextMessages(false)");
+  }
+
+  @Test
+  void anExplicitlyEmptySourceVarargsCallIsRejected() {
+    assertThatThrownBy(() -> HistoryPolicy.builder().storeContextFrom())
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessage("storeContextFrom must not be empty; use storeContextMessages(false)");
+  }
+
+  @Test
+  void anExplicitlyEmptySourceSetIsRejectedByTheCanonicalConstructor() {
+    assertThatThrownBy(() -> new HistoryPolicy(true, true, true, Set.of(), true))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessage("storeContextFrom must not be empty; use storeContextMessages(false)");
+  }
+
+  @Test
+  void storeContextFromAnySourceRemovesAPreviouslyConfiguredSelection() {
+    HistoryPolicy policy =
+        HistoryPolicy.builder()
+            .storeContextMessages(true)
+            .storeContextFrom("rag")
+            .storeContextFromAnySource()
+            .build();
+
+    assertThat(policy.storeContextFrom()).isNull();
   }
 
   @Test

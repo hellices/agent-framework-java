@@ -419,6 +419,92 @@ class SessionContextTest {
         .hasMessage("sourceId must not be blank");
   }
 
+  @Test
+  void contextContributionsRecordTheContributingProviderInGlobalOrder() {
+    SessionContext sessionContext =
+        new SessionContext(null, List.of(), Map.of(), new CancellationSignal());
+
+    sessionContext.addContextMessages("rag", List.of(sampleMessage("retrieved")));
+    sessionContext.addContextMessages("notes", List.of(sampleMessage("noted")));
+    sessionContext.addContextMessages("rag", List.of(sampleMessage("retrieved-again")));
+
+    assertThat(sessionContext.contextContributions())
+        .extracting(ContextMessageContribution::sourceId)
+        .containsExactly("rag", "notes", "rag");
+    assertThat(sessionContext.contextContributions())
+        .extracting(contribution -> contribution.message().text())
+        .containsExactly("retrieved", "noted", "retrieved-again");
+    assertThat(sessionContext.contextMessages())
+        .containsExactlyElementsOf(
+            sessionContext.contextContributions().stream()
+                .map(ContextMessageContribution::message)
+                .toList());
+  }
+
+  @Test
+  void aContributionKeepsItsContributorEvenWhenTheMessageCarriesAnotherAttribution() {
+    SessionContext sessionContext =
+        new SessionContext(null, List.of(), Map.of(), new CancellationSignal());
+    Message preAttributed =
+        new Message(
+            Role.USER,
+            List.of(new TextContent("remembered")),
+            new MessageAttribution("AIContextProvider", "vector-store", "other-session"),
+            Map.of(),
+            null);
+
+    sessionContext.addContextMessages("rag", List.of(preAttributed));
+
+    // Attribution is content provenance and may be preserved across sessions; the contribution
+    // records which provider of this run actually handed the message over.
+    assertThat(sessionContext.contextContributions())
+        .singleElement()
+        .satisfies(
+            contribution -> {
+              assertThat(contribution.sourceId()).isEqualTo("rag");
+              assertThat(contribution.message().attribution().sourceId()).isEqualTo("vector-store");
+            });
+  }
+
+  @Test
+  void theUnattributedHookContributesWithoutAContributingProvider() {
+    SessionContext sessionContext =
+        new SessionContext(null, List.of(), Map.of(), new CancellationSignal());
+
+    sessionContext.addContextMessages(List.of(sampleMessage("external")));
+
+    assertThat(sessionContext.contextContributions())
+        .singleElement()
+        .extracting(ContextMessageContribution::sourceId)
+        .isNull();
+  }
+
+  @Test
+  void contextContributionsReturnAnImmutableSnapshot() {
+    SessionContext sessionContext =
+        new SessionContext(null, List.of(), Map.of(), new CancellationSignal());
+    sessionContext.addContextMessages("rag", List.of(sampleMessage("retrieved")));
+
+    List<ContextMessageContribution> snapshot = sessionContext.contextContributions();
+
+    assertThatThrownBy(
+            () -> snapshot.add(new ContextMessageContribution("rag", sampleMessage("other"))))
+        .isInstanceOf(UnsupportedOperationException.class);
+    assertThat(sessionContext.contextContributions()).hasSize(1);
+  }
+
+  @Test
+  void aContributionRejectsANullMessageAndABlankSource() {
+    Message message = sampleMessage("retrieved");
+
+    assertThatThrownBy(() -> new ContextMessageContribution("rag", null))
+        .isInstanceOf(NullPointerException.class)
+        .hasMessage("message must not be null");
+    assertThatThrownBy(() -> new ContextMessageContribution("  ", message))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessage("sourceId must not be blank");
+  }
+
   private static Message sampleMessage(String text) {
     return new Message(Role.ASSISTANT, List.of(new TextContent(text)));
   }
