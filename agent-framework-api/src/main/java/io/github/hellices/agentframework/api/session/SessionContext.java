@@ -87,6 +87,11 @@ public final class SessionContext {
     return metadata;
   }
 
+  /** Returns the run request attributes exposed as session context metadata. */
+  public Map<String, Object> attributes() {
+    return metadata;
+  }
+
   public CancellationSignal cancellationSignal() {
     return cancellationSignal;
   }

@@ -93,6 +93,16 @@ class SessionContextTest {
   }
 
   @Test
+  void attributesAliasesRequestMetadata() {
+    Map<String, Object> attributes = Map.of("tenant", "test");
+    SessionContext sessionContext =
+        new SessionContext(null, List.of(), attributes, new CancellationSignal());
+
+    assertThat(sessionContext.attributes()).isEqualTo(attributes);
+    assertThat(sessionContext.attributes()).isSameAs(sessionContext.metadata());
+  }
+
+  @Test
   void addContextMessagesAppendsInOrderAcrossMultipleCalls() {
     SessionContext sessionContext =
         new SessionContext(null, List.of(), Map.of(), new CancellationSignal());
