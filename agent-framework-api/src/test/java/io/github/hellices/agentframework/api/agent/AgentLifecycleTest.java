@@ -14,6 +14,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Flow;
 import java.util.concurrent.TimeUnit;
@@ -302,7 +303,7 @@ class AgentLifecycleTest {
   }
 
   @Test
-  void responseJoinCannotReturnBeforeSessionContextResponseIsPopulated() throws Exception {
+  void responseJoinCannotReturnBeforeSessionContextResponseIsPopulated() {
     CompletableFuture<AgentResponse> manualSource = new CompletableFuture<>();
     ManualCompletionAgent agent = new ManualCompletionAgent("manual-agent", manualSource);
 
@@ -310,44 +311,47 @@ class AgentLifecycleTest {
     SessionContext sessionContext = agent.contexts.get(0);
     AgentResponse expected = sampleResponse("manual-agent");
 
-    CountDownLatch joinFinished = new CountDownLatch(1);
-    AtomicReference<AgentResponse> joinedResponse = new AtomicReference<>();
-    AtomicReference<AgentResponse> sessionResponseAtJoinReturn = new AtomicReference<>();
-    Thread joiner =
-        new Thread(
-            () -> {
-              joinedResponse.set(run.response().toCompletableFuture().join());
-              sessionResponseAtJoinReturn.set(sessionContext.response().orElse(null));
-              joinFinished.countDown();
-            });
-    joiner.setDaemon(true);
-    joiner.start();
-    awaitThreadParked(joiner);
+    // A dependent stage chained off the exposed response stage can only run once that stage has
+    // completed, so capturing sessionContext.response() from inside it proves the session context
+    // slot is filled no later than the exposed response stage completes.
+    AtomicReference<AgentResponse> sessionResponseAtStageCompletion = new AtomicReference<>();
+    CompletionStage<AgentResponse> observedCompletion =
+        run.response()
+            .whenComplete(
+                (value, failure) ->
+                    sessionResponseAtStageCompletion.set(sessionContext.response().orElse(null)));
 
     manualSource.complete(expected);
 
-    assertThat(joinFinished.await(5, TimeUnit.SECONDS)).isTrue();
-    // Not just "populated by the time join() returns" but the very same instance join() handed
-    // back, proving the exposed response stage is genuinely downstream of the session context
+    // Not just "populated eventually" but the very same instance handed to the dependent stage,
+    // proving the exposed response stage is genuinely downstream of the session context
     // completion rather than a coincidentally-ordered sibling callback.
-    assertThat(sessionResponseAtJoinReturn.get()).isSameAs(joinedResponse.get());
+    assertThat(observedCompletion.toCompletableFuture().join()).isSameAs(expected);
+    assertThat(sessionResponseAtStageCompletion.get()).isSameAs(expected);
   }
 
   @Test
   void withCompletionResponseCannotCompleteBeforeCompletionActionFinishes() throws Exception {
     CompletableFuture<AgentResponse> source = new CompletableFuture<>();
     AgentRun run = new AgentRun(source, new CancellationSignal());
+    CountDownLatch actionStarted = new CountDownLatch(1);
+    CountDownLatch releaseAction = new CountDownLatch(1);
     AtomicBoolean actionFinished = new AtomicBoolean();
     AgentRun observed =
         run.withCompletion(
             (value, failure) -> {
-              // A deliberate delay widens the window in which a naively-derived response stage
-              // (one that doesn't truly wait for this action) would return early.
-              sleepQuietly(200);
+              actionStarted.countDown();
+              // Bounded wait used only as hang protection; the test releases this latch itself.
+              awaitLatch(releaseAction);
               actionFinished.set(true);
             });
 
-    source.complete(sampleResponse("manual-agent"));
+    CompletableFuture.runAsync(() -> source.complete(sampleResponse("manual-agent")));
+
+    assertThat(actionStarted.await(5, TimeUnit.SECONDS)).isTrue();
+    assertThat(observed.response().toCompletableFuture().isDone()).isFalse();
+
+    releaseAction.countDown();
     observed.response().toCompletableFuture().join();
 
     assertThat(actionFinished.get()).isTrue();
@@ -369,39 +373,38 @@ class AgentLifecycleTest {
             Map.of(),
             null);
     AgentStreamingRun<AgentResponseUpdate> run = AgentStreamingRun.fromUpdate(update);
+    CountDownLatch actionStarted = new CountDownLatch(1);
+    CountDownLatch releaseAction = new CountDownLatch(1);
     AtomicBoolean actionFinished = new AtomicBoolean();
     AgentStreamingRun<AgentResponseUpdate> observed =
         run.withCompletion(
             (value, failure) -> {
-              sleepQuietly(200);
+              actionStarted.countDown();
+              // Bounded wait used only as hang protection; the test releases this latch itself.
+              awaitLatch(releaseAction);
               actionFinished.set(true);
             });
 
-    consume(observed.updates());
+    CompletableFuture<Void> consumption =
+        CompletableFuture.runAsync(() -> consume(observed.updates()));
+
+    assertThat(actionStarted.await(5, TimeUnit.SECONDS)).isTrue();
+    assertThat(observed.response().toCompletableFuture().isDone()).isFalse();
+
+    releaseAction.countDown();
+    consumption.join();
     observed.response().toCompletableFuture().join();
 
     assertThat(actionFinished.get()).isTrue();
   }
 
-  private static void sleepQuietly(long millis) {
+  private static void awaitLatch(CountDownLatch latch) {
     try {
-      Thread.sleep(millis);
+      assertThat(latch.await(5, TimeUnit.SECONDS)).isTrue();
     } catch (InterruptedException interrupted) {
       Thread.currentThread().interrupt();
       throw new AssertionError("unexpected interruption", interrupted);
     }
-  }
-
-  private static void awaitThreadParked(Thread thread) throws InterruptedException {
-    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
-    while (System.nanoTime() < deadline) {
-      Thread.State state = thread.getState();
-      if (state == Thread.State.WAITING || state == Thread.State.TIMED_WAITING) {
-        return;
-      }
-      Thread.sleep(5);
-    }
-    throw new IllegalStateException("joiner thread never parked before the deadline");
   }
 
   private static AgentResponse sampleResponse(String agentId) {
