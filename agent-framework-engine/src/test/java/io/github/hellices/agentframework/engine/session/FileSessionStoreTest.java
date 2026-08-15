@@ -12,11 +12,10 @@ import java.time.Instant;
 import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -115,6 +114,26 @@ class FileSessionStoreTest {
   }
 
   @Test
+  void oversizedSnapshotsFailBeforeDecodingAndRemainAvailableForRecovery() throws Exception {
+    FileSessionStore store =
+        new FileSessionStore(temporaryDirectory, new JacksonSessionSnapshotCodec());
+    store.save(snapshot("session-1", 0, "value")).toCompletableFuture().join();
+    Path stored;
+    try (Stream<Path> files = Files.list(temporaryDirectory)) {
+      stored = files.findFirst().orElseThrow();
+    }
+    Files.write(stored, new byte[SessionSnapshotLimits.MAX_BYTES + 1]);
+
+    assertThatThrownBy(() -> store.load("session-1").toCompletableFuture().join())
+        .isInstanceOf(CompletionException.class)
+        .hasCauseInstanceOf(SessionSnapshotSchemaException.class);
+    assertThat(stored).exists();
+    try (Stream<Path> files = Files.list(temporaryDirectory)) {
+      assertThat(files.filter(path -> fileName(path).endsWith(".corrupt"))).isEmpty();
+    }
+  }
+
+  @Test
   void noContentSnapshotsAreQuarantinedAsParseCorruption() throws Exception {
     for (String content : new String[] {"", " \n\t"}) {
       Path root = temporaryDirectory.resolve("case-" + content.length());
@@ -150,30 +169,43 @@ class FileSessionStoreTest {
     Files.writeString(stored, "{");
     codec.blockNextDecode();
 
-    CompletableFuture<Void> load =
-        CompletableFuture.runAsync(
-            () ->
-                assertThatThrownBy(() -> readerStore.load("session-1").toCompletableFuture().join())
-                    .isInstanceOf(CompletionException.class)
-                    .hasCauseInstanceOf(SessionSnapshotParseException.class));
-    assertThat(codec.awaitDecodeStarted()).isTrue();
-    CountDownLatch saveStarted = new CountDownLatch(1);
-    SessionSnapshot replacement = snapshot("session-1", 1, "replacement");
-    CompletableFuture<Void> save =
-        CompletableFuture.runAsync(
+    AtomicReference<RuntimeException> loadFailure = new AtomicReference<>();
+    Thread load =
+        new Thread(
             () -> {
-              saveStarted.countDown();
-              writerStore.save(replacement).toCompletableFuture().join();
+              try {
+                readerStore.load("session-1").toCompletableFuture().join();
+              } catch (RuntimeException failure) {
+                loadFailure.set(failure);
+              }
             });
+    load.start();
+    assertThat(codec.awaitDecodeStarted()).isTrue();
+    SessionSnapshot replacement = snapshot("session-1", 1, "replacement");
+    AtomicReference<RuntimeException> saveFailure = new AtomicReference<>();
+    Thread save =
+        new Thread(
+            () -> {
+              try {
+                writerStore.save(replacement).toCompletableFuture().join();
+              } catch (RuntimeException failure) {
+                saveFailure.set(failure);
+              }
+            });
+    save.start();
     try {
-      assertThat(saveStarted.await(5, TimeUnit.SECONDS)).isTrue();
-      assertThatThrownBy(() -> save.get(200, TimeUnit.MILLISECONDS))
-          .isInstanceOf(TimeoutException.class);
+      awaitBlocked(save);
     } finally {
       codec.releaseDecode();
     }
-    load.join();
-    save.join();
+    load.join(5_000);
+    save.join(5_000);
+    assertThat(load.isAlive()).isFalse();
+    assertThat(save.isAlive()).isFalse();
+    assertThat(loadFailure.get())
+        .isInstanceOf(CompletionException.class)
+        .hasCauseInstanceOf(SessionSnapshotParseException.class);
+    assertThat(saveFailure.get()).isNull();
     assertThat(writerStore.load("session-1").toCompletableFuture().join()).contains(replacement);
   }
 
@@ -248,6 +280,16 @@ class FileSessionStoreTest {
 
   private static String fileName(Path path) {
     return Objects.requireNonNull(path.getFileName()).toString();
+  }
+
+  private static void awaitBlocked(Thread thread) throws InterruptedException {
+    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+    while (thread.isAlive()
+        && thread.getState() != Thread.State.BLOCKED
+        && System.nanoTime() < deadline) {
+      Thread.sleep(10);
+    }
+    assertThat(thread.getState()).isEqualTo(Thread.State.BLOCKED);
   }
 
   private static final class BlockingDecodeCodec implements SessionSnapshotCodec {

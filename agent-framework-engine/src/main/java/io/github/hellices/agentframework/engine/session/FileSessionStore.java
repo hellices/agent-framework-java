@@ -3,7 +3,7 @@ package io.github.hellices.agentframework.engine.session;
 import io.github.hellices.agentframework.api.session.SessionSnapshot;
 import io.github.hellices.agentframework.spi.session.SessionSnapshotCodec;
 import io.github.hellices.agentframework.spi.session.SessionStore;
-import java.io.ByteArrayOutputStream;
+import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.ByteBuffer;
@@ -29,15 +29,14 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
 
 public final class FileSessionStore implements SessionStore {
 
-  private static final ConcurrentMap<Path, Object> ROOT_LOCKS = new ConcurrentHashMap<>();
+  private static final Object[] ROOT_LOCKS = createRootLocks();
 
   private final Path root;
   private final Object rootLock;
+  private final boolean directoryForceSupported;
   private final SessionSnapshotCodec codec;
 
   public FileSessionStore(Path root, SessionSnapshotCodec codec) {
@@ -46,7 +45,8 @@ public final class FileSessionStore implements SessionStore {
     try {
       Files.createDirectories(configuredRoot);
       this.root = configuredRoot.toRealPath();
-      this.rootLock = ROOT_LOCKS.computeIfAbsent(this.root, ignored -> new Object());
+      this.rootLock = ROOT_LOCKS[Math.floorMod(this.root.hashCode(), ROOT_LOCKS.length)];
+      this.directoryForceSupported = File.separatorChar != '\\';
     } catch (IOException failure) {
       throw new FileSessionStoreException("failed to initialize session store root", failure);
     }
@@ -197,10 +197,12 @@ public final class FileSessionStore implements SessionStore {
   private static byte[] readNoFollow(Path target) throws IOException {
     Set<OpenOption> options = Set.of(StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS);
     try (SeekableByteChannel channel = Files.newByteChannel(target, options);
-        InputStream input = Channels.newInputStream(channel);
-        ByteArrayOutputStream output = new ByteArrayOutputStream()) {
-      input.transferTo(output);
-      return output.toByteArray();
+        InputStream input = Channels.newInputStream(channel)) {
+      byte[] encoded = input.readNBytes(SessionSnapshotLimits.MAX_BYTES + 1);
+      if (encoded.length > SessionSnapshotLimits.MAX_BYTES) {
+        throw new SessionSnapshotSchemaException("session snapshot exceeds the 1 MiB limit");
+      }
+      return encoded;
     }
   }
 
@@ -219,7 +221,10 @@ public final class FileSessionStore implements SessionStore {
     }
   }
 
-  private static void forceDirectory(Path directory) throws IOException {
+  private void forceDirectory(Path directory) throws IOException {
+    if (!directoryForceSupported) {
+      return;
+    }
     try (FileChannel channel = FileChannel.open(directory, StandardOpenOption.READ)) {
       channel.force(true);
     }
@@ -229,7 +234,11 @@ public final class FileSessionStore implements SessionStore {
       Path target, String targetFileName, SessionSnapshotParseException parseFailure) {
     try {
       Path quarantined = root.resolve(targetFileName + "." + UUID.randomUUID() + ".corrupt");
-      Files.move(target, quarantined, StandardCopyOption.ATOMIC_MOVE);
+      try {
+        Files.move(target, quarantined, StandardCopyOption.ATOMIC_MOVE);
+      } catch (AtomicMoveNotSupportedException failure) {
+        Files.move(target, quarantined);
+      }
       forceDirectory(root);
     } catch (IOException | FileSessionStoreException failure) {
       parseFailure.addSuppressed(
@@ -245,5 +254,13 @@ public final class FileSessionStore implements SessionStore {
       return (RuntimeException) failure;
     }
     return new FileSessionStoreException(operation, failure);
+  }
+
+  private static Object[] createRootLocks() {
+    Object[] locks = new Object[64];
+    for (int index = 0; index < locks.length; index++) {
+      locks[index] = new Object();
+    }
+    return locks;
   }
 }
