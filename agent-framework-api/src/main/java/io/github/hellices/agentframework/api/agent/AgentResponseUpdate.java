@@ -15,6 +15,7 @@ public record AgentResponseUpdate(
     String authorName,
     Instant createdAt,
     FinishReason finishReason,
+    String continuationToken,
     List<Message> messages,
     Usage usage,
     Map<String, Object> additionalProperties,
@@ -23,10 +24,34 @@ public record AgentResponseUpdate(
   public AgentResponseUpdate {
     Objects.requireNonNull(agentId, "agentId must not be null");
     Objects.requireNonNull(responseId, "responseId must not be null");
-    Objects.requireNonNull(finishReason, "finishReason must not be null");
     messages = messages == null ? List.of() : List.copyOf(messages);
     additionalProperties =
         additionalProperties == null ? Map.of() : Map.copyOf(additionalProperties);
+  }
+
+  public AgentResponseUpdate(
+      String agentId,
+      String responseId,
+      String messageId,
+      String authorName,
+      Instant createdAt,
+      FinishReason finishReason,
+      List<Message> messages,
+      Usage usage,
+      Map<String, Object> additionalProperties,
+      Object rawRepresentation) {
+    this(
+        agentId,
+        responseId,
+        messageId,
+        authorName,
+        createdAt,
+        finishReason,
+        null,
+        messages,
+        usage,
+        additionalProperties,
+        rawRepresentation);
   }
 
   public String text() {

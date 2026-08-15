@@ -10,6 +10,7 @@ import java.lang.reflect.Modifier;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Flow;
 import org.junit.jupiter.api.Test;
 
 class AgentLifecycleTest {
@@ -85,7 +86,7 @@ class AgentLifecycleTest {
     Agent agent = new DelegatingAgent(delegate) {};
 
     AgentRun run = agent.run("hello");
-    AgentStreamingRun streamingRun = agent.runStreaming("hello");
+    AgentStreamingRun<AgentResponseUpdate> streamingRun = agent.runStreaming("hello");
 
     assertThat(agent.id()).isEqualTo("delegate-id");
     assertThat(agent.name()).isEqualTo("TestAgent");
@@ -99,8 +100,9 @@ class AgentLifecycleTest {
     Agent wrapped = new DelegatingAgent(new DelegatingAgent(baseAgent) {}) {};
 
     assertThat(wrapped.run("hello").response().toCompletableFuture().get().text()).isEqualTo("ok");
-    assertThat(wrapped.runStreaming("hello").response().toCompletableFuture().get().text())
-        .isEqualTo("ok");
+    AgentStreamingRun<AgentResponseUpdate> streamingRun = wrapped.runStreaming("hello");
+    consume(streamingRun.updates());
+    assertThat(streamingRun.response().toCompletableFuture().get().text()).isEqualTo("ok");
   }
 
   @Test
@@ -151,6 +153,19 @@ class AgentLifecycleTest {
     assertThat(agent.lastContext.attributes()).containsEntry("traceId", "trace-42");
   }
 
+  @Test
+  void streamingRunHandleCancelsTheRequestSignal() {
+    TestAgent agent = new TestAgent("test-agent");
+    CancellationSignal signal = new CancellationSignal();
+    AgentRunRequest request =
+        new AgentRunRequest(
+            Message.normalize("hello"), null, new AgentRunOptions(), signal, Map.of());
+
+    agent.runStreaming(request).cancel();
+
+    assertThat(signal.isCancelled()).isTrue();
+  }
+
   private static class TestAgent extends Agent {
     private TestAgent(String id) {
       super(id, "TestAgent", "agent test");
@@ -173,9 +188,9 @@ class AgentLifecycleTest {
     }
 
     @Override
-    protected AgentStreamingRun runStreamingInternal(
+    protected AgentStreamingRun<AgentResponseUpdate> runStreamingInternal(
         AgentRunContext context, AgentRunRequest request) {
-      return new AgentStreamingRun(
+      return AgentStreamingRun.fromUpdate(
           new AgentResponseUpdate(
               id(),
               "response-1",
@@ -186,7 +201,8 @@ class AgentLifecycleTest {
               List.of(new Message(Role.ASSISTANT, List.of(new TextContent("ok")))),
               null,
               Map.of(),
-              null));
+              null),
+          request.cancellationSignal());
     }
   }
 
@@ -211,7 +227,7 @@ class AgentLifecycleTest {
     }
 
     @Override
-    protected AgentStreamingRun runStreamingInternal(
+    protected AgentStreamingRun<AgentResponseUpdate> runStreamingInternal(
         AgentRunContext context, AgentRunRequest request) {
       executedStreamingRun = true;
       return super.runStreamingInternal(context, request);
@@ -230,5 +246,30 @@ class AgentLifecycleTest {
       lastContext = context;
       return super.runInternal(context, request);
     }
+  }
+
+  private static <T> void consume(Flow.Publisher<T> publisher) {
+    CompletableFuture<Void> completion = new CompletableFuture<>();
+    publisher.subscribe(
+        new Flow.Subscriber<>() {
+          @Override
+          public void onSubscribe(Flow.Subscription subscription) {
+            subscription.request(Long.MAX_VALUE);
+          }
+
+          @Override
+          public void onNext(T item) {}
+
+          @Override
+          public void onError(Throwable throwable) {
+            completion.completeExceptionally(throwable);
+          }
+
+          @Override
+          public void onComplete() {
+            completion.complete(null);
+          }
+        });
+    completion.join();
   }
 }
