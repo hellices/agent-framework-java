@@ -5,11 +5,13 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.github.hellices.agentframework.api.agent.AgentSession;
 import io.github.hellices.agentframework.api.message.Message;
+import io.github.hellices.agentframework.api.message.MessageAttribution;
 import io.github.hellices.agentframework.api.message.Role;
 import io.github.hellices.agentframework.api.message.TextContent;
 import io.github.hellices.agentframework.api.message.ToolCallContent;
 import io.github.hellices.agentframework.api.session.SessionSnapshot;
 import io.github.hellices.agentframework.api.session.SessionStateEntry;
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -39,7 +41,12 @@ class StateCodecRegistryTest {
   void frameworkMessageCodecIsRegisteredByDefault() {
     StateCodecRegistry registry = StateCodecRegistry.builder().build();
     Message message =
-        new Message(Role.USER, List.of(new TextContent("hello")), null, Map.of(), new Object());
+        new Message(
+            Role.USER,
+            List.of(new TextContent("hello")),
+            new MessageAttribution("memory", "source-1", "origin-1"),
+            Map.of("retries", 1, "ratio", 0.5),
+            new Object());
     SessionSnapshot snapshot =
         registry.snapshot(
             new AgentSession("session-1", null, Map.of("message", message)), 0, Instant.EPOCH);
@@ -52,6 +59,11 @@ class StateCodecRegistryTest {
             value -> {
               assertThat(value.role()).isEqualTo(Role.USER);
               assertThat(value.text()).isEqualTo("hello");
+              assertThat(value.attribution())
+                  .isEqualTo(new MessageAttribution("memory", "source-1", "origin-1"));
+              assertThat(value.additionalProperties())
+                  .containsEntry("retries", 1L)
+                  .containsEntry("ratio", new BigDecimal("0.5"));
               assertThat(value.rawRepresentation()).isNull();
             });
   }

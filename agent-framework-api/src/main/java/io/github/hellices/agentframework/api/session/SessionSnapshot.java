@@ -26,6 +26,9 @@ public record SessionSnapshot(
     if (sessionId == null || sessionId.isBlank()) {
       throw new IllegalArgumentException("sessionId must not be blank");
     }
+    if (serviceSessionId != null && serviceSessionId.isBlank()) {
+      throw new IllegalArgumentException("serviceSessionId must not be blank");
+    }
     if (revision < 0) {
       throw new IllegalArgumentException("revision must not be negative");
     }

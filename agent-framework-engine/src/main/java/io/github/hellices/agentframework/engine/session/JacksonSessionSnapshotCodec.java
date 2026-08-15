@@ -5,7 +5,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.hellices.agentframework.api.session.SessionSnapshot;
 import io.github.hellices.agentframework.api.session.SessionStateEntry;
 import io.github.hellices.agentframework.spi.session.SessionSnapshotCodec;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.OutputStream;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -58,12 +60,11 @@ public final class JacksonSessionSnapshotCodec implements SessionSnapshotCodec {
               state.put(key, encodedEntry);
             });
     envelope.put("state", state);
-    try {
-      byte[] encoded = objectMapper.writeValueAsBytes(envelope);
-      if (encoded.length > MAX_SNAPSHOT_BYTES) {
-        throw new SessionSnapshotSchemaException("session snapshot exceeds the 1 MiB limit");
-      }
-      return encoded;
+    try (BoundedOutputStream output = new BoundedOutputStream(MAX_SNAPSHOT_BYTES)) {
+      objectMapper.writeValue(output, envelope);
+      return output.toByteArray();
+    } catch (SnapshotSizeLimitException failure) {
+      throw new SessionSnapshotSchemaException("session snapshot exceeds the 1 MiB limit", failure);
     } catch (IOException failure) {
       throw new SessionSnapshotParseException("failed to encode session snapshot", failure);
     }
@@ -297,6 +298,41 @@ public final class JacksonSessionSnapshotCodec implements SessionSnapshotCodec {
       throw new SessionSnapshotSchemaException("snapshot field must be text: " + field);
     }
     return value.asText();
+  }
+
+  private static final class BoundedOutputStream extends OutputStream {
+    private final int maximumBytes;
+    private final ByteArrayOutputStream delegate = new ByteArrayOutputStream();
+
+    private BoundedOutputStream(int maximumBytes) {
+      this.maximumBytes = maximumBytes;
+    }
+
+    @Override
+    public void write(int value) throws IOException {
+      ensureCapacity(1);
+      delegate.write(value);
+    }
+
+    @Override
+    public void write(byte[] values, int offset, int length) throws IOException {
+      ensureCapacity(length);
+      delegate.write(values, offset, length);
+    }
+
+    private void ensureCapacity(int additionalBytes) throws SnapshotSizeLimitException {
+      if (delegate.size() + (long) additionalBytes > maximumBytes) {
+        throw new SnapshotSizeLimitException();
+      }
+    }
+
+    private byte[] toByteArray() {
+      return delegate.toByteArray();
+    }
+  }
+
+  private static final class SnapshotSizeLimitException extends IOException {
+    private static final long serialVersionUID = 1L;
   }
 
   private static String optionalText(JsonNode node, String field) {
