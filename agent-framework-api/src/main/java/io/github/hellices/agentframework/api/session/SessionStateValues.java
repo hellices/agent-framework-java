@@ -12,10 +12,18 @@ public final class SessionStateValues {
 
   private static final int MAX_DECIMAL_TEXT_LENGTH = 1_024;
   private static final int MAX_DECIMAL_SCALE = 10_000;
+  private static final int MAX_NESTING_DEPTH = 64;
 
   private SessionStateValues() {}
 
   public static Object immutableCopy(Object value) {
+    return immutableCopy(value, 0);
+  }
+
+  private static Object immutableCopy(Object value, int depth) {
+    if (depth > MAX_NESTING_DEPTH) {
+      throw new IllegalArgumentException("state payload exceeds the nesting depth limit");
+    }
     if (value == null || value instanceof String || value instanceof Boolean) {
       return value;
     }
@@ -64,14 +72,14 @@ public final class SessionStateValues {
         if (!(entry.getKey() instanceof String key)) {
           throw new IllegalArgumentException("state payload map keys must be strings");
         }
-        copy.put(key, immutableCopy(entry.getValue()));
+        copy.put(key, immutableCopy(entry.getValue(), depth + 1));
       }
       return Collections.unmodifiableMap(copy);
     }
     if (value instanceof List<?> list) {
       List<Object> copy = new ArrayList<>();
       for (Object item : list) {
-        copy.add(immutableCopy(item));
+        copy.add(immutableCopy(item, depth + 1));
       }
       return Collections.unmodifiableList(copy);
     }

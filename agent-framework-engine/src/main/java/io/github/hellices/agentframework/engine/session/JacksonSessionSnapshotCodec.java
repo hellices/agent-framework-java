@@ -18,6 +18,7 @@ public final class JacksonSessionSnapshotCodec implements SessionSnapshotCodec {
   private static final int MAX_SNAPSHOT_BYTES = 1_048_576;
   private static final int MAX_DECIMAL_TEXT_LENGTH = 1_024;
   private static final int MAX_DECIMAL_SCALE = 10_000;
+  private static final int MAX_PAYLOAD_DEPTH = 64;
 
   private final ObjectMapper objectMapper;
 
@@ -151,6 +152,13 @@ public final class JacksonSessionSnapshotCodec implements SessionSnapshotCodec {
   }
 
   private static Object wireValue(Object value) {
+    return wireValue(value, 0);
+  }
+
+  private static Object wireValue(Object value, int depth) {
+    if (depth > MAX_PAYLOAD_DEPTH) {
+      throw new SessionSnapshotSchemaException("snapshot payload exceeds the nesting depth limit");
+    }
     Map<String, Object> encoded = new LinkedHashMap<>();
     if (value == null) {
       encoded.put("kind", "null");
@@ -168,7 +176,7 @@ public final class JacksonSessionSnapshotCodec implements SessionSnapshotCodec {
       encoded.put("value", decimalText(decimal));
     } else if (value instanceof List<?> list) {
       encoded.put("kind", "array");
-      encoded.put("value", list.stream().map(JacksonSessionSnapshotCodec::wireValue).toList());
+      encoded.put("value", list.stream().map(item -> wireValue(item, depth + 1)).toList());
     } else if (value instanceof Map<?, ?> map) {
       Map<String, Object> object = new java.util.TreeMap<>();
       map.forEach(
@@ -177,7 +185,7 @@ public final class JacksonSessionSnapshotCodec implements SessionSnapshotCodec {
               throw new SessionSnapshotSchemaException(
                   "snapshot payload object keys must be strings");
             }
-            object.put(text, wireValue(item));
+            object.put(text, wireValue(item, depth + 1));
           });
       encoded.put("kind", "object");
       encoded.put("value", object);
@@ -189,6 +197,13 @@ public final class JacksonSessionSnapshotCodec implements SessionSnapshotCodec {
   }
 
   private static Object logicalValue(JsonNode node) {
+    return logicalValue(node, 0);
+  }
+
+  private static Object logicalValue(JsonNode node, int depth) {
+    if (depth > MAX_PAYLOAD_DEPTH) {
+      throw new SessionSnapshotSchemaException("snapshot payload exceeds the nesting depth limit");
+    }
     if (node == null || !node.isObject()) {
       throw new SessionSnapshotSchemaException("snapshot payload value must be typed");
     }
@@ -200,27 +215,28 @@ public final class JacksonSessionSnapshotCodec implements SessionSnapshotCodec {
       case "boolean" -> requiredBoolean(value, "boolean payload");
       case "integer" -> parseLong(requiredText(value, "integer payload"));
       case "decimal" -> parseDecimal(requiredText(value, "decimal payload"));
-      case "array" -> decodeArray(value);
-      case "object" -> decodeObject(value);
+      case "array" -> decodeArray(value, depth);
+      case "object" -> decodeObject(value, depth);
       default -> throw new SessionSnapshotSchemaException("unknown snapshot payload kind: " + kind);
     };
   }
 
-  private static Object decodeArray(JsonNode node) {
+  private static Object decodeArray(JsonNode node, int depth) {
     if (node == null || !node.isArray()) {
       throw new SessionSnapshotSchemaException("array payload must contain an array");
     }
     List<Object> values = new ArrayList<>();
-    node.forEach(item -> values.add(logicalValue(item)));
+    node.forEach(item -> values.add(logicalValue(item, depth + 1)));
     return java.util.Collections.unmodifiableList(values);
   }
 
-  private static Object decodeObject(JsonNode node) {
+  private static Object decodeObject(JsonNode node, int depth) {
     if (node == null || !node.isObject()) {
       throw new SessionSnapshotSchemaException("object payload must contain an object");
     }
     Map<String, Object> values = new java.util.TreeMap<>();
-    node.properties().forEach(entry -> values.put(entry.getKey(), logicalValue(entry.getValue())));
+    node.properties()
+        .forEach(entry -> values.put(entry.getKey(), logicalValue(entry.getValue(), depth + 1)));
     return java.util.Collections.unmodifiableMap(values);
   }
 

@@ -99,6 +99,11 @@ class SessionSnapshotStoreTest {
     assertThatThrownBy(() -> codec.decode(new byte[1_048_577]))
         .isInstanceOf(SessionSnapshotSchemaException.class)
         .hasMessageContaining("1 MiB");
+    assertThatThrownBy(
+            () ->
+                codec.decode(snapshotJson(nestedArrayPayload(65)).getBytes(StandardCharsets.UTF_8)))
+        .isInstanceOf(SessionSnapshotSchemaException.class)
+        .hasMessageContaining("nesting depth");
     SessionSnapshot oversized =
         new SessionSnapshot(
             "session",
@@ -156,5 +161,17 @@ class SessionSnapshotStoreTest {
         + "\"state\":{\"value\":{\"typeId\":\"test\",\"codecVersion\":1,\"payload\":"
         + payload
         + "}}}";
+  }
+
+  private static String nestedArrayPayload(int depth) {
+    StringBuilder value = new StringBuilder();
+    for (int index = 0; index < depth; index++) {
+      value.append("{\"kind\":\"array\",\"value\":[");
+    }
+    value.append("{\"kind\":\"null\"}");
+    for (int index = 0; index < depth; index++) {
+      value.append("]}");
+    }
+    return value.toString();
   }
 }
