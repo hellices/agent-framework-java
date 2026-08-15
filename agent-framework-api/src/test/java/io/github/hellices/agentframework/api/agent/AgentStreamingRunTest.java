@@ -77,6 +77,43 @@ class AgentStreamingRunTest {
   }
 
   @Test
+  void cancellingTheRunPreventsFinalization() {
+    CancellationSignal signal = new CancellationSignal();
+    AgentStreamingRun<AgentResponseUpdate> run =
+        AgentStreamingRun.fromUpdate(update("message-1", "partial"), signal);
+
+    run.cancel();
+    List<String> signals = new ArrayList<>();
+    run.updates()
+        .subscribe(
+            new Flow.Subscriber<>() {
+              @Override
+              public void onSubscribe(Flow.Subscription subscription) {
+                subscription.request(Long.MAX_VALUE);
+              }
+
+              @Override
+              public void onNext(AgentResponseUpdate item) {
+                signals.add("onNext");
+              }
+
+              @Override
+              public void onError(Throwable throwable) {
+                signals.add("onError");
+              }
+
+              @Override
+              public void onComplete() {
+                signals.add("onComplete");
+              }
+            });
+
+    assertThat(signal.isCancelled()).isTrue();
+    assertThat(signals).containsExactly("onComplete");
+    assertThat(run.response().toCompletableFuture()).isNotDone();
+  }
+
+  @Test
   void mapperFailureCancelsTheSourceAndSignalsTheError() {
     CancellationSignal signal = new CancellationSignal();
     AgentStreamingRun<AgentResponseUpdate> run =

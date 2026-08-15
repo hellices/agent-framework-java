@@ -15,6 +15,7 @@ public final class AgentStreamingRun<T> {
   private final Flow.Publisher<T> updates;
   private final CompletionStage<AgentResponse> response;
   private final CancellationSignal cancellationSignal;
+  private final Runnable cancellationAction;
 
   public AgentStreamingRun(
       Flow.Publisher<T> updates,
@@ -24,6 +25,20 @@ public final class AgentStreamingRun<T> {
     this.response = Objects.requireNonNull(response, "response must not be null");
     this.cancellationSignal =
         cancellationSignal == null ? new CancellationSignal() : cancellationSignal;
+    this.cancellationAction = this.cancellationSignal::cancel;
+  }
+
+  private AgentStreamingRun(
+      Flow.Publisher<T> updates,
+      CompletionStage<AgentResponse> response,
+      CancellationSignal cancellationSignal,
+      Runnable cancellationAction) {
+    this.updates = Objects.requireNonNull(updates, "updates must not be null");
+    this.response = Objects.requireNonNull(response, "response must not be null");
+    this.cancellationSignal =
+        cancellationSignal == null ? new CancellationSignal() : cancellationSignal;
+    this.cancellationAction =
+        Objects.requireNonNull(cancellationAction, "cancellationAction must not be null");
   }
 
   public static AgentStreamingRun<AgentResponseUpdate> fromUpdate(AgentResponseUpdate update) {
@@ -36,10 +51,16 @@ public final class AgentStreamingRun<T> {
     CancellationSignal signal =
         cancellationSignal == null ? new CancellationSignal() : cancellationSignal;
     CompletableFuture<AgentResponse> response = new CompletableFuture<>();
+    FinalizingPublisher publisher =
+        new FinalizingPublisher(new SingleValuePublisher<>(update), response, signal);
     return new AgentStreamingRun<>(
-        new FinalizingPublisher(new SingleValuePublisher<>(update), response, signal),
+        publisher,
         response.minimalCompletionStage(),
-        signal);
+        signal,
+        () -> {
+          signal.cancel();
+          publisher.cancel();
+        });
   }
 
   public static AgentStreamingRun<AgentResponseUpdate> fromUpdates(
@@ -48,10 +69,15 @@ public final class AgentStreamingRun<T> {
     CancellationSignal signal =
         cancellationSignal == null ? new CancellationSignal() : cancellationSignal;
     CompletableFuture<AgentResponse> response = new CompletableFuture<>();
+    FinalizingPublisher publisher = new FinalizingPublisher(updates, response, signal);
     return new AgentStreamingRun<>(
-        new FinalizingPublisher(updates, response, signal),
+        publisher,
         response.minimalCompletionStage(),
-        signal);
+        signal,
+        () -> {
+          signal.cancel();
+          publisher.cancel();
+        });
   }
 
   public Flow.Publisher<T> updates() {
@@ -63,13 +89,13 @@ public final class AgentStreamingRun<T> {
   }
 
   public void cancel() {
-    cancellationSignal.cancel();
+    cancellationAction.run();
   }
 
   public <R> AgentStreamingRun<R> mapUpdates(Function<? super T, ? extends R> mapper) {
     Objects.requireNonNull(mapper, "mapper must not be null");
     return new AgentStreamingRun<>(
-        new MappingPublisher<>(updates, mapper), response, cancellationSignal);
+        new MappingPublisher<>(updates, mapper), response, cancellationSignal, cancellationAction);
   }
 
   private static final class FinalizingPublisher implements Flow.Publisher<AgentResponseUpdate> {
@@ -77,6 +103,8 @@ public final class AgentStreamingRun<T> {
     private final CompletableFuture<AgentResponse> response;
     private final CancellationSignal cancellationSignal;
     private final AtomicBoolean subscribed = new AtomicBoolean();
+    private final AtomicReference<Flow.Subscription> subscription = new AtomicReference<>();
+    private final AtomicReference<StreamState> state = new AtomicReference<>(StreamState.ACTIVE);
 
     private FinalizingPublisher(
         Flow.Publisher<AgentResponseUpdate> source,
@@ -85,6 +113,17 @@ public final class AgentStreamingRun<T> {
       this.source = source;
       this.response = response;
       this.cancellationSignal = cancellationSignal;
+    }
+
+    private boolean cancel() {
+      if (state.compareAndSet(StreamState.ACTIVE, StreamState.CANCELLED)) {
+        Flow.Subscription activeSubscription = subscription.get();
+        if (activeSubscription != null) {
+          activeSubscription.cancel();
+        }
+        return true;
+      }
+      return false;
     }
 
     @Override
@@ -97,29 +136,29 @@ public final class AgentStreamingRun<T> {
       }
 
       List<AgentResponseUpdate> bufferedUpdates = new ArrayList<>();
-      AtomicReference<StreamState> state = new AtomicReference<>(StreamState.ACTIVE);
-      AtomicBoolean cancellationRequested = new AtomicBoolean();
       source.subscribe(
           new Flow.Subscriber<>() {
             @Override
-            public void onSubscribe(Flow.Subscription subscription) {
+            public void onSubscribe(Flow.Subscription upstreamSubscription) {
+              subscription.set(upstreamSubscription);
+              if (state.get() != StreamState.ACTIVE) {
+                upstreamSubscription.cancel();
+                subscriber.onSubscribe(EmptySubscription.INSTANCE);
+                subscriber.onComplete();
+                return;
+              }
               subscriber.onSubscribe(
                   new Flow.Subscription() {
                     @Override
                     public void request(long n) {
-                      subscription.request(n);
+                      upstreamSubscription.request(n);
                     }
 
                     @Override
                     public void cancel() {
-                      if (!cancellationRequested.compareAndSet(false, true)) {
-                        return;
+                      if (FinalizingPublisher.this.cancel()) {
+                        cancellationSignal.cancel();
                       }
-                      if (!state.compareAndSet(StreamState.ACTIVE, StreamState.CANCELLED)) {
-                        return;
-                      }
-                      cancellationSignal.cancel();
-                      subscription.cancel();
                     }
                   });
             }
