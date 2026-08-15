@@ -2,7 +2,7 @@ package io.github.hellices.agentframework.api.message;
 
 import java.util.Map;
 
-public abstract sealed class Content permits TextContent {
+public abstract sealed class Content permits TextContent, ToolCallContent, ToolResultContent {
 
   private final Map<String, Object> additionalProperties;
   private final Object rawRepresentation;

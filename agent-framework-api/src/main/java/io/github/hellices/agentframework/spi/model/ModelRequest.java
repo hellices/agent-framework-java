@@ -2,6 +2,7 @@ package io.github.hellices.agentframework.spi.model;
 
 import io.github.hellices.agentframework.api.agent.CancellationSignal;
 import io.github.hellices.agentframework.api.message.Message;
+import io.github.hellices.agentframework.api.tool.ToolDefinition;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -10,12 +11,14 @@ public record ModelRequest(
     List<Message> messages,
     ModelRequestOptions options,
     CancellationSignal cancellationSignal,
+    List<ToolDefinition> tools,
     Map<String, Object> metadata) {
 
   public ModelRequest {
     messages = messages == null ? List.of() : List.copyOf(messages);
     options = options == null ? ModelRequestOptions.empty() : options;
     cancellationSignal = cancellationSignal == null ? new CancellationSignal() : cancellationSignal;
+    tools = tools == null ? List.of() : List.copyOf(tools);
     metadata = metadata == null ? Map.of() : Map.copyOf(metadata);
     for (Message message : messages) {
       Objects.requireNonNull(message, "messages must not contain null entries");
@@ -24,7 +27,15 @@ public record ModelRequest(
 
   public ModelRequest(
       List<Message> messages, ModelRequestOptions options, Map<String, Object> metadata) {
-    this(messages, options, new CancellationSignal(), metadata);
+    this(messages, options, new CancellationSignal(), List.of(), metadata);
+  }
+
+  public ModelRequest(
+      List<Message> messages,
+      ModelRequestOptions options,
+      CancellationSignal cancellationSignal,
+      Map<String, Object> metadata) {
+    this(messages, options, cancellationSignal, List.of(), metadata);
   }
 
   public static ModelRequest fromLegacyOptions(
@@ -33,6 +44,7 @@ public record ModelRequest(
         messages,
         ModelRequestOptions.fromLegacyOptions(legacyOptions),
         new CancellationSignal(),
+        List.of(),
         metadata);
   }
 
@@ -46,11 +58,12 @@ public record ModelRequest(
     }
     return messages.equals(that.messages)
         && options.equals(that.options)
+        && tools.equals(that.tools)
         && metadata.equals(that.metadata);
   }
 
   @Override
   public int hashCode() {
-    return Objects.hash(messages, options, metadata);
+    return Objects.hash(messages, options, tools, metadata);
   }
 }
