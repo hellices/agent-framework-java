@@ -12,8 +12,9 @@ This project does not build an application server or a dependency injection cont
 deliverable is an embeddable `AgentEngine`. A host runtime such as Spring Boot keeps owning object
 lifecycle, execution resources, security, transactions, and observability configuration.
 
-> **Status:** early. The build harness, requirements, and module skeleton are in place. Agent
-> behavior is not implemented yet. See [Current state](#current-state).
+> **Status:** early. Deterministic single-agent execution and the core function-tool loop are
+> implemented; sessions, provider adapters, and host integrations remain in progress. See
+> [Current state](#current-state).
 >
 > **API stability:** pre-1.0. Public contracts may evolve between requirement slices while the core
 > execution semantics are being established.
@@ -84,14 +85,31 @@ build-logic/                Gradle convention plugins
 build-tools/harness-policy/ Executable repository policy
 config/                     Checkstyle, PMD, SpotBugs configuration
 docs/                       Requirements, design, upstream analysis
+samples/sample-standalone/  Runnable standalone Agent.run example
 .harness/                   Agent artifact JSON schemas
 ```
 
 Planned grouping directories are `providers/`, `integrations/`, `starters/`, `protocols/`,
-`workflow/`, `compatibility-tests/`, and `samples/`. Each is created when its first module lands.
+`workflow/`, and `compatibility-tests/`. Each is created when its first module lands.
 
 Module rules are defined in [module composition](docs/design/module-composition.md) and enforced by
 `./gradlew policyCheck`.
+
+## Run a standalone agent
+
+The standalone sample assembles an `Agent` with an explicit deterministic `ModelClient`, then calls
+`agent.run(...)` without a server, dependency-injection container, provider credentials, or global
+registry.
+
+```bash
+./gradlew :samples:sample-standalone:run --args="hello"
+```
+
+Expected output:
+
+```text
+Standalone agent received: hello
+```
 
 ## Documentation
 
@@ -128,7 +146,7 @@ satisfies it. Reference the id in the commit message so the contract and the cod
 
 ## Current state
 
-The repository has a verified foundation and no agent behavior yet.
+The repository has a verified foundation and a runnable deterministic single-agent execution path.
 
 **In place**
 
@@ -137,15 +155,17 @@ The repository has a verified foundation and no agent behavior yet.
 - Agent artifact JSON schemas under `.harness/`
 - CI on the `arc-java-build` ARC scale set with a fork-safe verification path
 - 244 requirements derived from a pinned upstream snapshot
-- Four product modules with a compiled, tested, publishable surface
+- Four published product modules with a compiled and tested surface
+- Deterministic `AgentEngine` run and function-tool loops
+- Runnable standalone `Agent.run(...)` sample with explicit model-client assembly
 
 **Not started**
 
-- The deterministic `AgentEngine` run loop, tool loop execution, and interceptor pipeline
-- Workflows, hosting, protocol adapters, provider integrations
+- Session persistence, interceptor pipeline, and streaming tool execution
+- Workflows, hosting, protocol adapters, and direct provider integrations
 
-The first implementation target is the `agent-framework-api` type model, because every other module
-depends on it and the compatibility matrix marks it required for the initial release.
+The next implementation stages add session restoration, provider adapters, and host integration
+without changing the standalone agent definition.
 
 ## Translations
 

@@ -1,11 +1,12 @@
 package io.github.hellices.agentframework.engine;
 
+import io.github.hellices.agentframework.api.agent.AgentBuilder;
 import io.github.hellices.agentframework.api.tool.FunctionTool;
 import io.github.hellices.agentframework.spi.model.ModelClient;
 import java.util.ArrayList;
 import java.util.List;
 
-public final class AgentEngineBuilder {
+public final class AgentEngineBuilder implements AgentBuilder {
 
   private String id;
   private String name;
@@ -16,16 +17,19 @@ public final class AgentEngineBuilder {
 
   AgentEngineBuilder() {}
 
+  @Override
   public AgentEngineBuilder id(String id) {
     this.id = id;
     return this;
   }
 
+  @Override
   public AgentEngineBuilder name(String name) {
     this.name = name;
     return this;
   }
 
+  @Override
   public AgentEngineBuilder description(String description) {
     this.description = description;
     return this;
@@ -36,6 +40,7 @@ public final class AgentEngineBuilder {
     return this;
   }
 
+  @Override
   public AgentEngineBuilder tools(FunctionTool... tools) {
     if (tools != null) {
       for (FunctionTool tool : tools) {
@@ -48,6 +53,7 @@ public final class AgentEngineBuilder {
     return this;
   }
 
+  @Override
   public AgentEngineBuilder maxIterations(int maxIterations) {
     if (maxIterations < 1) {
       throw new IllegalArgumentException("maxIterations must be greater than 0");
@@ -56,6 +62,7 @@ public final class AgentEngineBuilder {
     return this;
   }
 
+  @Override
   public AgentEngine build() {
     if (modelClient == null) {
       throw new IllegalStateException("modelClient must be configured");

@@ -1,6 +1,7 @@
 package io.github.hellices.agentframework.engine;
 
 import io.github.hellices.agentframework.api.agent.Agent;
+import io.github.hellices.agentframework.api.agent.AgentFactory;
 import io.github.hellices.agentframework.api.agent.AgentResponse;
 import io.github.hellices.agentframework.api.agent.AgentResponseUpdate;
 import io.github.hellices.agentframework.api.agent.AgentRun;
@@ -20,6 +21,7 @@ import io.github.hellices.agentframework.api.tool.ToolDefinition;
 import io.github.hellices.agentframework.api.tool.ToolResult;
 import io.github.hellices.agentframework.engine.internal.model.ModelResponseMapper;
 import io.github.hellices.agentframework.spi.model.ContinuationModelClient;
+import io.github.hellices.agentframework.spi.model.ModelCatalog;
 import io.github.hellices.agentframework.spi.model.ModelClient;
 import io.github.hellices.agentframework.spi.model.ModelRequest;
 import io.github.hellices.agentframework.spi.model.ModelRequestOptions;
@@ -69,6 +71,10 @@ public final class AgentEngine extends Agent {
 
   public static AgentEngineBuilder builder() {
     return new AgentEngineBuilder();
+  }
+
+  public static AgentFactory factory(ModelCatalog catalog) {
+    return new CatalogAgentFactory(catalog);
   }
 
   @Override

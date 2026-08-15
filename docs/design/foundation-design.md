@@ -191,8 +191,8 @@ agent-framework-java/
 ├── workflow/
 ├── compatibility-tests/
 └── samples/
-    ├── standalone-agent
-    └── spring-boot-agent
+    ├── sample-standalone
+    └── sample-spring-boot
 ```
 
 This structure does not mean that every final directory is created up front. Only the modules a

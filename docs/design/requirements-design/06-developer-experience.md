@@ -64,13 +64,13 @@ Do not share a mutable `AgentBuilder` as a singleton bean. The framework provide
 public interface AgentFactory {
     AgentBuilder builder();
     AgentBuilder builder(String modelName);
-    AgentBuilder builder(ModelClient model);
+    AgentBuilder builderWithClient(ModelClient model);
 }
 ```
 
 - the factory combines a model-independent `AgentEngine` with an immutable `ModelCatalog`
 - use `builder()` when exactly one model is unambiguous
-- when multiple models exist, select one by name or explicit port
+- when multiple models exist, select one by name or with `builderWithClient(ModelClient)`
 - create the factory even when multiple named models exist; only a `builder()` call without a
   default fails explicitly, while `builder(name)` selects the corresponding model
 - builders are thread-confined and build results are immutable
