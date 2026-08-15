@@ -98,6 +98,14 @@ public abstract class Agent {
    * performed for it. A stage returned here that fails, or a {@code null} stage, fails the run
    * rather than being swallowed.
    *
+   * <p>On a streaming run the seam necessarily runs after the update stream reached its terminal
+   * signal, since the response it observes only exists once streaming finished. A failure here
+   * therefore fails {@link AgentStreamingRun#response()} while the update subscriber has already
+   * seen {@code onComplete}. That is the deliberate contract: the update stream signals model
+   * transport completion, and the authoritative run outcome is the response stage. The alternative
+   * would require emitting a second terminal signal on an already-terminated stream, which Reactive
+   * Streams forbids.
+   *
    * @param sessionContext the completed per-run session context
    * @return a stage completing when the post-run work is done; must not be {@code null}
    */

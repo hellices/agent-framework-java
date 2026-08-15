@@ -163,6 +163,16 @@ public final class AgentEngine extends Agent {
     return new AgentRun(response, request.cancellationSignal());
   }
 
+  /**
+   * Starts a streaming run. Without configured context providers there is no asynchronous hook to
+   * wait for, so the model's update publisher is created eagerly and a client that throws or
+   * returns {@code null} fails this call synchronously, exactly as it did before the context
+   * provider pipeline existed. With providers configured the first model call must happen after
+   * every {@code beforeRun} hook completed, so publisher creation is deferred and the same failures
+   * are instead delivered to the update subscriber as a terminal {@code onError}, which the run's
+   * response stage reports. Failures that do not depend on a hook (unsupported tools, a client
+   * lacking the streaming or streaming-continuation capability) stay synchronous in both shapes.
+   */
   @Override
   protected AgentStreamingRun<AgentResponseUpdate> runStreamingInternal(
       AgentRunContext context, AgentRunRequest request) {
@@ -176,17 +186,21 @@ public final class AgentEngine extends Agent {
     String responseId = UUID.randomUUID().toString();
     Instant createdAt = Instant.now();
     Flow.Publisher<ModelResponseUpdate> modelUpdates =
-        deferUntil(
-            beforeRun(sessionContext, request.cancellationSignal()),
-            request.cancellationSignal(),
-            () -> {
-              if (request.cancellationSignal().isCancelled()) {
-                throw new CancellationException("run was cancelled");
-              }
-              return Objects.requireNonNull(
-                  streamingInvoker.apply(toModelRequest(request, sessionContext)),
-                  "model client update publisher must not be null");
-            });
+        contextProviders.isEmpty()
+            ? Objects.requireNonNull(
+                streamingInvoker.apply(toModelRequest(request, sessionContext)),
+                "model client update publisher must not be null")
+            : deferUntil(
+                beforeRun(sessionContext, request.cancellationSignal()),
+                request.cancellationSignal(),
+                () -> {
+                  if (request.cancellationSignal().isCancelled()) {
+                    throw new CancellationException("run was cancelled");
+                  }
+                  return Objects.requireNonNull(
+                      streamingInvoker.apply(toModelRequest(request, sessionContext)),
+                      "model client update publisher must not be null");
+                });
     Flow.Publisher<AgentResponseUpdate> agentUpdates =
         subscriber ->
             modelUpdates.subscribe(
@@ -456,11 +470,13 @@ public final class AgentEngine extends Agent {
 
   /**
    * Delays subscribing to the model's update publisher until {@code gate} completes, so a streaming
-   * run performs no model call before every {@code beforeRun} hook finished. The gate is composed
-   * when the run starts, not when the stream is consumed, so hooks run in the same place as on the
-   * ordinary path. A failed gate, or a failure while the source publisher is being created, is
-   * delivered as a terminal {@code onError} after the mandatory {@code onSubscribe}, which the
-   * run's response stage then reports.
+   * run performs no model call before every {@code beforeRun} hook finished. It is used only when
+   * at least one context provider is configured; a run without providers keeps creating the model
+   * publisher eagerly, so nothing that could fail synchronously before becomes deferred here. The
+   * gate is composed when the run starts, not when the stream is consumed, so hooks run in the same
+   * place as on the ordinary path. A failed gate, or a failure while the source publisher is being
+   * created, is delivered as a terminal {@code onError} after the mandatory {@code onSubscribe},
+   * which the run's response stage then reports.
    *
    * <p>Cancellation races the gate rather than waiting for it. A hook still pending when the run is
    * cancelled would otherwise leave an already-subscribed consumer without any signal until the

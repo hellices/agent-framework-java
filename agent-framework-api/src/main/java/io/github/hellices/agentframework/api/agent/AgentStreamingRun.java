@@ -123,6 +123,12 @@ public final class AgentStreamingRun<T> {
     return updates;
   }
 
+  /**
+   * Returns the run's authoritative outcome. It completes only after every lifecycle step of the
+   * run finished, so it can still fail after {@link #updates()} completed normally: the update
+   * stream signals model transport completion, while post-stream work (for example a context
+   * provider's {@code afterRun} hook) is reported here.
+   */
   public CompletionStage<AgentResponse> response() {
     return response;
   }

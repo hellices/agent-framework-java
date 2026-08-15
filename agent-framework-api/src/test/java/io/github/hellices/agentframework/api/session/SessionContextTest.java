@@ -295,7 +295,41 @@ class SessionContextTest {
 
     assertThat(sessionContext.contextMessages())
         .extracting(Message::attribution)
-        .containsExactly(new MessageAttribution("Context", "memory", "session-1"));
+        .containsExactly(new MessageAttribution("AIContextProvider", "memory", "session-1"));
+  }
+
+  @Test
+  void sourceBoundContextMessagesUseThePinnedProviderSourceTypeName() {
+    SessionContext sessionContext =
+        new SessionContext(null, List.of(), Map.of(), new CancellationSignal());
+
+    sessionContext.addContextMessages("memory", List.of(sampleMessage("remembered")));
+
+    // The pinned snapshot's known source types are External, AIContextProvider, and ChatHistory;
+    // a provider contribution must be readable as the upstream name, not a Java-only alias.
+    assertThat(sessionContext.contextMessages())
+        .extracting(message -> message.attribution().sourceType())
+        .containsExactly("AIContextProvider");
+  }
+
+  @Test
+  void sourceBoundContextMessagesTreatABlankExistingSourceIdAsAbsent() {
+    AgentSession session = new AgentSession("session-1", null, Map.of());
+    SessionContext sessionContext =
+        new SessionContext(session, List.of(), Map.of(), new CancellationSignal());
+    Message blankSource =
+        new Message(
+            Role.USER,
+            List.of(new TextContent("remembered")),
+            new MessageAttribution("Memory", "   ", "origin-9"),
+            Map.of(),
+            null);
+
+    sessionContext.addContextMessages("memory", List.of(blankSource));
+
+    assertThat(sessionContext.contextMessages())
+        .extracting(Message::attribution)
+        .containsExactly(new MessageAttribution("Memory", "memory", "origin-9"));
   }
 
   @Test

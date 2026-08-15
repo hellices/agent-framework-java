@@ -33,6 +33,7 @@ import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Flow;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 
@@ -130,8 +131,8 @@ class AgentEngineSessionContextTest {
     assertThat(capturedRequest.get().messages())
         .extracting(Message::attribution)
         .containsExactly(
-            new MessageAttribution("Context", "first", null),
-            new MessageAttribution("Context", "second", null),
+            new MessageAttribution("AIContextProvider", "first", null),
+            new MessageAttribution("AIContextProvider", "second", null),
             null);
   }
 
@@ -463,6 +464,96 @@ class AgentEngineSessionContextTest {
     assertThat(client.capturedRequest.get()).isNull();
   }
 
+  @Test
+  void aStreamingRunWithoutContextProvidersReportsAModelClientFailureSynchronously() {
+    BrokenStreamingClient client = BrokenStreamingClient.throwing();
+    AgentEngine engine = AgentEngine.builder().modelClient(client).build();
+
+    // With no provider hook to wait for there is nothing to defer, so a run that cannot start
+    // still fails from the call that started it, exactly as it did before the provider pipeline.
+    assertThatThrownBy(() -> engine.runStreaming("hi"))
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessage("streaming client failure");
+    assertThat(client.streamingCalled.get()).isTrue();
+  }
+
+  @Test
+  void aStreamingRunWithoutContextProvidersRejectsANullUpdatePublisherSynchronously() {
+    AgentEngine engine =
+        AgentEngine.builder().modelClient(BrokenStreamingClient.returningNull()).build();
+
+    assertThatThrownBy(() -> engine.runStreaming("hi"))
+        .isInstanceOf(NullPointerException.class)
+        .hasMessage("model client update publisher must not be null");
+  }
+
+  @Test
+  void aStreamingRunWithContextProvidersDeliversAModelClientFailureThroughTheStream() {
+    List<String> log = new ArrayList<>();
+    RecordingProvider provider = new RecordingProvider("memory", log);
+    AgentEngine engine =
+        AgentEngine.builder()
+            .modelClient(BrokenStreamingClient.throwing())
+            .contextProviders(provider)
+            .build();
+
+    // A configured provider makes the model call happen after an asynchronous hook, so the same
+    // failure can no longer be raised by runStreaming; it is delivered as a terminal onError.
+    AgentStreamingRun<AgentResponseUpdate> run = engine.runStreaming("hi");
+
+    assertThatThrownBy(() -> consume(run.updates()))
+        .hasRootCauseInstanceOf(IllegalStateException.class)
+        .hasRootCauseMessage("streaming client failure");
+    assertThatThrownBy(() -> run.response().toCompletableFuture().join())
+        .hasRootCauseInstanceOf(IllegalStateException.class)
+        .hasRootCauseMessage("streaming client failure");
+    assertThat(log).containsExactly("before:memory");
+    assertThat(provider.afterRunContexts).isEmpty();
+  }
+
+  @Test
+  void aStreamingRunWithContextProvidersDeliversANullUpdatePublisherThroughTheStream() {
+    List<String> log = new ArrayList<>();
+    AgentEngine engine =
+        AgentEngine.builder()
+            .modelClient(BrokenStreamingClient.returningNull())
+            .contextProviders(new RecordingProvider("memory", log))
+            .build();
+
+    AgentStreamingRun<AgentResponseUpdate> run = engine.runStreaming("hi");
+
+    assertThatThrownBy(() -> consume(run.updates()))
+        .hasRootCauseInstanceOf(NullPointerException.class)
+        .hasRootCauseMessage("model client update publisher must not be null");
+    assertThatThrownBy(() -> run.response().toCompletableFuture().join())
+        .hasRootCauseInstanceOf(NullPointerException.class)
+        .hasRootCauseMessage("model client update publisher must not be null");
+  }
+
+  @Test
+  void aStreamingAfterRunFailureFailsTheRunAfterTheUpdateStreamAlreadyCompleted() {
+    List<String> log = new ArrayList<>();
+    AgentEngine engine =
+        AgentEngine.builder()
+            .modelClient(new StreamingFakeClient(log))
+            .contextProviders(new FailingAfterRunProvider("memory", log))
+            .build();
+
+    AgentStreamingRun<AgentResponseUpdate> run = engine.runStreaming("hi");
+    RecordingSubscriber<AgentResponseUpdate> subscriber = subscribe(run.updates());
+
+    // The update stream reports model transport completion only, so it completes normally even
+    // though the run itself did not succeed.
+    assertThat(subscriber.completion).isCompleted();
+    assertThat(subscriber.terminalFailure.get()).isNull();
+    assertThat(subscriber.values).extracting(AgentResponseUpdate::text).containsExactly("hello");
+    // The authoritative outcome is the response stage, which carries the after-run failure.
+    assertThatThrownBy(() -> run.response().toCompletableFuture().join())
+        .hasRootCauseInstanceOf(IllegalStateException.class)
+        .hasRootCauseMessage("after-run failure");
+    assertThat(log).containsExactly("before:memory", "model", "after:memory");
+  }
+
   private static void runStreamingWithSession(AgentEngine engine, AgentSession session) {
     AgentStreamingRun<AgentResponseUpdate> run =
         engine.runStreaming(
@@ -664,6 +755,41 @@ class AgentEngineSessionContextTest {
     @Override
     public CompletionStage<Void> afterRun(SessionContext context, ProviderSessionState state) {
       return completedFuture(null);
+    }
+  }
+
+  /**
+   * A streaming client that never returns a usable update publisher, so a test can observe where
+   * the failure of a run that cannot even start is reported.
+   */
+  private static final class BrokenStreamingClient implements StreamingModelClient {
+    private final boolean returnNull;
+    private final AtomicBoolean streamingCalled = new AtomicBoolean();
+
+    private BrokenStreamingClient(boolean returnNull) {
+      this.returnNull = returnNull;
+    }
+
+    private static BrokenStreamingClient throwing() {
+      return new BrokenStreamingClient(false);
+    }
+
+    private static BrokenStreamingClient returningNull() {
+      return new BrokenStreamingClient(true);
+    }
+
+    @Override
+    public CompletionStage<ModelResponse> run(ModelRequest request) {
+      return completedFuture(response("hello"));
+    }
+
+    @Override
+    public Flow.Publisher<ModelResponseUpdate> runStreaming(ModelRequest request) {
+      streamingCalled.set(true);
+      if (returnNull) {
+        return null;
+      }
+      throw new IllegalStateException("streaming client failure");
     }
   }
 

@@ -28,8 +28,13 @@ import java.util.Optional;
  */
 public final class SessionContext {
 
-  /** Source type stamped onto provider-contributed context messages that carry no attribution. */
-  private static final String CONTEXT_SOURCE_TYPE = "Context";
+  /**
+   * Source type stamped onto provider-contributed context messages that carry no attribution. The
+   * value is the pinned upstream known source type for context-provider contributions, so a
+   * message's provenance reads the same here as it does in the pinned snapshot ({@code External},
+   * {@code AIContextProvider}, {@code ChatHistory}).
+   */
+  private static final String PROVIDER_SOURCE_TYPE = "AIContextProvider";
 
   private final AgentSession session;
   private final List<Message> inputMessages;
@@ -72,9 +77,10 @@ public final class SessionContext {
 
   /**
    * Appends an ordered, immutable-safe copy of {@code messages} to this context's accumulated
-   * context messages. This is a plain accumulation hook for engines/providers to make {@link
-   * #contextMessages()} usable; it does not attach any provider source attribution to the messages
-   * it appends (source-bound attribution is owned by a later context-provider slice).
+   * context messages, exactly as given. This is the unattributed accumulation hook: it appends the
+   * messages unchanged and never stamps source attribution. A context provider contributing on
+   * behalf of a source id uses {@link #addContextMessages(String, List)} instead, which stamps the
+   * provider attribution before appending.
    *
    * <p>Null handling mirrors the constructor's {@code inputMessages} normalization: a {@code null}
    * collection is treated as "nothing to add" and is a no-op, while a non-null collection must not
@@ -102,12 +108,13 @@ public final class SessionContext {
    * {@code beforeRun} hook; the engine places the accumulated context messages before the caller's
    * input in the model request, preserving provider declaration order.
    *
-   * <p>A message that already carries a {@link MessageAttribution} with a source id keeps it, so a
-   * provider can preserve cross-session provenance for memory it retrieved elsewhere. Any other
-   * message is stamped with the given {@code sourceId} and, when it carries no attribution at all,
-   * source type {@code "Context"}. The origin session id is only filled in from this run's session
-   * when the message does not already carry one, so provenance a provider attached for memory
-   * retrieved from another session survives the stamping.
+   * <p>A message that already carries a {@link MessageAttribution} with a non-blank source id keeps
+   * it, so a provider can preserve cross-session provenance for memory it retrieved elsewhere. A
+   * blank source id carries no provenance, so it is treated as absent and stamped like a missing
+   * one. Any other message is stamped with the given {@code sourceId} and, when it carries no
+   * attribution at all, source type {@code "AIContextProvider"}. The origin session id is only
+   * filled in from this run's session when the message does not already carry one, so provenance a
+   * provider attached for memory retrieved from another session survives the stamping.
    *
    * <p>Null handling matches {@link #addContextMessages(List)}: a {@code null} collection is a
    * no-op, and a collection containing a {@code null} entry is rejected in full before anything is
@@ -165,6 +172,14 @@ public final class SessionContext {
    * through {@link #providerState(String)} is written back, a cleared namespace is removed, and
    * every other session state entry is preserved as it was.
    *
+   * <p>Only the state <em>map</em> is new. The values it holds are the same object references the
+   * original session held or the provider stored, so this is not a deep copy and it does not
+   * protect a provider's state object from being mutated in place. A provider that mutates a value
+   * it already stored changes what the original session observes too, and the change is visible
+   * before any persistence step runs. Providers therefore replace their value through {@link
+   * ProviderSessionState#set(Object)} with a new object, or keep only immutable values, rather than
+   * mutating a stored value in place.
+   *
    * @return the updated session, or empty for a sessionless run
    */
   public synchronized Optional<AgentSession> updatedSession() {
@@ -186,7 +201,9 @@ public final class SessionContext {
 
   private Message attribute(Message message, String sourceId) {
     MessageAttribution attribution = message.attribution();
-    if (attribution != null && attribution.sourceId() != null) {
+    if (attribution != null
+        && attribution.sourceId() != null
+        && !attribution.sourceId().isBlank()) {
       return message;
     }
     String currentSessionId = session == null ? null : session.sessionId();
@@ -198,7 +215,7 @@ public final class SessionContext {
         message.role(),
         message.content(),
         new MessageAttribution(
-            attribution == null ? CONTEXT_SOURCE_TYPE : attribution.sourceType(),
+            attribution == null ? PROVIDER_SOURCE_TYPE : attribution.sourceType(),
             sourceId,
             originSessionId),
         message.additionalProperties(),

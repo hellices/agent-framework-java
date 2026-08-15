@@ -42,6 +42,11 @@ public interface ProviderSessionState {
   /**
    * Replaces the value stored under this namespace.
    *
+   * <p>The value is stored by reference, not copied. The updated session a run produces reuses the
+   * same reference, so mutating a stored value in place changes what every holder of it observes,
+   * including the session this run started from. Store an immutable value, or replace it through
+   * this method with a new object, instead of mutating one already stored.
+   *
    * @param value the new state value; must not be {@code null} (use {@link #clear()} to remove the
    *     namespace)
    * @throws NullPointerException if {@code value} is {@code null}
