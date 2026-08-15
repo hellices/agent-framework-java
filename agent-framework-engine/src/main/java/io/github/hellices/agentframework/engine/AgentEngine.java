@@ -533,7 +533,11 @@ public final class AgentEngine extends Agent {
                         Message toolResultMessage = ToolLoopPolicy.toolResultMessage(results);
                         ModelRequest nextRequest =
                             toolLoop.nextRequest(
-                                modelRequest, response.messages(), toolResultMessage, iteration);
+                                modelRequest,
+                                response.messages(),
+                                calls,
+                                toolResultMessage,
+                                iteration);
                         outputMessages.add(toolResultMessage);
                         return runToolLoop(
                             client,

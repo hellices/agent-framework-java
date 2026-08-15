@@ -9,14 +9,18 @@ import io.github.hellices.agentframework.api.message.Message;
 import io.github.hellices.agentframework.api.message.Role;
 import io.github.hellices.agentframework.api.message.TextContent;
 import io.github.hellices.agentframework.api.message.ToolCallContent;
+import io.github.hellices.agentframework.api.message.ToolResultContent;
+import io.github.hellices.agentframework.spi.model.ModelRequest;
 import io.github.hellices.agentframework.spi.model.ModelResponse;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 
 /**
- * The tool calls a response amounts to. A streamed response can report one call in fragments, so
- * the fragments of a call id are merged into the single call both loops execute exactly once.
+ * The tool calls a response amounts to, and the request the iteration after them is made with. A
+ * streamed response can report one call in fragments, so the fragments of a call id are merged into
+ * the single call both loops execute exactly once and echo exactly once.
  */
 class ToolLoopPolicyTest {
 
@@ -80,6 +84,121 @@ class ToolLoopPolicyTest {
   @Test
   void aResponseWithoutToolCallsHasNoCalls() {
     assertThat(ToolLoopPolicy.toolCalls(response(new TextContent("just text")))).isEmpty();
+  }
+
+  @Test
+  void theNextRequestEchoesTheMergedCallInPlaceOfItsFragments() {
+    List<Message> responseMessages =
+        List.of(
+            new Message(
+                Role.ASSISTANT,
+                List.of(
+                    new TextContent("checking"),
+                    new ToolCallContent("call-1", "weather", Map.of("city", "Seo", "unit", "c")))),
+            new Message(
+                Role.ASSISTANT,
+                List.of(new ToolCallContent("call-1", "weather", Map.of("city", "Seoul")))));
+    List<ToolCallContent> calls = ToolLoopPolicy.toolCalls(response(responseMessages));
+    Message results = ToolLoopPolicy.toolResultMessage(List.of(result("call-1", "weather")));
+
+    ModelRequest next =
+        new ToolLoopPolicy(List.of(), 4)
+            .nextRequest(request(), responseMessages, calls, results, 0);
+
+    assertThat(next.messages()).hasSize(3);
+    assertThat(next.messages().get(1).text()).isEqualTo("checking");
+    assertThat(toolCallsOf(next))
+        .singleElement()
+        .satisfies(
+            call -> {
+              assertThat(call.callId()).isEqualTo("call-1");
+              assertThat(call.arguments()).isEqualTo(Map.of("city", "Seoul", "unit", "c"));
+            });
+    assertThat(toolResultsOf(next)).extracting(ToolResultContent::callId).containsExactly("call-1");
+  }
+
+  @Test
+  void aMessageLeftEmptyByItsFragmentsIsDroppedFromTheNextRequest() {
+    Message text = new Message(Role.ASSISTANT, List.of(new TextContent("checking")));
+    List<Message> responseMessages =
+        List.of(
+            text,
+            new Message(
+                Role.ASSISTANT,
+                List.of(new ToolCallContent("call-1", "weather", Map.of("city", "Seo")))),
+            new Message(
+                Role.ASSISTANT,
+                List.of(new ToolCallContent("call-1", "weather", Map.of("city", "Seoul")))));
+    List<ToolCallContent> calls = ToolLoopPolicy.toolCalls(response(responseMessages));
+    Message results = ToolLoopPolicy.toolResultMessage(List.of(result("call-1", "weather")));
+
+    ModelRequest next =
+        new ToolLoopPolicy(List.of(), 4)
+            .nextRequest(request(), responseMessages, calls, results, 0);
+
+    assertThat(next.messages()).hasSize(4);
+    assertThat(next.messages().get(1)).isSameAs(text);
+    assertThat(toolCallsOf(next)).hasSize(1);
+  }
+
+  @Test
+  void anUnsplitResponseIsEchoedMessageForMessage() {
+    Message assistant =
+        new Message(
+            Role.ASSISTANT,
+            List.of(
+                new TextContent("checking"),
+                new ToolCallContent("call-1", "weather", Map.of("city", "Seoul")),
+                new ToolCallContent("call-2", "forecast", Map.of("city", "Seoul"))));
+    List<Message> responseMessages = List.of(assistant);
+    List<ToolCallContent> calls = ToolLoopPolicy.toolCalls(response(responseMessages));
+    Message results =
+        ToolLoopPolicy.toolResultMessage(
+            List.of(result("call-1", "weather"), result("call-2", "forecast")));
+
+    ModelRequest next =
+        new ToolLoopPolicy(List.of(), 4)
+            .nextRequest(request(), responseMessages, calls, results, 0);
+
+    assertThat(next.messages()).element(1).isSameAs(assistant);
+    assertThat(next.messages()).last().isSameAs(results);
+  }
+
+  private static ModelRequest request() {
+    return new ModelRequest(
+        List.of(new Message(Role.USER, List.of(new TextContent("weather?")))),
+        null,
+        null,
+        List.of(),
+        Map.of());
+  }
+
+  private static ToolResultContent result(String callId, String name) {
+    return new ToolResultContent(callId, name, List.of(new TextContent("sunny")), false);
+  }
+
+  private static List<ToolCallContent> toolCallsOf(ModelRequest request) {
+    return contentOf(request, ToolCallContent.class);
+  }
+
+  private static List<ToolResultContent> toolResultsOf(ModelRequest request) {
+    return contentOf(request, ToolResultContent.class);
+  }
+
+  private static <T extends Content> List<T> contentOf(ModelRequest request, Class<T> type) {
+    List<T> found = new ArrayList<>();
+    for (Message message : request.messages()) {
+      for (Content content : message.content()) {
+        if (type.isInstance(content)) {
+          found.add(type.cast(content));
+        }
+      }
+    }
+    return List.copyOf(found);
+  }
+
+  private static ModelResponse response(List<Message> messages) {
+    return new ModelResponse(messages, null, FinishReason.TOOL_CALLS, Map.of(), null);
   }
 
   private static ModelResponse response(Content... content) {

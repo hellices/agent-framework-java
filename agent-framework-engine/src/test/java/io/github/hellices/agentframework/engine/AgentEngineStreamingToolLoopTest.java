@@ -247,6 +247,45 @@ class AgentEngineStreamingToolLoopTest {
   }
 
   @Test
+  void theNextRequestEchoesTheMergedCallOfSplitFragmentsExactlyOnce() {
+    List<ModelRequest> requests = new ArrayList<>();
+    StreamingModelClient client =
+        scripted(
+            requests,
+            List.of(
+                List.of(
+                    update(
+                        toolCall("call-1", "weather", Map.of("city", "Seo", "unit", "c")),
+                        null,
+                        FinishReason.TOOL_CALLS),
+                    update(
+                        toolCall("call-1", "weather", Map.of("city", "Seoul")),
+                        null,
+                        FinishReason.TOOL_CALLS)),
+                List.of(update(assistant("It is sunny"), null, FinishReason.STOP))));
+
+    AgentStreamingRun<AgentResponseUpdate> run =
+        engine(client, weatherTool()).runStreaming("weather?");
+    subscribe(run.updates(), Long.MAX_VALUE).completion.join();
+
+    assertThat(requestToolCalls(requests.get(1)))
+        .singleElement()
+        .satisfies(
+            call -> {
+              assertThat(call.callId()).isEqualTo("call-1");
+              assertThat(call.name()).isEqualTo("weather");
+              assertThat(call.arguments()).isEqualTo(Map.of("city", "Seoul", "unit", "c"));
+            });
+    assertThat(requestToolResults(requests.get(1)))
+        .singleElement()
+        .satisfies(
+            result -> {
+              assertThat(result.callId()).isEqualTo("call-1");
+              assertThat(result.name()).isEqualTo("weather");
+            });
+  }
+
+  @Test
   void toolCallsSplitAcrossUpdatesKeepTheirFirstSeenOrder() {
     List<String> invocations = new ArrayList<>();
     FunctionTool first = recordingTool("first", invocations);
@@ -531,6 +570,76 @@ class AgentEngineStreamingToolLoopTest {
     assertThat(subscriber.failure.get())
         .isInstanceOf(NullPointerException.class)
         .hasMessage("model client update publisher must not be null");
+  }
+
+  @Test
+  void aFirstIterationPublisherThatThrowsFromSubscribeFailsTheStream() {
+    StreamingModelClient client =
+        streaming(
+            request ->
+                subscriber -> {
+                  throw new IllegalStateException("subscribe rejected");
+                });
+
+    AgentStreamingRun<AgentResponseUpdate> run = engine(client, weatherTool()).runStreaming("hi");
+    RecordingSubscriber subscriber = subscribe(run.updates(), Long.MAX_VALUE);
+
+    assertThat(subscriber.terminals).hasValue(1);
+    assertThat(subscriber.failure.get())
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessage("subscribe rejected");
+    assertThatThrownBy(() -> run.response().toCompletableFuture().join())
+        .hasRootCauseInstanceOf(IllegalStateException.class)
+        .hasRootCauseMessage("subscribe rejected");
+  }
+
+  @Test
+  void aLaterIterationPublisherThatThrowsFromSubscribeFailsTheStream() {
+    AtomicInteger calls = new AtomicInteger();
+    StreamingModelClient client =
+        streaming(
+            request -> {
+              if (calls.getAndIncrement() == 0) {
+                return publisher(
+                    List.of(
+                        update(
+                            toolCall("call-1", "weather", SEOUL), null, FinishReason.TOOL_CALLS)));
+              }
+              return subscriber -> {
+                throw new IllegalStateException("subscribe rejected");
+              };
+            });
+
+    AgentStreamingRun<AgentResponseUpdate> run = engine(client, weatherTool()).runStreaming("hi");
+    RecordingSubscriber subscriber = subscribe(run.updates(), Long.MAX_VALUE);
+
+    assertThat(subscriber.terminals).hasValue(1);
+    assertThat(subscriber.failure.get())
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessage("subscribe rejected");
+    assertThatThrownBy(() -> run.response().toCompletableFuture().join())
+        .hasRootCauseInstanceOf(IllegalStateException.class)
+        .hasRootCauseMessage("subscribe rejected");
+    assertThat(calls).hasValue(2);
+  }
+
+  @Test
+  void aSubscriberThatThrowsFromOnNextLeavesTheStreamDrainable() {
+    ManualStreams streams = new ManualStreams();
+    ThrowingOnceSubscriber subscriber = new ThrowingOnceSubscriber();
+    AgentStreamingRun<AgentResponseUpdate> run =
+        engine(streams.client(), weatherTool()).runStreaming("hi");
+    run.updates().subscribe(subscriber);
+
+    assertThatThrownBy(
+            () -> streams.stream(0).emit(update(assistant("first"), null, FinishReason.STOP)))
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessage("subscriber rejected the update");
+    streams.stream(0).emit(update(assistant("second"), null, FinishReason.STOP));
+    streams.stream(0).complete();
+
+    assertThat(subscriber.texts).containsExactly("second");
+    assertThat(subscriber.terminals).hasValue(1);
   }
 
   @Test
@@ -1130,6 +1239,28 @@ class AgentEngineStreamingToolLoopTest {
     return results;
   }
 
+  /** The tool calls a model request echoes, across all of its messages, in order. */
+  private static List<ToolCallContent> requestToolCalls(ModelRequest request) {
+    return requestContent(request, ToolCallContent.class);
+  }
+
+  /** The tool results a model request reports, across all of its messages, in order. */
+  private static List<ToolResultContent> requestToolResults(ModelRequest request) {
+    return requestContent(request, ToolResultContent.class);
+  }
+
+  private static <T extends Content> List<T> requestContent(ModelRequest request, Class<T> type) {
+    List<T> found = new ArrayList<>();
+    for (Message message : request.messages()) {
+      for (Content content : message.content()) {
+        if (type.isInstance(content)) {
+          found.add(type.cast(content));
+        }
+      }
+    }
+    return List.copyOf(found);
+  }
+
   private static Message assistant(String text) {
     return new Message(Role.ASSISTANT, List.of(new TextContent(text)));
   }
@@ -1320,6 +1451,38 @@ class AgentEngineStreamingToolLoopTest {
 
     private List<String> texts() {
       return values.stream().map(AgentResponseUpdate::text).toList();
+    }
+  }
+
+  /** A subscriber that rejects its first update, so a drain has to survive a foreign failure. */
+  private static final class ThrowingOnceSubscriber
+      implements Flow.Subscriber<AgentResponseUpdate> {
+    private final List<String> texts = new ArrayList<>();
+    private final AtomicInteger terminals = new AtomicInteger();
+    private boolean thrown;
+
+    @Override
+    public void onSubscribe(Flow.Subscription subscription) {
+      subscription.request(Long.MAX_VALUE);
+    }
+
+    @Override
+    public void onNext(AgentResponseUpdate item) {
+      if (!thrown) {
+        thrown = true;
+        throw new IllegalStateException("subscriber rejected the update");
+      }
+      texts.add(item.text());
+    }
+
+    @Override
+    public void onError(Throwable throwable) {
+      terminals.incrementAndGet();
+    }
+
+    @Override
+    public void onComplete() {
+      terminals.incrementAndGet();
     }
   }
 

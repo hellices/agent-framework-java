@@ -15,9 +15,11 @@ import io.github.hellices.agentframework.spi.model.ModelRequest;
 import io.github.hellices.agentframework.spi.model.ModelResponse;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
@@ -207,14 +209,24 @@ public final class ToolLoopPolicy {
    * Builds the request of the iteration after {@code iteration}: the request that was just
    * answered, followed by the model's own messages and by the tool results, with the tools the
    * remaining budget still permits.
+   *
+   * <p>The model's messages are echoed as the calls that were actually executed rather than as they
+   * arrived, because {@code executedCalls} is the merge of what a streamed response may have
+   * reported in fragments. Echoing the fragments would send the next model call one tool call per
+   * fragment while the tool message answers each call id once, which providers reject as a call
+   * without a result. See {@link #echoedMessages(List, List)} for what the rewrite preserves.
+   *
+   * @param executedCalls the merged calls of {@link #toolCalls(ModelResponse)} that were executed,
+   *     which is also what {@code toolResultMessage} reports results for
    */
   public ModelRequest nextRequest(
       ModelRequest current,
       List<Message> responseMessages,
+      List<ToolCallContent> executedCalls,
       Message toolResultMessage,
       int iteration) {
     List<Message> messages = new ArrayList<>(current.messages());
-    messages.addAll(responseMessages);
+    messages.addAll(echoedMessages(responseMessages, executedCalls));
     messages.add(toolResultMessage);
     return new ModelRequest(
         messages,
@@ -222,5 +234,71 @@ public final class ToolLoopPolicy {
         current.cancellationSignal(),
         toolsForIteration(iteration + 1),
         current.metadata());
+  }
+
+  /**
+   * The model's own messages as the next request echoes them: each call id appears once, as the
+   * merged call that was executed, where its first fragment appeared.
+   *
+   * <p>Everything else is left alone — non-tool content keeps its place and order, a message no
+   * split call touched is the same instance the response carried, and a call id that was not
+   * executed is echoed unchanged rather than dropped. A message that consisted only of fragments of
+   * a call already echoed earlier has nothing left to say and is dropped, because an empty
+   * assistant message is not what the model produced.
+   */
+  private static List<Message> echoedMessages(
+      List<Message> responseMessages, List<ToolCallContent> executedCalls) {
+    Map<String, ToolCallContent> merged = new LinkedHashMap<>();
+    for (ToolCallContent call : executedCalls) {
+      merged.put(call.callId(), call);
+    }
+    Map<String, Integer> fragmentsPerCall = fragmentsPerCall(responseMessages, merged);
+    if (fragmentsPerCall.values().stream().noneMatch(fragments -> fragments > 1)) {
+      return List.copyOf(responseMessages);
+    }
+    Set<String> echoedCallIds = new LinkedHashSet<>();
+    List<Message> echoed = new ArrayList<>();
+    for (Message message : responseMessages) {
+      List<Content> content = new ArrayList<>();
+      boolean rewritten = false;
+      for (Content item : message.content()) {
+        ToolCallContent replacement =
+            item instanceof ToolCallContent call ? merged.get(call.callId()) : null;
+        if (replacement == null) {
+          content.add(item);
+          continue;
+        }
+        rewritten = rewritten || fragmentsPerCall.get(replacement.callId()) > 1;
+        if (echoedCallIds.add(replacement.callId())) {
+          content.add(replacement);
+        }
+      }
+      if (!rewritten) {
+        echoed.add(message);
+      } else if (!content.isEmpty()) {
+        echoed.add(
+            new Message(
+                message.role(),
+                content,
+                message.attribution(),
+                message.additionalProperties(),
+                message.rawRepresentation()));
+      }
+    }
+    return List.copyOf(echoed);
+  }
+
+  /** How many fragments each executed call id was reported in; one when it was not split. */
+  private static Map<String, Integer> fragmentsPerCall(
+      List<Message> responseMessages, Map<String, ToolCallContent> merged) {
+    Map<String, Integer> fragments = new LinkedHashMap<>();
+    for (Message message : responseMessages) {
+      for (Content item : message.content()) {
+        if (item instanceof ToolCallContent call && merged.containsKey(call.callId())) {
+          fragments.merge(call.callId(), 1, Integer::sum);
+        }
+      }
+    }
+    return fragments;
   }
 }

@@ -234,6 +234,13 @@ public final class StreamingToolLoopPublisher implements Flow.Publisher<AgentRes
      * after it — while the client is producing its publisher — cannot unmake that call, but no
      * signal of it reaches the subscriber either, because {@link ModelSubscriber#onSubscribe}
      * cancels the new subscription instead of requesting from it.
+     *
+     * <p>Producing the publisher and subscribing to it are guarded together, because both are the
+     * client's code and a client that rejects a subscription fails the run for the same reason one
+     * that cannot produce a publisher does. Letting the throw escape instead would unwind through
+     * whichever thread happened to start the iteration — the subscriber's own {@code request} call
+     * for the first iteration, a tool stage's completion for a later one — and leave the run with
+     * no terminal signal at all.
      */
     private void beginIteration(
         int index,
@@ -245,15 +252,13 @@ public final class StreamingToolLoopPublisher implements Flow.Publisher<AgentRes
       if (cancelled || terminated.get() || request.cancellationSignal().isCancelled()) {
         return;
       }
-      Flow.Publisher<ModelResponseUpdate> publisher;
       try {
-        publisher =
+        Flow.Publisher<ModelResponseUpdate> publisher =
             Objects.requireNonNull(source.get(), "model client update publisher must not be null");
+        publisher.subscribe(new ModelSubscriber(index, iterationRequest));
       } catch (RuntimeException startFailure) {
         fail(startFailure);
-        return;
       }
-      publisher.subscribe(new ModelSubscriber(index, iterationRequest));
     }
 
     /**
@@ -275,10 +280,11 @@ public final class StreamingToolLoopPublisher implements Flow.Publisher<AgentRes
       CompletionStage<List<Content>> results;
       ModelResponse response;
       ModelRequest current;
+      List<ToolCallContent> calls;
       try {
         response = accumulator.toModelResponse();
         policy.validateContinuation(response);
-        List<ToolCallContent> calls = ToolLoopPolicy.toolCalls(response);
+        calls = ToolLoopPolicy.toolCalls(response);
         if (calls.isEmpty()) {
           if (!response.metadata().isEmpty()) {
             queue.add(identity.metadataUpdate(response.metadata()));
@@ -301,7 +307,8 @@ public final class StreamingToolLoopPublisher implements Flow.Publisher<AgentRes
         return;
       }
       results.whenComplete(
-          (values, toolFailure) -> completeTools(index, current, response, values, toolFailure));
+          (values, toolFailure) ->
+              completeTools(index, current, response, calls, values, toolFailure));
     }
 
     /**
@@ -313,6 +320,7 @@ public final class StreamingToolLoopPublisher implements Flow.Publisher<AgentRes
         int index,
         ModelRequest current,
         ModelResponse response,
+        List<ToolCallContent> calls,
         List<Content> results,
         Throwable toolFailure) {
       if (toolFailure != null) {
@@ -329,7 +337,8 @@ public final class StreamingToolLoopPublisher implements Flow.Publisher<AgentRes
           updates.add(
               identity.messageUpdate(List.of(ToolLoopPolicy.toolResultMessage(List.of(result)))));
         }
-        ModelRequest next = policy.nextRequest(current, response.messages(), toolResults, index);
+        ModelRequest next =
+            policy.nextRequest(current, response.messages(), calls, toolResults, index);
         queue.addAll(updates);
         pending.set(new PendingIteration(index + 1, next));
       } catch (RuntimeException resultFailure) {
@@ -346,16 +355,27 @@ public final class StreamingToolLoopPublisher implements Flow.Publisher<AgentRes
       }
     }
 
+    /**
+     * Runs the emission trampoline. A signal a downstream callback throws out of is not this
+     * subscription's failure to record — the subscriber violated its own contract — but the
+     * work-in-progress counter is reset before the throw leaves, because leaving it raised would
+     * make every later drain a no-op and strand the run without a terminal signal.
+     */
     private void drain() {
       if (wip.getAndIncrement() != 0) {
         return;
       }
       int missed = 1;
-      while (emit()) {
-        missed = wip.addAndGet(-missed);
-        if (missed == 0) {
-          return;
+      try {
+        while (emit()) {
+          missed = wip.addAndGet(-missed);
+          if (missed == 0) {
+            return;
+          }
         }
+      } catch (RuntimeException drainFailure) {
+        wip.set(0);
+        throw drainFailure;
       }
     }
 
