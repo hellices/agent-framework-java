@@ -14,6 +14,9 @@ public record AgentSession(String sessionId, String serviceSessionId, Map<String
       throw new IllegalArgumentException("sessionId must not be blank");
     }
     sessionId = normalizedSessionId;
+    if (serviceSessionId != null && serviceSessionId.isBlank()) {
+      throw new IllegalArgumentException("serviceSessionId must not be blank");
+    }
     state = state == null ? Map.of() : Map.copyOf(state);
   }
 

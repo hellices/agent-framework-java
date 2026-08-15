@@ -577,6 +577,133 @@ class AgentLifecycleTest {
     assertThat(delegate.afterRunSawResponse).isSameAs(response);
   }
 
+  @Test
+  void aRunBuiltDirectlyPublishesNoUpdatedSession() {
+    AgentRun run = new AgentRun(sampleResponse("agent-1"));
+    AgentStreamingRun<AgentResponseUpdate> streamingRun =
+        AgentStreamingRun.fromUpdate(
+            new AgentResponseUpdate(
+                "agent-1",
+                "response-1",
+                "message-1",
+                "agent-1",
+                null,
+                FinishReason.STOP,
+                List.of(new Message(Role.ASSISTANT, List.of(new TextContent("ok")))),
+                null,
+                Map.of(),
+                null));
+
+    assertThat(run.session().toCompletableFuture().join()).isEmpty();
+    assertThat(streamingRun.session().toCompletableFuture().join()).isEmpty();
+  }
+
+  @Test
+  void aSessionlessRunPublishesNoUpdatedSession() {
+    TestAgent agent = new TestAgent("agent-1");
+
+    AgentRun run = agent.run("hello");
+    run.response().toCompletableFuture().join();
+
+    assertThat(run.session().toCompletableFuture().join()).isEmpty();
+  }
+
+  @Test
+  void aRunWithASessionPublishesTheUpdatedSessionAfterTheAfterRunSeam() {
+    SessionMutatingAfterRunSeamAgent agent = new SessionMutatingAfterRunSeamAgent("agent-1");
+
+    AgentRun run =
+        agent.run(
+            new AgentRunRequest(
+                Message.normalize("hello"),
+                new AgentSession("session-1", null, Map.of()),
+                new AgentRunOptions(),
+                new CancellationSignal(),
+                Map.of()));
+    AgentSession updated = run.session().toCompletableFuture().join().orElseThrow();
+
+    assertThat(agent.afterRunInvocations).isEqualTo(1);
+    assertThat(updated.sessionId()).isEqualTo("session-1");
+    assertThat(updated.state()).containsEntry("seam", "written");
+  }
+
+  @Test
+  void aStreamingRunWithASessionPublishesTheUpdatedSessionAfterTheAfterRunSeam() {
+    SessionMutatingAfterRunSeamAgent agent = new SessionMutatingAfterRunSeamAgent("agent-1");
+
+    AgentStreamingRun<AgentResponseUpdate> run =
+        agent.runStreaming(
+            new AgentRunRequest(
+                Message.normalize("hello"),
+                new AgentSession("session-1", null, Map.of()),
+                new AgentRunOptions(),
+                new CancellationSignal(),
+                Map.of()));
+    assertThat(run.session().toCompletableFuture().isDone()).isFalse();
+    consume(run.updates());
+    AgentSession updated = run.session().toCompletableFuture().join().orElseThrow();
+
+    assertThat(agent.afterRunInvocations).isEqualTo(1);
+    assertThat(updated.state()).containsEntry("seam", "written");
+  }
+
+  @Test
+  void afterRunSeamFailureFailsTheSessionStageToo() {
+    FailingAfterRunSeamAgent agent = new FailingAfterRunSeamAgent("seam-agent", true);
+
+    AgentRun run =
+        agent.run(
+            new AgentRunRequest(
+                Message.normalize("hello"),
+                new AgentSession("session-1", null, Map.of()),
+                new AgentRunOptions(),
+                new CancellationSignal(),
+                Map.of()));
+
+    assertThatThrownBy(() -> run.session().toCompletableFuture().join())
+        .hasCauseInstanceOf(IllegalStateException.class)
+        .cause()
+        .hasMessage("after-run failure");
+  }
+
+  @Test
+  void aCancelledRunFailsTheSessionStage() {
+    CompletableFuture<AgentResponse> manualSource = new CompletableFuture<>();
+    ManualCompletionAgent agent = new ManualCompletionAgent("agent-1", manualSource);
+
+    AgentRun run =
+        agent.run(
+            new AgentRunRequest(
+                Message.normalize("hello"),
+                new AgentSession("session-1", null, Map.of()),
+                new AgentRunOptions(),
+                new CancellationSignal(),
+                Map.of()));
+    run.cancel();
+
+    assertThatThrownBy(() -> run.session().toCompletableFuture().join())
+        .hasCauseInstanceOf(CancellationException.class);
+  }
+
+  @Test
+  void mappingUpdatesKeepsTheSessionStage() {
+    SessionMutatingAfterRunSeamAgent agent = new SessionMutatingAfterRunSeamAgent("agent-1");
+
+    AgentStreamingRun<AgentResponseUpdate> run =
+        agent.runStreaming(
+            new AgentRunRequest(
+                Message.normalize("hello"),
+                new AgentSession("session-1", null, Map.of()),
+                new AgentRunOptions(),
+                new CancellationSignal(),
+                Map.of()));
+    AgentStreamingRun<String> mapped = run.mapUpdates(update -> "mapped");
+    consume(mapped.updates());
+
+    assertThat(mapped.session().toCompletableFuture().join().orElseThrow().state())
+        .containsEntry("seam", "written");
+  }
+
   private static void awaitLatch(CountDownLatch latch) {
     try {
       assertThat(latch.await(5, TimeUnit.SECONDS)).isTrue();
@@ -840,6 +967,18 @@ class AgentLifecycleTest {
       CompletableFuture<Void> failed = new CompletableFuture<>();
       failed.completeExceptionally(new IllegalStateException("after-run failure"));
       return failed;
+    }
+  }
+
+  private static final class SessionMutatingAfterRunSeamAgent extends AfterRunSeamAgent {
+    private SessionMutatingAfterRunSeamAgent(String id) {
+      super(id);
+    }
+
+    @Override
+    protected CompletionStage<Void> afterRun(SessionContext sessionContext) {
+      sessionContext.providerState("seam").set("written");
+      return super.afterRun(sessionContext);
     }
   }
 

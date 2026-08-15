@@ -52,7 +52,8 @@ public abstract class Agent {
             new AgentRunContext(this, session, normalizedRequest.attributes(), sessionContext),
             normalizedRequest);
     AgentRun completed = run.withCompletion(completionAction(sessionContext));
-    return completed.withResponse(afterRunStage(sessionContext, completed.response()));
+    return completed.withResponse(
+        afterRunStage(sessionContext, completed.response()), sessionContext::updatedSession);
   }
 
   public final AgentStreamingRun<AgentResponseUpdate> runStreaming(String input) {
@@ -73,7 +74,8 @@ public abstract class Agent {
             normalizedRequest);
     AgentStreamingRun<AgentResponseUpdate> completed =
         run.withCompletion(completionAction(sessionContext));
-    return completed.withResponse(afterRunStage(sessionContext, completed.response()));
+    return completed.withResponse(
+        afterRunStage(sessionContext, completed.response()), sessionContext::updatedSession);
   }
 
   protected void validateSessionCompatibility(AgentSession session) {
@@ -97,6 +99,12 @@ public abstract class Agent {
    * being changed. A failed or cancelled run never reaches this seam, so no success-only work is
    * performed for it. A stage returned here that fails, or a {@code null} stage, fails the run
    * rather than being swallowed.
+   *
+   * <p>Because this seam is the last lifecycle step, it is also the fence for {@link
+   * AgentRun#session()}: the session that stage publishes is read only after this seam succeeded,
+   * so an implementation that persists the session here (the engine's session save) publishes only
+   * what it durably wrote, and a failure here fails the session stage rather than reporting state
+   * the run never committed.
    *
    * <p>On a streaming run the seam necessarily runs after the update stream reached its terminal
    * signal, since the response it observes only exists once streaming finished. A failure here

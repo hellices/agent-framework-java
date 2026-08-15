@@ -7,11 +7,15 @@ import io.github.hellices.agentframework.api.message.Message;
 import io.github.hellices.agentframework.api.message.MessageAttribution;
 import io.github.hellices.agentframework.spi.session.ProviderSessionState;
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * The independent per-run execution context described by SES-011. A fresh instance is created for
@@ -30,6 +34,12 @@ import java.util.Optional;
  * #contextContributions()} can answer "who added this?" for a consumer that selects context by
  * source, while {@link #contextMessages()} stays the plain ordered message list the model request
  * is built from.
+ *
+ * <p>A run that loads a stored session has its session replaced once through {@link
+ * #hydrate(AgentSession, SessionSnapshotMetadata)} before any provider is bound, and the set of
+ * namespaces a later save may write back is fixed once through {@link
+ * #restrictPersistedSources(java.util.Collection)}. Both are framework lifecycle plumbing, both are
+ * set-once, and both are refused once a provider state view exists.
  */
 public final class SessionContext {
 
@@ -41,12 +51,14 @@ public final class SessionContext {
    */
   private static final String PROVIDER_SOURCE_TYPE = "AIContextProvider";
 
-  private final AgentSession session;
   private final List<Message> inputMessages;
   private final List<ContextMessageContribution> contextContributions = new ArrayList<>();
   private final Map<String, ProviderState> providerStates = new LinkedHashMap<>();
   private final Map<String, Object> metadata;
   private final CancellationSignal cancellationSignal;
+  private AgentSession session;
+  private SessionSnapshotMetadata snapshotMetadata;
+  private Set<String> persistedSourceIds;
   private AgentResponse response;
 
   public SessionContext(
@@ -68,8 +80,118 @@ public final class SessionContext {
         cancellationSignal == null ? new CancellationSignal() : cancellationSignal;
   }
 
-  public AgentSession session() {
+  public synchronized AgentSession session() {
     return session;
+  }
+
+  /**
+   * Replaces this run's session with the one restored from durable storage, and records the
+   * persistence metadata of the snapshot it came from (SES-003, SES-014).
+   *
+   * <p>This is framework lifecycle plumbing invoked once by the engine's session coordinator,
+   * before any context provider is bound. It exists because a run's {@code SessionContext} is
+   * created by {@code Agent} before the engine can start the asynchronous load, so the restored
+   * session has to reach the context that already exists rather than a second one: two contexts per
+   * run would break the one-context-per-run guarantee of SES-011 and split the provider state
+   * views.
+   *
+   * <p>The seam is deliberately narrow and fails closed. The session identity is immutable, so a
+   * snapshot for a different session is rejected instead of silently redirecting the run; a
+   * caller-declared service conversation handle is never replaced or dropped, so a run bound to a
+   * provider-side conversation cannot be silently turned into a locally stored one; hydration
+   * happens at most once; and it is refused once any {@link #providerState(String)} view exists,
+   * because a view already reflects the pre-hydration state and swapping the session underneath it
+   * would make a provider observe state that was never persisted for it.
+   *
+   * <p>The service handle is reconciled rather than overwritten. A request that declares no handle
+   * accepts whichever handle the snapshot carries, because the store is the authority for a session
+   * the caller only named. A request that declares a handle requires the stored one to be exactly
+   * equal: a stored {@code null} or a different handle means the caller and the store disagree
+   * about who owns the conversation, and continuing would either mix service-managed and local
+   * history in one run or erase the caller's handle from durable storage on the next save.
+   *
+   * @param restored the session restored from the loaded snapshot; must not be {@code null} and
+   *     must carry this run's session id
+   * @param metadata the loaded snapshot's persistence bookkeeping; must not be {@code null}
+   * @throws NullPointerException if {@code restored} or {@code metadata} is {@code null}
+   * @throws IllegalArgumentException if {@code restored} carries a different session id, or this
+   *     run declared a service session id that {@code restored} does not carry
+   * @throws IllegalStateException if this run is sessionless, has already been hydrated, or has
+   *     already created a provider state view
+   */
+  public synchronized void hydrate(AgentSession restored, SessionSnapshotMetadata metadata) {
+    Objects.requireNonNull(restored, "session must not be null");
+    Objects.requireNonNull(metadata, "metadata must not be null");
+    if (session == null) {
+      throw new IllegalStateException("a sessionless run cannot be hydrated");
+    }
+    if (snapshotMetadata != null) {
+      throw new IllegalStateException("session context is already hydrated");
+    }
+    requireNoStateViews();
+    if (!session.sessionId().equals(restored.sessionId())) {
+      throw new IllegalArgumentException("hydrated session id must be " + session.sessionId());
+    }
+    String requestedServiceSessionId = session.serviceSessionId();
+    if (requestedServiceSessionId != null
+        && !requestedServiceSessionId.equals(restored.serviceSessionId())) {
+      throw new IllegalArgumentException(
+          "hydrated service session id must be " + requestedServiceSessionId);
+    }
+    session = restored;
+    snapshotMetadata = metadata;
+  }
+
+  /**
+   * Returns the persistence bookkeeping of the snapshot this run was restored from, or empty when
+   * no stored snapshot was loaded — either because no store is configured, the run is sessionless,
+   * or the session has never been saved.
+   */
+  public synchronized Optional<SessionSnapshotMetadata> snapshotMetadata() {
+    return Optional.ofNullable(snapshotMetadata);
+  }
+
+  /**
+   * Limits which session state namespaces {@link #updatedSession()} writes back, to the source ids
+   * the engine actually resolved for this run.
+   *
+   * <p>This is framework lifecycle plumbing invoked once by the engine after it binds the run's
+   * context providers. Without it, a provider that reaches a sibling namespace through {@link
+   * #providerState(String)} — which this class documents as reachable plumbing rather than an
+   * isolation boundary — would have that write persisted under the sibling's name, so a namespace
+   * nobody owns in this run could overwrite the state of a provider that is configured elsewhere.
+   * Restricting write-back keeps the durable session a function of the providers the run actually
+   * ran.
+   *
+   * <p>Namespaces outside the allow-list are dropped from the update entirely: neither a value set
+   * on them nor a clear of them changes what a later save writes, so stored state for an unbound
+   * namespace survives the run untouched. A context that is never restricted keeps writing back
+   * every touched namespace, which is what a run without a configured session store does.
+   *
+   * @param sourceIds the source ids that may be written back; must not be {@code null} and must not
+   *     contain blank entries
+   * @throws NullPointerException if {@code sourceIds} is {@code null} or contains {@code null}
+   * @throws IllegalArgumentException if any source id is blank
+   * @throws IllegalStateException if the restriction was already applied, or a provider state view
+   *     already exists
+   */
+  public synchronized void restrictPersistedSources(Collection<String> sourceIds) {
+    Objects.requireNonNull(sourceIds, "sourceIds must not be null");
+    if (persistedSourceIds != null) {
+      throw new IllegalStateException("session context persisted sources are already restricted");
+    }
+    requireNoStateViews();
+    Set<String> normalized = new LinkedHashSet<>();
+    for (String sourceId : sourceIds) {
+      normalized.add(normalizeSourceId(sourceId));
+    }
+    persistedSourceIds = Collections.unmodifiableSet(normalized);
+  }
+
+  private void requireNoStateViews() {
+    if (!providerStates.isEmpty()) {
+      throw new IllegalStateException("session context state views already exist");
+    }
   }
 
   public List<Message> inputMessages() {
@@ -190,21 +312,28 @@ public final class SessionContext {
    * it from provider or application code is outside the provider contract; making it unreachable
    * requires module-level encapsulation (a qualified export), which this build does not have yet.
    *
+   * <p>What is bounded is persistence, not reachability: once a run applied {@link
+   * #restrictPersistedSources(Collection)}, a view created for a namespace outside the allow-list
+   * still reads and writes normally for the rest of the run, but nothing it holds reaches {@link
+   * #updatedSession()}, so it cannot outlive the run it was created in.
+   *
    * @param sourceId the provider's fixed session-state namespace key; must not be blank
    * @throws IllegalArgumentException if {@code sourceId} is blank
    * @throws NullPointerException if {@code sourceId} is {@code null}
    */
   public synchronized ProviderSessionState providerState(String sourceId) {
     String normalizedSourceId = normalizeSourceId(sourceId);
+    AgentSession current = session;
     return providerStates.computeIfAbsent(
         normalizedSourceId,
-        key -> new ProviderState(key, session == null ? null : session.state().get(key)));
+        key -> new ProviderState(key, current == null ? null : current.state().get(key)));
   }
 
   /**
    * Returns an immutable {@link AgentSession} carrying this run's provider state, for a later
    * persistence step to save. The original session is never mutated: every namespace touched
-   * through {@link #providerState(String)} is written back, a cleared namespace is removed, and
+   * through {@link #providerState(String)} and allowed by {@link
+   * #restrictPersistedSources(Collection)} is written back, a cleared namespace is removed, and
    * every other session state entry is preserved as it was.
    *
    * <p>Only the state <em>map</em> is new. The values it holds are the same object references the
@@ -221,9 +350,18 @@ public final class SessionContext {
     if (session == null) {
       return Optional.empty();
     }
+    Set<String> allowedSourceIds = persistedSourceIds;
+    if (providerStates.isEmpty()
+        || (allowedSourceIds != null
+            && Collections.disjoint(providerStates.keySet(), allowedSourceIds))) {
+      return Optional.of(session);
+    }
     Map<String, Object> updatedState = new LinkedHashMap<>(session.state());
     providerStates.forEach(
         (sourceId, state) -> {
+          if (allowedSourceIds != null && !allowedSourceIds.contains(sourceId)) {
+            return;
+          }
           Optional<Object> value = state.value();
           if (value.isPresent()) {
             updatedState.put(sourceId, value.get());
