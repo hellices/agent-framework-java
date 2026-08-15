@@ -45,7 +45,8 @@ class ModelCatalogTest {
 
     assertThatThrownBy(catalog::defaultClient)
         .isInstanceOf(IllegalStateException.class)
-        .hasMessage("no default model is configured; use builder(name) or builder(ModelClient)");
+        .hasMessage(
+            "no default model is configured; configure defaultModel(name) or resolve a named model");
   }
 
   private static ModelResponse response() {

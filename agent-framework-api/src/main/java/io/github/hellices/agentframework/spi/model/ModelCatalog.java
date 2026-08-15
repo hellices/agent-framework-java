@@ -31,7 +31,7 @@ public final class ModelCatalog {
   public ModelClient defaultClient() {
     if (defaultModelName == null) {
       throw new IllegalStateException(
-          "no default model is configured; use builder(name) or builder(ModelClient)");
+          "no default model is configured; configure defaultModel(name) or resolve a named model");
     }
     return clients.get(defaultModelName);
   }
@@ -41,7 +41,7 @@ public final class ModelCatalog {
   }
 
   public Map<String, ModelClient> clients() {
-    return Map.copyOf(clients);
+    return clients;
   }
 
   public static final class Builder {
