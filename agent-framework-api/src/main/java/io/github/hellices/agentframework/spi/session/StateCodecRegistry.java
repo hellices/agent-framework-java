@@ -10,7 +10,6 @@ import io.github.hellices.agentframework.api.message.ToolCallContent;
 import io.github.hellices.agentframework.api.message.ToolResultContent;
 import io.github.hellices.agentframework.api.session.SessionSnapshot;
 import io.github.hellices.agentframework.api.session.SessionStateEntry;
-import io.github.hellices.agentframework.api.session.SessionStateValues;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -42,8 +41,8 @@ public final class StateCodecRegistry {
         .forEach(
             (key, value) -> {
               StateCodec<Object> codec = codecForValue(value);
-              Object payload = SessionStateValues.immutableCopy(codec.encode(value));
-              entries.put(key, new SessionStateEntry(codec.typeId(), codec.version(), payload));
+              entries.put(
+                  key, new SessionStateEntry(codec.typeId(), codec.version(), codec.encode(value)));
             });
     return new SessionSnapshot(
         "session",
