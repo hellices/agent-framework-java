@@ -246,6 +246,26 @@ class SessionContextTest {
   }
 
   @Test
+  void updatedSessionReturnsTheOriginalWhenNoProviderStateWasViewed() {
+    AgentSession session = new AgentSession("session-1", null, Map.of("stored", "value"));
+    SessionContext sessionContext =
+        new SessionContext(session, List.of(), Map.of(), new CancellationSignal());
+
+    assertThat(sessionContext.updatedSession()).containsSame(session);
+  }
+
+  @Test
+  void updatedSessionReturnsTheOriginalWhenNoViewedSourceCanBePersisted() {
+    AgentSession session = new AgentSession("session-1", null, Map.of("stored", "value"));
+    SessionContext sessionContext =
+        new SessionContext(session, List.of(), Map.of(), new CancellationSignal());
+    sessionContext.restrictPersistedSources(List.of());
+    sessionContext.providerState("unbound").set("dropped");
+
+    assertThat(sessionContext.updatedSession()).containsSame(session);
+  }
+
+  @Test
   void updatedSessionCarriesProviderStateWithoutMutatingTheOriginalSession() {
     AgentSession session =
         new AgentSession("session-1", "service-1", Map.of("memory", 1, "keep", "as-is"));

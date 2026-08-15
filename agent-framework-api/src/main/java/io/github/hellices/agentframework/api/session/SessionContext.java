@@ -350,8 +350,13 @@ public final class SessionContext {
     if (session == null) {
       return Optional.empty();
     }
-    Map<String, Object> updatedState = new LinkedHashMap<>(session.state());
     Set<String> allowedSourceIds = persistedSourceIds;
+    if (providerStates.isEmpty()
+        || (allowedSourceIds != null
+            && Collections.disjoint(providerStates.keySet(), allowedSourceIds))) {
+      return Optional.of(session);
+    }
+    Map<String, Object> updatedState = new LinkedHashMap<>(session.state());
     providerStates.forEach(
         (sourceId, state) -> {
           if (allowedSourceIds != null && !allowedSourceIds.contains(sourceId)) {
