@@ -244,7 +244,7 @@ public final class FileSessionStore implements SessionStore {
         Files.move(target, quarantined);
       }
       forceDirectory(root);
-    } catch (IOException | FileSessionStoreException failure) {
+    } catch (IOException | FileSessionStoreException | SecurityException failure) {
       parseFailure.addSuppressed(
           new FileSessionStoreException("failed to quarantine corrupt session snapshot", failure));
     }
