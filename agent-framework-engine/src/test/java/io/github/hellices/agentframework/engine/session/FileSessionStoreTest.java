@@ -215,6 +215,8 @@ class FileSessionStoreTest {
   void fileSystemErrorsAreNotReportedAsMissingSessions() throws Exception {
     Path root = temporaryDirectory.resolve("store");
     FileSessionStore store = new FileSessionStore(root, new JacksonSessionSnapshotCodec());
+    Path replacementRoot = temporaryDirectory.resolve("replacement-store");
+    Files.createDirectory(replacementRoot);
     Files.delete(root);
     Files.writeString(root, "not a directory");
 
@@ -233,7 +235,7 @@ class FileSessionStoreTest {
         .isInstanceOf(CompletionException.class)
         .hasCauseInstanceOf(FileSessionStoreException.class);
 
-    Files.createDirectory(root);
+    Files.move(replacementRoot, root);
     assertThatThrownBy(() -> store.load("session-1").toCompletableFuture().join())
         .isInstanceOf(CompletionException.class)
         .hasCauseInstanceOf(FileSessionStoreException.class)
