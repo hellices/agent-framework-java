@@ -21,4 +21,32 @@ class AgentSessionTest {
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessage("sessionId must not be blank");
   }
+
+  @Test
+  void rejectsEmptyServiceSessionId() {
+    assertThatThrownBy(() -> new AgentSession("session-1", "", Map.of()))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessage("serviceSessionId must not be blank");
+  }
+
+  @Test
+  void rejectsWhitespaceServiceSessionId() {
+    assertThatThrownBy(() -> new AgentSession("session-1", "   ", Map.of()))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessage("serviceSessionId must not be blank");
+  }
+
+  @Test
+  void acceptsValidServiceSessionId() {
+    AgentSession session = new AgentSession("session-1", "service-1", Map.of());
+
+    assertThat(session.serviceSessionId()).isEqualTo("service-1");
+  }
+
+  @Test
+  void acceptsNullServiceSessionId() {
+    AgentSession session = new AgentSession("session-1", null, Map.of());
+
+    assertThat(session.serviceSessionId()).isNull();
+  }
 }
