@@ -57,7 +57,7 @@ class StateCodecRegistryTest {
   }
 
   @Test
-  void frameworkMessageCodecPreservesBlankTextAndNullToolArguments() {
+  void frameworkMessageCodecPreservesBlankTextAndNullToolArgumentValues() {
     StateCodecRegistry registry = StateCodecRegistry.builder().build();
     Map<String, Object> arguments = new LinkedHashMap<>();
     arguments.put("query", "x");
