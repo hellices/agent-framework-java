@@ -30,6 +30,10 @@ public final class AgentRunRequest {
     this.messages = List.copyOf(normalizedMessages);
     this.session = session;
     this.options = options == null ? new AgentRunOptions() : options;
+    if (!this.messages.isEmpty() && this.options.continuationToken().isPresent()) {
+      throw new IllegalArgumentException(
+          "continuationToken cannot be combined with input messages");
+    }
     this.cancellationSignal =
         cancellationSignal == null ? new CancellationSignal() : cancellationSignal;
     this.attributes = attributes == null ? Map.of() : Map.copyOf(attributes);
