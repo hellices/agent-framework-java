@@ -229,7 +229,8 @@ public final class FileSessionStore implements SessionStore {
     if (!directoryForceSupported) {
       return;
     }
-    try (FileChannel channel = FileChannel.open(directory, StandardOpenOption.READ)) {
+    try (FileChannel channel =
+        FileChannel.open(directory, StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS)) {
       channel.force(true);
     }
   }
