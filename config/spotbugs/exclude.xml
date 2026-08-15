@@ -9,4 +9,18 @@
     <Method name="additionalProperties"/>
     <Bug pattern="EI_EXPOSE_REP"/>
   </Match>
+  <!-- SessionContext is intentionally a single, shared, mutable per-run object (SES-011): Agent hands
+       the exact same instance to AgentRunContext and to its own completion callback so the response
+       slot can be filled once the run finishes. Storing and exposing that shared reference is the
+       design, not an accidental leak of caller state. -->
+  <Match>
+    <Class name="io.github.hellices.agentframework.api.agent.AgentRunContext"/>
+    <Method name="sessionContext"/>
+    <Bug pattern="EI_EXPOSE_REP"/>
+  </Match>
+  <Match>
+    <Class name="io.github.hellices.agentframework.api.agent.AgentRunContext"/>
+    <Method name="&lt;init&gt;"/>
+    <Bug pattern="EI_EXPOSE_REP2"/>
+  </Match>
 </FindBugsFilter>

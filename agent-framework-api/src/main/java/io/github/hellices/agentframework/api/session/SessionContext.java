@@ -57,6 +57,32 @@ public final class SessionContext {
     return List.copyOf(contextMessages);
   }
 
+  /**
+   * Appends an ordered, immutable-safe copy of {@code messages} to this context's accumulated
+   * context messages. This is a plain accumulation hook for engines/providers to make {@link
+   * #contextMessages()} usable; it does not attach any provider source attribution to the messages
+   * it appends (source-bound attribution is owned by a later context-provider slice).
+   *
+   * <p>Null handling mirrors the constructor's {@code inputMessages} normalization: a {@code null}
+   * collection is treated as "nothing to add" and is a no-op, while a non-null collection must not
+   * contain {@code null} entries. A collection with a {@code null} entry is rejected in full (no
+   * partial append) before any of its messages are appended.
+   *
+   * @param messages the messages to append, in order; may be {@code null}
+   * @throws NullPointerException if {@code messages} is non-null and contains a {@code null} entry
+   */
+  public synchronized void addContextMessages(List<? extends Message> messages) {
+    if (messages == null) {
+      return;
+    }
+    List<Message> normalized = new ArrayList<>();
+    for (Message message : messages) {
+      normalized.add(
+          Objects.requireNonNull(message, "contextMessages must not contain null entries"));
+    }
+    contextMessages.addAll(normalized);
+  }
+
   public Map<String, Object> metadata() {
     return metadata;
   }

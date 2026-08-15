@@ -69,6 +69,58 @@ class AgentRunContextTest {
         .hasMessage("session must match sessionContext.session()");
   }
 
+  @SuppressWarnings({"deprecation", "removal"})
+  @Test
+  void deprecatedThreeArgConstructorDelegatesToCanonicalConstructorWithAnEmptySessionContext() {
+    AgentSession session = new AgentSession("session-1", "service-1", Map.of());
+    Map<String, Object> attributes = Map.of("key", "value");
+
+    AgentRunContext context = new AgentRunContext(AGENT, session, attributes);
+
+    assertThat(context.agent()).isEqualTo(AGENT);
+    assertThat(context.session()).isEqualTo(session);
+    assertThat(context.attributes()).isEqualTo(attributes);
+    assertThat(context.sessionContext().session()).isEqualTo(session);
+    assertThat(context.sessionContext().inputMessages()).isEmpty();
+    assertThat(context.sessionContext().contextMessages()).isEmpty();
+    assertThat(context.sessionContext().metadata()).isEqualTo(attributes);
+    assertThat(context.sessionContext().cancellationSignal()).isNotNull();
+    assertThat(context.sessionContext().cancellationSignal().isCancelled()).isFalse();
+  }
+
+  @SuppressWarnings({"deprecation", "removal"})
+  @Test
+  void deprecatedThreeArgConstructorNormalizesNullAttributesForBothContextAndSessionContext() {
+    AgentSession session = new AgentSession("session-1", "service-1", Map.of());
+
+    AgentRunContext context = new AgentRunContext(AGENT, session, null);
+
+    assertThat(context.attributes()).isEqualTo(Map.of());
+    assertThat(context.sessionContext().metadata()).isEqualTo(Map.of());
+  }
+
+  @SuppressWarnings({"deprecation", "removal"})
+  @Test
+  void deprecatedThreeArgConstructorProducesAFreshCancellationSignalPerCall() {
+    AgentSession session = new AgentSession("session-1", "service-1", Map.of());
+
+    AgentRunContext first = new AgentRunContext(AGENT, session, Map.of());
+    AgentRunContext second = new AgentRunContext(AGENT, session, Map.of());
+
+    assertThat(first.sessionContext().cancellationSignal())
+        .isNotSameAs(second.sessionContext().cancellationSignal());
+  }
+
+  @SuppressWarnings({"deprecation", "removal"})
+  @Test
+  void deprecatedThreeArgConstructorStillValidatesAgentNonNull() {
+    AgentSession session = new AgentSession("session-1", "service-1", Map.of());
+
+    assertThatThrownBy(() -> new AgentRunContext(null, session, Map.of()))
+        .isInstanceOf(NullPointerException.class)
+        .hasMessage("agent must not be null");
+  }
+
   private static final class NoOpAgent extends Agent {
     private NoOpAgent() {
       super("no-op-agent", "NoOpAgent", "agent test double");

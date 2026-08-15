@@ -9,6 +9,7 @@ import io.github.hellices.agentframework.api.message.FinishReason;
 import io.github.hellices.agentframework.api.message.Message;
 import io.github.hellices.agentframework.api.message.Role;
 import io.github.hellices.agentframework.api.message.TextContent;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
@@ -89,6 +90,81 @@ class SessionContextTest {
     SessionContext second = new SessionContext(null, List.of(), Map.of(), null);
 
     assertThat(first.cancellationSignal()).isNotSameAs(second.cancellationSignal());
+  }
+
+  @Test
+  void addContextMessagesAppendsInOrderAcrossMultipleCalls() {
+    SessionContext sessionContext =
+        new SessionContext(null, List.of(), Map.of(), new CancellationSignal());
+    Message first = sampleMessage("first");
+    Message second = sampleMessage("second");
+    Message third = sampleMessage("third");
+
+    sessionContext.addContextMessages(List.of(first, second));
+    sessionContext.addContextMessages(List.of(third));
+
+    assertThat(sessionContext.contextMessages()).containsExactly(first, second, third);
+  }
+
+  @Test
+  void addContextMessagesCopiesTheCallerListSoLaterMutationsDoNotLeak() {
+    SessionContext sessionContext =
+        new SessionContext(null, List.of(), Map.of(), new CancellationSignal());
+    Message first = sampleMessage("first");
+    List<Message> callerList = new ArrayList<>(List.of(first));
+
+    sessionContext.addContextMessages(callerList);
+    callerList.add(sampleMessage("second"));
+
+    assertThat(sessionContext.contextMessages()).containsExactly(first);
+  }
+
+  @Test
+  void contextMessagesReturnsAnImmutableSnapshotThatDoesNotExposeTheBackingList() {
+    SessionContext sessionContext =
+        new SessionContext(null, List.of(), Map.of(), new CancellationSignal());
+    Message first = sampleMessage("first");
+    sessionContext.addContextMessages(List.of(first));
+
+    List<Message> snapshot = sessionContext.contextMessages();
+
+    assertThatThrownBy(() -> snapshot.add(sampleMessage("second")))
+        .isInstanceOf(UnsupportedOperationException.class);
+    // Mutating the previously-returned snapshot must not affect state observed afterwards.
+    assertThat(sessionContext.contextMessages()).containsExactly(first);
+  }
+
+  @Test
+  void addContextMessagesTreatsANullCollectionAsANoOp() {
+    SessionContext sessionContext =
+        new SessionContext(null, List.of(), Map.of(), new CancellationSignal());
+    Message first = sampleMessage("first");
+    sessionContext.addContextMessages(List.of(first));
+
+    sessionContext.addContextMessages(null);
+
+    assertThat(sessionContext.contextMessages()).containsExactly(first);
+  }
+
+  @Test
+  void addContextMessagesRejectsNullEntriesAndLeavesStateUnchanged() {
+    SessionContext sessionContext =
+        new SessionContext(null, List.of(), Map.of(), new CancellationSignal());
+    Message first = sampleMessage("first");
+    sessionContext.addContextMessages(List.of(first));
+    List<Message> withNullEntry = new ArrayList<>();
+    withNullEntry.add(sampleMessage("second"));
+    withNullEntry.add(null);
+
+    assertThatThrownBy(() -> sessionContext.addContextMessages(withNullEntry))
+        .isInstanceOf(NullPointerException.class)
+        .hasMessage("contextMessages must not contain null entries");
+    // The rejected call must not partially append entries before the null was found.
+    assertThat(sessionContext.contextMessages()).containsExactly(first);
+  }
+
+  private static Message sampleMessage(String text) {
+    return new Message(Role.ASSISTANT, List.of(new TextContent(text)));
   }
 
   private static AgentResponse sampleResponse() {
