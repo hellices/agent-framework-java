@@ -9,4 +9,5 @@ description = "Embedded agent execution engine for Agent Framework for Java."
 
 dependencies {
     api(project(":agent-framework-api"))
+    implementation(libs.jackson.databind)
 }

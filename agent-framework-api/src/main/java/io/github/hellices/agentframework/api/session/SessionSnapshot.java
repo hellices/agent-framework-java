@@ -1,0 +1,54 @@
+package io.github.hellices.agentframework.api.session;
+
+import java.time.Instant;
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.Objects;
+import java.util.TreeMap;
+
+public record SessionSnapshot(
+    String type,
+    String version,
+    String sessionId,
+    String serviceSessionId,
+    long revision,
+    Instant createdAt,
+    Map<String, SessionStateEntry> state) {
+
+  public SessionSnapshot {
+    if (type == null || type.isBlank()) {
+      throw new IllegalArgumentException("type must not be blank");
+    }
+    if (version == null || version.isBlank()) {
+      throw new IllegalArgumentException("version must not be blank");
+    }
+    if (sessionId == null || sessionId.isBlank()) {
+      throw new IllegalArgumentException("sessionId must not be blank");
+    }
+    if (serviceSessionId != null && serviceSessionId.isBlank()) {
+      throw new IllegalArgumentException("serviceSessionId must not be blank");
+    }
+    if (revision < 0) {
+      throw new IllegalArgumentException("revision must not be negative");
+    }
+    createdAt = Objects.requireNonNull(createdAt, "createdAt must not be null");
+    Map<String, SessionStateEntry> normalized = new TreeMap<>();
+    if (state != null) {
+      for (Map.Entry<String, SessionStateEntry> entry : state.entrySet()) {
+        String key = entry.getKey();
+        if (key == null || key.isBlank()) {
+          throw new IllegalArgumentException("state keys must not be blank");
+        }
+        normalized.put(
+            key, Objects.requireNonNull(entry.getValue(), "state values must not be null"));
+      }
+    }
+    state = Collections.unmodifiableMap(new LinkedHashMap<>(normalized));
+  }
+
+  @Override
+  public Map<String, SessionStateEntry> state() {
+    return state;
+  }
+}
