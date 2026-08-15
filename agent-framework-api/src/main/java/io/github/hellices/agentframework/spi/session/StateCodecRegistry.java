@@ -40,7 +40,7 @@ public final class StateCodecRegistry {
         .state()
         .forEach(
             (key, value) -> {
-              StateCodec<Object> codec = codecForValue(value);
+              StateCodec<Object> codec = codecForValue(key, value);
               entries.put(
                   key, new SessionStateEntry(codec.typeId(), codec.version(), codec.encode(value)));
             });
@@ -92,8 +92,14 @@ public final class StateCodecRegistry {
     return new AgentSession(snapshot.sessionId(), snapshot.serviceSessionId(), state);
   }
 
+  /**
+   * Resolves the codec for one session state value. Failures name the state key — the provider
+   * namespace or source the value belongs to — because the value's own class is often a JDK
+   * internal implementation type (an immutable list, for example) that says nothing about which
+   * component wrote it.
+   */
   @SuppressWarnings("unchecked")
-  private StateCodec<Object> codecForValue(Object value) {
+  private StateCodec<Object> codecForValue(String key, Object value) {
     Objects.requireNonNull(value, "session state values must not be null");
     StateCodec<?> exact = byJavaType.get(value.getClass());
     if (exact != null) {
@@ -104,7 +110,10 @@ public final class StateCodecRegistry {
       if (codec.javaType().isInstance(value)) {
         if (assignable != null) {
           throw new IllegalArgumentException(
-              "ambiguous session state codecs for type: " + value.getClass().getName());
+              "ambiguous session state codecs for source '"
+                  + key
+                  + "': "
+                  + value.getClass().getName());
         }
         assignable = codec;
       }
@@ -113,7 +122,7 @@ public final class StateCodecRegistry {
       return (StateCodec<Object>) assignable;
     }
     throw new IllegalArgumentException(
-        "unregistered session state type: " + value.getClass().getName());
+        "unregistered session state type for source '" + key + "': " + value.getClass().getName());
   }
 
   public static final class Builder {

@@ -118,7 +118,7 @@ class StateCodecRegistryTest {
                     0,
                     Instant.EPOCH))
         .isInstanceOf(IllegalArgumentException.class)
-        .hasMessage("unregistered session state type: java.lang.Object");
+        .hasMessage("unregistered session state type for source 'unknown': java.lang.Object");
 
     StateCodecRegistry invalidRegistry =
         StateCodecRegistry.builder().register(new NonFiniteCodec()).build();

@@ -5,7 +5,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.github.hellices.agentframework.api.agent.AgentResponse;
 import io.github.hellices.agentframework.api.agent.AgentResponseUpdate;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.Test;
 
 class MessageTest {
@@ -34,6 +36,42 @@ class MessageTest {
         new Message(Role.USER, List.of(new TextContent("hello "), new TextContent("world")));
 
     assertThat(message.text()).isEqualTo("hello world");
+  }
+
+  @Test
+  void withAttributionCopiesEveryOtherPartOfTheMessage() {
+    Object rawRepresentation = new Object();
+    Message message =
+        new Message(
+            Role.ASSISTANT,
+            List.of(new TextContent("hello")),
+            new MessageAttribution("External", "caller", "origin-session"),
+            Map.of("key", "value"),
+            rawRepresentation);
+    MessageAttribution attribution =
+        new MessageAttribution("ChatHistory", "in_memory", "origin-session");
+
+    Message stamped = message.withAttribution(attribution);
+
+    assertThat(stamped).isNotSameAs(message);
+    assertThat(stamped.attribution()).isEqualTo(attribution);
+    assertThat(stamped.role()).isEqualTo(Role.ASSISTANT);
+    assertThat(stamped.content()).isEqualTo(message.content());
+    assertThat(stamped.additionalProperties()).isEqualTo(Map.of("key", "value"));
+    assertThat(stamped.rawRepresentation()).isSameAs(rawRepresentation);
+    assertThat(message.attribution())
+        .isEqualTo(new MessageAttribution("External", "caller", "origin-session"));
+  }
+
+  @Test
+  void withAttributionRejectsANullAttribution() {
+    Message message = new Message(Role.USER, List.of(new TextContent("hi")));
+    List<Message> copies = new ArrayList<>();
+
+    assertThatThrownBy(() -> copies.add(message.withAttribution(null)))
+        .isInstanceOf(NullPointerException.class)
+        .hasMessage("attribution must not be null");
+    assertThat(copies).isEmpty();
   }
 
   @Test
