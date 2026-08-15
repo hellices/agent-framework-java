@@ -19,7 +19,6 @@ import java.util.Objects;
 
 public final class JacksonSessionSnapshotCodec implements SessionSnapshotCodec {
 
-  private static final int MAX_SNAPSHOT_BYTES = 1_048_576;
   private static final int MAX_DECIMAL_TEXT_LENGTH = 1_024;
   private static final int MAX_DECIMAL_SCALE = 10_000;
   private static final int MAX_PAYLOAD_DEPTH = 64;
@@ -34,7 +33,7 @@ public final class JacksonSessionSnapshotCodec implements SessionSnapshotCodec {
                 .streamReadConstraints(
                     StreamReadConstraints.builder()
                         .maxNestingDepth(MAX_JSON_NESTING_DEPTH)
-                        .maxStringLength(MAX_SNAPSHOT_BYTES)
+                        .maxStringLength(SessionSnapshotLimits.MAX_BYTES)
                         .build())
                 .build()));
   }
@@ -71,11 +70,11 @@ public final class JacksonSessionSnapshotCodec implements SessionSnapshotCodec {
               state.put(key, encodedEntry);
             });
     envelope.put("state", state);
-    try (BoundedOutputStream output = new BoundedOutputStream(MAX_SNAPSHOT_BYTES)) {
+    try (BoundedOutputStream output = new BoundedOutputStream(SessionSnapshotLimits.MAX_BYTES)) {
       objectMapper.writeValue(output, envelope);
       return output.toByteArray();
     } catch (SnapshotSizeLimitException failure) {
-      throw new SessionSnapshotSchemaException("session snapshot exceeds the 1 MiB limit", failure);
+      throw new SessionSnapshotSchemaException(SessionSnapshotLimits.exceededMessage(), failure);
     } catch (IOException failure) {
       throw new SessionSnapshotParseException("failed to encode session snapshot", failure);
     }
@@ -84,14 +83,17 @@ public final class JacksonSessionSnapshotCodec implements SessionSnapshotCodec {
   @Override
   public SessionSnapshot decode(byte[] encoded) {
     Objects.requireNonNull(encoded, "encoded must not be null");
-    if (encoded.length > MAX_SNAPSHOT_BYTES) {
-      throw new SessionSnapshotSchemaException("session snapshot exceeds the 1 MiB limit");
+    if (encoded.length > SessionSnapshotLimits.MAX_BYTES) {
+      throw new SessionSnapshotSchemaException(SessionSnapshotLimits.exceededMessage());
     }
     JsonNode root;
     try {
       root = objectMapper.readTree(encoded);
     } catch (IOException failure) {
       throw new SessionSnapshotParseException("failed to parse session snapshot", failure);
+    }
+    if (root == null || root.isMissingNode()) {
+      throw new SessionSnapshotParseException("session snapshot contains no JSON content", null);
     }
     if (!root.isObject()) {
       throw new SessionSnapshotSchemaException("snapshot must be a JSON object");
