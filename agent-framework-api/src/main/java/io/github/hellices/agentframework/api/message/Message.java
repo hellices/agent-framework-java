@@ -83,7 +83,7 @@ public final class Message {
   }
 
   public Map<String, Object> additionalProperties() {
-    return Map.copyOf(additionalProperties);
+    return additionalProperties;
   }
 
   public Object rawRepresentation() {

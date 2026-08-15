@@ -3,4 +3,10 @@
   <Match>
     <Class name="~.*\.generated\..*"/>
   </Match>
+  <!-- Map.copyOf creates the immutable representation returned by this accessor. -->
+  <Match>
+    <Class name="io.github.hellices.agentframework.api.message.Message"/>
+    <Method name="additionalProperties"/>
+    <Bug pattern="EI_EXPOSE_REP"/>
+  </Match>
 </FindBugsFilter>

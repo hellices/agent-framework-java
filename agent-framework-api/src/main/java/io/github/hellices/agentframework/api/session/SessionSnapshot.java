@@ -46,7 +46,6 @@ public record SessionSnapshot(
 
   @Override
   public Map<String, SessionStateEntry> state() {
-    // Preserve sorted iteration while preventing representation exposure at the public boundary.
-    return Collections.unmodifiableMap(new LinkedHashMap<>(state));
+    return state;
   }
 }
