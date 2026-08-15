@@ -32,6 +32,12 @@ public final class JacksonSessionSnapshotCodec implements SessionSnapshotCodec {
   @Override
   public byte[] encode(SessionSnapshot snapshot) {
     SessionSnapshot value = Objects.requireNonNull(snapshot, "snapshot must not be null");
+    if (!"session".equals(value.type())) {
+      throw new SessionSnapshotSchemaException("snapshot type must be session");
+    }
+    if (!"1.0".equals(value.version())) {
+      throw new SessionSnapshotSchemaException("snapshot version must be 1.0");
+    }
     Map<String, Object> envelope = new LinkedHashMap<>();
     envelope.put("type", value.type());
     envelope.put("version", value.version());

@@ -57,6 +57,12 @@ public final class StateCodecRegistry {
 
   public AgentSession restore(SessionSnapshot snapshot) {
     Objects.requireNonNull(snapshot, "snapshot must not be null");
+    if (!"session".equals(snapshot.type())) {
+      throw new IllegalArgumentException("snapshot type must be session");
+    }
+    if (!"1.0".equals(snapshot.version())) {
+      throw new IllegalArgumentException("snapshot version must be 1.0");
+    }
     Map<String, Object> state = new LinkedHashMap<>();
     snapshot
         .state()

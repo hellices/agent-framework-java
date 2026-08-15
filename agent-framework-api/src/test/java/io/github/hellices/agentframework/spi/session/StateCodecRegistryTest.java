@@ -163,6 +163,17 @@ class StateCodecRegistryTest {
         .hasMessageContaining("core.message");
   }
 
+  @Test
+  void restoreRejectsAnIncompatibleEnvelopeBeforeStateDecoding() {
+    StateCodecRegistry registry = StateCodecRegistry.builder().build();
+    SessionSnapshot incompatible =
+        new SessionSnapshot("other", "2.0", "session-1", null, 0, Instant.EPOCH, Map.of());
+
+    assertThatThrownBy(() -> registry.restore(incompatible))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessage("snapshot type must be session");
+  }
+
   private record Preference(String theme) {}
 
   private record NonFiniteValue() {}

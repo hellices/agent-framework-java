@@ -45,6 +45,13 @@ class SessionSnapshotStoreTest {
     assertThat(decoded).isEqualTo(snapshot);
     assertThatThrownBy(
             () ->
+                codec.encode(
+                    new SessionSnapshot(
+                        "other", "1.0", "session-1", null, 0, Instant.EPOCH, Map.of())))
+        .isInstanceOf(SessionSnapshotSchemaException.class)
+        .hasMessage("snapshot type must be session");
+    assertThatThrownBy(
+            () ->
                 codec.decode(
                     "{\"type\":\"other\",\"version\":\"1.0\"}".getBytes(StandardCharsets.UTF_8)))
         .isInstanceOf(SessionSnapshotSchemaException.class)
