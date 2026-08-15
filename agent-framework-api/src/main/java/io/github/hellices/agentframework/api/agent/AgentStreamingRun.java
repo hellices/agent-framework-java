@@ -12,6 +12,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.BiConsumer;
 import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
@@ -135,6 +136,27 @@ public final class AgentStreamingRun<T> {
     return new AgentStreamingRun<>(
         new MappingPublisher<>(updates, mapper, failureAction),
         response,
+        cancellationSignal,
+        cancellationAction,
+        failureAction);
+  }
+
+  /**
+   * Package-private copy used by {@link Agent} to observe run completion without losing the
+   * original cancellation wiring. The returned run's exposed response stage is derived via {@link
+   * CompletionStage#whenComplete(BiConsumer)}, so joining it can only return once {@code
+   * completion} has finished running: any exception {@code completion} throws (including {@code
+   * SessionContext} lifecycle violations such as a pre-filled or double-completed response slot)
+   * propagates through the returned run's response stage instead of being swallowed. The original
+   * {@code cancellationAction} and {@code failureAction} are preserved unchanged, so {@link
+   * #cancel()} and update-mapping failure handling keep working exactly as before.
+   */
+  AgentStreamingRun<T> withCompletion(
+      BiConsumer<? super AgentResponse, ? super Throwable> completion) {
+    Objects.requireNonNull(completion, "completion must not be null");
+    return new AgentStreamingRun<>(
+        updates,
+        response.whenComplete(completion),
         cancellationSignal,
         cancellationAction,
         failureAction);

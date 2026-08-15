@@ -3,6 +3,7 @@ package io.github.hellices.agentframework.api.agent;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import io.github.hellices.agentframework.api.message.FinishReason;
 import io.github.hellices.agentframework.api.message.Message;
 import io.github.hellices.agentframework.api.message.Role;
 import io.github.hellices.agentframework.api.message.TextContent;
@@ -11,8 +12,13 @@ import java.lang.reflect.Modifier;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Flow;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 
 class AgentLifecycleTest {
@@ -246,6 +252,154 @@ class AgentLifecycleTest {
   }
 
   @Test
+  void runDoesNotFillSessionContextResponseSlotWhenCancelledBeforeCompletion() {
+    CompletableFuture<AgentResponse> manualSource = new CompletableFuture<>();
+    ManualCompletionAgent agent = new ManualCompletionAgent("manual-agent", manualSource);
+
+    AgentRun run = agent.run("hello");
+    SessionContext sessionContext = agent.contexts.get(0);
+    run.cancel();
+
+    assertThatThrownBy(() -> run.response().toCompletableFuture().join())
+        .hasCauseInstanceOf(CancellationException.class);
+    assertThat(sessionContext.response()).isEmpty();
+
+    // Completing the underlying source after cancellation must not retroactively fill the slot.
+    manualSource.complete(sampleResponse("manual-agent"));
+    assertThat(sessionContext.response()).isEmpty();
+  }
+
+  @Test
+  void streamingRunDoesNotFillSessionContextResponseSlotWhenCancelledBeforeCompletion() {
+    SessionContextCapturingAgent agent = new SessionContextCapturingAgent("manual-streaming-agent");
+
+    AgentStreamingRun<AgentResponseUpdate> run = agent.runStreaming("hello");
+    SessionContext sessionContext = agent.contexts.get(0);
+    run.cancel();
+
+    assertThatThrownBy(() -> run.response().toCompletableFuture().join())
+        .hasCauseInstanceOf(CancellationException.class);
+    assertThat(sessionContext.response()).isEmpty();
+  }
+
+  @Test
+  void responseJoinCannotReturnBeforeSessionContextResponseIsPopulated() throws Exception {
+    CompletableFuture<AgentResponse> manualSource = new CompletableFuture<>();
+    ManualCompletionAgent agent = new ManualCompletionAgent("manual-agent", manualSource);
+
+    AgentRun run = agent.run("hello");
+    SessionContext sessionContext = agent.contexts.get(0);
+    AgentResponse expected = sampleResponse("manual-agent");
+
+    CountDownLatch joinFinished = new CountDownLatch(1);
+    AtomicReference<AgentResponse> joinedResponse = new AtomicReference<>();
+    AtomicReference<AgentResponse> sessionResponseAtJoinReturn = new AtomicReference<>();
+    Thread joiner =
+        new Thread(
+            () -> {
+              joinedResponse.set(run.response().toCompletableFuture().join());
+              sessionResponseAtJoinReturn.set(sessionContext.response().orElse(null));
+              joinFinished.countDown();
+            });
+    joiner.setDaemon(true);
+    joiner.start();
+    awaitThreadParked(joiner);
+
+    manualSource.complete(expected);
+
+    assertThat(joinFinished.await(5, TimeUnit.SECONDS)).isTrue();
+    // Not just "populated by the time join() returns" but the very same instance join() handed
+    // back, proving the exposed response stage is genuinely downstream of the session context
+    // completion rather than a coincidentally-ordered sibling callback.
+    assertThat(sessionResponseAtJoinReturn.get()).isSameAs(joinedResponse.get());
+  }
+
+  @Test
+  void withCompletionResponseCannotCompleteBeforeCompletionActionFinishes() throws Exception {
+    CompletableFuture<AgentResponse> source = new CompletableFuture<>();
+    AgentRun run = new AgentRun(source, new CancellationSignal());
+    AtomicBoolean actionFinished = new AtomicBoolean();
+    AgentRun observed =
+        run.withCompletion(
+            (value, failure) -> {
+              // A deliberate delay widens the window in which a naively-derived response stage
+              // (one that doesn't truly wait for this action) would return early.
+              sleepQuietly(200);
+              actionFinished.set(true);
+            });
+
+    source.complete(sampleResponse("manual-agent"));
+    observed.response().toCompletableFuture().join();
+
+    assertThat(actionFinished.get()).isTrue();
+  }
+
+  @Test
+  void streamingWithCompletionResponseCannotCompleteBeforeCompletionActionFinishes()
+      throws Exception {
+    AgentResponseUpdate update =
+        new AgentResponseUpdate(
+            "manual-agent",
+            "response-1",
+            "message-1",
+            "manual-agent",
+            null,
+            FinishReason.STOP,
+            List.of(new Message(Role.ASSISTANT, List.of(new TextContent("ok")))),
+            null,
+            Map.of(),
+            null);
+    AgentStreamingRun<AgentResponseUpdate> run = AgentStreamingRun.fromUpdate(update);
+    AtomicBoolean actionFinished = new AtomicBoolean();
+    AgentStreamingRun<AgentResponseUpdate> observed =
+        run.withCompletion(
+            (value, failure) -> {
+              sleepQuietly(200);
+              actionFinished.set(true);
+            });
+
+    consume(observed.updates());
+    observed.response().toCompletableFuture().join();
+
+    assertThat(actionFinished.get()).isTrue();
+  }
+
+  private static void sleepQuietly(long millis) {
+    try {
+      Thread.sleep(millis);
+    } catch (InterruptedException interrupted) {
+      Thread.currentThread().interrupt();
+      throw new AssertionError("unexpected interruption", interrupted);
+    }
+  }
+
+  private static void awaitThreadParked(Thread thread) throws InterruptedException {
+    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+    while (System.nanoTime() < deadline) {
+      Thread.State state = thread.getState();
+      if (state == Thread.State.WAITING || state == Thread.State.TIMED_WAITING) {
+        return;
+      }
+      Thread.sleep(5);
+    }
+    throw new IllegalStateException("joiner thread never parked before the deadline");
+  }
+
+  private static AgentResponse sampleResponse(String agentId) {
+    return new AgentResponse(
+        agentId,
+        "response-1",
+        "message-1",
+        agentId,
+        null,
+        FinishReason.STOP,
+        List.of(new Message(Role.ASSISTANT, List.of(new TextContent("ok")))),
+        null,
+        Map.of(),
+        null);
+  }
+
+  @Test
   void cancellationListenerCanBeRemoved() {
     CancellationSignal signal = new CancellationSignal();
     boolean[] called = {false};
@@ -377,6 +531,22 @@ class AgentLifecycleTest {
       CompletableFuture<AgentResponse> failed = new CompletableFuture<>();
       failed.completeExceptionally(new IllegalStateException("model failure"));
       return new AgentRun(failed, request.cancellationSignal());
+    }
+  }
+
+  private static final class ManualCompletionAgent extends TestAgent {
+    private final List<SessionContext> contexts = new ArrayList<>();
+    private final CompletableFuture<AgentResponse> manualSource;
+
+    private ManualCompletionAgent(String id, CompletableFuture<AgentResponse> manualSource) {
+      super(id);
+      this.manualSource = manualSource;
+    }
+
+    @Override
+    protected AgentRun runInternal(AgentRunContext context, AgentRunRequest request) {
+      contexts.add(context.sessionContext());
+      return new AgentRun(manualSource, request.cancellationSignal());
     }
   }
 
