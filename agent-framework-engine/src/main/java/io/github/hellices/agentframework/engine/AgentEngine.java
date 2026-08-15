@@ -111,6 +111,16 @@ public final class AgentEngine extends Agent {
     return new CatalogAgentFactory(catalog);
   }
 
+  /**
+   * Starts an ordinary run. Without configured context providers there is no asynchronous hook to
+   * wait for, so the tool loop's first model call is started eagerly and a client that throws or
+   * returns {@code null} fails this call synchronously, exactly as it did before the context
+   * provider pipeline existed. With providers configured the first model call must happen after
+   * every {@code beforeRun} hook completed, so the tool loop is started only once the composed hook
+   * stage completes, and the same failures are instead reported on the run's response stage. This
+   * mirrors {@link #runStreamingInternal} exactly, without duplicating its tool-loop-specific
+   * cancellation re-check (below), which streaming has no equivalent of because it has no loop.
+   */
   @Override
   protected AgentRun runInternal(AgentRunContext context, AgentRunRequest request) {
     if (!tools.isEmpty() && request.options().continuationToken().isPresent()) {
@@ -122,44 +132,55 @@ public final class AgentEngine extends Agent {
     SessionContext sessionContext = context.sessionContext();
     String responseId = UUID.randomUUID().toString();
     Instant createdAt = Instant.now();
-    // Providers make the first model call asynchronous, so the run can be cancelled while a hook is
-    // still pending. Re-checking here keeps the ordinary path aligned with the streaming one: once
-    // the caller observed cancellation, no model request is issued when the hook finally completes.
+    CompletionStage<ToolLoopResult> toolLoopResult =
+        contextProviders.isEmpty()
+            ? runToolLoop(
+                selectedClient,
+                modelInvoker,
+                toModelRequest(request, sessionContext),
+                request,
+                0,
+                List.of(),
+                null)
+            : beforeRun(sessionContext, request.cancellationSignal())
+                .thenCompose(
+                    ignored -> {
+                      // Providers make the first model call asynchronous, so the run can be
+                      // cancelled while a hook is still pending. Re-checking here keeps the
+                      // ordinary path aligned with the streaming one: once the caller observed
+                      // cancellation, no model request is issued when the hook finally completes.
+                      if (request.cancellationSignal().isCancelled()) {
+                        throw new CancellationException("run was cancelled");
+                      }
+                      return runToolLoop(
+                          selectedClient,
+                          modelInvoker,
+                          toModelRequest(request, sessionContext),
+                          request,
+                          0,
+                          List.of(),
+                          null);
+                    });
     CompletionStage<AgentResponse> response =
-        beforeRun(sessionContext, request.cancellationSignal())
-            .thenCompose(
-                ignored -> {
-                  if (request.cancellationSignal().isCancelled()) {
-                    throw new CancellationException("run was cancelled");
-                  }
-                  return runToolLoop(
-                      selectedClient,
-                      modelInvoker,
-                      toModelRequest(request, sessionContext),
-                      request,
-                      0,
-                      List.of(),
-                      null);
-                })
-            .thenApply(
-                result -> {
-                  if (request.cancellationSignal().isCancelled()) {
-                    throw new CancellationException("run was cancelled");
-                  }
-                  ModelResponse terminal = result.terminalResponse();
-                  return ModelResponseMapper.toAgentResponse(
-                      id(),
-                      responseId,
-                      name(),
-                      createdAt,
-                      new ModelResponse(
-                          result.messages(),
-                          result.usage(),
-                          terminal.finishReason(),
-                          terminal.continuationToken(),
-                          terminal.metadata(),
-                          terminal.rawRepresentation()));
-                });
+        toolLoopResult.thenApply(
+            result -> {
+              if (request.cancellationSignal().isCancelled()) {
+                throw new CancellationException("run was cancelled");
+              }
+              ModelResponse terminal = result.terminalResponse();
+              return ModelResponseMapper.toAgentResponse(
+                  id(),
+                  responseId,
+                  name(),
+                  createdAt,
+                  new ModelResponse(
+                      result.messages(),
+                      result.usage(),
+                      terminal.finishReason(),
+                      terminal.continuationToken(),
+                      terminal.metadata(),
+                      terminal.rawRepresentation()));
+            });
     return new AgentRun(response, request.cancellationSignal());
   }
 

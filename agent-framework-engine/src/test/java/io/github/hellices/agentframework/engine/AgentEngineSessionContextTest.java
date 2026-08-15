@@ -301,6 +301,53 @@ class AgentEngineSessionContextTest {
   }
 
   @Test
+  void anOrdinaryRunWithoutContextProvidersReportsAModelClientFailureSynchronously() {
+    BrokenClient client = BrokenClient.throwing();
+    AgentEngine engine = AgentEngine.builder().modelClient(client).build();
+
+    // With no provider hook to wait for there is nothing to defer, so a run that cannot start
+    // still fails from the call that started it, exactly as it did before the provider pipeline.
+    assertThatThrownBy(() -> engine.run("hi"))
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessage("model client failure");
+    assertThat(client.runCalled.get()).isTrue();
+  }
+
+  @Test
+  void anOrdinaryRunWithoutContextProvidersRejectsANullModelResponseStageSynchronously() {
+    AgentEngine engine = AgentEngine.builder().modelClient(BrokenClient.returningNull()).build();
+
+    assertThatThrownBy(() -> engine.run("hi"))
+        .isInstanceOf(NullPointerException.class)
+        .hasMessage("model client response stage must not be null");
+  }
+
+  @Test
+  void anOrdinaryRunWithContextProvidersDefersTheModelCallUntilBeforeRunHooksComplete() {
+    List<String> log = new ArrayList<>();
+    GatedBeforeRunProvider gated = new GatedBeforeRunProvider("slow", log);
+    BrokenClient client = BrokenClient.throwing();
+    AgentEngine engine = AgentEngine.builder().modelClient(client).contextProviders(gated).build();
+
+    AgentRun run = engine.run("hi");
+
+    // The model is not called while the hook is still pending, so the run has not failed yet
+    // either; the same client that fails synchronously with no providers must not be reached here.
+    assertThat(client.runCalled.get()).isFalse();
+    assertThat(run.response().toCompletableFuture()).isNotDone();
+
+    gated.releaseBeforeRun();
+
+    // Once the hook completes the deferred model call happens, and its failure surfaces on the
+    // response stage instead of synchronously from run().
+    assertThatThrownBy(() -> run.response().toCompletableFuture().join())
+        .hasRootCauseInstanceOf(IllegalStateException.class)
+        .hasRootCauseMessage("model client failure");
+    assertThat(client.runCalled.get()).isTrue();
+    assertThat(log).containsExactly("before:slow");
+  }
+
+  @Test
   void cancellationBeforeTheRunSkipsEveryProviderHook() {
     List<String> log = new ArrayList<>();
     RecordingProvider provider = new RecordingProvider("memory", log);
@@ -755,6 +802,36 @@ class AgentEngineSessionContextTest {
     @Override
     public CompletionStage<Void> afterRun(SessionContext context, ProviderSessionState state) {
       return completedFuture(null);
+    }
+  }
+
+  /**
+   * A non-streaming client that never returns a usable response stage, so a test can observe where
+   * the failure of an ordinary run that cannot even start is reported.
+   */
+  private static final class BrokenClient implements ModelClient {
+    private final boolean returnNull;
+    private final AtomicBoolean runCalled = new AtomicBoolean();
+
+    private BrokenClient(boolean returnNull) {
+      this.returnNull = returnNull;
+    }
+
+    private static BrokenClient throwing() {
+      return new BrokenClient(false);
+    }
+
+    private static BrokenClient returningNull() {
+      return new BrokenClient(true);
+    }
+
+    @Override
+    public CompletionStage<ModelResponse> run(ModelRequest request) {
+      runCalled.set(true);
+      if (returnNull) {
+        return null;
+      }
+      throw new IllegalStateException("model client failure");
     }
   }
 
