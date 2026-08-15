@@ -74,7 +74,7 @@ class AgentRunOptionsTest {
 
   @Test
   void blankContinuationTokenIsRejected() {
-    assertThatThrownBy(() -> AgentRunOptions.builder().continuationToken(" ").build())
+    assertThatThrownBy(() -> AgentRunOptions.builder().continuationToken(" "))
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessage("continuationToken must not be blank");
   }
