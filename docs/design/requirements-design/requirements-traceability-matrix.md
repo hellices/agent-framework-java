@@ -10,40 +10,41 @@ current implementation status, and verification layer.
 - `partial`: build or policy code and tests cover part of the acceptance criteria
 - `implemented`: all acceptance criteria map to production code and executable tests
 
-`ApiContract` and `EngineContract` markers are module bootstrap, not feature implementations, so
-each feature ID is `absent`. The target code family is a package/module plan, not a current file path.
+The matrix is updated as executable production slices land. A marker type alone remains `bootstrap`;
+`partial` and `implemented` statuses require production code plus executable tests. The target code
+family is an architectural owner, not necessarily a current file path.
 
 | ID | Requirement | Canonical design | Target code family | Status | Verification |
 | --- | --- | --- | --- | --- | --- |
-| AGT-001 | The public entry point is unified into the single `Agent` type | [01-core-execution.md](01-core-execution.md) | `api.agent`, `spi.model`, `engine.internal.run` | `absent` | unit + agent contract + golden |
-| AGT-002 | Every agent has a stable identifier | [01-core-execution.md](01-core-execution.md) | `api.agent`, `spi.model`, `engine.internal.run` | `absent` | unit + agent contract + golden |
-| AGT-003 | The run and streaming entry points are separate | [01-core-execution.md](01-core-execution.md) | `api.agent`, `spi.model`, `engine.internal.run` | `absent` | unit + agent contract + golden |
-| AGT-004 | Consuming only the stream still completes the run | [01-core-execution.md](01-core-execution.md) | `api.agent`, `spi.model`, `engine.internal.run` | `absent` | unit + agent contract + golden |
-| AGT-005 | Every run exposes an explicit cancellation signal | [01-core-execution.md](01-core-execution.md) | `api.agent`, `spi.model`, `engine.internal.run` | `absent` | unit + agent contract + golden |
-| AGT-006 | The agent validates session compatibility only | [01-core-execution.md](01-core-execution.md) | `api.agent`, `spi.model`, `engine.internal.run` | `absent` | unit + agent contract + golden |
-| AGT-007 | An agent can be wrapped with a decorator | [01-core-execution.md](01-core-execution.md) | `api.agent`, `spi.model`, `engine.internal.run` | `absent` | unit + agent contract + golden |
-| AGT-008 | The run context is passed explicitly | [01-core-execution.md](01-core-execution.md) | `api.agent`, `spi.model`, `engine.internal.run` | `absent` | unit + agent contract + golden |
-| AGT-009 | Model calls are separated behind the `ModelClient` port | [01-core-execution.md](01-core-execution.md) | `api.agent`, `spi.model`, `engine.internal.run` | `absent` | unit + agent contract + golden |
-| AGT-010 | Optional model capabilities are exposed as separate interfaces | [01-core-execution.md](01-core-execution.md) | `api.agent`, `spi.model`, `engine.internal.run` | `absent` | unit + agent contract + golden |
-| AGT-011 | Common request options use a typed provider-neutral contract | [01-core-execution.md](01-core-execution.md) | `api.agent`, `spi.model`, `engine.internal.run` | `absent` | unit + agent contract + golden |
-| AGT-012 | The option merge precedence is fixed | [01-core-execution.md](01-core-execution.md) | `api.agent`, `spi.model`, `engine.internal.run` | `absent` | unit + agent contract + golden |
-| AGT-013 | The model client can be replaced per run | [01-core-execution.md](01-core-execution.md) | `api.agent`, `spi.model`, `engine.internal.run` | `absent` | unit + agent contract + golden |
-| AGT-014 | A continuation run cannot carry new input as well | [01-core-execution.md](01-core-execution.md) | `api.agent`, `spi.model`, `engine.internal.run` | `absent` | unit + agent contract + golden |
-| AGT-015 | The final response is reconstructed from the streamed fragments alone | [01-core-execution.md](01-core-execution.md) | `api.agent`, `spi.model`, `engine.internal.run` | `absent` | unit + agent contract + golden |
+| AGT-001 | The public entry point is unified into the single `Agent` type | [01-core-execution.md](01-core-execution.md) | `api.agent`, `spi.model`, `engine.internal.run` | `implemented` | unit + agent contract + golden |
+| AGT-002 | Every agent has a stable identifier | [01-core-execution.md](01-core-execution.md) | `api.agent`, `spi.model`, `engine.internal.run` | `implemented` | unit + agent contract + golden |
+| AGT-003 | The run and streaming entry points are separate | [01-core-execution.md](01-core-execution.md) | `api.agent`, `spi.model`, `engine.internal.run` | `implemented` | unit + agent contract + golden |
+| AGT-004 | Consuming only the stream still completes the run | [01-core-execution.md](01-core-execution.md) | `api.agent`, `spi.model`, `engine.internal.run` | `partial` | unit + agent contract + golden |
+| AGT-005 | Every run exposes an explicit cancellation signal | [01-core-execution.md](01-core-execution.md) | `api.agent`, `spi.model`, `engine.internal.run` | `implemented` | unit + agent contract + golden |
+| AGT-006 | The agent validates session compatibility only | [01-core-execution.md](01-core-execution.md) | `api.agent`, `spi.model`, `engine.internal.run` | `partial` | unit + agent contract + golden |
+| AGT-007 | An agent can be wrapped with a decorator | [01-core-execution.md](01-core-execution.md) | `api.agent`, `spi.model`, `engine.internal.run` | `implemented` | unit + agent contract + golden |
+| AGT-008 | The run context is passed explicitly | [01-core-execution.md](01-core-execution.md) | `api.agent`, `spi.model`, `engine.internal.run` | `implemented` | unit + agent contract + golden |
+| AGT-009 | Model calls are separated behind the `ModelClient` port | [01-core-execution.md](01-core-execution.md) | `api.agent`, `spi.model`, `engine.internal.run` | `implemented` | unit + agent contract + golden |
+| AGT-010 | Optional model capabilities are exposed as separate interfaces | [01-core-execution.md](01-core-execution.md) | `api.agent`, `spi.model`, `engine.internal.run` | `implemented` | unit + agent contract + golden |
+| AGT-011 | Common request options use a typed provider-neutral contract | [01-core-execution.md](01-core-execution.md) | `api.agent`, `spi.model`, `engine.internal.run` | `partial` | unit + agent contract + golden |
+| AGT-012 | The option merge precedence is fixed | [01-core-execution.md](01-core-execution.md) | `api.agent`, `spi.model`, `engine.internal.run` | `partial` | unit + agent contract + golden |
+| AGT-013 | The model client can be replaced per run | [01-core-execution.md](01-core-execution.md) | `api.agent`, `spi.model`, `engine.internal.run` | `implemented` | unit + agent contract + golden |
+| AGT-014 | A continuation run cannot carry new input as well | [01-core-execution.md](01-core-execution.md) | `api.agent`, `spi.model`, `engine.internal.run` | `implemented` | unit + agent contract + golden |
+| AGT-015 | The final response is reconstructed from the streamed fragments alone | [01-core-execution.md](01-core-execution.md) | `api.agent`, `spi.model`, `engine.internal.run` | `implemented` | unit + agent contract + golden |
 | AGT-016 | When the service stores history, local history is not stored twice | [01-core-execution.md](01-core-execution.md) | `api.agent`, `spi.model`, `engine.internal.run` | `absent` | unit + agent contract + golden |
-| MSG-001 | The core directly owns conversation types | [01-core-execution.md](01-core-execution.md) | `api.message`, `engine.internal.model` | `absent` | value unit + serialization + golden |
-| MSG-002 | Roles allow both known values and custom values | [01-core-execution.md](01-core-execution.md) | `api.message`, `engine.internal.model` | `absent` | value unit + serialization + golden |
-| MSG-003 | Input is normalized to a message list | [01-core-execution.md](01-core-execution.md) | `api.message`, `engine.internal.model` | `absent` | value unit + serialization + golden |
-| MSG-004 | Text projection sees only text content | [01-core-execution.md](01-core-execution.md) | `api.message`, `engine.internal.model` | `absent` | value unit + serialization + golden |
+| MSG-001 | The core directly owns conversation types | [01-core-execution.md](01-core-execution.md) | `api.message`, `engine.internal.model` | `implemented` | value unit + serialization + golden |
+| MSG-002 | Roles allow both known values and custom values | [01-core-execution.md](01-core-execution.md) | `api.message`, `engine.internal.model` | `implemented` | value unit + serialization + golden |
+| MSG-003 | Input is normalized to a message list | [01-core-execution.md](01-core-execution.md) | `api.message`, `engine.internal.model` | `implemented` | value unit + serialization + golden |
+| MSG-004 | Text projection sees only text content | [01-core-execution.md](01-core-execution.md) | `api.message`, `engine.internal.model` | `implemented` | value unit + serialization + golden |
 | MSG-005 | The core provides basic multimodal content kinds | [01-core-execution.md](01-core-execution.md) | `api.message`, `engine.internal.model` | `absent` | value unit + serialization + golden |
 | MSG-006 | URI and binary content are validated at creation time | [01-core-execution.md](01-core-execution.md) | `api.message`, `engine.internal.model` | `absent` | value unit + serialization + golden |
-| MSG-007 | Additional properties and the raw representation are preserved | [01-core-execution.md](01-core-execution.md) | `api.message`, `engine.internal.model` | `absent` | value unit + serialization + golden |
-| MSG-008 | Message provenance is tagged separately from content | [01-core-execution.md](01-core-execution.md) | `api.message`, `engine.internal.model` | `absent` | value unit + serialization + golden |
+| MSG-007 | Additional properties and the raw representation are preserved | [01-core-execution.md](01-core-execution.md) | `api.message`, `engine.internal.model` | `implemented` | value unit + serialization + golden |
+| MSG-008 | Message provenance is tagged separately from content | [01-core-execution.md](01-core-execution.md) | `api.message`, `engine.internal.model` | `implemented` | value unit + serialization + golden |
 | MSG-009 | Leading instructions are not inserted redundantly | [01-core-execution.md](01-core-execution.md) | `api.message`, `engine.internal.model` | `absent` | value unit + serialization + golden |
-| MSG-010 | Usage carries both standard fields and extension fields | [01-core-execution.md](01-core-execution.md) | `api.message`, `engine.internal.model` | `absent` | value unit + serialization + golden |
-| MSG-011 | Responses and updates share the same metadata axes | [01-core-execution.md](01-core-execution.md) | `api.message`, `api.agent`, `engine.internal.model` | `absent` | value unit + serialization + golden |
-| MSG-012 | The final response is reconstructed from an update sequence | [01-core-execution.md](01-core-execution.md) | `api.message`, `api.agent`, `engine.internal.model` | `absent` | value unit + serialization + golden |
-| MSG-013 | The stream wrapper provides a final response and transformation hooks | [01-core-execution.md](01-core-execution.md) | `api.message`, `api.agent`, `engine.internal.model` | `absent` | value unit + serialization + golden |
+| MSG-010 | Usage carries both standard fields and extension fields | [01-core-execution.md](01-core-execution.md) | `api.message`, `engine.internal.model` | `implemented` | value unit + serialization + golden |
+| MSG-011 | Responses and updates share the same metadata axes | [01-core-execution.md](01-core-execution.md) | `api.message`, `api.agent`, `engine.internal.model` | `implemented` | value unit + serialization + golden |
+| MSG-012 | The final response is reconstructed from an update sequence | [01-core-execution.md](01-core-execution.md) | `api.message`, `api.agent`, `engine.internal.model` | `implemented` | value unit + serialization + golden |
+| MSG-013 | The stream wrapper provides a final response and transformation hooks | [01-core-execution.md](01-core-execution.md) | `api.message`, `api.agent`, `engine.internal.model` | `partial` | value unit + serialization + golden |
 | OUT-001 | Structured output is requested explicitly | [01-core-execution.md](01-core-execution.md) | `api.structured`, `engine.internal.structured` | `absent` | parser/schema contract + golden |
 | OUT-002 | Both a typed validation path and a JSON-only path are supported | [01-core-execution.md](01-core-execution.md) | `api.structured`, `engine.internal.structured` | `absent` | parser/schema contract + golden |
 | OUT-003 | Non-object target types are requested via a wrapper schema | [01-core-execution.md](01-core-execution.md) | `api.structured`, `engine.internal.structured` | `absent` | parser/schema contract + golden |
@@ -56,20 +57,20 @@ each feature ID is `absent`. The target code family is a package/module plan, no
 | OUT-010 | Valid JSON text is fallback-parsed even without native support | [01-core-execution.md](01-core-execution.md) | `api.structured`, `engine.internal.structured` | `absent` | parser/schema contract + golden |
 | OUT-011 | When a wrapper was expected but bare JSON arrives, the original JSON is retried | [01-core-execution.md](01-core-execution.md) | `api.structured`, `engine.internal.structured` | `absent` | parser/schema contract + golden |
 | OUT-012 | Structured streaming values are read only from the final response | [01-core-execution.md](01-core-execution.md) | `api.structured`, `engine.internal.structured` | `absent` | parser/schema contract + golden |
-| TOOL-001 | Tools are represented as core-defined types | [01-core-execution.md](01-core-execution.md) | `api.tool`, `spi.tool`, `engine.internal.tool` | `absent` | tool contract + loop golden |
-| TOOL-002 | The tool call loop is solely owned by the Java core | [01-core-execution.md](01-core-execution.md) | `api.tool`, `spi.tool`, `engine.internal.tool` | `absent` | tool contract + loop golden |
-| TOOL-003 | Input schema is inferred but an explicit schema wins | [01-core-execution.md](01-core-execution.md) | `api.tool`, `spi.tool`, `engine.internal.tool` | `absent` | tool contract + loop golden |
-| TOOL-004 | Context arguments are injected outside the schema | [01-core-execution.md](01-core-execution.md) | `api.tool`, `spi.tool`, `engine.internal.tool` | `absent` | tool contract + loop golden |
+| TOOL-001 | Tools are represented as core-defined types | [01-core-execution.md](01-core-execution.md) | `api.tool`, `spi.tool`, `engine.internal.tool` | `implemented` | tool contract + loop golden |
+| TOOL-002 | The tool call loop is solely owned by the Java core | [01-core-execution.md](01-core-execution.md) | `api.tool`, `spi.tool`, `engine.internal.tool` | `partial` | tool contract + loop golden |
+| TOOL-003 | Input schema is inferred but an explicit schema wins | [01-core-execution.md](01-core-execution.md) | `api.tool`, `spi.tool`, `engine.internal.tool` | `partial` | tool contract + loop golden |
+| TOOL-004 | Context arguments are injected outside the schema | [01-core-execution.md](01-core-execution.md) | `api.tool`, `spi.tool`, `engine.internal.tool` | `partial` | tool contract + loop golden |
 | TOOL-005 | Arguments are validated on every invocation path | [01-core-execution.md](01-core-execution.md) | `api.tool`, `spi.tool`, `engine.internal.tool` | `absent` | tool contract + loop golden |
 | TOOL-006 | Declaration-only tools and additional tools are not executed locally | [01-core-execution.md](01-core-execution.md) | `api.tool`, `spi.tool`, `engine.internal.tool` | `absent` | tool contract + loop golden |
 | TOOL-007 | Tool selection is fixed via `ToolMode` | [01-core-execution.md](01-core-execution.md) | `api.tool`, `spi.tool`, `engine.internal.tool` | `absent` | tool contract + loop golden |
 | TOOL-008 | Run-level options override default options | [01-core-execution.md](01-core-execution.md) | `api.tool`, `spi.tool`, `engine.internal.tool` | `absent` | tool contract + loop golden |
-| TOOL-009 | Invocation configuration has a normalized type and safe defaults | [01-core-execution.md](01-core-execution.md) | `api.tool`, `spi.tool`, `engine.internal.tool` | `absent` | tool contract + loop golden |
-| TOOL-010 | The semantics of iteration limit and call budget are fixed | [01-core-execution.md](01-core-execution.md) | `api.tool`, `spi.tool`, `engine.internal.tool` | `absent` | tool contract + loop golden |
+| TOOL-009 | Invocation configuration has a normalized type and safe defaults | [01-core-execution.md](01-core-execution.md) | `api.tool`, `spi.tool`, `engine.internal.tool` | `partial` | tool contract + loop golden |
+| TOOL-010 | The semantics of iteration limit and call budget are fixed | [01-core-execution.md](01-core-execution.md) | `api.tool`, `spi.tool`, `engine.internal.tool` | `partial` | tool contract + loop golden |
 | TOOL-011 | Call budget blocks best-effort after a batch completes | [01-core-execution.md](01-core-execution.md) | `api.tool`, `spi.tool`, `engine.internal.tool` | `absent` | tool contract + loop golden |
 | TOOL-012 | Parallel execution covers only executable batches and preserves order | [01-core-execution.md](01-core-execution.md) | `api.tool`, `spi.tool`, `engine.internal.tool` | `absent` | tool contract + loop golden |
-| TOOL-013 | Tool results are normalized to a `Content` list | [01-core-execution.md](01-core-execution.md) | `api.tool`, `spi.tool`, `engine.internal.tool` | `absent` | tool contract + loop golden |
-| TOOL-014 | Tool definitions and runtime counters are separated | [01-core-execution.md](01-core-execution.md) | `api.tool`, `spi.tool`, `engine.internal.tool` | `absent` | tool contract + loop golden |
+| TOOL-013 | Tool results are normalized to a `Content` list | [01-core-execution.md](01-core-execution.md) | `api.tool`, `spi.tool`, `engine.internal.tool` | `implemented` | tool contract + loop golden |
+| TOOL-014 | Tool definitions and runtime counters are separated | [01-core-execution.md](01-core-execution.md) | `api.tool`, `spi.tool`, `engine.internal.tool` | `partial` | tool contract + loop golden |
 | TOOL-015 | Streaming uses the same tool loop | [01-core-execution.md](01-core-execution.md) | `api.tool`, `spi.tool`, `engine.internal.tool` | `absent` | tool contract + loop golden |
 | TOOL-016 | Approval requests and responses are core content | [01-core-execution.md](01-core-execution.md) | `api.tool`, `spi.tool`, `engine.internal.tool` | `absent` | tool contract + loop golden |
 | TOOL-017 | An approval response binds only to its original request | [01-core-execution.md](01-core-execution.md) | `api.tool`, `spi.tool`, `engine.internal.tool` | `absent` | tool contract + loop golden |
@@ -265,5 +266,7 @@ each feature ID is `absent`. The target code family is a package/module plan, no
 - The requirement corpus and this table must each contain 244 IDs.
 - Design validation fails if any ID is duplicated or missing.
 - Each canonical design link must match the prefix owner.
-- Promoting a row to `implemented` or `partial` requires recording both the production code and executable test paths.
+- Promoting a row to `implemented` or `partial` requires production code and executable tests in
+  the current tree. The target column records the architectural owner, and the verification column
+  records the required verification layers rather than file-level evidence paths.
 - When a requirement changes, update its title and mapping row in the same change.

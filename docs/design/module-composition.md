@@ -31,7 +31,8 @@ docs/                           Requirements, design, upstream analysis
 ```
 
 Planned grouping directories are `providers/`, `integrations/`, `hosting/`, `starters/`, `protocols/`,
-`workflow/`, `compatibility-tests/`, and `samples/`. `build-tools/` already exists for harness code.
+`workflow/`, and `compatibility-tests/`. `samples/` now contains the standalone example, and
+`build-tools/` already exists for harness code.
 This list is closed and mirrored in `ModuleCompositionPolicyTest`; a project registered outside it,
 or nested more than one level deep, fails `policyCheck`.
 
@@ -69,6 +70,7 @@ level would add path depth without adding published identity.
 | `:agent-framework-engine` | `agent-framework-engine` | Embedded execution state machine. | `:agent-framework-api` |
 | `:agent-framework-testkit` | `agent-framework-testkit` | Deterministic fixtures and contract-test bases. | `:agent-framework-api` |
 | `:agent-framework-bom` | `agent-framework-bom` | `java-platform` listing every published artifact. | none |
+| `:samples:sample-standalone` | not published | Runnable standalone `Agent.run` example with explicit model-client assembly. | `:agent-framework-api`, `:agent-framework-engine` |
 
 ## Harness projects
 
