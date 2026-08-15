@@ -343,8 +343,12 @@ public final class AgentEngine extends Agent {
    * <p>A run with tools streams through {@link StreamingToolLoopPublisher}, which turns the same
    * tool loop the ordinary run executes into one update stream: every model call's updates are
    * forwarded live, each tool result is reported as an update the engine synthesised, and the whole
-   * loop assembles into the single response an equivalent ordinary run returns (TOOL-015). A run
-   * without tools keeps mapping the single model stream directly, so nothing about it changed.
+   * loop assembles into one response carrying the content, order, tool results, usage and terminal
+   * outcome of an equivalent ordinary run (TOOL-015). What that response does not reproduce is the
+   * message boundaries an ordinary client returned, because a streamed response is reconstructed by
+   * {@link AgentResponse#fromUpdates} — see {@link StreamingToolLoopPublisher} for why inventing a
+   * message identity would be worse. A run without tools keeps mapping the single model stream
+   * directly, so nothing about it changed.
    */
   @Override
   protected AgentStreamingRun<AgentResponseUpdate> runStreamingInternal(

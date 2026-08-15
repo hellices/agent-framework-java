@@ -6,6 +6,7 @@ import io.github.hellices.agentframework.spi.model.ModelResponse;
 import io.github.hellices.agentframework.spi.model.ModelResponseUpdate;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 
 /**
@@ -23,6 +24,13 @@ import java.util.Objects;
  *
  * <p>One instance covers one model call; a new iteration gets a new accumulator, which is what
  * keeps a later call's usage and finish reason from being attributed to an earlier one.
+ *
+ * <p>Metadata is the one value the forwarded update does not repeat. {@link
+ * AgentResponse#fromUpdates} unions the metadata of every update it assembles, so forwarding each
+ * call's metadata would make a run's assembled metadata the union of all its model calls, where an
+ * ordinary run reports the metadata of its terminal call alone. The accumulator therefore records
+ * the model's metadata — {@link #toModelResponse()} still reports it, so the loop can report the
+ * terminal call's metadata once — and forwards an update without it.
  *
  * <p>Instances are not thread-safe: they are written from the serialized signals of one model
  * publisher.
@@ -46,7 +54,8 @@ public final class StreamingModelResponseAccumulator {
   }
 
   /**
-   * Records an already-mapped update.
+   * Records an already-mapped update and returns the form of it the loop forwards, which reports
+   * everything the model reported except its metadata.
    *
    * <p>An update that belongs to another response is rejected here rather than at the end of the
    * iteration: mixing identities would otherwise surface as a failure of the whole run assembly,
@@ -60,7 +69,25 @@ public final class StreamingModelResponseAccumulator {
       throw new IllegalStateException("model update does not belong to this agent response");
     }
     updates.add(value);
-    return value;
+    return withoutMetadata(value);
+  }
+
+  private static AgentResponseUpdate withoutMetadata(AgentResponseUpdate update) {
+    if (update.additionalProperties().isEmpty()) {
+      return update;
+    }
+    return new AgentResponseUpdate(
+        update.agentId(),
+        update.responseId(),
+        update.messageId(),
+        update.authorName(),
+        update.createdAt(),
+        update.finishReason(),
+        update.continuationToken(),
+        update.messages(),
+        update.usage(),
+        Map.of(),
+        update.rawRepresentation());
   }
 
   /** Whether this model call has emitted no update yet. */

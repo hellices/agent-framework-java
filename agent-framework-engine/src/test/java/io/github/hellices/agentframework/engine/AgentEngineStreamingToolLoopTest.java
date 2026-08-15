@@ -49,6 +49,12 @@ import org.junit.jupiter.api.Test;
  * Streaming function tool loop (TOOL-015): the streaming path runs the same iteration, budget, and
  * result semantics as the ordinary path, forwards model updates live, and honours downstream demand
  * and cancellation across the model, tool, and tool-result phases.
+ *
+ * <p>Response parity is asserted as content and order — the roles, text, tool calls and tool
+ * results a response reports, its usage, finish reason and terminal metadata — not as the message
+ * objects themselves: a streamed response is reconstructed by {@code AgentResponse.fromUpdates},
+ * which coalesces consecutive same-role chunks while no model port reports message ids. {@link
+ * #consecutiveAssistantChunksAreReconstructedAsOneMessage()} characterises that difference.
  */
 class AgentEngineStreamingToolLoopTest {
 
@@ -130,17 +136,66 @@ class AgentEngineStreamingToolLoopTest {
   }
 
   @Test
-  void aToolCallSplitAcrossUpdatesIsExecutedOnceWithItsFullArguments() {
+  void theFinalResponseCarriesOnlyTheTerminalIterationsMetadata() {
+    Map<String, Object> firstMetadata = Map.of("iteration0", "secret-a", "shared", "first");
+    Map<String, Object> terminalMetadata = Map.of("iteration1", "b", "shared", "second");
+
+    AgentResponse ordinary =
+        engine(twoIterations(firstMetadata, terminalMetadata), weatherTool())
+            .run("weather?")
+            .response()
+            .toCompletableFuture()
+            .join();
+    AgentResponse streaming =
+        streamedResponse(twoStreamedIterations(firstMetadata, terminalMetadata));
+
+    assertThat(ordinary.additionalProperties()).isEqualTo(terminalMetadata);
+    assertThat(streaming.additionalProperties()).isEqualTo(ordinary.additionalProperties());
+    assertThat(streaming.additionalProperties()).doesNotContainKey("iteration0");
+  }
+
+  @Test
+  void anEmptyTerminalIterationMetadataLeavesNoEarlierMetadataBehind() {
+    Map<String, Object> firstMetadata = Map.of("iteration0", "secret-a");
+
+    AgentResponse ordinary =
+        engine(twoIterations(firstMetadata, Map.of()), weatherTool())
+            .run("weather?")
+            .response()
+            .toCompletableFuture()
+            .join();
+    AgentResponse streaming = streamedResponse(twoStreamedIterations(firstMetadata, Map.of()));
+
+    assertThat(ordinary.additionalProperties()).isEmpty();
+    assertThat(streaming.additionalProperties()).isEqualTo(ordinary.additionalProperties());
+  }
+
+  @Test
+  void modelMetadataReachesTheSubscriberOnceAsTheTerminalMetadataUpdate() {
+    Map<String, Object> firstMetadata = Map.of("iteration0", "secret-a");
+    Map<String, Object> terminalMetadata = Map.of("iteration1", "b");
+    AgentStreamingRun<AgentResponseUpdate> run =
+        engine(twoStreamedIterations(firstMetadata, terminalMetadata), weatherTool())
+            .runStreaming("weather?");
+
+    RecordingSubscriber subscriber = subscribe(run.updates(), Long.MAX_VALUE);
+    subscriber.completion.join();
+
+    assertThat(subscriber.values).hasSize(4);
+    assertThat(subscriber.values.subList(0, 3))
+        .allSatisfy(update -> assertThat(update.additionalProperties()).isEmpty());
+    AgentResponseUpdate terminal = subscriber.values.get(3);
+    assertThat(terminal.additionalProperties()).isEqualTo(terminalMetadata);
+    assertThat(terminal.messages()).isEmpty();
+    assertThat(terminal.finishReason()).isNull();
+    assertThat(terminal.usage()).isNull();
+    assertThat(subscriber.terminals).hasValue(1);
+  }
+
+  @Test
+  void aWholeToolCallEmittedAfterATextUpdateIsExecutedOnce() {
     List<Map<String, Object>> observedArguments = new ArrayList<>();
-    FunctionTool weather =
-        FunctionTool.create(
-            "weather",
-            "Gets weather",
-            Map.of(),
-            (arguments, context) -> {
-              observedArguments.add(Map.of("city", arguments.get("city")));
-              return completedFuture(ToolResult.success(new TextContent("sunny")));
-            });
+    FunctionTool weather = recordingWeatherTool(observedArguments);
     StreamingModelClient client =
         scripted(
             new ArrayList<>(),
@@ -161,6 +216,91 @@ class AgentEngineStreamingToolLoopTest {
             "assistant|checking |call:call-1:weather:{city=Seoul}",
             "tool||result:call-1:weather:false:[sunny]",
             "assistant|It is sunny");
+  }
+
+  @Test
+  void aToolCallSplitAcrossTwoUpdatesIsExecutedOnceWithItsMergedArguments() {
+    List<Map<String, Object>> observedArguments = new ArrayList<>();
+    FunctionTool weather = recordingWeatherTool(observedArguments);
+    StreamingModelClient client =
+        scripted(
+            new ArrayList<>(),
+            List.of(
+                List.of(
+                    update(
+                        toolCall("call-1", "weather", Map.of("city", "Seo", "unit", "c")),
+                        null,
+                        FinishReason.TOOL_CALLS),
+                    update(
+                        toolCall("call-1", "weather", Map.of("city", "Seoul")),
+                        null,
+                        FinishReason.TOOL_CALLS)),
+                List.of(update(assistant("It is sunny"), null, FinishReason.STOP))));
+
+    AgentStreamingRun<AgentResponseUpdate> run = engine(client, weather).runStreaming("weather?");
+    RecordingSubscriber subscriber = subscribe(run.updates(), Long.MAX_VALUE);
+    subscriber.completion.join();
+    AgentResponse response = run.response().toCompletableFuture().join();
+
+    assertThat(observedArguments).containsExactly(Map.of("city", "Seoul", "unit", "c"));
+    assertThat(toolResults(response)).containsExactly("call-1:weather");
+  }
+
+  @Test
+  void toolCallsSplitAcrossUpdatesKeepTheirFirstSeenOrder() {
+    List<String> invocations = new ArrayList<>();
+    FunctionTool first = recordingTool("first", invocations);
+    FunctionTool second = recordingTool("second", invocations);
+    StreamingModelClient client =
+        scripted(
+            new ArrayList<>(),
+            List.of(
+                List.of(
+                    update(
+                        toolCall("call-1", "first", Map.of("a", 1)), null, FinishReason.TOOL_CALLS),
+                    update(
+                        toolCall("call-2", "second", Map.of("b", 1)),
+                        null,
+                        FinishReason.TOOL_CALLS),
+                    update(
+                        toolCall("call-1", "first", Map.of("a", 2)),
+                        null,
+                        FinishReason.TOOL_CALLS)),
+                List.of(update(assistant("done"), null, FinishReason.STOP))));
+
+    AgentStreamingRun<AgentResponseUpdate> run =
+        engine(client, first, second).runStreaming("call both");
+    RecordingSubscriber subscriber = subscribe(run.updates(), Long.MAX_VALUE);
+    subscriber.completion.join();
+    AgentResponse response = run.response().toCompletableFuture().join();
+
+    assertThat(invocations).containsExactly("first:{a=2}", "second:{b=1}");
+    assertThat(toolResults(response)).containsExactly("call-1:first", "call-2:second");
+  }
+
+  @Test
+  void aCallIdReportedWithTwoToolNamesFailsTheStream() {
+    List<String> invocations = new ArrayList<>();
+    FunctionTool first = recordingTool("first", invocations);
+    FunctionTool second = recordingTool("second", invocations);
+    StreamingModelClient client =
+        scripted(
+            new ArrayList<>(),
+            List.of(
+                List.of(
+                    update(toolCall("call-1", "first", Map.of()), null, FinishReason.TOOL_CALLS),
+                    update(toolCall("call-1", "second", Map.of()), null, FinishReason.TOOL_CALLS)),
+                List.of(update(assistant("done"), null, FinishReason.STOP))));
+
+    AgentStreamingRun<AgentResponseUpdate> run =
+        engine(client, first, second).runStreaming("call both");
+    RecordingSubscriber subscriber = subscribe(run.updates(), Long.MAX_VALUE);
+
+    assertThat(subscriber.terminals).hasValue(1);
+    assertThat(subscriber.failure.get())
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessage("tool call call-1 was reported as both 'first' and 'second'");
+    assertThat(invocations).isEmpty();
   }
 
   @Test
@@ -758,6 +898,138 @@ class AgentEngineStreamingToolLoopTest {
     assertThat(subscriber.terminals).hasValue(1);
   }
 
+  /**
+   * A cancellation that is already observable on the run's signal, but whose listeners have not
+   * reached the loop yet, must not let a queued tool result start the next model call. The listener
+   * registered here runs before the loop's own, so it drains the queued result — and therefore
+   * reaches the point where the next iteration would begin — while the loop still believes it was
+   * not cancelled.
+   */
+  @Test
+  void aCancellationObservedBeforeTheNextIterationStartsNoFurtherModelCall() {
+    AtomicReference<RecordingSubscriber> subscriberRef = new AtomicReference<>();
+    CancellationSignal signal = new CancellationSignal();
+    signal.onCancel(
+        () -> {
+          RecordingSubscriber pending = subscriberRef.get();
+          if (pending != null) {
+            pending.request(4);
+          }
+        });
+    ManualStreams streams = new ManualStreams();
+    AgentStreamingRun<AgentResponseUpdate> run =
+        engine(streams.client(), weatherTool())
+            .runStreaming(
+                new AgentRunRequest(
+                    Message.normalize("hi"),
+                    null,
+                    new AgentRunOptions(),
+                    signal,
+                    Map.<String, Object>of()));
+    RecordingSubscriber subscriber = subscribe(run.updates(), 0);
+    subscriberRef.set(subscriber);
+    subscriber.request(1);
+
+    streams.stream(0)
+        .emit(update(toolCall("call-1", "weather", SEOUL), null, FinishReason.TOOL_CALLS));
+    streams.stream(0).complete();
+
+    assertThat(subscriber.values).hasSize(1);
+    assertThat(streams.count()).isEqualTo(1);
+
+    signal.cancel();
+
+    assertThat(streams.count()).isEqualTo(1);
+    assertThatThrownBy(() -> run.response().toCompletableFuture().join())
+        .hasRootCauseInstanceOf(CancellationException.class);
+  }
+
+  @Test
+  void demandRejectedFromOnSubscribeStartsNoModelCall() {
+    ManualStreams streams = new ManualStreams();
+    AgentEngine engine =
+        AgentEngine.builder()
+            .modelClient(streams.client())
+            .tools(weatherTool())
+            .contextProviders(new CountingProvider("memory", new ArrayList<>()))
+            .build();
+    AgentStreamingRun<AgentResponseUpdate> run = engine.runStreaming("hi");
+
+    RecordingSubscriber subscriber = subscribeRequestingFromOnSubscribe(run.updates(), 0);
+
+    assertThat(streams.count()).isZero();
+    assertThat(subscriber.terminals).hasValue(1);
+    assertThat(subscriber.failure.get())
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessage("demand must be greater than zero");
+  }
+
+  /**
+   * Characterises what "the same response an ordinary run returns" means for message structure.
+   * Both paths report the same roles in the same order and the same content in the same order, but
+   * an ordinary response keeps the message boundaries its model client returned, while a streamed
+   * response is reconstructed by {@link AgentResponse#fromUpdates}, which coalesces consecutive
+   * same-role chunks that carry no message id. No in-tree model port reports message ids, so the
+   * streamed boundaries are a property of the reconstruction, not a guarantee of this loop.
+   */
+  @Test
+  void consecutiveAssistantChunksAreReconstructedAsOneMessage() {
+    AtomicInteger ordinaryCalls = new AtomicInteger();
+    ModelClient ordinaryClient =
+        request ->
+            ordinaryCalls.getAndIncrement() == 0
+                ? completedFuture(
+                    new ModelResponse(
+                        List.of(toolCall("call-1", "weather", SEOUL)),
+                        null,
+                        FinishReason.TOOL_CALLS,
+                        Map.of(),
+                        null))
+                : completedFuture(
+                    new ModelResponse(
+                        List.of(assistant("It is "), assistant("sunny")),
+                        null,
+                        FinishReason.STOP,
+                        Map.of(),
+                        null));
+    StreamingModelClient streamingClient =
+        scripted(
+            new ArrayList<>(),
+            List.of(
+                List.of(
+                    update(toolCall("call-1", "weather", SEOUL), null, FinishReason.TOOL_CALLS)),
+                List.of(
+                    update(assistant("It is "), null, FinishReason.STOP),
+                    update(assistant("sunny"), null, FinishReason.STOP))));
+
+    AgentResponse ordinary =
+        engine(ordinaryClient, weatherTool())
+            .run("weather?")
+            .response()
+            .toCompletableFuture()
+            .join();
+    AgentResponse streaming = streamedResponse(streamingClient);
+
+    assertThat(describe(ordinary.messages()))
+        .containsExactly(
+            "assistant||call:call-1:weather:{city=Seoul}",
+            "tool||result:call-1:weather:false:[sunny:Seoul]",
+            "assistant|It is ",
+            "assistant|sunny");
+    assertThat(describe(streaming.messages()))
+        .containsExactly(
+            "assistant||call:call-1:weather:{city=Seoul}",
+            "tool||result:call-1:weather:false:[sunny:Seoul]",
+            "assistant|It is sunny");
+    assertThat(streaming.text()).isEqualTo(ordinary.text());
+    assertThat(streaming.messages().stream().map(message -> message.role().value()).distinct())
+        .containsExactlyElementsOf(
+            ordinary.messages().stream()
+                .map(message -> message.role().value())
+                .distinct()
+                .toList());
+  }
+
   private static AgentEngine engine(ModelClient client, FunctionTool... tools) {
     return AgentEngine.builder()
         .id("agent-1")
@@ -776,6 +1048,88 @@ class AgentEngineStreamingToolLoopTest {
             completedFuture(ToolResult.success(new TextContent("sunny:" + arguments.get("city")))));
   }
 
+  /** A weather tool that records the arguments each invocation was given. */
+  private static FunctionTool recordingWeatherTool(List<Map<String, Object>> observedArguments) {
+    return FunctionTool.create(
+        "weather",
+        "Gets weather",
+        Map.of(),
+        (arguments, context) -> {
+          observedArguments.add(arguments.values());
+          return completedFuture(ToolResult.success(new TextContent("sunny")));
+        });
+  }
+
+  /** A tool that records {@code name:arguments} per invocation, so call order is observable. */
+  private static FunctionTool recordingTool(String name, List<String> invocations) {
+    return FunctionTool.create(
+        name,
+        name,
+        Map.of(),
+        (arguments, context) -> {
+          invocations.add(name + ":" + arguments.values());
+          return completedFuture(ToolResult.success(new TextContent(name)));
+        });
+  }
+
+  /** An ordinary client that calls one tool and then answers, with per-iteration metadata. */
+  private static ModelClient twoIterations(
+      Map<String, Object> firstMetadata, Map<String, Object> terminalMetadata) {
+    AtomicInteger calls = new AtomicInteger();
+    return request ->
+        calls.getAndIncrement() == 0
+            ? completedFuture(
+                new ModelResponse(
+                    List.of(toolCall("call-1", "weather", SEOUL)),
+                    null,
+                    FinishReason.TOOL_CALLS,
+                    firstMetadata,
+                    null))
+            : completedFuture(
+                new ModelResponse(
+                    List.of(assistant("It is sunny")),
+                    null,
+                    FinishReason.STOP,
+                    terminalMetadata,
+                    null));
+  }
+
+  /** The streaming counterpart of {@link #twoIterations}, one update per iteration. */
+  private static StreamingModelClient twoStreamedIterations(
+      Map<String, Object> firstMetadata, Map<String, Object> terminalMetadata) {
+    return scripted(
+        new ArrayList<>(),
+        List.of(
+            List.of(
+                update(
+                    toolCall("call-1", "weather", SEOUL),
+                    null,
+                    FinishReason.TOOL_CALLS,
+                    firstMetadata)),
+            List.of(update(assistant("It is sunny"), null, FinishReason.STOP, terminalMetadata))));
+  }
+
+  /** Consumes a whole streaming run with unbounded demand and returns its assembled response. */
+  private static AgentResponse streamedResponse(StreamingModelClient client) {
+    AgentStreamingRun<AgentResponseUpdate> run =
+        engine(client, weatherTool()).runStreaming("weather?");
+    subscribe(run.updates(), Long.MAX_VALUE).completion.join();
+    return run.response().toCompletableFuture().join();
+  }
+
+  /** The {@code callId:name} of every tool result the assembled response reports, in order. */
+  private static List<String> toolResults(AgentResponse response) {
+    List<String> results = new ArrayList<>();
+    for (Message message : response.messages()) {
+      for (Content content : message.content()) {
+        if (content instanceof ToolResultContent result) {
+          results.add(result.callId() + ":" + result.name());
+        }
+      }
+    }
+    return results;
+  }
+
   private static Message assistant(String text) {
     return new Message(Role.ASSISTANT, List.of(new TextContent(text)));
   }
@@ -785,7 +1139,12 @@ class AgentEngineStreamingToolLoopTest {
   }
 
   private static ModelResponseUpdate update(Message message, Usage usage, FinishReason reason) {
-    return new ModelResponseUpdate(List.of(message), usage, reason, Map.of(), null);
+    return update(message, usage, reason, Map.of());
+  }
+
+  private static ModelResponseUpdate update(
+      Message message, Usage usage, FinishReason reason, Map<String, Object> metadata) {
+    return new ModelResponseUpdate(List.of(message), usage, reason, metadata, null);
   }
 
   /**
@@ -897,7 +1256,15 @@ class AgentEngineStreamingToolLoopTest {
 
   private static RecordingSubscriber subscribe(
       Flow.Publisher<AgentResponseUpdate> publisher, long initialDemand) {
-    RecordingSubscriber subscriber = new RecordingSubscriber(initialDemand);
+    RecordingSubscriber subscriber = new RecordingSubscriber(initialDemand, initialDemand > 0);
+    publisher.subscribe(subscriber);
+    return subscriber;
+  }
+
+  /** Subscribes with a subscriber that always calls {@code request} from {@code onSubscribe}. */
+  private static RecordingSubscriber subscribeRequestingFromOnSubscribe(
+      Flow.Publisher<AgentResponseUpdate> publisher, long initialDemand) {
+    RecordingSubscriber subscriber = new RecordingSubscriber(initialDemand, true);
     publisher.subscribe(subscriber);
     return subscriber;
   }
@@ -910,15 +1277,17 @@ class AgentEngineStreamingToolLoopTest {
     private final AtomicInteger terminals = new AtomicInteger();
     private final AtomicReference<Flow.Subscription> subscription = new AtomicReference<>();
     private final long initialDemand;
+    private final boolean requestFromOnSubscribe;
 
-    private RecordingSubscriber(long initialDemand) {
+    private RecordingSubscriber(long initialDemand, boolean requestFromOnSubscribe) {
       this.initialDemand = initialDemand;
+      this.requestFromOnSubscribe = requestFromOnSubscribe;
     }
 
     @Override
     public void onSubscribe(Flow.Subscription value) {
       subscription.set(value);
-      if (initialDemand > 0) {
+      if (requestFromOnSubscribe) {
         value.request(initialDemand);
       }
     }

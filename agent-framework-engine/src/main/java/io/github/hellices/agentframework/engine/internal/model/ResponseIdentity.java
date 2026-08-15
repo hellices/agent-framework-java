@@ -57,4 +57,28 @@ public record ResponseIdentity(
         Map.of(),
         null);
   }
+
+  /**
+   * The update that reports a run's model metadata, carrying nothing else.
+   *
+   * <p>{@link io.github.hellices.agentframework.api.agent.AgentResponse#fromUpdates} unions the
+   * metadata of every update it assembles, so a multi-call run whose updates each carried their own
+   * call's metadata would end with the union of all its model calls — where an ordinary run reports
+   * the terminal call's metadata alone. Reporting metadata once, in this update, is what lets the
+   * assembled map be exactly that terminal metadata.
+   */
+  public AgentResponseUpdate metadataUpdate(Map<String, Object> metadata) {
+    return new AgentResponseUpdate(
+        agentId,
+        responseId,
+        null,
+        authorName,
+        createdAt,
+        null,
+        null,
+        List.of(),
+        null,
+        metadata,
+        null);
+  }
 }

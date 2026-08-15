@@ -101,17 +101,58 @@ public final class ToolLoopPolicy {
     }
   }
 
-  /** Every tool call of a model response, in the order the model emitted them. */
+  /**
+   * The tool calls a model response asks for, in the order the model first mentioned each of them.
+   *
+   * <p>A streamed model call may report one call in fragments — an id and a name first, then its
+   * arguments, or arguments a token at a time — and {@link
+   * io.github.hellices.agentframework.api.agent.AgentResponse#fromUpdates} concatenates the content
+   * of those updates without merging it. Executing that content as-is would run one call's handler
+   * once per fragment and report several results under one call id, so the fragments of a call id
+   * are merged here, where both loops read them.
+   *
+   * <p>Merging is defined so that a later fragment refines an earlier one: arguments and the
+   * provider's own properties are merged in arrival order with the later value winning, and the raw
+   * handle is the last one a fragment carried. A call id that arrives under two tool names is not a
+   * fragmented call but a broken response, and fails the run rather than picking a name.
+   */
   public static List<ToolCallContent> toolCalls(ModelResponse response) {
-    List<ToolCallContent> calls = new ArrayList<>();
+    Map<String, ToolCallContent> calls = new LinkedHashMap<>();
     for (Message message : response.messages()) {
       for (Content content : message.content()) {
         if (content instanceof ToolCallContent call) {
-          calls.add(call);
+          calls.merge(call.callId(), call, ToolLoopPolicy::mergeToolCall);
         }
       }
     }
-    return List.copyOf(calls);
+    return List.copyOf(calls.values());
+  }
+
+  private static ToolCallContent mergeToolCall(
+      ToolCallContent accumulated, ToolCallContent fragment) {
+    if (!accumulated.name().equals(fragment.name())) {
+      throw new IllegalStateException(
+          "tool call "
+              + accumulated.callId()
+              + " was reported as both '"
+              + accumulated.name()
+              + "' and '"
+              + fragment.name()
+              + "'");
+    }
+    Map<String, Object> arguments = new LinkedHashMap<>(accumulated.arguments());
+    arguments.putAll(fragment.arguments());
+    Map<String, Object> additionalProperties =
+        new LinkedHashMap<>(accumulated.additionalProperties());
+    additionalProperties.putAll(fragment.additionalProperties());
+    return new ToolCallContent(
+        accumulated.callId(),
+        accumulated.name(),
+        arguments,
+        additionalProperties,
+        fragment.rawRepresentation() == null
+            ? accumulated.rawRepresentation()
+            : fragment.rawRepresentation());
   }
 
   /**

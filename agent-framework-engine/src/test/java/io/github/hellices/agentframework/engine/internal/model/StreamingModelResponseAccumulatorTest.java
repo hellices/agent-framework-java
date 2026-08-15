@@ -93,7 +93,7 @@ class StreamingModelResponseAccumulatorTest {
   }
 
   @Test
-  void recordedUpdatesCarryTheRunsIdentityAndTheModelsValues() {
+  void forwardedUpdatesCarryTheRunsIdentityAndTheModelsValuesWithoutItsMetadata() {
     StreamingModelResponseAccumulator accumulator = new StreamingModelResponseAccumulator(IDENTITY);
 
     AgentResponseUpdate mapped =
@@ -110,8 +110,48 @@ class StreamingModelResponseAccumulatorTest {
     assertThat(mapped.authorName()).isEqualTo("agent");
     assertThat(mapped.createdAt()).isEqualTo(IDENTITY.createdAt());
     assertThat(mapped.finishReason()).isEqualTo(FinishReason.STOP);
-    assertThat(mapped.additionalProperties()).containsExactly(Map.entry("provider", "fake"));
     assertThat(mapped.rawRepresentation()).isEqualTo("raw");
+    assertThat(mapped.additionalProperties()).isEmpty();
+    assertThat(accumulator.toModelResponse().metadata())
+        .containsExactly(Map.entry("provider", "fake"));
+  }
+
+  @Test
+  void theReassembledResponseUnionsTheMetadataOfItsOwnModelCallOnly() {
+    StreamingModelResponseAccumulator accumulator = new StreamingModelResponseAccumulator(IDENTITY);
+
+    accumulator.record(
+        new ModelResponseUpdate(
+            List.of(message(new TextContent("hi"))),
+            null,
+            FinishReason.STOP,
+            Map.of("shared", "first", "only-first", 1),
+            null));
+    accumulator.record(
+        new ModelResponseUpdate(
+            List.of(message(new TextContent(" there"))),
+            null,
+            FinishReason.STOP,
+            Map.of("shared", "second"),
+            null));
+
+    assertThat(accumulator.toModelResponse().metadata())
+        .isEqualTo(Map.of("shared", "second", "only-first", 1));
+  }
+
+  @Test
+  void aSynthesisedMetadataUpdateReportsMetadataAndNothingElse() {
+    AgentResponseUpdate update = IDENTITY.metadataUpdate(Map.of("provider", "fake"));
+
+    assertThat(update.agentId()).isEqualTo("agent-1");
+    assertThat(update.responseId()).isEqualTo("response-1");
+    assertThat(update.messageId()).isNull();
+    assertThat(update.messages()).isEmpty();
+    assertThat(update.finishReason()).isNull();
+    assertThat(update.continuationToken()).isNull();
+    assertThat(update.usage()).isNull();
+    assertThat(update.rawRepresentation()).isNull();
+    assertThat(update.additionalProperties()).containsExactly(Map.entry("provider", "fake"));
   }
 
   @Test

@@ -34,7 +34,22 @@ import java.util.function.Supplier;
  * as updates the engine synthesised, and the next model call happens only once the results before
  * it were delivered. Because every update carries the same {@link ResponseIdentity}, {@link
  * io.github.hellices.agentframework.api.agent.AgentResponse#fromUpdates} assembles the whole loop
- * into the one response an equivalent ordinary run returns.
+ * into one response.
+ *
+ * <h2>What the assembled response has in common with an ordinary run</h2>
+ *
+ * <p>The assembled response reports the same roles in the same order, the same content in the same
+ * order within them, the same tool results, the summed usage, the terminal call's finish reason,
+ * continuation token and metadata, and the run's own identity — which is what makes a streamed run
+ * and an ordinary run of the same script interchangeable to a caller that reads the response.
+ *
+ * <p>What it does not promise is the message objects themselves. A streamed response is
+ * reconstructed by {@code fromUpdates}, which coalesces consecutive same-role content into one
+ * message while no update reports a message id, and no model port in this repository reports one.
+ * Two assistant chunks an ordinary client returned as two messages therefore arrive as one
+ * reconstructed message. Inventing an id per update to force the boundaries apart would claim an
+ * identity the provider never gave, so the parity this loop maintains is of content and order, not
+ * of message boundaries.
  *
  * <h2>State machine</h2>
  *
@@ -46,9 +61,9 @@ import java.util.function.Supplier;
  *       passed straight through to it, so a slow subscriber slows the model down instead of being
  *       buffered around.
  *   <li><b>Tools</b> — when the model call completes, its accumulated response decides the run:
- *       without tool calls the loop is finished and the stream completes; with tool calls the
- *       shared {@link ToolLoopPolicy} validates the budget and executes them, exactly as an
- *       ordinary run does.
+ *       without tool calls the loop is finished, the call's metadata is queued as the stream's last
+ *       update and the stream completes; with tool calls the shared {@link ToolLoopPolicy}
+ *       validates the budget and executes them, exactly as an ordinary run does.
  *   <li><b>Results</b> — each tool result is queued as its own update and emitted under downstream
  *       demand, in call order. The next iteration starts only after the last of them was delivered,
  *       so the model never sees a request whose results the subscriber has not seen yet.
@@ -68,7 +83,11 @@ import java.util.function.Supplier;
  * <p>Cancellation is honoured from both sides — the subscriber cancelling and the run's {@link
  * io.github.hellices.agentframework.api.agent.CancellationSignal} — and stops the loop wherever it
  * is: the active model subscription is cancelled, queued results are dropped, and a tool stage that
- * completes afterwards neither emits its results nor starts another model call.
+ * completes afterwards neither emits its results nor starts another iteration. The state is read
+ * again immediately before each model call is made, so no iteration starts once cancellation is
+ * observable there; a cancellation that becomes observable while a client is producing its
+ * publisher cannot unmake that call, but that publisher is cancelled instead of read and delivers
+ * no signal.
  *
  * <p>No executor, thread or {@link java.util.concurrent.SubmissionPublisher} is created: every
  * signal runs on the thread that caused it.
@@ -151,8 +170,13 @@ public final class StreamingToolLoopPublisher implements Flow.Publisher<AgentRes
     }
 
     private void start() {
-      removeCancellationListener = request.cancellationSignal().onCancel(this::cancel);
-      if (cancelled) {
+      if (cancelled || terminated.get()) {
+        return;
+      }
+      Runnable removeListener = request.cancellationSignal().onCancel(this::cancel);
+      removeCancellationListener = removeListener;
+      if (cancelled || terminated.get()) {
+        removeListener.run();
         return;
       }
       beginIteration(0, null, firstStream);
@@ -198,6 +222,18 @@ public final class StreamingToolLoopPublisher implements Flow.Publisher<AgentRes
      * Subscribes the model call of {@code index}. The upstream slot is cleared first, so demand
      * granted between two iterations is handed to the new subscription when it arrives rather than
      * to the finished one.
+     *
+     * <p>The cancellation state is read once more immediately before the model client is asked for
+     * its publisher, because the decision to start this iteration was taken earlier — when a
+     * finished tool round was armed, or when the last queued result was delivered — and the run may
+     * have been cancelled since. The check is deliberately not held under {@code lock}: obtaining
+     * and subscribing a publisher calls foreign code, and holding the demand monitor across it
+     * would let a client that emits synchronously deadlock the subscription. What the check
+     * guarantees is therefore stated in terms of what it observes: once cancellation is observable
+     * here, this iteration does not start. A cancellation that becomes observable in the instant
+     * after it — while the client is producing its publisher — cannot unmake that call, but no
+     * signal of it reaches the subscriber either, because {@link ModelSubscriber#onSubscribe}
+     * cancels the new subscription instead of requesting from it.
      */
     private void beginIteration(
         int index,
@@ -205,6 +241,9 @@ public final class StreamingToolLoopPublisher implements Flow.Publisher<AgentRes
         Supplier<Flow.Publisher<ModelResponseUpdate>> source) {
       synchronized (lock) {
         upstream = null;
+      }
+      if (cancelled || terminated.get() || request.cancellationSignal().isCancelled()) {
+        return;
       }
       Flow.Publisher<ModelResponseUpdate> publisher;
       try {
@@ -221,6 +260,12 @@ public final class StreamingToolLoopPublisher implements Flow.Publisher<AgentRes
      * Decides what a finished model call means for the run: end it, or execute the tools it asked
      * for. This is the point at which a streaming iteration and an ordinary one are made to agree —
      * both read the same reassembled response and both ask the same {@link ToolLoopPolicy}.
+     *
+     * <p>The call that ends the run is also the one whose metadata the run reports. Its metadata is
+     * queued as the last update of the stream, because that is the only place a metadata-unioning
+     * assembler can be told which model call's metadata the response has: no update before it
+     * carried any, so the assembled map is exactly this call's, down to being empty when the call
+     * reported nothing.
      */
     private void completeIteration(
         int index, ModelRequest iterationRequest, StreamingModelResponseAccumulator accumulator) {
@@ -235,6 +280,9 @@ public final class StreamingToolLoopPublisher implements Flow.Publisher<AgentRes
         policy.validateContinuation(response);
         List<ToolCallContent> calls = ToolLoopPolicy.toolCalls(response);
         if (calls.isEmpty()) {
+          if (!response.metadata().isEmpty()) {
+            queue.add(identity.metadataUpdate(response.metadata()));
+          }
           finished = true;
           drain();
           return;
