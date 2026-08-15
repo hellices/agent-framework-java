@@ -3,6 +3,7 @@ package io.github.hellices.agentframework.spi.model;
 import io.github.hellices.agentframework.api.agent.CancellationSignal;
 import io.github.hellices.agentframework.api.message.Message;
 import io.github.hellices.agentframework.api.tool.ToolDefinition;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -18,7 +19,13 @@ public record ModelRequest(
     messages = messages == null ? List.of() : List.copyOf(messages);
     options = options == null ? ModelRequestOptions.empty() : options;
     cancellationSignal = cancellationSignal == null ? new CancellationSignal() : cancellationSignal;
-    tools = tools == null ? List.of() : List.copyOf(tools);
+    List<ToolDefinition> normalizedTools = new ArrayList<>();
+    if (tools != null) {
+      for (ToolDefinition tool : tools) {
+        normalizedTools.add(Objects.requireNonNull(tool, "tools must not contain null entries"));
+      }
+    }
+    tools = List.copyOf(normalizedTools);
     metadata = metadata == null ? Map.of() : Map.copyOf(metadata);
     for (Message message : messages) {
       Objects.requireNonNull(message, "messages must not contain null entries");

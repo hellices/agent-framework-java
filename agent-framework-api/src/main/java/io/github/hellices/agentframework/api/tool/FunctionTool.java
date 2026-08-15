@@ -26,10 +26,13 @@ public final class FunctionTool {
   }
 
   public CompletionStage<ToolResult> execute(ToolArguments arguments, ToolContext context) {
-    return Objects.requireNonNull(
-        handler.invoke(
-            Objects.requireNonNull(arguments, "arguments must not be null"),
-            Objects.requireNonNull(context, "context must not be null")),
-        "tool handler must not return null");
+    CompletionStage<ToolResult> result =
+        Objects.requireNonNull(
+            handler.invoke(
+                Objects.requireNonNull(arguments, "arguments must not be null"),
+                Objects.requireNonNull(context, "context must not be null")),
+            "tool handler must not return null");
+    return result.thenApply(
+        value -> Objects.requireNonNull(value, "tool handler result must not be null"));
   }
 }

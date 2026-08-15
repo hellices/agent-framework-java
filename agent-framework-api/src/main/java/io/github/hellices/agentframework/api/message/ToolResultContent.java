@@ -1,5 +1,6 @@
 package io.github.hellices.agentframework.api.message;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
@@ -31,7 +32,14 @@ public final class ToolResultContent extends Content {
     }
     this.callId = callId;
     this.name = name;
-    this.content = content == null ? List.of() : List.copyOf(content);
+    List<Content> normalizedContent = new ArrayList<>();
+    if (content != null) {
+      for (Content item : content) {
+        normalizedContent.add(
+            java.util.Objects.requireNonNull(item, "content must not contain null entries"));
+      }
+    }
+    this.content = List.copyOf(normalizedContent);
     this.error = error;
   }
 
