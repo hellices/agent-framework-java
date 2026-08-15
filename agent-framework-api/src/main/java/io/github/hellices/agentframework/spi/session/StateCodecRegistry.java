@@ -253,7 +253,7 @@ public final class StateCodecRegistry {
               requireString(encoded, "callId"),
               requireString(encoded, "name"),
               nested,
-              Boolean.TRUE.equals(encoded.get("error")),
+              requireBoolean(encoded, "error"),
               additionalProperties,
               null);
         }
@@ -339,6 +339,14 @@ public final class StateCodecRegistry {
         throw new IllegalArgumentException(key + " must be text or null");
       }
       return text;
+    }
+
+    private static boolean requireBoolean(Map<?, ?> value, String key) {
+      Object item = value.get(key);
+      if (!(item instanceof Boolean bool)) {
+        throw new IllegalArgumentException(key + " must be boolean");
+      }
+      return bool;
     }
 
     private static Map<String, Object> map(Object... values) {
