@@ -1,0 +1,84 @@
+package io.github.hellices.agentframework.mcp;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+import io.github.hellices.agentframework.api.tool.ToolContext;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Map;
+import org.junit.jupiter.api.Test;
+
+class McpToolAdapterOptionsTest {
+
+  @Test
+  void defaultsCarryNoPrefixNoExtrasAndEmptyMetadata() {
+    McpToolAdapterOptions options = McpToolAdapterOptions.defaults();
+
+    assertThat(options.localNamePrefix()).isEmpty();
+    assertThat(options.additionalArgumentNames()).isEmpty();
+    assertThat(options.callMetadataProvider().metadata(new ToolContext(null, Map.of("runId", "r"))))
+        .isEmpty();
+  }
+
+  @Test
+  void keepsTheConfiguredValues() {
+    McpToolAdapterOptions options =
+        McpToolAdapterOptions.builder()
+            .localNamePrefix("github_")
+            .additionalArgumentNames(List.of("tenant", "region"))
+            .callMetadataProvider(context -> Map.of("traceId", "t"))
+            .build();
+
+    assertThat(options.localNamePrefix()).isEqualTo("github_");
+    assertThat(options.additionalArgumentNames()).containsExactlyInAnyOrder("tenant", "region");
+    assertThat(options.callMetadataProvider().metadata(new ToolContext(null, Map.of())))
+        .containsEntry("traceId", "t");
+  }
+
+  @Test
+  void copiesTheExtraArgumentNamesOnBothSidesOfTheBoundary() {
+    List<String> mutable = new ArrayList<>(List.of("tenant"));
+    McpToolAdapterOptions options =
+        McpToolAdapterOptions.builder().additionalArgumentNames(mutable).build();
+
+    mutable.add("smuggled");
+
+    assertThat(options.additionalArgumentNames()).containsExactly("tenant");
+    assertThatThrownBy(() -> options.additionalArgumentNames().add("smuggled"))
+        .isInstanceOf(UnsupportedOperationException.class);
+  }
+
+  @Test
+  void keepsBuilderMutationOutOfAnAlreadyBuiltOptions() {
+    McpToolAdapterOptions.Builder builder =
+        McpToolAdapterOptions.builder().additionalArgumentNames(List.of("tenant"));
+    McpToolAdapterOptions options = builder.build();
+
+    builder.localNamePrefix("late_").addAdditionalArgumentName("late");
+
+    assertThat(options.localNamePrefix()).isEmpty();
+    assertThat(options.additionalArgumentNames()).containsExactly("tenant");
+  }
+
+  @Test
+  void rejectsBlankOrNullConfiguration() {
+    McpToolAdapterOptions.Builder builder = McpToolAdapterOptions.builder();
+
+    assertThatThrownBy(() -> builder.localNamePrefix("  "))
+        .isInstanceOf(IllegalArgumentException.class);
+    assertThatThrownBy(() -> builder.localNamePrefix(null))
+        .isInstanceOf(IllegalArgumentException.class);
+    assertThatThrownBy(() -> builder.additionalArgumentNames(null))
+        .isInstanceOf(IllegalArgumentException.class);
+    assertThatThrownBy(() -> builder.additionalArgumentNames(Arrays.asList("tenant", null)))
+        .isInstanceOf(IllegalArgumentException.class);
+    assertThatThrownBy(() -> builder.additionalArgumentNames(List.of("tenant", " ")))
+        .isInstanceOf(IllegalArgumentException.class);
+    assertThatThrownBy(() -> builder.addAdditionalArgumentName(" "))
+        .isInstanceOf(IllegalArgumentException.class);
+    assertThatThrownBy(() -> builder.callMetadataProvider(null))
+        .isInstanceOf(IllegalArgumentException.class);
+  }
+}

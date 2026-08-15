@@ -287,7 +287,10 @@ public final class StateCodecRegistry {
         encoded.put("error", result.error());
       } else {
         throw new IllegalArgumentException(
-            "unsupported framework message content type: " + content.getClass().getName());
+            "unsupported framework message content type: "
+                + content.getClass().getName()
+                + ". Adapter-owned ExtensionContent needs a registered content codec before it can"
+                + " be persisted.");
       }
       return encoded;
     }
