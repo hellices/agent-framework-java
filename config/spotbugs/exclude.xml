@@ -72,4 +72,19 @@
     <Method name="toolOptions"/>
     <Bug pattern="EI_EXPOSE_REP2"/>
   </Match>
+  <!-- The owned streamable HTTP builder records the same two collaborators for the same reasons:
+       the SDK transport encodes every message with the caller's very McpJsonMapper, and
+       McpToolAdapterOptions is a deeply immutable value. Its mutable configuration, the base URI
+       and the endpoint, is held as Strings and a parsed java.net.URI, which is immutable, so no
+       exclusion is needed for it. -->
+  <Match>
+    <Class name="io.github.hellices.agentframework.mcp.McpStreamableHttpTools$Builder"/>
+    <Method name="jsonMapper"/>
+    <Bug pattern="EI_EXPOSE_REP2"/>
+  </Match>
+  <Match>
+    <Class name="io.github.hellices.agentframework.mcp.McpStreamableHttpTools$Builder"/>
+    <Method name="toolOptions"/>
+    <Bug pattern="EI_EXPOSE_REP2"/>
+  </Match>
 </FindBugsFilter>
