@@ -13,8 +13,9 @@
  *
  * <p>Cancellation stops the framework from waiting; it does not abort an in-flight HTTP request.
  * The future the SDK returns is derived from its transport future, and a JDK {@code
- * CompletableFuture} never cancels its antecedent. The per-request timeout is what bounds work the
- * framework has stopped waiting for.
+ * CompletableFuture} never cancels its antecedent. A timeout is what bounds work the framework has
+ * stopped waiting for, and it bounds one attempt: this package adds no retry, while the SDK client
+ * the host injected retries inside a single call according to the host's own {@code maxRetries}.
  *
  * <p>Requirements for this package live in {@code docs/requirements/12-providers.md} and {@code
  * docs/requirements/01-agent-execution.md}.

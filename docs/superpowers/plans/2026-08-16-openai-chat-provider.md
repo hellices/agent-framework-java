@@ -327,11 +327,23 @@ State it plainly in Javadoc, in the README, and in a test name.
    completion path through the handle `CancellationSignal.onCancel` returns, so a finished run
    leaves no listener behind.
 3. The in-flight HTTP request is **not** aborted, because the future the SDK returns is derived by
-   `thenApply` from the transport future (fact 21). Do not claim hard cancellation anywhere. The
-   per-request timeout is what bounds the abandoned work.
+   `thenApply` from the transport future (fact 21). Do not claim hard cancellation anywhere.
+   Cancelling the future a caller takes from the returned stage aborts nothing either: that future
+   is a copy of the outcome, not the call. A timeout is what bounds the abandoned work, and it
+   bounds one **attempt**: the SDK client the host injected retries inside a single dispatch
+   (`maxRetries` on its own builder, two by default), so abandoned work can last the per-request
+   timeout times the number of attempts, plus the SDK's backoff between them.
 4. A failure from the operations port is delivered with the original SDK exception preserved as the
    cause of the returned stage, unwrapped from any `CompletionException` or `ExecutionException`
    wrapper, never flattened into a message string.
+5. The stage handed to a caller carries no completion authority: it is a minimal completion stage,
+   so completing or cancelling the future taken from it settles that future alone and never decides
+   this call's outcome, hides the provider's own answer, or removes a cancellation listener while
+   the request it belongs to is still in flight.
+6. A null argument is a call-site programming error, not a request failure: it is rejected by name
+   where the call was made. A `java.lang.Error` from the dispatch is rethrown as the same instance
+   after the bridge settles the listener and the result it owns, because turning a fatal error into
+   a failed stage would offer it to a caller to map or retry as if the provider had answered.
 
 ## Module and build policy decision
 
@@ -1048,8 +1060,10 @@ so `:providers:agent-framework-openai` publishes as `agent-framework-openai`.
  *
  * <p>Cancellation stops the framework from waiting; it does not abort an in-flight HTTP request.
  * The future the SDK returns is derived from its transport future, and a JDK
- * {@code CompletableFuture} never cancels its antecedent. The per-request timeout is what bounds
- * work the framework has stopped waiting for.
+ * {@code CompletableFuture} never cancels its antecedent. A timeout is what bounds work the
+ * framework has stopped waiting for, and it bounds one attempt: this package adds no retry, while
+ * the SDK client the host injected retries inside a single call according to the host's own
+ * {@code maxRetries}.
  *
  * <p>Requirements for this package live in {@code docs/requirements/12-providers.md} and
  * {@code docs/requirements/01-agent-execution.md}.
@@ -2946,6 +2960,15 @@ dispatch, remove the cancellation listener on every completion path, and deliver
 with the original SDK exception preserved. Listener removal is only meaningful if it is observable,
 so the bridge takes a narrow cancellation seam that a test can record against.
 
+Three rules keep the class honest about what it does *not* own. A null argument is rejected by name
+where the call was made, because a programming error must not arrive as a failed stage a caller
+might map or retry. A `java.lang.Error` is rethrown as the same instance, after the listener and the
+result this class owns are settled, because a fatal error is not a provider answer. And the stage
+handed out is a minimal completion stage rather than the call's own future, so a caller that
+completes or cancels the future it was given settles that future alone: the provider call keeps
+running, its real answer still arrives, and the cancellation listener stays registered until the
+call itself completes.
+
 **Files:**
 - Create: `providers/agent-framework-openai/src/main/java/io/github/hellices/agentframework/openai/internal/OpenAiCallBridge.java`
 - Test: `providers/agent-framework-openai/src/test/java/io/github/hellices/agentframework/openai/internal/OpenAiCallBridgeTest.java`
@@ -2953,10 +2976,14 @@ so the bridge takes a narrow cancellation seam that a test can record against.
 **Interfaces:**
 - Consumes: nothing.
 - Produces, in `io.github.hellices.agentframework.openai.internal`:
-  - `public static <T> CompletableFuture<T> OpenAiCallBridge.guard(CancellationSignal signal, Supplier<CompletableFuture<T>> dispatch)`
+  - `public static <T> CompletionStage<T> OpenAiCallBridge.guard(CancellationSignal signal, Supplier<CompletableFuture<T>> dispatch)`
   - `public static Throwable OpenAiCallBridge.unwrap(Throwable failure)`
   - package-private `interface OpenAiCallBridge.Cancellation` with `boolean isCancelled()` and
-    `Runnable onCancel(Runnable listener)`, plus the package-private `guard` overload that takes it
+    `Runnable onCancel(Runnable listener)`, plus two package-private seams over it:
+    `static <T> CompletionStage<T> guardStage(Cancellation, Supplier<CompletableFuture<T>>)`, which
+    is exactly what the public overload returns, and
+    `static <T> CompletableFuture<T> guard(Cancellation, Supplier<CompletableFuture<T>>)`, the
+    call's own future, whose deterministic state a test can assert on directly
 
 - [ ] **Step 1: Write the failing bridge test**
 
@@ -2970,6 +2997,7 @@ import io.github.hellices.agentframework.api.agent.CancellationSignal;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
@@ -2982,7 +3010,7 @@ class OpenAiCallBridgeTest {
     signal.cancel();
     AtomicInteger dispatches = new AtomicInteger();
 
-    CompletableFuture<String> result =
+    CompletionStage<String> result =
         OpenAiCallBridge.guard(
             signal,
             () -> {
@@ -2991,9 +3019,120 @@ class OpenAiCallBridgeTest {
             });
 
     assertThat(dispatches).hasValue(0);
-    assertThatThrownBy(result::join)
-        .isInstanceOf(CompletionException.class)
-        .hasCauseInstanceOf(CancellationException.class);
+    assertThat(result).isCompletedExceptionally();
+    // Read through unwrap rather than off join: the exposed stage relays this call's failure, so
+    // every reader sees a CompletionException around the cancellation, and JDK 23 and later would
+    // add a second CancellationException on top of a bare one anyway.
+    assertThat(OpenAiCallBridge.unwrap(exposedFailureOf(result)))
+        .isInstanceOf(CancellationException.class)
+        .hasMessage("model call was cancelled before it was dispatched");
+  }
+
+  @Test
+  void rejectsANullSignalOrANullDispatch() {
+    // A call site that passes neither is a programming error rather than a request failure, so it
+    // fails where it was made, by name, instead of arriving as a failed stage a caller might map.
+    assertThatThrownBy(
+            () -> OpenAiCallBridge.guard((CancellationSignal) null, CompletableFuture<String>::new))
+        .isInstanceOf(NullPointerException.class)
+        .hasMessage("signal must not be null");
+    assertThatThrownBy(() -> OpenAiCallBridge.guard(new CancellationSignal(), null))
+        .isInstanceOf(NullPointerException.class)
+        .hasMessage("dispatch must not be null");
+  }
+
+  @Test
+  void rejectsANullCancellationOrANullDispatchOnTheSeam() {
+    assertThatThrownBy(
+            () ->
+                OpenAiCallBridge.guard(
+                    (OpenAiCallBridge.Cancellation) null, CompletableFuture<String>::new))
+        .isInstanceOf(NullPointerException.class)
+        .hasMessage("cancellation must not be null");
+    assertThatThrownBy(() -> OpenAiCallBridge.guard(new RecordingCancellation(), null))
+        .isInstanceOf(NullPointerException.class)
+        .hasMessage("dispatch must not be null");
+  }
+
+  @Test
+  void rethrowsAFatalDispatchErrorAfterRemovingTheCancellationListener() {
+    // An Error is not a provider failure. Completing the stage with it and returning would hand a
+    // caller a fatal condition to map, retry, or log as a bad request, so the same instance is
+    // rethrown - but the listener and the result this bridge owns are still settled first.
+    RecordingCancellation cancellation = new RecordingCancellation();
+    StackOverflowError fatal = new StackOverflowError("dispatch exhausted the stack");
+
+    assertThatThrownBy(
+            () ->
+                OpenAiCallBridge.<String>guard(
+                    cancellation,
+                    () -> {
+                      throw fatal;
+                    }))
+        .isSameAs(fatal);
+
+    assertThat(cancellation.deregistered()).isTrue();
+  }
+
+  @Test
+  void doesNotLetTheCallerCancelTheRunThroughTheStageItReturns() {
+    // The stage handed out is a view, not the call. A caller that cancels its own future abandons
+    // its own wait: it neither settles this call nor aborts the HTTP request, which is exactly what
+    // cancelling the run's signal cannot do either.
+    CancellationSignal signal = new CancellationSignal();
+    CompletableFuture<String> inFlight = new CompletableFuture<>();
+
+    CompletionStage<String> result = OpenAiCallBridge.guard(signal, () -> inFlight);
+    assertThat(result.toCompletableFuture().cancel(true)).isTrue();
+
+    assertThat(inFlight).isNotDone();
+    assertThat(result).isNotDone();
+
+    inFlight.complete("answer");
+
+    assertThat(result).isCompletedWithValue("answer");
+  }
+
+  @Test
+  void keepsTheCancellationListenerUntilTheProviderCallItselfCompletes() {
+    // Cancelling the caller's own future settles nothing here: the provider call is still running,
+    // so the listener that would fail this call on a real cancellation has to stay registered, and
+    // it is removed when the call finishes rather than when a caller stops waiting for it.
+    RecordingCancellation cancellation = new RecordingCancellation();
+    CompletableFuture<String> inFlight = new CompletableFuture<>();
+
+    CompletionStage<String> exposed = OpenAiCallBridge.guardStage(cancellation, () -> inFlight);
+    assertThat(exposed.toCompletableFuture().cancel(true)).isTrue();
+
+    assertThat(inFlight).isNotDone();
+    assertThat(exposed).isNotDone();
+    assertThat(cancellation.deregistered()).isFalse();
+
+    inFlight.complete("answer");
+
+    assertThat(exposed).isCompletedWithValue("answer");
+    assertThat(cancellation.deregistered()).isTrue();
+  }
+
+  @Test
+  void handsOutNoCompletionAuthorityOverTheProviderCall() {
+    // A forged value on the caller's own future is the same kind of mistake as a forged
+    // cancellation: it must not become this call's answer, and it must not settle the provider
+    // call, whose real answer still arrives on the stage everyone else reads.
+    RecordingCancellation cancellation = new RecordingCancellation();
+    CompletableFuture<String> inFlight = new CompletableFuture<>();
+
+    CompletionStage<String> exposed = OpenAiCallBridge.guardStage(cancellation, () -> inFlight);
+    CompletableFuture<String> caller = exposed.toCompletableFuture();
+    assertThat(caller.complete("forged")).isTrue();
+
+    assertThat(inFlight).isNotDone();
+    assertThat(exposed).isNotDone();
+
+    inFlight.complete("answer");
+
+    assertThat(exposed).isCompletedWithValue("answer");
+    assertThat(caller).isCompletedWithValue("forged");
   }
 
   @Test
@@ -3001,15 +3140,16 @@ class OpenAiCallBridgeTest {
     CancellationSignal signal = new CancellationSignal();
     CompletableFuture<String> inFlight = new CompletableFuture<>();
 
-    CompletableFuture<String> result = OpenAiCallBridge.guard(signal, () -> inFlight);
+    CompletionStage<String> result = OpenAiCallBridge.guard(signal, () -> inFlight);
     assertThat(result).isNotDone();
     signal.cancel();
 
-    assertThatThrownBy(result::join)
-        .isInstanceOf(CompletionException.class)
-        .hasCauseInstanceOf(CancellationException.class);
+    assertThat(result).isCompletedExceptionally();
+    assertThat(OpenAiCallBridge.unwrap(exposedFailureOf(result)))
+        .isInstanceOf(CancellationException.class)
+        .hasMessage("model call was cancelled");
     // The in-flight call is deliberately left alone. The SDK derives its future with thenApply, so
-    // nothing here can abort the HTTP request; the per-request timeout is what reclaims it.
+    // nothing here can abort the HTTP request; the per-attempt timeout is what reclaims it.
     assertThat(inFlight).isNotDone();
   }
 
@@ -3037,10 +3177,10 @@ class OpenAiCallBridgeTest {
     CancellationSignal signal = new CancellationSignal();
     IllegalStateException failure = new IllegalStateException("upstream");
 
-    CompletableFuture<String> result =
+    CompletionStage<String> result =
         OpenAiCallBridge.guard(signal, () -> CompletableFuture.failedFuture(failure));
 
-    assertThatThrownBy(result::join)
+    assertThatThrownBy(result.toCompletableFuture()::join)
         .isInstanceOf(CompletionException.class)
         .satisfies(thrown -> assertThat(thrown.getCause()).isSameAs(failure));
   }
@@ -3052,14 +3192,14 @@ class OpenAiCallBridgeTest {
     CancellationSignal signal = new CancellationSignal();
     IllegalArgumentException failure = new IllegalArgumentException("cannot map");
 
-    CompletableFuture<String> result =
+    CompletionStage<String> result =
         OpenAiCallBridge.guard(
             signal,
             () -> {
               throw failure;
             });
 
-    assertThatThrownBy(result::join)
+    assertThatThrownBy(result.toCompletableFuture()::join)
         .isInstanceOf(CompletionException.class)
         .satisfies(thrown -> assertThat(thrown.getCause()).isSameAs(failure));
   }
@@ -3070,6 +3210,10 @@ class OpenAiCallBridgeTest {
 
     assertThat(OpenAiCallBridge.unwrap(new CompletionException(cause))).isSameAs(cause);
     assertThat(OpenAiCallBridge.unwrap(cause)).isSameAs(cause);
+  }
+
+  private static Throwable exposedFailureOf(CompletionStage<?> stage) {
+    return stage.handle((value, failure) -> failure).toCompletableFuture().join();
   }
 
   private static boolean deregistrationAfter(
@@ -3123,9 +3267,11 @@ Expected: compilation FAILS with `cannot find symbol: class OpenAiCallBridge`.
 package io.github.hellices.agentframework.openai.internal;
 
 import io.github.hellices.agentframework.api.agent.CancellationSignal;
+import java.util.Objects;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ExecutionException;
 import java.util.function.Supplier;
 
@@ -3133,9 +3279,30 @@ import java.util.function.Supplier;
  * Bridges a framework cancellation signal and a provider call.
  *
  * <p>Cancellation stops the framework from waiting. It does not abort the HTTP request: the future
- * the SDK returns is derived from its transport future with {@code thenApply}, and a JDK
- * {@code CompletableFuture} never completes its antecedent. The per-request timeout is what bounds
- * the work nobody is waiting for any more.
+ * the SDK returns is derived from its transport future with {@code thenApply}, and a JDK {@code
+ * CompletableFuture} never completes its antecedent. Cancelling the future taken from the returned
+ * stage does not abort it either - that future is a copy, so it abandons one caller's wait and
+ * nothing else. Only a timeout reclaims the work nobody is waiting for any more.
+ *
+ * <p>The bridge neither retries nor logs. It dispatches one call once, and a provider failure
+ * reaches the caller as the instance the SDK threw, because that instance carries the status code,
+ * the request id, and the retry advice a caller needs, and a second attempt this adapter never
+ * announced would double a billed call. The SDK client the host injected may still retry inside
+ * that single dispatch: {@code maxRetries} is the host's setting on its own client builder and
+ * defaults to two, so an abandoned call can outlive the run by roughly the per-request timeout
+ * times the number of attempts, plus the backoff the SDK waits between them. The adapter's
+ * per-request timeout bounds one attempt, not the whole call.
+ *
+ * <p>Null arguments are a call-site programming error and are rejected where the call was made.
+ * Everything the dispatch itself does - a mapping failure, no stage at all, a provider failure -
+ * arrives through the returned stage instead, so a caller handles one failure path rather than two.
+ * A {@link Error} is the exception to that rule: it is rethrown as thrown, after this bridge has
+ * settled the listener and the result it owns.
+ *
+ * <p>The returned stage carries no completion authority. Cancellation completes it with a {@link
+ * CancellationException}, which a caller should recognise by type rather than by message, and which
+ * a reader always sees behind a {@link CompletionException} because the exposed stage relays this
+ * call's outcome: {@link #unwrap(Throwable)} peels that wrapper.
  */
 public final class OpenAiCallBridge {
 
@@ -3159,12 +3326,17 @@ public final class OpenAiCallBridge {
    *
    * @param signal the run's cancellation signal, never {@code null}
    * @param dispatch produces the provider call; never invoked when the signal is already cancelled
+   * @param <T> the value the provider call produces
    * @return a stage that fails with {@link CancellationException} on cancellation and otherwise
-   *     mirrors the provider call, with the original failure preserved
+   *     mirrors the provider call, with the original failure preserved and never thrown from this
+   *     method; completing or cancelling the future taken from it settles that future alone
+   * @throws NullPointerException if {@code signal} or {@code dispatch} is {@code null}
    */
-  public static <T> CompletableFuture<T> guard(
+  public static <T> CompletionStage<T> guard(
       CancellationSignal signal, Supplier<CompletableFuture<T>> dispatch) {
-    return guard(
+    Objects.requireNonNull(signal, "signal must not be null");
+    Objects.requireNonNull(dispatch, "dispatch must not be null");
+    return guardStage(
         new Cancellation() {
           @Override
           public boolean isCancelled() {
@@ -3179,8 +3351,18 @@ public final class OpenAiCallBridge {
         dispatch);
   }
 
+  static <T> CompletionStage<T> guardStage(
+      Cancellation cancellation, Supplier<CompletableFuture<T>> dispatch) {
+    // A minimal stage, not the call's own future: a caller that completed or cancelled the future
+    // it was handed would otherwise decide this call's outcome, hide the provider's own answer, and
+    // remove a cancellation listener while the request it belongs to is still in flight.
+    return guard(cancellation, dispatch).minimalCompletionStage();
+  }
+
   static <T> CompletableFuture<T> guard(
       Cancellation cancellation, Supplier<CompletableFuture<T>> dispatch) {
+    Objects.requireNonNull(cancellation, "cancellation must not be null");
+    Objects.requireNonNull(dispatch, "dispatch must not be null");
     if (cancellation.isCancelled()) {
       return CompletableFuture.failedFuture(
           new CancellationException("model call was cancelled before it was dispatched"));
@@ -3206,6 +3388,20 @@ public final class OpenAiCallBridge {
       // would surface in two different places depending on the tool loop iteration.
       result.completeExceptionally(failure);
       return result;
+    } catch (Error fatal) {
+      // A fatal error is not a request failure. Turning it into a failed stage would offer it to a
+      // caller to map or retry as if the provider had answered, so the listener and the result this
+      // bridge owns are settled and the same instance is rethrown.
+      result.completeExceptionally(fatal);
+      throw fatal;
+    }
+    if (dispatched == null) {
+      // A port that answers with no stage would otherwise be a null pointer thrown from inside the
+      // bridge, which is both the synchronous throw above and a cancellation listener that is never
+      // removed because the result never completes.
+      result.completeExceptionally(
+          new IllegalStateException("the OpenAI chat completion call returned no stage"));
+      return result;
     }
     dispatched.whenComplete(
         (value, failure) -> {
@@ -3225,7 +3421,8 @@ public final class OpenAiCallBridge {
    * @return the original provider exception instance where there is one
    */
   public static Throwable unwrap(Throwable failure) {
-    boolean wrapped = failure instanceof CompletionException || failure instanceof ExecutionException;
+    boolean wrapped =
+        failure instanceof CompletionException || failure instanceof ExecutionException;
     return wrapped && failure.getCause() != null ? failure.getCause() : failure;
   }
 }
@@ -3235,18 +3432,23 @@ public final class OpenAiCallBridge {
 
 Run: `./gradlew :providers:agent-framework-openai:test --tests 'io.github.hellices.agentframework.openai.internal.OpenAiCallBridgeTest'`
 
-Expected: PASS, 7 tests.
+Expected: PASS, 21 tests. The snippet above carries 13; the delivered file adds 8 more, each one
+carried by a mutation: the registration race, listener removal on a synchronous dispatch failure,
+value mirroring, the wrapper-preserving failure path asserted on the seam's raw future, no retry of
+a failed call, a dispatch that answers with no stage, the derived-stage cancellation shape, and a
+causeless wrapper. Read the count from the XML report under `build/test-results/test/`. The module
+suite is then 96 tests (10 + 19 + 17 + 23 + 21 + 6).
 
 - [ ] **Step 5: Run the module quality gate**
 
 Run: `./gradlew :providers:agent-framework-openai:quality`
 
 Expected: PASS. The bridge is static methods over a narrow interface and stores no caller-supplied
-collaborator, so no `EI_EXPOSE_REP2` finding is expected. Watch instead for the two rules this code
-is closest to: Checkstyle forbids catching or declaring `java.lang.Throwable`, and a `whenComplete`
-parameter of that type is not a catch; PMD's `CompareObjectsWithEquals` forbids `==` between
-references, and comparison against `null` is unaffected. Fix what is reported rather than excluding
-it.
+collaborator, so no `EI_EXPOSE_REP2` finding is expected. Watch instead for the three rules this
+code is closest to: Checkstyle's `IllegalCatch` and `IllegalThrows` list `java.lang.Throwable` only,
+so `catch (Error fatal)` is allowed and a `whenComplete` parameter of type `Throwable` is not a
+catch at all; PMD's `CompareObjectsWithEquals` forbids `==` between references, and comparison
+against `null` is unaffected. Fix what is reported rather than excluding it.
 
 - [ ] **Step 6: Commit**
 
@@ -3260,8 +3462,17 @@ after dispatch fails the returned stage promptly and the listener is removed on
 every completion path, which a narrow cancellation seam makes observable in a
 test. Provider failures keep their original instance as the cause, and a
 synchronous mapping failure is delivered through the stage rather than thrown, so
-ModelClient.run behaves the same on every tool loop iteration. The in-flight HTTP
-request is deliberately not aborted; the SDK gives no seam for it.
+ModelClient.run behaves the same on every tool loop iteration. A null argument
+and a fatal Error are the two things that do not arrive through the stage: the
+first is rejected by name where the call was made, and the second is rethrown as
+the same instance once the listener and the result this class owns are settled.
+
+The stage handed out is a minimal completion stage, so completing or cancelling
+the future taken from it settles that future alone, and the cancellation listener
+stays registered until the call itself completes. The in-flight HTTP request is
+deliberately not aborted by either route; the SDK gives no seam for it, and the
+timeout that reclaims abandoned work bounds one attempt of a call the host's own
+client may retry.
 
 Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
 MSG
@@ -3667,7 +3878,12 @@ import java.util.concurrent.CompletionStage;
  * failed stage, so a caller handles one failure path rather than two.
  *
  * <p>Cancelling the run's signal fails the returned stage promptly and removes the listener, but it
- * does not abort the HTTP request already in flight. The request timeout bounds that work.
+ * does not abort the HTTP request already in flight, and neither does cancelling the future taken
+ * from the returned stage: that future is a copy of the outcome, not the call. A timeout is what
+ * bounds the abandoned work, and {@code requestTimeout} bounds one attempt. Retries are the host's
+ * setting on the client it builds ({@code maxRetries}, two by default), not this adapter's: the
+ * adapter dispatches one call once, so an abandoned call can run for the timeout times the number
+ * of attempts, plus the SDK's backoff between them.
  *
  * <p>Instances are immutable and safe to share once built.
  */
@@ -3738,7 +3954,10 @@ public final class OpenAiChatModelClient implements ModelClient {
       return this;
     }
 
-    /** Sets the per-request timeout that bounds a call nobody is waiting for any more. */
+    /**
+     * Sets the per-request timeout that bounds one attempt of a call nobody is waiting for any
+     * more. How many attempts there are is the host's {@code maxRetries} on its own client.
+     */
     public Builder requestTimeout(Duration requestTimeout) {
       this.requestTimeout = requestTimeout;
       return this;
@@ -4790,9 +5009,11 @@ Create `providers/agent-framework-openai/README.md` covering, in this order:
    sees which path ran.
 4. **Ownership.** The client is borrowed. The adapter creates no client, thread, connection, or
    shutdown hook, and has no `close()`. Retry belongs to the SDK's `maxRetries` and to the host, not
-   to the adapter.
+   to the adapter: the adapter dispatches one call once, and `requestTimeout` bounds one attempt of
+   it, so an abandoned call costs the timeout times the host's attempt count, plus the SDK backoff.
 5. **Limitations**, each stated as a fact rather than a roadmap promise:
-   - Cancellation does not abort the in-flight HTTP request; the per-request timeout bounds it.
+   - Cancellation does not abort the in-flight HTTP request, and neither does cancelling the future
+     taken from the returned stage; a timeout bounds it, per attempt.
    - No streaming, Responses API, structured output, embeddings, vision, audio, `tool_choice`, or
      Azure-specific credential and deployment handling.
    - Per-run `ModelRequestOptions` do not reach a provider yet (G1); the builder defaults are the
@@ -5141,7 +5362,7 @@ rather than re-deriving it.
 | Response mapping: exactly one choice, ordered text and tool calls, argument rules, finish reasons, usage, metadata, raw object, null continuation | Tasks 5 and 6, response mapping table |
 | Builder defaults with a positive request timeout and optional temperature and token limit; request options win; provider options rejected | Tasks 3 and 8 |
 | AGT-011 and AGT-012 stay partial with no metadata side channel | Global Constraints, recorded gap G1, Task 12 |
-| Cancellation: pre-cancel never dispatches, post-dispatch fails promptly and de-registers, no hard cancellation claim, timeout bounds abandoned work, exceptions preserved, no adapter retry | Cancellation contract, Tasks 7 and 9 |
+| Cancellation: pre-cancel never dispatches, post-dispatch fails promptly and de-registers, no hard cancellation claim, no completion authority handed to a caller, a timeout bounds each attempt of abandoned work, exceptions preserved, no adapter retry | Cancellation contract, Tasks 7 and 9 |
 | Sample moves from a fake to the real provider, keeps an injectable deterministic entry point, resolves three environment variables, fails explicitly on a missing key, owns and closes the client, registers one local tool the default prompt asks for | Task 11 |
 | Provider README with maturity, install, environment, run, ownership, limitations, test evidence, packaging facts | Task 12 |
 | Traceability updates for PRV-001, PRV-002, PRV-004, PRV-007, PRV-010, AGT-009, AGT-011, AGT-012, AGT-015 | Task 12 |

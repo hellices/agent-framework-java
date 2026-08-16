@@ -1,9 +1,11 @@
 package io.github.hellices.agentframework.openai.internal;
 
 import io.github.hellices.agentframework.api.agent.CancellationSignal;
+import java.util.Objects;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ExecutionException;
 import java.util.function.Supplier;
 
@@ -12,17 +14,29 @@ import java.util.function.Supplier;
  *
  * <p>Cancellation stops the framework from waiting. It does not abort the HTTP request: the future
  * the SDK returns is derived from its transport future with {@code thenApply}, and a JDK {@code
- * CompletableFuture} never completes its antecedent. The per-request timeout is what bounds the
- * work nobody is waiting for any more.
+ * CompletableFuture} never completes its antecedent. Cancelling the future taken from the returned
+ * stage does not abort it either - that future is a copy, so it abandons one caller's wait and
+ * nothing else. Only a timeout reclaims the work nobody is waiting for any more.
  *
- * <p>The bridge neither retries nor logs. A provider failure reaches the caller as the instance the
- * SDK threw, because that instance carries the status code, the request id, and the retry advice a
- * caller needs, and a second attempt this adapter never announced would double a billed call.
+ * <p>The bridge neither retries nor logs. It dispatches one call once, and a provider failure
+ * reaches the caller as the instance the SDK threw, because that instance carries the status code,
+ * the request id, and the retry advice a caller needs, and a second attempt this adapter never
+ * announced would double a billed call. The SDK client the host injected may still retry inside
+ * that single dispatch: {@code maxRetries} is the host's setting on its own client builder and
+ * defaults to two, so an abandoned call can outlive the run by roughly the per-request timeout
+ * times the number of attempts, plus the backoff the SDK waits between them. The adapter's
+ * per-request timeout bounds one attempt, not the whole call.
  *
- * <p>Cancellation completes the returned stage with a {@link CancellationException}, which callers
- * should recognise by type rather than by message: a derived stage reports it as a {@link
- * CompletionException} cause, and {@code CompletableFuture.join} rethrows the instance itself up to
- * JDK 22 but a fresh {@code CancellationException} carrying it as the cause from JDK 23 on.
+ * <p>Null arguments are a call-site programming error and are rejected where the call was made.
+ * Everything the dispatch itself does - a mapping failure, no stage at all, a provider failure -
+ * arrives through the returned stage instead, so a caller handles one failure path rather than two.
+ * A {@link Error} is the exception to that rule: it is rethrown as thrown, after this bridge has
+ * settled the listener and the result it owns.
+ *
+ * <p>The returned stage carries no completion authority. Cancellation completes it with a {@link
+ * CancellationException}, which a caller should recognise by type rather than by message, and which
+ * a reader always sees behind a {@link CompletionException} because the exposed stage relays this
+ * call's outcome: {@link #unwrap(Throwable)} peels that wrapper.
  */
 public final class OpenAiCallBridge {
 
@@ -49,11 +63,14 @@ public final class OpenAiCallBridge {
    * @param <T> the value the provider call produces
    * @return a stage that fails with {@link CancellationException} on cancellation and otherwise
    *     mirrors the provider call, with the original failure preserved and never thrown from this
-   *     method
+   *     method; completing or cancelling the future taken from it settles that future alone
+   * @throws NullPointerException if {@code signal} or {@code dispatch} is {@code null}
    */
-  public static <T> CompletableFuture<T> guard(
+  public static <T> CompletionStage<T> guard(
       CancellationSignal signal, Supplier<CompletableFuture<T>> dispatch) {
-    return guard(
+    Objects.requireNonNull(signal, "signal must not be null");
+    Objects.requireNonNull(dispatch, "dispatch must not be null");
+    return guardStage(
         new Cancellation() {
           @Override
           public boolean isCancelled() {
@@ -68,8 +85,18 @@ public final class OpenAiCallBridge {
         dispatch);
   }
 
+  static <T> CompletionStage<T> guardStage(
+      Cancellation cancellation, Supplier<CompletableFuture<T>> dispatch) {
+    // A minimal stage, not the call's own future: a caller that completed or cancelled the future
+    // it was handed would otherwise decide this call's outcome, hide the provider's own answer, and
+    // remove a cancellation listener while the request it belongs to is still in flight.
+    return guard(cancellation, dispatch).minimalCompletionStage();
+  }
+
   static <T> CompletableFuture<T> guard(
       Cancellation cancellation, Supplier<CompletableFuture<T>> dispatch) {
+    Objects.requireNonNull(cancellation, "cancellation must not be null");
+    Objects.requireNonNull(dispatch, "dispatch must not be null");
     if (cancellation.isCancelled()) {
       return CompletableFuture.failedFuture(
           new CancellationException("model call was cancelled before it was dispatched"));
@@ -95,6 +122,12 @@ public final class OpenAiCallBridge {
       // would surface in two different places depending on the tool loop iteration.
       result.completeExceptionally(failure);
       return result;
+    } catch (Error fatal) {
+      // A fatal error is not a request failure. Turning it into a failed stage would offer it to a
+      // caller to map or retry as if the provider had answered, so the listener and the result this
+      // bridge owns are settled and the same instance is rethrown.
+      result.completeExceptionally(fatal);
+      throw fatal;
     }
     if (dispatched == null) {
       // A port that answers with no stage would otherwise be a null pointer thrown from inside the
