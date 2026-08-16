@@ -215,6 +215,68 @@ class OwnedMcpClientOperationTest {
   }
 
   @Test
+  void cancellingAnOperationBeforeItIsDispatchedSendsNoRequest() {
+    // Cancellation that lands while the operation is still waiting for the handshake it joined has
+    // to stop the request from ever being sent. A ping is harmless, but a tool call the caller has
+    // withdrawn from would run its side effect on the server for nobody.
+    InMemoryMcpTransport transport =
+        new InMemoryMcpTransport().answeringPing().withholding(McpSchema.METHOD_INITIALIZE);
+    ScriptedMcpTransportFactory factory = new ScriptedMcpTransportFactory(transport);
+    OwnedMcpClientLifecycle lifecycle = new OwnedMcpClientLifecycle(factory, settings());
+
+    CompletableFuture<Void> connecting = lifecycle.connect();
+    CompletableFuture<Object> operation = lifecycle.execute(client -> client.ping());
+    assertThat(operation.cancel(true)).isTrue();
+
+    transport.releaseWithheld();
+
+    assertThat(connecting).succeedsWithin(SETTLE);
+    assertThat(operation).isCancelled();
+    assertThat(transport.countOf(McpSchema.METHOD_PING)).isZero();
+    assertThat(transport.closeCount()).isZero();
+    assertThat(factory.createdCount()).isEqualTo(1);
+
+    // The generation the cancelled operation joined is untouched, so the next operation runs on it.
+    lifecycle.execute(client -> client.ping()).join();
+    assertThat(transport.countOf(McpSchema.METHOD_PING)).isEqualTo(1);
+    assertThat(factory.createdCount()).isEqualTo(1);
+  }
+
+  @Test
+  void anOperationIsNeverAnsweredByTheGenerationThatReplacedTheOneItJoined() {
+    // The owner closed and connected again while this operation waited for the handshake it joined,
+    // so it is handed a generation two tickets behind the one the owner now holds. A currency check
+    // that only asked whether some generation exists would dispatch it on the orphan: a request on
+    // a client nobody owns, answered by a server the caller already asked to be released.
+    InMemoryMcpTransport orphaned =
+        new InMemoryMcpTransport().answeringPing().withholding(McpSchema.METHOD_INITIALIZE);
+    InMemoryMcpTransport reopened = new InMemoryMcpTransport().answeringPing();
+    ScriptedMcpTransportFactory factory = new ScriptedMcpTransportFactory(orphaned, reopened);
+    OwnedMcpClientLifecycle lifecycle = new OwnedMcpClientLifecycle(factory, settings());
+
+    CompletableFuture<Void> connecting = lifecycle.connect();
+    CompletableFuture<Object> operation = lifecycle.execute(client -> client.ping());
+    CompletableFuture<Void> closing = lifecycle.close();
+    lifecycle.connect().join();
+
+    orphaned.releaseWithheld();
+
+    assertThat(connecting).succeedsWithin(SETTLE);
+    assertThat(closing).succeedsWithin(SETTLE);
+    // A get with a deadline rather than join, because an operation dispatched on the orphan is the
+    // failure this test is about and join would hang on it instead of failing.
+    assertThatThrownBy(() -> operation.get(SETTLE.toMillis(), TimeUnit.MILLISECONDS))
+        .rootCause()
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("connect()");
+    assertThat(orphaned.countOf(McpSchema.METHOD_PING)).isZero();
+    assertThat(reopened.countOf(McpSchema.METHOD_PING)).isZero();
+    assertThat(orphaned.closeCount()).isEqualTo(1);
+    assertThat(reopened.closeCount()).isZero();
+    assertThat(factory.createdCount()).isEqualTo(2);
+  }
+
+  @Test
   void anOperationLosesTheHandshakeTheOwnerClosedAndReachesNoServer() {
     // The owner closed while this operation was still waiting for the handshake it joined. The
     // generation that handshake produced belongs to nobody: it is released as soon as it arrives.

@@ -3,6 +3,7 @@ package io.github.hellices.agentframework.mcp.internal;
 import io.modelcontextprotocol.client.McpAsyncClient;
 import io.modelcontextprotocol.client.McpClient;
 import io.modelcontextprotocol.spec.McpClientTransport;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
@@ -133,6 +134,10 @@ public final class OwnedMcpClientLifecycle {
    * waited fails on the same explicit connect requirement rather than reaching a server through a
    * connection nobody owns any more.
    *
+   * <p>Cancelling the returned stage before the operation was dispatched stops it from being
+   * dispatched at all, so a cancelled call never reaches the server; a cancellation that arrives
+   * after dispatch disposes the in-flight request instead. Either way the generation stays open.
+   *
    * @param operation produces the SDK call for a given client, never {@code null}
    * @param <T> the operation result type
    * @return a stage completing with the operation result, never {@code null}
@@ -170,6 +175,14 @@ public final class OwnedMcpClientLifecycle {
       // and no transport is created to satisfy it.
       return AsyncStages.failed(new IllegalStateException(NOT_CONNECTED));
     }
+    if (attempt.cancelled()) {
+      // The caller withdrew while this operation was waiting for the handshake it joined. Applying
+      // the operation subscribes to the SDK call, and subscribing is what puts the request on the
+      // wire, so dispatching here would run a tool's side effect on the server for a caller that is
+      // already gone. Nothing is closed and no reconnect is attempted: cancellation ends one
+      // operation, not the generation it would have used.
+      return AsyncStages.failed(new CancellationException());
+    }
     CompletableFuture<T> inFlight;
     try {
       Mono<T> call = operation.apply(generation.client());
@@ -202,6 +215,15 @@ public final class OwnedMcpClientLifecycle {
 
     private final AtomicBoolean cancelled = new AtomicBoolean();
     private final AtomicReference<CompletableFuture<?>> inFlight = new AtomicReference<>();
+
+    /**
+     * Reports whether the caller already withdrew, so the dispatch can be suppressed before the
+     * operation is applied. A cancellation arriving after this answer is still caught by {@link
+     * #track(CompletableFuture)}, which cancels the call the dispatch produced.
+     */
+    boolean cancelled() {
+      return cancelled.get();
+    }
 
     void track(CompletableFuture<?> call) {
       inFlight.set(call);
