@@ -28,6 +28,10 @@ import reactor.core.publisher.Mono;
  * and will happily run a second handshake, so a transport that stayed usable would make every owned
  * close and reconnect assertion vacuous.
  *
+ * <p>Tests must configure, drive, release, and inspect an instance from one thread. The ordered
+ * script and observation collections are intentionally not a concurrent transport simulation; the
+ * atomic close state only models close visibility at the SDK boundary.
+ *
  * <p>{@link #unmarshalFrom(Object, TypeRef)} returns the scripted result object unchanged, because
  * the results never leave the process, so no JSON mapper implementation is needed on the test
  * runtime.
