@@ -1,9 +1,18 @@
 package io.github.hellices.agentframework.openai.internal;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.openai.core.JsonValue;
+import com.openai.models.FunctionDefinition;
+import com.openai.models.FunctionParameters;
 import com.openai.models.chat.completions.ChatCompletionAssistantMessageParam;
 import com.openai.models.chat.completions.ChatCompletionCreateParams;
 import com.openai.models.chat.completions.ChatCompletionDeveloperMessageParam;
+import com.openai.models.chat.completions.ChatCompletionFunctionTool;
+import com.openai.models.chat.completions.ChatCompletionMessage;
+import com.openai.models.chat.completions.ChatCompletionMessageFunctionToolCall;
 import com.openai.models.chat.completions.ChatCompletionSystemMessageParam;
+import com.openai.models.chat.completions.ChatCompletionToolMessageParam;
 import com.openai.models.chat.completions.ChatCompletionUserMessageParam;
 import io.github.hellices.agentframework.api.message.Content;
 import io.github.hellices.agentframework.api.message.ExtensionContent;
@@ -12,9 +21,11 @@ import io.github.hellices.agentframework.api.message.Role;
 import io.github.hellices.agentframework.api.message.TextContent;
 import io.github.hellices.agentframework.api.message.ToolCallContent;
 import io.github.hellices.agentframework.api.message.ToolResultContent;
+import io.github.hellices.agentframework.api.tool.ToolDefinition;
 import io.github.hellices.agentframework.spi.model.ModelRequest;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.OptionalInt;
 
 /** Translates a neutral {@code ModelRequest} into Chat Completions request parameters. */
@@ -22,20 +33,33 @@ public final class ChatCompletionRequestMapper {
 
   private static final Role DEVELOPER = Role.of("developer");
 
+  private final ObjectMapper json = new ObjectMapper();
+
   /**
    * Maps a request onto Chat Completions parameters.
+   *
+   * <p>Every tool the request offers becomes a function tool, one {@code Role.TOOL} message becomes
+   * one Chat Completions tool message per result it carries, and an echoed assistant turn prefers
+   * the originating SDK message so the {@code arguments} string the model produced is sent back
+   * unchanged.
+   *
+   * <p>{@code ToolResultContent.error()} has no representation: a Chat Completions tool message
+   * carries no error flag. A failed result is sent as its text, which is what the model reads, and
+   * the flag is dropped rather than disguised as an invented prefix the model would have to guess
+   * at.
    *
    * @param request the neutral request, never {@code null}
    * @param settings the adapter defaults, never {@code null}
    * @return parameters ready to send
-   * @throws IllegalArgumentException if a role, a content placement, or a provider option cannot be
-   *     represented
+   * @throws IllegalArgumentException if a role, a content placement, a tool call's arguments, or a
+   *     provider option cannot be represented
    * @throws UnsupportedOperationException if the request carries adapter-owned extension content
    */
   public ChatCompletionCreateParams map(ModelRequest request, OpenAiChatSettings settings) {
     ChatCompletionCreateParams.Builder params =
         ChatCompletionCreateParams.builder().model(settings.model());
     applyOptions(request, settings, params);
+    applyTools(request, params);
     for (Message message : request.messages()) {
       appendMessage(message, params);
     }
@@ -66,6 +90,23 @@ public final class ChatCompletionRequestMapper {
     }
   }
 
+  private void applyTools(ModelRequest request, ChatCompletionCreateParams.Builder params) {
+    for (ToolDefinition tool : request.tools()) {
+      FunctionDefinition.Builder function = FunctionDefinition.builder().name(tool.name());
+      if (!tool.description().isBlank()) {
+        function.description(tool.description());
+      }
+      Map<String, Object> schema = tool.inputSchema();
+      if (!schema.isEmpty()) {
+        FunctionParameters.Builder parameters = FunctionParameters.builder();
+        schema.forEach(
+            (key, value) -> parameters.putAdditionalProperty(key, JsonValue.from(value)));
+        function.parameters(parameters.build());
+      }
+      params.addTool(ChatCompletionFunctionTool.builder().function(function.build()).build());
+    }
+  }
+
   private void appendMessage(Message message, ChatCompletionCreateParams.Builder params) {
     Role role = message.role();
     if (Role.SYSTEM.equals(role)) {
@@ -77,11 +118,91 @@ public final class ChatCompletionRequestMapper {
     } else if (Role.USER.equals(role)) {
       params.addMessage(ChatCompletionUserMessageParam.builder().content(textOf(message)).build());
     } else if (Role.ASSISTANT.equals(role)) {
-      params.addMessage(
-          ChatCompletionAssistantMessageParam.builder().content(textOf(message)).build());
+      appendAssistantMessage(message, params);
+    } else if (Role.TOOL.equals(role)) {
+      appendToolMessages(message, params);
     } else {
       throw new IllegalArgumentException(
           "openai chat completions cannot map role: " + role.value());
+    }
+  }
+
+  private void appendAssistantMessage(Message message, ChatCompletionCreateParams.Builder params) {
+    // Validated before either path is chosen: an SDK handle is a shortcut for the arguments string,
+    // not a licence to send content this adapter has already said it cannot represent.
+    String text = textOf(message);
+    if (message.rawRepresentation() instanceof ChatCompletionMessage sdkMessage) {
+      // The SDK object still carries the exact arguments string the model produced, which
+      // re-serialising a parsed map cannot reproduce.
+      params.addMessage(sdkMessage);
+      return;
+    }
+    ChatCompletionAssistantMessageParam.Builder assistant =
+        ChatCompletionAssistantMessageParam.builder();
+    if (!text.isEmpty()) {
+      assistant.content(text);
+    }
+    for (Content content : message.content()) {
+      if (content instanceof ToolCallContent call) {
+        assistant.addToolCall(
+            ChatCompletionMessageFunctionToolCall.builder()
+                .id(call.callId())
+                .function(
+                    ChatCompletionMessageFunctionToolCall.Function.builder()
+                        .name(call.name())
+                        .arguments(serializeArguments(call))
+                        .build())
+                .build());
+      }
+    }
+    params.addMessage(assistant.build());
+  }
+
+  private void appendToolMessages(Message message, ChatCompletionCreateParams.Builder params) {
+    // One framework tool message holds every result of one round; Chat Completions wants one
+    // message per tool_call_id. Dropping the fan-out leaves a call without a result.
+    for (Content content : message.content()) {
+      requireRepresentable(content, message.role());
+      if (!(content instanceof ToolResultContent result)) {
+        throw new IllegalArgumentException(
+            "a tool message may only carry tool results, but carried content type: "
+                + content.type());
+      }
+      params.addMessage(
+          ChatCompletionToolMessageParam.builder()
+              .toolCallId(result.callId())
+              .content(resultText(result))
+              .build());
+    }
+  }
+
+  private String resultText(ToolResultContent result) {
+    List<String> parts = new ArrayList<>();
+    for (Content content : result.content()) {
+      if (content instanceof ExtensionContent) {
+        throw new UnsupportedOperationException(
+            "openai chat completions cannot carry content type: " + content.type());
+      }
+      if (!(content instanceof TextContent text)) {
+        throw new IllegalArgumentException(
+            "a tool result may only carry text, but carried content type: " + content.type());
+      }
+      parts.add(text.value());
+    }
+    return String.join("\n", parts);
+  }
+
+  private String serializeArguments(ToolCallContent call) {
+    try {
+      return json.writeValueAsString(call.arguments());
+    } catch (JsonProcessingException failure) {
+      throw new IllegalArgumentException(
+          "openai chat completions cannot serialise the arguments of tool '"
+              + call.name()
+              + "' call '"
+              + call.callId()
+              + "'",
+          failure);
     }
   }
 
