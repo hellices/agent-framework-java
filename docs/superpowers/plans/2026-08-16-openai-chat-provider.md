@@ -292,10 +292,10 @@ keeps a caller-constructed history working.
 | `arguments()` equal to `""` | `Map.of()` | OpenAI emits `""` or `{}` for a zero-argument tool |
 | an argument value that is JSON `null`, for example `{"unit":null}` | the key survives, mapped to a `null` value | models routinely emit `null` for an optional parameter; the parsed map is returned as `Collections.unmodifiableMap(new LinkedHashMap<>(...))` because `Map.copyOf` throws `NullPointerException` on a null value, and `ToolCallContent` copies it into a `LinkedHashMap`, which tolerates it |
 | `arguments()` that is valid JSON but not an object | fail | `IllegalStateException` naming tool and call id, no payload (G3) |
-| `arguments()` that is not valid JSON | fail | same failure, cause preserved, no payload |
+| `arguments()` that is not valid JSON | fail | same failure, no payload, and no parser exception attached as a cause or as a suppressed throwable |
 | `arguments()` with input after the first JSON value, for example `{"a":1}{"b":2}` or `{"a":1} oops` | fail | the parser runs with `DeserializationFeature.FAIL_ON_TRAILING_TOKENS`; `readTree` otherwise keeps the first value and drops the rest, which hands a tool a call the model did not make |
 | `arguments()` with a repeated key, for example `{"city":"Seoul","city":"Busan"}` | fail | the parser runs with `StreamReadFeature.STRICT_DUPLICATE_DETECTION`; Jackson's default is last-wins, and silently choosing one of two values the model sent changes its intent, which is not a decision this adapter is entitled to make |
-| any argument parse failure | no payload anywhere in the chain | the message names tool and call id only, and the parser runs with `StreamReadFeature.INCLUDE_SOURCE_IN_LOCATION` disabled so the preserved Jackson cause cannot quote the arguments string into a log either |
+| any argument parse failure | no payload anywhere in the chain | the failure is this adapter's own `IllegalStateException` naming tool, call id, and the structural requirement, and the Jackson exception is attached nowhere - not as a cause and not as a suppressed throwable - because Jackson quotes the token it rejected in its own message text (`{"name": <token>}` yields `Unrecognized token '<token>'`), which no source-location setting redacts. `StreamReadFeature.INCLUDE_SOURCE_IN_LOCATION` stays disabled as a second layer for any parser exception that escapes by a route the mapper does not catch |
 | `message.functionCall()` present, the deprecated pre-tools payload | fail | `IllegalStateException` naming `function_call` and the function, never the arguments; the shape carries no call id, so it can neither be mapped nor be dropped without ending the run with an answer the model never gave |
 | `finish_reason` `stop` | `FinishReason.STOP` | |
 | `length` | `FinishReason.LENGTH` | |
@@ -2572,9 +2572,11 @@ coerced.
   class gains a private `ObjectMapper` field it creates itself. As in Task 4, the package-private
   `ChatCompletionResponseMapper(ObjectMapper)` seam an earlier draft proposed is not added: no test
   in this plan uses it, and an unused seam is untested code. The mapper it creates is configured
-  rather than defaulted, because Jackson's defaults for this input are wrong in three ways that a
-  caller cannot see (`readTree` stops after the first value, duplicate keys resolve last-wins, and
-  parse failures quote the source they failed on); the field below states each one.
+  rather than defaulted, because Jackson's defaults for this input are wrong in two ways that a
+  caller cannot see (`readTree` stops after the first value, and duplicate keys resolve last-wins);
+  the field below states each one, plus a third setting that keeps a parser message from quoting the
+  source it failed on. Configuration is not enough on its own: Jackson also names the rejected token
+  in its own message text, so no parser exception is attached to the adapter's failure at all.
 
 - [ ] **Step 1: Write the failing tool-call test**
 
@@ -2693,7 +2695,7 @@ class ChatCompletionResponseMapperToolCallTest {
         .isInstanceOf(IllegalStateException.class)
         .hasMessageContaining("call_1")
         .hasMessageNotContaining("oops")
-        .hasCauseInstanceOf(com.fasterxml.jackson.core.JsonProcessingException.class);
+        .hasNoCause();
   }
 
   @Test
@@ -2791,7 +2793,9 @@ Replace the stub:
   // configured rather than defaulted: FAIL_ON_TRAILING_TOKENS because readTree otherwise keeps
   // `{"a":1}` out of `{"a":1}{"b":2}` and drops the rest, STRICT_DUPLICATE_DETECTION because
   // last-wins silently picks one of two values the model sent, and INCLUDE_SOURCE_IN_LOCATION
-  // disabled so the preserved Jackson cause cannot quote the arguments string into a log.
+  // disabled so a parser exception cannot quote the arguments string into a log. That last one is
+  // the second layer only: the exception below carries no cause, because Jackson names the token
+  // it rejected in its own message text, which no source-location setting redacts.
   private final ObjectMapper json =
       JsonMapper.builder()
           .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)
@@ -2832,7 +2836,10 @@ Replace the stub:
     try {
       parsed = json.readTree(arguments);
     } catch (JsonProcessingException failure) {
-      throw new IllegalStateException(argumentFailure(name, callId), failure);
+      // The parser exception is deliberately attached nowhere: Jackson names the token it choked
+      // on, so its message is model output and a cause is printed by every logger that prints a
+      // stack trace.
+      throw new IllegalStateException(argumentFailure(name, callId));
     }
     if (!parsed.isObject()) {
       throw new IllegalStateException(argumentFailure(name, callId));
@@ -2851,9 +2858,9 @@ Replace the stub:
 
   private static String argumentFailure(String name, String callId) {
     // Names the tool and the call id and stops there. The arguments are model output and are never
-    // put in an exception message. "exactly one JSON object with unique keys" covers every way the
-    // string can fail to be one: invalid JSON, an array or a scalar, a value followed by more
-    // input, and a repeated key.
+    // put in an exception message, nor reachable through one: no parser exception is attached.
+    // "exactly one JSON object with unique keys" covers every way the string can fail to be one:
+    // invalid JSON, an array or a scalar, a value followed by more input, and a repeated key.
     return "openai chat completions returned arguments that are not exactly one JSON object with"
         + " unique keys for tool '"
         + name
@@ -2879,16 +2886,24 @@ If `JsonNode.properties()` is unavailable on the pinned Jackson, use
 The rejection tests this task's Step 1 lists cover the shape of a single parsed value. The strict
 parser above needs three more that the response mapping table now carries as rows: two concatenated
 objects, an object followed by input that is not JSON, and an object with a repeated key. Each
-asserts the failure names the tool and the call id, and one of them walks the whole cause chain and
-asserts no argument value appears in any message in it, which is what the disabled source location
-buys. Prove them the way the rest of this plan proves a rule: with a mutation that removes the
-feature and the test that then fails.
+asserts the failure names the tool and the call id, and each asserts `hasNoCause()`. One more walks
+the whole failure chain - causes *and* suppressed throwables - for input that really does leak
+(`{"name": <token>}`, and an object followed by `<token>`, both of which make Jackson answer
+`Unrecognized token '<token>'`) and asserts that no link in that chain is a
+`JsonProcessingException` and that no message contains the token or the arguments string. Disabling
+the source location does not buy that on its own, which is why the parser exception is dropped
+rather than wrapped. Prove the parser settings the way the rest of this plan proves a rule: with a
+mutation that removes the feature and the test that then fails.
 
 - [ ] **Step 4: Run both response mapper tests**
 
 Run: `./gradlew :providers:agent-framework-openai:test --tests 'io.github.hellices.agentframework.openai.internal.ChatCompletionResponseMapper*'`
 
-Expected: PASS, 21 tests (13 from Task 5 plus 8 here).
+Expected: PASS, 40 tests. The selector matches both response mapper classes:
+`ChatCompletionResponseMapperTest` (17, Task 5's 13 plus the 4 it added) and
+`ChatCompletionResponseMapperToolCallTest` (23, this task's 8 plus the 15 the strict parser, the
+pairing asymmetry, and the sanitised parse failure required). Read the counts from the XML report
+under `build/test-results/test/`, not from the console sentence.
 
 - [ ] **Step 5: Run the module quality gate**
 
@@ -4789,8 +4804,10 @@ Create `providers/agent-framework-openai/README.md` covering, in this order:
    - Tool-call arguments are parsed strictly, and each of these is a named failure rather than a
      silent repair, because every alternative would hand a tool a call the model did not make:
      input after the first JSON value (`{"a":1}{"b":2}`, `{"a":1} oops`) and a repeated key
-     (`{"city":"Seoul","city":"Busan"}`). Say that a parse failure names the tool and the call id
-     and quotes no part of the arguments, in this adapter's message or in the Jackson cause.
+     (`{"city":"Seoul","city":"Busan"}`). Say that a parse failure names the tool, the call id, and
+     the structural requirement, quotes no part of the arguments, and carries no parser exception
+     as a cause or as a suppressed throwable, so nothing a logger prints contains model output. Say
+     plainly what that costs: the parser's own wording and the failing column are not reported.
    - A turn whose finish reason is `tool_calls` or the deprecated `function_call` but which carries
      no tool call fails, because the engine ends its loop on an empty tool-call list and the run
      would otherwise report a successful final answer the model never gave. State the deliberate
@@ -4818,12 +4835,13 @@ Create `providers/agent-framework-openai/README.md` covering, in this order:
 Before moving on, read the limitations list back against the **fail** rows of the response mapping
 table above and confirm that every rule a caller can hit at runtime appears in one of the two
 places. A limitation the README omits is a behaviour a caller meets first as an exception in
-production, which is the failure mode PRV-010 exists to prevent. The four rules this check exists
+production, which is the failure mode PRV-010 exists to prevent. The five rules this check exists
 for, because each was added after the mapping table was first written and each is easy to leave
 out, are: strict argument parsing (input after the first JSON value, and a repeated key), a
 `tool_calls` or `function_call` finish reason with no tool call, the deprecated `function_call`
-message payload, and the deliberate acceptance of tool calls under a non-tool finish reason. Task 13
-step 6 checks the same list from the reviewer's side.
+message payload, the deliberate acceptance of tool calls under a non-tool finish reason, and the
+sanitised parse failure that attaches no parser exception as a cause or as a suppressed throwable.
+Task 13 step 6 checks the same list from the reviewer's side.
 
 - [ ] **Step 2: Update the traceability matrix**
 
@@ -5052,8 +5070,10 @@ Check each of these and write the answer in the pull request body:
   after the table was first written by name: strict argument parsing (input after the first JSON
   value, and a repeated key), a `tool_calls` or `function_call` finish reason carrying no tool call,
   the deprecated `function_call` message payload, and tool calls accepted under a non-tool finish
-  reason with the server's own finish reason reported. A rule that only exists in a test is a rule a
-  caller meets first as an exception in production.
+  reason with the server's own finish reason reported. Check the fifth the same way: an argument
+  parse failure carries no parser exception anywhere in its chain, so neither the README nor the
+  javadoc may promise a preserved cause. A rule that only exists in a test is a rule a caller meets
+  first as an exception in production.
 
 - [ ] **Step 7: Push and run the review loop**
 
@@ -5200,7 +5220,10 @@ response mapper therefore never uses `Map.copyOf` for parsed arguments. `metadat
 
 No prompt, model output, or tool argument is logged, printed, or embedded in an exception message.
 Two tests assert the negative directly: extension content fails naming only its type, and invalid
-tool arguments fail naming only the tool and the call id. The sample prints the model's reply
+tool arguments fail naming only the tool and the call id. A third walks the whole failure chain of a
+parse failure - causes and suppressed throwables - for input Jackson would quote back, which is why
+an argument parse failure carries no parser exception at all rather than a redacted one. The sample
+prints the model's reply
 because that is the point of a sample, and its footer carries only the model name, the finish
 reason, a tool-call count, and token counts, which a test pins by exact string equality. The
 sample's own tool reads a clock and returns a timestamp; it takes no argument, opens nothing, and

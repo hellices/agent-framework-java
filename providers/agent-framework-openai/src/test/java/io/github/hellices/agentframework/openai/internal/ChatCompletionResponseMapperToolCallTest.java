@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.catchThrowable;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.openai.models.chat.completions.ChatCompletion;
 import com.openai.models.chat.completions.ChatCompletionCreateParams;
 import com.openai.models.chat.completions.ChatCompletionMessageCustomToolCall;
@@ -20,9 +21,14 @@ import io.github.hellices.agentframework.spi.model.ModelRequest;
 import io.github.hellices.agentframework.spi.model.ModelRequestOptions;
 import io.github.hellices.agentframework.spi.model.ModelResponse;
 import java.time.Duration;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Deque;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -210,7 +216,7 @@ class ChatCompletionResponseMapperToolCallTest {
         .isInstanceOf(IllegalStateException.class)
         .hasMessageContaining("call_1")
         .hasMessageNotContaining("oops")
-        .hasCauseInstanceOf(com.fasterxml.jackson.core.JsonProcessingException.class);
+        .hasNoCause();
   }
 
   @Test
@@ -233,7 +239,7 @@ class ChatCompletionResponseMapperToolCallTest {
         .hasMessageContaining("call_1")
         .hasMessageNotContaining("Seoul")
         .hasMessageNotContaining("Busan")
-        .hasCauseInstanceOf(com.fasterxml.jackson.core.JsonProcessingException.class);
+        .hasNoCause();
   }
 
   @Test
@@ -255,7 +261,7 @@ class ChatCompletionResponseMapperToolCallTest {
         .hasMessageContaining("call_1")
         .hasMessageNotContaining("Seoul")
         .hasMessageNotContaining("oops")
-        .hasCauseInstanceOf(com.fasterxml.jackson.core.JsonProcessingException.class);
+        .hasNoCause();
   }
 
   @Test
@@ -278,31 +284,61 @@ class ChatCompletionResponseMapperToolCallTest {
         .hasMessageContaining("call_1")
         .hasMessageNotContaining("Seoul")
         .hasMessageNotContaining("Busan")
-        .hasCauseInstanceOf(com.fasterxml.jackson.core.JsonProcessingException.class);
+        .hasNoCause();
   }
 
   @Test
   void quotesNoArgumentValueAnywhereInAParseFailureChain() {
-    // The top-level message is this adapter's; the cause is Jackson's, and it is printed by every
-    // logger that prints a stack trace. Jackson quotes the source it failed on unless told not to,
-    // so "the failure names the tool and the call id and nothing else" is a claim about the whole
-    // chain rather than about one message.
-    ChatCompletion completion =
-        ChatCompletionsFixture.completion(
-            ChatCompletionsFixture.withToolCalls(
-                null,
-                ChatCompletionsFixture.functionCall(
-                    "call_1", "lookup", "{\"patient\":\"Kim\"} {\"patient\":\"Lee\"}")),
-            ChatCompletion.Choice.FinishReason.TOOL_CALLS);
+    // Both shapes below make Jackson name the token it choked on, and that token is model output.
+    // Disabling the source location does not help here: the quoted text is in the parser's own
+    // message, not in a source excerpt. A cause is printed by every logger that prints a stack
+    // trace, so "the failure names the tool and the call id and nothing else" only holds if no
+    // parser exception is attached anywhere in the chain, as a cause or as a suppressed throwable.
+    String secret = "sk9f3abSecretPatientToken";
+    List<String> leakingArguments =
+        List.of("{\"name\": " + secret + "}", "{\"city\":\"Seoul\"} " + secret);
 
-    Throwable failure = catchThrowable(() -> mapper.map(completion));
+    for (String arguments : leakingArguments) {
+      ChatCompletion completion =
+          ChatCompletionsFixture.completion(
+              ChatCompletionsFixture.withToolCalls(
+                  null, ChatCompletionsFixture.functionCall("call_1", "lookup", arguments)),
+              ChatCompletion.Choice.FinishReason.TOOL_CALLS);
 
-    assertThat(failure)
-        .isInstanceOf(IllegalStateException.class)
-        .hasCauseInstanceOf(com.fasterxml.jackson.core.JsonProcessingException.class);
-    for (Throwable link = failure; link != null; link = link.getCause()) {
-      assertThat(String.valueOf(link.getMessage())).doesNotContain("Kim").doesNotContain("Lee");
+      Throwable failure = catchThrowable(() -> mapper.map(completion));
+
+      assertThat(failure).isInstanceOf(IllegalStateException.class).hasNoCause();
+      assertThat(failure)
+          .hasMessageContaining("lookup")
+          .hasMessageContaining("call_1")
+          .hasMessageContaining("exactly one JSON object with unique keys");
+      for (Throwable link : chainOf(failure)) {
+        assertThat(link).isNotInstanceOf(JsonProcessingException.class);
+        assertThat(String.valueOf(link.getMessage()))
+            .doesNotContain(secret)
+            .doesNotContain(arguments);
+      }
     }
+  }
+
+  /** Every throwable reachable from {@code root} through causes and suppressed throwables. */
+  private static List<Throwable> chainOf(Throwable root) {
+    Set<Throwable> seen = Collections.newSetFromMap(new IdentityHashMap<>());
+    List<Throwable> chain = new ArrayList<>();
+    Deque<Throwable> pending = new ArrayDeque<>();
+    pending.add(root);
+    while (!pending.isEmpty()) {
+      Throwable next = pending.poll();
+      if (!seen.add(next)) {
+        continue;
+      }
+      chain.add(next);
+      if (next.getCause() != null) {
+        pending.add(next.getCause());
+      }
+      pending.addAll(List.of(next.getSuppressed()));
+    }
+    return chain;
   }
 
   @Test

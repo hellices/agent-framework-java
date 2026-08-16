@@ -40,10 +40,12 @@ public final class ChatCompletionResponseMapper {
   // knowable here, and choosing one changes the model's intent, so the duplicate fails instead.
   //
   // INCLUDE_SOURCE_IN_LOCATION disabled: Jackson's own message would otherwise quote the source it
-  // failed on, and that source is the arguments string. The cause is preserved and printed by every
-  // logger that prints a stack trace, so keeping the payload out of this adapter's message is only
-  // half the rule. This is the pinned Jackson's default; stating it explicitly keeps a future
-  // upgrade from re-enabling it silently.
+  // failed on, and that source is the arguments string. No parse failure escapes this class - the
+  // exception below carries no cause and no suppressed throwable, because Jackson names the token
+  // it choked on in the message text itself, which no source-location setting can redact. This
+  // line is the second layer rather than the rule: it keeps a parser exception that ever escapes
+  // by a route this class does not catch from carrying the payload with it. It is also the pinned
+  // Jackson's default, so stating it keeps a future upgrade from re-enabling it silently.
   private final ObjectMapper json =
       JsonMapper.builder()
           .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)
@@ -71,13 +73,17 @@ public final class ChatCompletionResponseMapper {
    * its raw representation so the {@code arguments} string the model produced stays byte-exact
    * through the echo. Arguments must be exactly one JSON object with unique keys: trailing input
    * after the object and a repeated key both fail, because keeping the first value and dropping the
-   * rest would hand a tool a call the model did not make. A finish reason of {@code tool_calls} or
-   * the deprecated {@code function_call} that arrives with no tool call fails: {@code AgentEngine}
-   * ends its loop on an empty tool-call list, so such a turn would otherwise be reported as a
-   * successful final answer that the model never gave. The reverse pairing is deliberately not
-   * policed - a tool call that arrives under {@code stop} or {@code length} is mapped and the
-   * finish reason is reported as the server sent it, because calls that are present are executable
-   * whatever the finish reason says, and only a promise the adapter cannot see is dangerous.
+   * rest would hand a tool a call the model did not make. Every argument failure is this adapter's
+   * own {@code IllegalStateException} naming the tool, the call id, and that requirement, with no
+   * parser exception attached as a cause or as a suppressed throwable: the parser names the token
+   * it rejected, so its message is model output and belongs in no log. A finish reason of {@code
+   * tool_calls} or the deprecated {@code function_call} that arrives with no tool call fails:
+   * {@code AgentEngine} ends its loop on an empty tool-call list, so such a turn would otherwise be
+   * reported as a successful final answer that the model never gave. The reverse pairing is
+   * deliberately not policed - a tool call that arrives under {@code stop} or {@code length} is
+   * mapped and the finish reason is reported as the server sent it, because calls that are present
+   * are executable whatever the finish reason says, and only a promise the adapter cannot see is
+   * dangerous.
    *
    * @param completion the parsed response, never {@code null}
    * @return the neutral response
@@ -186,7 +192,14 @@ public final class ChatCompletionResponseMapper {
     try {
       parsed = json.readTree(arguments);
     } catch (JsonProcessingException failure) {
-      throw new IllegalStateException(argumentFailure(name, callId), failure);
+      // The parser exception is deliberately not attached, as a cause or as a suppressed
+      // throwable. Jackson names the token it choked on, so its message carries the payload
+      // whatever the source location setting is: `{"name": <token>}` yields
+      // "Unrecognized token '<token>'". A cause is printed by every logger that prints a stack
+      // trace, so attaching it would put model output in a log while this adapter's own message
+      // carefully kept it out. What is lost is the column and the parser's wording; what is kept
+      // is the tool, the call id, and the structural requirement, which is what a caller acts on.
+      throw new IllegalStateException(argumentFailure(name, callId));
     }
     if (!parsed.isObject()) {
       throw new IllegalStateException(argumentFailure(name, callId));
@@ -206,9 +219,9 @@ public final class ChatCompletionResponseMapper {
 
   private static String argumentFailure(String name, String callId) {
     // Names the tool and the call id and stops there. The arguments are model output and are never
-    // put in an exception message. "exactly one JSON object with unique keys" covers every way the
-    // string can fail to be one: invalid JSON, an array or a scalar, a value followed by more
-    // input, and a repeated key.
+    // put in an exception message, nor reachable through one: no parser exception is attached.
+    // "exactly one JSON object with unique keys" covers every way the string can fail to be one:
+    // invalid JSON, an array or a scalar, a value followed by more input, and a repeated key.
     return "openai chat completions returned arguments that are not exactly one JSON object with"
         + " unique keys for tool '"
         + name
