@@ -53,16 +53,35 @@ class McpFailuresTest {
 
   @Test
   void refusesToRepeatAGenericTransportFailure() {
-    // SDK 2.0.0 raises the base type for far more than a lost connection: the body of a successful
-    // POST that its mapper could not read, and a 400 or a 404 from a streamable HTTP server that
-    // issues no session id. The server has answered by then, so a tools/call classified as a lost
-    // connection here would be sent a second time and run its side effect twice.
+    // SDK 2.0.0 raises the generic type for far more than a lost connection: the body of a
+    // successful POST that its mapper could not read, and a 400 or a 404 from a streamable HTTP
+    // server that issues no session id. The server has answered by then, so a tools/call classified
+    // as a lost connection here would be sent a second time and run its side effect twice.
     assertThat(McpFailures.isRepeatableConnectionLoss(new McpTransportException("stream broke")))
         .isFalse();
     assertThat(
             McpFailures.isRepeatableConnectionLoss(
                 new McpTransportException(
                     "Error parsing response body", new IOException("unexpected end of input"))))
+        .isFalse();
+  }
+
+  @Test
+  void theTwoSessionFailuresArePeersOfTheGenericTransportFailureRatherThanSubtypes() {
+    // Naming both session failures reads like a verbose way of writing "instanceof
+    // McpTransportException", and it is not: all three extend RuntimeException directly. Collapsing
+    // the two into the generic type would not narrow anything, it would repeat every failure the
+    // test above refuses to repeat, so the hierarchy this classification relies on is pinned here.
+    assertThat(McpTransportSessionNotFoundException.class.getSuperclass())
+        .isEqualTo(RuntimeException.class);
+    assertThat(McpTransportSessionClosedException.class.getSuperclass())
+        .isEqualTo(RuntimeException.class);
+    assertThat(
+            McpTransportException.class.isAssignableFrom(
+                McpTransportSessionNotFoundException.class))
+        .isFalse();
+    assertThat(
+            McpTransportException.class.isAssignableFrom(McpTransportSessionClosedException.class))
         .isFalse();
   }
 

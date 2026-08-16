@@ -24,6 +24,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -32,6 +33,13 @@ import org.junit.jupiter.api.Test;
  * <p>The bound matters twice over. A retry loop against a server that keeps dropping the connection
  * would spawn processes or HTTP sessions without limit, and a retry of something that was not a
  * connection failure would run a tool's side effect a second time.
+ *
+ * <p>What may be repeated is decided per operation, so the tests below name the operation they are
+ * about. A {@code tools/call} is repeated only on a failure that proves the server never had it,
+ * and never because this owner dismissed it while replacing the connection for something else. A
+ * {@code tools/list} read changes nothing on the server, so a dismissal its owner caused is
+ * recovered from — as a restart signal, because a page is never re-sent with a cursor the dead
+ * session issued.
  *
  * <p>The counts are the contract, so every test counts three things: transports the factory was
  * asked for, transports closed, and how often the original request reached each of them. A request
@@ -120,10 +128,11 @@ class OwnedMcpClientRetryTest {
 
   @Test
   void doesNotRepeatACallThatFailedWithAGenericTransportFailure() {
-    // The SDK's base transport failure is not a lost session. Version 2.0.0 raises it for the body
-    // of a successful POST its mapper could not read, and for a 400 or a 404 from a streamable HTTP
-    // server that issues no session id — cases in which the server accepted the call and may
-    // already have run it. Only the two session-scoped subtypes may be repeated, so this one is
+    // The SDK's generic transport failure is not a lost session. Version 2.0.0 raises it for the
+    // body of a successful POST its mapper could not read, and for a 400 or a 404 from a streamable
+    // HTTP server that issues no session id — cases in which the server accepted the call and may
+    // already have run it. Only the two session-scoped failures may be repeated, and they are named
+    // one by one because they are peers of this type rather than subtypes of it, so this one is
     // reported: one transport, one dispatch, and the spare the factory still holds is what a
     // replacement would have taken.
     InMemoryMcpTransport transport =
@@ -204,11 +213,61 @@ class OwnedMcpClientRetryTest {
   }
 
   @Test
-  void retriesACallThatOurOwnReplacementDismissed() {
-    // Closing the stale generation dismisses the sibling request in flight on it with a bare
-    // RuntimeException carrying no type and no cause. That dismissal is this owner's own doing, so
-    // the sibling is repeated on the replacement its neighbour built, and it is recognised by the
-    // generation's recorded state rather than by the wording of a failure the SDK owns.
+  void doesNotRepeatACallThatASiblingsReplacementDismissed() {
+    // The trigger is only a sibling's validation ping going unanswered, which a merely slow server
+    // produces. Replacing the generation closes it, and closing it dismisses the tools/call already
+    // on the wire with a bare RuntimeException. That dismissal says nothing about the server: the
+    // call may have arrived and run there before the close. Repeating it on the replacement would
+    // run its side effect a second time, so it is reported to the caller that asked for it.
+    AtomicInteger pings = new AtomicInteger();
+    InMemoryMcpTransport first =
+        toolServer()
+            .answering(
+                McpSchema.METHOD_PING,
+                params -> {
+                  if (pings.incrementAndGet() > 1) {
+                    throw new McpTransportException("the server did not answer the ping in time");
+                  }
+                  return Map.of();
+                })
+            .withholding(McpSchema.METHOD_TOOLS_CALL);
+    InMemoryMcpTransport second = toolServer().answeringPing();
+    ScriptedMcpTransportFactory factory = new ScriptedMcpTransportFactory(first, second);
+    OwnedMcpClientLifecycle lifecycle = new OwnedMcpClientLifecycle(factory, settings());
+    lifecycle.connect().join();
+    OwnedMcpAsyncOperations operations = new OwnedMcpAsyncOperations(lifecycle);
+
+    CompletableFuture<McpSchema.CallToolResult> dismissedCall =
+        operations
+            .callTool(new McpSchema.CallToolRequest("search-issues", null, null))
+            .toCompletableFuture();
+    assertThat(dismissedCall).isNotDone();
+    assertThat(first.countOf(McpSchema.METHOD_TOOLS_CALL)).isEqualTo(1);
+
+    // The sibling's ping is the second one this server is asked for, and it is the one that fails.
+    CompletableFuture<McpSchema.ListToolsResult> sibling = listTools(lifecycle);
+
+    // The sibling heals: its ping had no side effect to repeat, so it buys the replacement and runs
+    // there. The call it dismissed on the way does not follow it.
+    assertThat(sibling).succeedsWithin(SETTLE);
+    Throwable reported = settledFailure(dismissedCall);
+    assertThat(reported).isNotInstanceOf(CancellationException.class);
+    // Nothing was attached to it, because no recovery was attempted for this call at all.
+    assertThat(reported.getSuppressed()).isEmpty();
+    assertThat(factory.createdCount()).isEqualTo(2);
+    assertThat(first.closeCount()).isEqualTo(1);
+    assertThat(first.countOf(McpSchema.METHOD_TOOLS_CALL)).isEqualTo(1);
+    assertThat(second.countOf(McpSchema.METHOD_TOOLS_CALL)).isZero();
+    assertThat(second.countOf(McpSchema.METHOD_TOOLS_LIST)).isEqualTo(1);
+    assertThat(second.closeCount()).isZero();
+  }
+
+  @Test
+  void doesNotRepeatAGenericRequestThatOurOwnReplacementDismissed() {
+    // The generic entry point is handed a function of a client and cannot tell a read from a tool
+    // call, so it assumes the worst: a request dismissed by this owner's own replacement is
+    // reported rather than sent again. An operation that really is safe to repeat or restart says
+    // so through its own attempt, which is what the paged read below does.
     InMemoryMcpTransport first =
         toolServer()
             .answeringPing()
@@ -226,12 +285,50 @@ class OwnedMcpClientRetryTest {
         lifecycle.execute(
             client -> client.callTool(new McpSchema.CallToolRequest("search-issues", null, null)));
 
+    // The neighbour's own failure is the typed session loss, which proves the server never had its
+    // request, so that one is repeated on the replacement.
     assertThat(lostConnection).succeedsWithin(SETTLE);
-    assertThat(dismissed).succeedsWithin(SETTLE);
+    assertThat(settledFailure(dismissed)).isNotInstanceOf(CancellationException.class);
     assertThat(factory.createdCount()).isEqualTo(2);
     assertThat(first.closeCount()).isEqualTo(1);
     assertThat(first.countOf(McpSchema.METHOD_TOOLS_LIST)).isEqualTo(1);
-    assertThat(second.countOf(McpSchema.METHOD_TOOLS_LIST)).isEqualTo(1);
+    assertThat(second.countOf(McpSchema.METHOD_TOOLS_LIST)).isZero();
+    assertThat(second.countOf(McpSchema.METHOD_TOOLS_CALL)).isEqualTo(1);
+  }
+
+  @Test
+  void tellsAPagedReadThatOurOwnReplacementDismissedToStartOver() {
+    // The other side of the same rule. A tools/list page has no side effect to repeat, so the
+    // dismissal its owner caused is recovered from — but a page is never re-sent, because its
+    // cursor belongs to the session that issued it. The read is told the connection was replaced,
+    // which is the signal a paged reader restarts from the first page on.
+    InMemoryMcpTransport first =
+        toolServer()
+            .answeringPing()
+            .withholding(McpSchema.METHOD_TOOLS_LIST)
+            .failingSend(
+                McpSchema.METHOD_TOOLS_CALL,
+                () -> new McpTransportSessionNotFoundException("session expired"));
+    InMemoryMcpTransport second = toolServer().answeringPing();
+    ScriptedMcpTransportFactory factory = new ScriptedMcpTransportFactory(first, second);
+    OwnedMcpClientLifecycle lifecycle = new OwnedMcpClientLifecycle(factory, settings());
+    lifecycle.connect().join();
+
+    CompletableFuture<McpSchema.ListToolsResult> dismissedRead =
+        new OwnedMcpAsyncOperations(lifecycle)
+            .listTools(McpSchema.FIRST_PAGE, null)
+            .toCompletableFuture();
+    CompletableFuture<McpSchema.CallToolResult> lostConnection =
+        lifecycle.execute(
+            client -> client.callTool(new McpSchema.CallToolRequest("search-issues", null, null)));
+
+    assertThat(lostConnection).succeedsWithin(SETTLE);
+    Throwable reported = settledFailure(dismissedRead);
+    assertThat(reported.getClass().getSimpleName()).isEqualTo("McpConnectionReplacedException");
+    assertThat(factory.createdCount()).isEqualTo(2);
+    assertThat(first.closeCount()).isEqualTo(1);
+    assertThat(first.countOf(McpSchema.METHOD_TOOLS_LIST)).isEqualTo(1);
+    assertThat(second.countOf(McpSchema.METHOD_TOOLS_LIST)).isZero();
     assertThat(second.countOf(McpSchema.METHOD_TOOLS_CALL)).isEqualTo(1);
   }
 
@@ -288,16 +385,11 @@ class OwnedMcpClientRetryTest {
     assertThat(lifecycle.close()).succeedsWithin(SETTLE);
 
     // The dismissal type carries no information (verified SDK fact 15), so the assertion is on what
-    // the owner did about it: it looked for a generation to repeat the call on, found none, and
-    // attached that as the reason. One transport, one close, and the spare the factory still holds
-    // is what a reconnect would have taken.
-    assertThat(settledFailure(inFlight).getSuppressed())
-        .singleElement()
-        .satisfies(
-            suppressed ->
-                assertThat(suppressed)
-                    .isInstanceOf(IllegalStateException.class)
-                    .hasMessageContaining("connect()"));
+    // the owner did about it: nothing at all. A call the server may already have run is not made
+    // safe to repeat by the owner recognising its own close, so no generation is looked for and
+    // nothing is attached to the failure. One transport, one close, and the spare the factory still
+    // holds is what a reconnect would have taken.
+    assertThat(settledFailure(inFlight).getSuppressed()).isEmpty();
     assertThat(factory.createdCount()).isEqualTo(1);
     assertThat(neverUsed.methodsSent()).isEmpty();
     assertThat(transport.closeCount()).isEqualTo(1);
@@ -368,16 +460,16 @@ class OwnedMcpClientRetryTest {
 
   @Test
   void aCancelledCallIsNotResurrectedByTheReplacementItWasWaitingFor() {
-    // The retry is what makes the pre-dispatch guards matter again: a repeat is dispatched from the
+    // The repeat is what makes the pre-dispatch guards matter again: it is dispatched from the
     // completion of a replacement handshake, which is a window long enough for the caller to
-    // withdraw. The stale close is withheld, so the cancellation lands while the repeat is waiting
-    // for the replacement, and the repeat must then not reach the new server at all.
+    // withdraw. The call's own session loss is what buys that replacement — the one failure a call
+    // may be repeated on — and the withheld close holds the replacement up, so the cancellation
+    // lands while the repeat is waiting for it. The repeat must then not reach the new server.
     InMemoryMcpTransport first =
         toolServer()
             .answeringPing()
-            .withholding(McpSchema.METHOD_TOOLS_CALL)
             .failingSend(
-                McpSchema.METHOD_TOOLS_LIST,
+                McpSchema.METHOD_TOOLS_CALL,
                 () -> new McpTransportSessionNotFoundException("session expired"))
             .withholdingClose();
     InMemoryMcpTransport second = toolServer().answeringPing();
@@ -388,10 +480,9 @@ class OwnedMcpClientRetryTest {
     CompletableFuture<McpSchema.CallToolResult> withdrawn =
         lifecycle.execute(
             client -> client.callTool(new McpSchema.CallToolRequest("search-issues", null, null)));
-    CompletableFuture<McpSchema.ListToolsResult> replacing = listTools(lifecycle);
 
-    // The neighbour's connection loss closed the generation, which dismissed the call in flight on
-    // it; both are now waiting for the one replacement the withheld close is holding up.
+    // The stale generation is already closing and the repeat is waiting for the replacement the
+    // withheld close is holding up.
     assertThat(first.closeCount()).isEqualTo(1);
     assertThat(factory.createdCount()).isEqualTo(1);
     assertThat(withdrawn).isNotDone();
@@ -399,11 +490,11 @@ class OwnedMcpClientRetryTest {
 
     first.releaseWithheldClose();
 
-    assertThat(replacing).succeedsWithin(SETTLE);
     assertThat(withdrawn).isCancelled();
     assertThat(factory.createdCount()).isEqualTo(2);
-    assertThat(second.countOf(McpSchema.METHOD_TOOLS_LIST)).isEqualTo(1);
     assertThat(second.countOf(McpSchema.METHOD_TOOLS_CALL)).isZero();
+    // Cancellation ends one operation, not the generation it would have used: the replacement the
+    // owner adopted stays open for the next caller.
     assertThat(second.closeCount()).isZero();
   }
 

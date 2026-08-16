@@ -34,6 +34,13 @@ import reactor.core.publisher.Mono;
  * so an owner never holds two live servers, and concurrent failures on one generation produce one
  * replacement rather than one each.
  *
+ * <p>Replacing a generation also dismisses whatever else was in flight on it, and that dismissal
+ * says nothing about the server: a request may have arrived and run before the close. Which
+ * operations may act on it therefore follows the same at-most-once rule as everything else here. A
+ * catalogue read restarts, because reading changes nothing. A tool call, and any operation the
+ * owner cannot tell apart from one, is reported to its caller, because the alternative is running
+ * its side effect twice.
+ *
  * <p>The handshake runs on a subscription the caller cannot dispose. Disposing it would leave the
  * SDK initializer holding a permanently pending initialization, after which every later operation
  * blocks for the initialization timeout and no second handshake is ever attempted.
@@ -158,12 +165,14 @@ public final class OwnedMcpClientLifecycle {
    * the SDK reports a session the server no longer has is repeated once on a replacement
    * generation. Validation and the call share one reconnect budget, which bounds an operation at
    * two generations and one repeat whichever stage spent it. Nothing else is repeated: an
-   * application error, a request that timed out, and a transport failure that leaves it unknown
-   * whether the server ran the request are all reported, because repeating a tool call the server
-   * may already have run would run its side effect twice. A connection that really is gone is
-   * healed by the next operation's ping instead.
+   * application error, a request that timed out, a transport failure that leaves it unknown whether
+   * the server ran the request, and the untyped dismissal this owner causes when it replaces the
+   * generation for another operation are all reported, because repeating a tool call the server may
+   * already have run would run its side effect twice. A connection that really is gone is healed by
+   * the next operation's ping instead.
    *
-   * <p>This entry point is one request, so it is the shape that repeats. An operation made of
+   * <p>This entry point is one request whose effect on the server is unknown to the owner, so it
+   * takes the conservative attempt from {@link #sideEffectingAttempt()}. An operation made of
    * several requests takes its attempt from {@link #pagedAttempt()} and passes it to every request
    * of the read, which spends the budget once for all of them and reports the replacement to the
    * caller rather than repeating a request the new session cannot interpret.
@@ -177,7 +186,22 @@ public final class OwnedMcpClientLifecycle {
    * @return a stage completing with the operation result, never {@code null}
    */
   public <T> CompletableFuture<T> execute(Function<McpAsyncClient, Mono<T>> operation) {
-    return execute(operation, new Attempt(true));
+    return execute(operation, sideEffectingAttempt());
+  }
+
+  /**
+   * Creates the attempt of one request that may change what the server holds.
+   *
+   * <p>This is the conservative policy, and it is what the generic {@link #execute(Function)} uses,
+   * because that entry point is handed a function of a client and cannot tell a catalogue read from
+   * a tool call. A single request repeats itself on a replacement, but only for a failure that
+   * proves the server never had it; a request dismissed because this owner closed the generation
+   * for another operation is reported, since the server may have run it already.
+   *
+   * @return an attempt for one request whose repeat must be earned, never {@code null}
+   */
+  static Attempt sideEffectingAttempt() {
+    return new Attempt(true, false);
   }
 
   /**
@@ -188,10 +212,15 @@ public final class OwnedMcpClientLifecycle {
    * reconnect budget cover the read rather than each page, and what tells {@link #recover} to
    * report a replacement instead of repeating a request whose cursor died with its session.
    *
+   * <p>Reading a catalogue changes nothing on the server, so this is also the attempt that may act
+   * on a dismissal this owner caused: a page the owner's own replacement threw away is worth
+   * recovering, and the recovery is the reader being told to start over rather than the page being
+   * sent again.
+   *
    * @return an attempt whose single reconnect covers every request of the read, never {@code null}
    */
   static Attempt pagedAttempt() {
-    return new Attempt(false);
+    return new Attempt(false, true);
   }
 
   /**
@@ -373,7 +402,7 @@ public final class OwnedMcpClientLifecycle {
                 return CompletableFuture.completedFuture(result);
               }
               Throwable reported = AsyncStages.unwrap(failure);
-              return retryable(reported, generation)
+              return retryable(reported, generation, attempt)
                   ? recover(operation, generation, attempt, reported)
                   : AsyncStages.<T>failed(reported);
             })
@@ -381,29 +410,31 @@ public final class OwnedMcpClientLifecycle {
   }
 
   /**
-   * Decides whether a failed call may be repeated on a replacement generation.
+   * Decides whether a failed call may be recovered on a replacement generation.
    *
    * <p>This is the call stage's own guard, separate from the validation guard, because the two
    * answer different questions. Validation only has to decide whether the ping failure says
-   * anything about the connection; a call also has to decide whether repeating it is safe. That is
-   * why the two are not the same predicate: a ping replaces the generation on any failure, while a
-   * call is repeated only when the SDK named the session the server no longer has. They share only
-   * the cancellation rule.
+   * anything about the connection; a call also has to decide whether acting on the failure is safe.
+   * That is why the two are not the same predicate: a ping replaces the generation on any failure,
+   * while a call is recovered only when the SDK named the session the server no longer has. They
+   * share only the cancellation rule.
    *
-   * <p>A cancelled call is never repeated: the caller asked for it to stop. A generation this owner
-   * closed makes its failure repeatable regardless of type, because the SDK dismisses the in-flight
-   * calls of a closed client with an untyped failure, and that dismissal is the direct consequence
-   * of a replacement this owner started for another operation, not of anything the server did.
-   * Reading that state off the generation is what keeps the decision out of message matching, which
-   * an untyped dismissal would otherwise invite. When the close came from {@link #close()} rather
-   * than from a replacement, the repeat finds no generation and fails on the connect requirement,
-   * which is the correct answer: an explicit close must not bring the server back.
+   * <p>A cancelled call is never recovered: the caller asked for it to stop. The second arm is a
+   * generation this owner closed, whose other in-flight requests the SDK dismisses with an untyped
+   * failure. Reading that state off the generation is what keeps the decision out of message
+   * matching, which an untyped dismissal would otherwise invite — but the dismissal itself proves
+   * nothing about the server. The request may have arrived and run before the close, so the arm is
+   * open only to an operation whose attempt says a dismissal is safe to act on: an idempotent read,
+   * never a tool call. When the close came from {@link #close()} rather than from a replacement,
+   * such a read finds no generation and fails on the connect requirement, which is the correct
+   * answer: an explicit close must not bring the server back.
    */
-  private static boolean retryable(Throwable failure, Generation generation) {
+  private static boolean retryable(Throwable failure, Generation generation, Attempt attempt) {
     if (cancelled(failure)) {
       return false;
     }
-    return McpFailures.isRepeatableConnectionLoss(failure) || generation.closedByOwner();
+    return McpFailures.isRepeatableConnectionLoss(failure)
+        || (attempt.recoversFromOwnerDismissal() && generation.closedByOwner());
   }
 
   /**
@@ -421,21 +452,31 @@ public final class OwnedMcpClientLifecycle {
 
   /**
    * Tracks the in-flight call of one operation so cancellation can reach it, and carries that
-   * operation's single reconnect budget.
+   * operation's single reconnect budget and its two recovery rules.
    *
    * <p>An operation is not always one request. A paged read is one attempt spanning many requests,
    * and it is the attempt that decides what happens after a replacement: a single request repeats
    * itself, a paged read cannot and asks its reader to start over instead.
+   *
+   * <p>The two rules are independent and answer different questions. {@link
+   * #repeatsOnReplacement()} asks what to do once a replacement exists, and {@link
+   * #recoversFromOwnerDismissal()} asks whether a request this owner's own close threw away may be
+   * acted on at all. A paged read says no to the first and yes to the second: it must not re-send a
+   * page, and it is safe to restart. A tool call says the opposite: it carries everything a new
+   * session needs, and it must never be sent twice on the strength of a dismissal that proves
+   * nothing about what the server already did.
    */
   static final class Attempt {
 
     private final boolean repeatOnReplacement;
+    private final boolean recoverFromOwnerDismissal;
     private final AtomicBoolean cancelled = new AtomicBoolean();
     private final AtomicBoolean reconnect = new AtomicBoolean(true);
     private final AtomicReference<CompletableFuture<?>> inFlight = new AtomicReference<>();
 
-    Attempt(boolean repeatOnReplacement) {
+    private Attempt(boolean repeatOnReplacement, boolean recoverFromOwnerDismissal) {
       this.repeatOnReplacement = repeatOnReplacement;
+      this.recoverFromOwnerDismissal = recoverFromOwnerDismissal;
     }
 
     /**
@@ -447,6 +488,20 @@ public final class OwnedMcpClientLifecycle {
      */
     boolean repeatsOnReplacement() {
       return repeatOnReplacement;
+    }
+
+    /**
+     * Reports whether this operation may be recovered when the failure is the SDK dismissing it
+     * because this owner closed the generation underneath it.
+     *
+     * <p>Such a dismissal is evidence about the owner, never about the server: the request may have
+     * arrived and run before the close. Only an operation that changes nothing — a catalogue read —
+     * can afford to act on it, and even then the recovery is a restart rather than a repeat. An
+     * operation that may have had a side effect is reported instead, because the alternative is
+     * running that side effect a second time on a fresh session.
+     */
+    boolean recoversFromOwnerDismissal() {
+      return recoverFromOwnerDismissal;
     }
 
     /**
@@ -913,8 +968,11 @@ public final class OwnedMcpClientLifecycle {
      * Reports whether this owner closed this generation.
      *
      * <p>It is the same flag {@link #close()} claims, read rather than taken. A call dismissed by
-     * that close failed because of something this owner did, which is what makes it repeatable
-     * without inspecting the untyped failure the SDK dismisses it with.
+     * that close failed because of something this owner did, which is what lets an operation
+     * recognise the SDK's untyped dismissal without inspecting the failure it carries. Recognising
+     * it is not permission to repeat it: whether the dismissed operation may act on that answer is
+     * the attempt's decision, because a request the server may already have run is not made safe by
+     * knowing who closed the connection.
      */
     boolean closedByOwner() {
       return closed.get();

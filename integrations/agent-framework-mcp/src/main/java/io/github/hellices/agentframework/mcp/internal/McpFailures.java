@@ -44,14 +44,18 @@ final class McpFailures {
    * request is <em>sent again</em>. A session the server does not have is one that accepted
    * nothing, so a request that failed that way ran nowhere and repeating it is safe.
    *
-   * <p>The SDK's base {@code McpTransportException} deliberately does not qualify. Version 2.0.0
-   * raises it for the body of a <em>successful</em> POST response its JSON mapper could not read,
-   * and for a 400 or a 404 from a streamable HTTP server that issues no session id — cases in which
-   * the server received the request, may have executed it, and only the answer went wrong.
-   * Repeating a {@code tools/call} there would run its side effect twice, which is a worse outcome
-   * than reporting a connection that really was lost. A connection that is genuinely gone is healed
-   * one operation later anyway: the validation ping of the next operation has no side effect to
-   * repeat and replaces the generation on any failure at all.
+   * <p>The SDK's generic {@code McpTransportException} deliberately does not qualify, and it is
+   * named here as the peer type it is: {@code McpTransportSessionNotFoundException} and {@code
+   * McpTransportSessionClosedException} extend {@link RuntimeException} directly, so listing the
+   * two is not a narrowing of a common supertype and must not be "simplified" into one {@code
+   * instanceof McpTransportException} check. Version 2.0.0 raises the generic type for the body of
+   * a <em>successful</em> POST response its JSON mapper could not read, and for a 400 or a 404 from
+   * a streamable HTTP server that issues no session id — cases in which the server received the
+   * request, may have executed it, and only the answer went wrong. Repeating a {@code tools/call}
+   * there would run its side effect twice, which is a worse outcome than reporting a connection
+   * that really was lost. A connection that is genuinely gone is healed one operation later anyway:
+   * the validation ping of the next operation has no side effect to repeat and replaces the
+   * generation on any failure at all.
    *
    * <p>An application error, including a tool that failed and a request that timed out, is the
    * server's answer and is reported to the caller for the same reason.

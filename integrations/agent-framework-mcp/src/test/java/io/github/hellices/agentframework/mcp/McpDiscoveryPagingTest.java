@@ -98,6 +98,46 @@ class McpDiscoveryPagingTest {
   }
 
   @Test
+  void restartsAPageThatASiblingsReplacementDismissed() {
+    List<String> staleCursors = new ArrayList<>();
+    List<String> freshCursors = new ArrayList<>();
+    InMemoryMcpTransport stale = catalogueWithheldAfterTheFirstPage(staleCursors);
+    InMemoryMcpTransport fresh = catalogue(freshCursors, Integer.MAX_VALUE);
+    ScriptedMcpTransportFactory factory = new ScriptedMcpTransportFactory(stale, fresh);
+    OwnedMcpClientLifecycle lifecycle = new OwnedMcpClientLifecycle(factory, settings());
+    lifecycle.connect().join();
+
+    CompletableFuture<List<FunctionTool>> discovery =
+        new McpToolDiscovery(
+                new OwnedMcpAsyncOperations(lifecycle), McpToolAdapterOptions.defaults())
+            .discover();
+    // The second page is on the wire and unanswered, which is the request a sibling's replacement
+    // dismisses.
+    assertThat(discovery).isNotDone();
+    assertThat(stale.countOf(McpSchema.METHOD_TOOLS_LIST)).isEqualTo(2);
+
+    // A neighbouring tool call loses the session and replaces the generation; closing it dismisses
+    // the page in flight with the SDK's untyped failure.
+    CompletableFuture<McpSchema.CallToolResult> sibling =
+        new OwnedMcpAsyncOperations(lifecycle)
+            .callTool(new McpSchema.CallToolRequest("search-issues", null, null))
+            .toCompletableFuture();
+
+    assertThat(sibling).succeedsWithin(BLOCK);
+    // A page read has no side effect, so the read recovers from a dismissal its own owner caused —
+    // it spends its one reconnect on the replacement the sibling already built rather than buying a
+    // third generation, and starts the catalogue again from the first page. The replacement is
+    // never asked to continue the cursor the dead session issued.
+    assertThat(discovery).succeedsWithin(BLOCK);
+    assertThat(names(discovery.join())).containsExactly("search-issues", "close-issues");
+    assertThat(staleCursors).containsExactly((String) null);
+    assertThat(freshCursors).containsExactly(null, "page-2").doesNotContain("stale-page-2");
+    assertThat(factory.createdCount()).isEqualTo(2);
+    assertThat(stale.closeCount()).isEqualTo(1);
+    assertThat(fresh.closeCount()).isZero();
+  }
+
+  @Test
   void aFailedReplacementDuringAPagedReadReportsTheFailureThatStoppedIt() {
     List<String> staleCursors = new ArrayList<>();
     List<String> refusedCursors = new ArrayList<>();
@@ -302,6 +342,34 @@ class McpDiscoveryPagingTest {
               return cursor == null
                   ? new McpSchema.ListToolsResult(List.of(tool("search-issues")), "page-2", null)
                   : new McpSchema.ListToolsResult(List.of(tool("close-issues")), null, null);
+            });
+  }
+
+  /**
+   * A catalogue that answers its first page and then leaves every later page in flight.
+   *
+   * <p>Withholding starts from inside the first page's answer, so the request that hangs is the
+   * second page — the one carrying a cursor the session issued. Its tool call always loses the
+   * session, which is how a sibling operation replaces the generation while that page is pending.
+   *
+   * <p>The cursor it issues is named for the session it belongs to, so a restart that wrongly
+   * carried it over to the replacement would be visible in the replacement's own recorded cursors
+   * rather than hidden behind a token both catalogues happen to share.
+   */
+  private static InMemoryMcpTransport catalogueWithheldAfterTheFirstPage(List<String> cursors) {
+    InMemoryMcpTransport transport = new InMemoryMcpTransport();
+    return transport
+        .answeringPing()
+        .failingSend(
+            McpSchema.METHOD_TOOLS_CALL,
+            () -> new McpTransportSessionNotFoundException("session expired"))
+        .answering(
+            McpSchema.METHOD_TOOLS_LIST,
+            params -> {
+              cursors.add(((McpSchema.PaginatedRequest) params).cursor());
+              transport.withholding(McpSchema.METHOD_TOOLS_LIST);
+              return new McpSchema.ListToolsResult(
+                  List.of(tool("search-issues")), "stale-page-2", null);
             });
   }
 
