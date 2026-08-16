@@ -231,7 +231,10 @@ public final class McpToolAdapterOptions {
     }
 
     private static String requireArgumentName(String name) {
-      if (name == null || name.isBlank()) {
+      if (name == null) {
+        throw new IllegalArgumentException("additionalArgumentNames must not hold a null name");
+      }
+      if (name.isBlank()) {
         throw new IllegalArgumentException("additionalArgumentNames must not hold a blank name");
       }
       return name;

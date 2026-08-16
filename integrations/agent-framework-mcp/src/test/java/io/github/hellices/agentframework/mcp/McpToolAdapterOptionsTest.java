@@ -85,11 +85,17 @@ class McpToolAdapterOptionsTest {
     assertThatThrownBy(() -> builder.additionalArgumentNames(null))
         .isInstanceOf(IllegalArgumentException.class);
     assertThatThrownBy(() -> builder.additionalArgumentNames(Arrays.asList("tenant", null)))
-        .isInstanceOf(IllegalArgumentException.class);
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessage("additionalArgumentNames must not hold a null name");
     assertThatThrownBy(() -> builder.additionalArgumentNames(List.of("tenant", " ")))
-        .isInstanceOf(IllegalArgumentException.class);
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessage("additionalArgumentNames must not hold a blank name");
+    assertThatThrownBy(() -> builder.addAdditionalArgumentName(null))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessage("additionalArgumentNames must not hold a null name");
     assertThatThrownBy(() -> builder.addAdditionalArgumentName(" "))
-        .isInstanceOf(IllegalArgumentException.class);
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessage("additionalArgumentNames must not hold a blank name");
     assertThatThrownBy(() -> builder.callMetadataProvider(null))
         .isInstanceOf(IllegalArgumentException.class);
     assertThatThrownBy(() -> builder.maxDiscoveryPages(0))
