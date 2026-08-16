@@ -24,9 +24,11 @@ import reactor.core.publisher.Mono;
  *
  * <p>An operation replaces the generation it was given at most once, and only after the connection
  * behind it was lost: either the validation ping went unanswered, or the call itself failed the way
- * the SDK reports a connection that is gone. A single request is then repeated once on the
- * replacement, so one request reaches at most two generations and each of them exactly once. A
- * paged read is one operation spanning many requests and is never repeated that way, because its
+ * the SDK reports a session the server no longer has. A single request is then repeated once on the
+ * replacement, so one request reaches at most two generations and each of them exactly once. The
+ * two stages ask different questions: a ping has no side effect, so any failure of it buys the
+ * replacement, while a call is repeated only when the failure proves the server never accepted it.
+ * A paged read is one operation spanning many requests and is never repeated that way, because its
  * cursor belongs to the session that issued it; its reader is told the connection was replaced and
  * starts the read again. The stale generation is always released before the replacement is created,
  * so an owner never holds two live servers, and concurrent failures on one generation produce one
@@ -153,11 +155,13 @@ public final class OwnedMcpClientLifecycle {
    * replaces nothing, because a caller changing its mind says nothing about the connection.
    *
    * <p>A connection can also be lost between the ping and the answer, so a call that fails the way
-   * the SDK reports a lost connection is repeated once on a replacement generation. Validation and
-   * the call share one reconnect budget, which bounds an operation at two generations and one
-   * repeat whichever stage spent it. Nothing else is repeated: an application error and a request
-   * that timed out are the server's answer, and repeating a tool call the server may already have
-   * run would run its side effect twice.
+   * the SDK reports a session the server no longer has is repeated once on a replacement
+   * generation. Validation and the call share one reconnect budget, which bounds an operation at
+   * two generations and one repeat whichever stage spent it. Nothing else is repeated: an
+   * application error, a request that timed out, and a transport failure that leaves it unknown
+   * whether the server ran the request are all reported, because repeating a tool call the server
+   * may already have run would run its side effect twice. A connection that really is gone is
+   * healed by the next operation's ping instead.
    *
    * <p>This entry point is one request, so it is the shape that repeats. An operation made of
    * several requests takes its attempt from {@link #pagedAttempt()} and passes it to every request
@@ -381,8 +385,10 @@ public final class OwnedMcpClientLifecycle {
    *
    * <p>This is the call stage's own guard, separate from the validation guard, because the two
    * answer different questions. Validation only has to decide whether the ping failure says
-   * anything about the connection; a call also has to decide whether repeating it is safe. They
-   * share only the cancellation rule.
+   * anything about the connection; a call also has to decide whether repeating it is safe. That is
+   * why the two are not the same predicate: a ping replaces the generation on any failure, while a
+   * call is repeated only when the SDK named the session the server no longer has. They share only
+   * the cancellation rule.
    *
    * <p>A cancelled call is never repeated: the caller asked for it to stop. A generation this owner
    * closed makes its failure repeatable regardless of type, because the SDK dismisses the in-flight
@@ -397,7 +403,7 @@ public final class OwnedMcpClientLifecycle {
     if (cancelled(failure)) {
       return false;
     }
-    return McpFailures.isConnectionLoss(failure) || generation.closedByOwner();
+    return McpFailures.isRepeatableConnectionLoss(failure) || generation.closedByOwner();
   }
 
   /**
@@ -775,11 +781,34 @@ public final class OwnedMcpClientLifecycle {
     return handshake;
   }
 
+  /**
+   * Releases the generation whose handshake failed, and settles {@code handshake} even when
+   * starting that release does not return.
+   *
+   * <p>This runs from the SDK's error consumer, which on every real transport is a stack the
+   * subscription in {@link #startGeneration(long)} already returned from. Nothing that started the
+   * handshake is left to catch a throwable here, so an {@link Error} leaving {@link
+   * Generation#close()} — it settles its own memoized closure and rethrows — would take the only
+   * remaining path to {@code handshake} with it. The promise is already published by then, so the
+   * owner would stay in connecting forever and every later {@link #connect()} and {@link #close()}
+   * would join a promise nobody is left to complete.
+   *
+   * <p>It is the same guard {@link #release(Generation, CompletableFuture)} applies one frame up,
+   * and it reports the same thing this method reports on every other path: the handshake failure
+   * the caller asked about, with the cleanup trouble attached to it rather than substituted for it.
+   * The throwable then keeps travelling as the same instance, because settling a promise is not a
+   * reason to swallow an {@code Error}.
+   */
   private static void closeAfterFailedHandshake(
       Generation generation, Throwable failure, CompletableFuture<Generation> handshake) {
-    generation
-        .close()
-        .whenComplete((ignored, cleanupFailure) -> report(handshake, failure, cleanupFailure));
+    CompletableFuture<Void> cleanup;
+    try {
+      cleanup = generation.close();
+    } catch (RuntimeException | Error cleanupFailure) {
+      report(handshake, failure, cleanupFailure);
+      throw cleanupFailure;
+    }
+    cleanup.whenComplete((ignored, cleanupFailure) -> report(handshake, failure, cleanupFailure));
   }
 
   /** Closes a transport no client ever took ownership of. */

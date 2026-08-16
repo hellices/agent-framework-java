@@ -13,7 +13,9 @@ import io.github.hellices.agentframework.mcp.internal.OwnedMcpAsyncOperations;
 import io.github.hellices.agentframework.mcp.internal.OwnedMcpClientLifecycle;
 import io.modelcontextprotocol.spec.McpError;
 import io.modelcontextprotocol.spec.McpSchema;
+import io.modelcontextprotocol.spec.McpTransportException;
 import io.modelcontextprotocol.spec.McpTransportSessionNotFoundException;
+import java.io.IOException;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
@@ -114,6 +116,40 @@ class OwnedMcpClientRetryTest {
     assertThat(factory.createdCount()).isEqualTo(1);
     assertThat(transport.closeCount()).isZero();
     assertThat(transport.countOf(McpSchema.METHOD_TOOLS_LIST)).isEqualTo(1);
+  }
+
+  @Test
+  void doesNotRepeatACallThatFailedWithAGenericTransportFailure() {
+    // The SDK's base transport failure is not a lost session. Version 2.0.0 raises it for the body
+    // of a successful POST its mapper could not read, and for a 400 or a 404 from a streamable HTTP
+    // server that issues no session id — cases in which the server accepted the call and may
+    // already have run it. Only the two session-scoped subtypes may be repeated, so this one is
+    // reported: one transport, one dispatch, and the spare the factory still holds is what a
+    // replacement would have taken.
+    InMemoryMcpTransport transport =
+        toolServer()
+            .answeringPing()
+            .failingSend(
+                McpSchema.METHOD_TOOLS_CALL,
+                () ->
+                    new McpTransportException(
+                        "Error parsing response body", new IOException("unexpected end of input")));
+    InMemoryMcpTransport neverUsed = toolServer().answeringPing();
+    ScriptedMcpTransportFactory factory = new ScriptedMcpTransportFactory(transport, neverUsed);
+    OwnedMcpClientLifecycle lifecycle = new OwnedMcpClientLifecycle(factory, settings());
+    lifecycle.connect().join();
+
+    CompletableFuture<McpSchema.CallToolResult> unparseable =
+        lifecycle.execute(
+            client -> client.callTool(new McpSchema.CallToolRequest("search-issues", null, null)));
+
+    assertThat(settledFailure(unparseable))
+        .isInstanceOf(McpTransportException.class)
+        .hasCauseInstanceOf(IOException.class);
+    assertThat(factory.createdCount()).isEqualTo(1);
+    assertThat(neverUsed.methodsSent()).isEmpty();
+    assertThat(transport.closeCount()).isZero();
+    assertThat(transport.countOf(McpSchema.METHOD_TOOLS_CALL)).isEqualTo(1);
   }
 
   @Test

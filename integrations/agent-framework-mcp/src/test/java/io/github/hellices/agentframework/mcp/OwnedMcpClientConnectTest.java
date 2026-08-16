@@ -250,6 +250,72 @@ class OwnedMcpClientConnectTest {
   }
 
   @Test
+  void aFatalCleanupAfterALateHandshakeFailureStillSettlesTheConnectStage() {
+    Error fatal = new NoClassDefFoundError("no transport class on this classpath");
+    InMemoryMcpTransport failing =
+        new InMemoryMcpTransport()
+            .answeringWithError(McpSchema.METHOD_INITIALIZE, -32000, "no server")
+            .withholding(McpSchema.METHOD_INITIALIZE)
+            .throwingCloseError(() -> fatal);
+    InMemoryMcpTransport healthy = new InMemoryMcpTransport().answeringPing();
+    ScriptedMcpTransportFactory factory = new ScriptedMcpTransportFactory(failing, healthy);
+    OwnedMcpClientLifecycle lifecycle = new OwnedMcpClientLifecycle(factory, settings());
+
+    CompletableFuture<Void> connecting = lifecycle.connect();
+
+    // The handshake fails only now, on a stack the subscription already returned from, which is
+    // what every real transport does. Nothing that started the handshake is on the stack any more,
+    // so the Error the cleanup throws travels into the SDK's own error handling rather than into
+    // this class: the callback has to settle the promise connect() published before it lets that
+    // Error go, or nobody is left to settle it at all.
+    failing.releaseWithheld();
+
+    // A bounded get rather than join, because a promise nobody completes fails this line by
+    // timeout instead of hanging the suite. The caller is owed the handshake failure, with the
+    // fatal cleanup attached to it rather than substituted for it.
+    assertThatThrownBy(() -> connecting.get(SETTLE.toMillis(), TimeUnit.MILLISECONDS))
+        .isInstanceOf(ExecutionException.class)
+        .satisfies(
+            reported -> {
+              assertThat(reported.getCause()).isNotSameAs(fatal);
+              assertThat(reported.getCause().getSuppressed()).containsExactly(fatal);
+            });
+    assertThat(failing.closeCount()).isEqualTo(1);
+
+    // The owner adopted nothing, so it is still usable: the next connect asks the factory again
+    // rather than joining a promise nobody is left to complete, and the generation whose cleanup
+    // threw is not asked to close a second time.
+    assertThat(lifecycle.connect()).succeedsWithin(SETTLE);
+    assertThat(factory.createdCount()).isEqualTo(2);
+    assertThat(healthy.countOf(McpSchema.METHOD_INITIALIZE)).isEqualTo(1);
+    assertThat(failing.closeCount()).isEqualTo(1);
+  }
+
+  @Test
+  void aFatalCleanupAfterAnImmediateHandshakeFailureStillLeavesTheOwnerReusable() {
+    Error fatal = new NoClassDefFoundError("no transport class on this classpath");
+    InMemoryMcpTransport failing =
+        new InMemoryMcpTransport()
+            .failingSend(McpSchema.METHOD_INITIALIZE, () -> new IllegalStateException("no server"))
+            .throwingCloseError(() -> fatal);
+    InMemoryMcpTransport healthy = new InMemoryMcpTransport().answeringPing();
+    ScriptedMcpTransportFactory factory = new ScriptedMcpTransportFactory(failing, healthy);
+    OwnedMcpClientLifecycle lifecycle = new OwnedMcpClientLifecycle(factory, settings());
+
+    // The same cleanup on the other ordering: here the handshake fails while the subscription is
+    // still being made, so the caller that asked to connect is still on the stack and receives the
+    // very Error instance rather than a stage carrying it. Settling the published promise first
+    // must not change that.
+    assertThatThrownBy(lifecycle::connect).isSameAs(fatal);
+    assertThat(failing.closeCount()).isEqualTo(1);
+
+    assertThat(lifecycle.connect()).succeedsWithin(SETTLE);
+    assertThat(factory.createdCount()).isEqualTo(2);
+    assertThat(healthy.countOf(McpSchema.METHOD_INITIALIZE)).isEqualTo(1);
+    assertThat(failing.closeCount()).isEqualTo(1);
+  }
+
+  @Test
   void aCleanupFailureThatIsTheReportedFailureStillFailsTheStageOnce() {
     IllegalStateException refusal = new IllegalStateException("transport refuses to negotiate");
     ClientHostileMcpTransport hostile =

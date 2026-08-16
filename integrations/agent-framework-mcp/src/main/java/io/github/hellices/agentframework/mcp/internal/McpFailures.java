@@ -2,7 +2,6 @@ package io.github.hellices.agentframework.mcp.internal;
 
 import io.modelcontextprotocol.spec.McpError;
 import io.modelcontextprotocol.spec.McpSchema;
-import io.modelcontextprotocol.spec.McpTransportException;
 import io.modelcontextprotocol.spec.McpTransportSessionClosedException;
 import io.modelcontextprotocol.spec.McpTransportSessionNotFoundException;
 import java.util.function.Predicate;
@@ -38,17 +37,30 @@ final class McpFailures {
   }
 
   /**
-   * Reports whether the failure is the SDK saying the connection is gone.
+   * Reports whether the failure is the SDK saying the server no longer has the session the request
+   * was addressed to.
    *
-   * <p>Only the SDK's own transport failure types qualify. An application error, including a tool
-   * that failed and a request that timed out, is the server's answer and is reported to the caller
-   * instead of costing a reconnect and a second execution of a call that may have side effects.
+   * <p>Only the two session-scoped SDK failures qualify, because this answer decides whether a
+   * request is <em>sent again</em>. A session the server does not have is one that accepted
+   * nothing, so a request that failed that way ran nowhere and repeating it is safe.
+   *
+   * <p>The SDK's base {@code McpTransportException} deliberately does not qualify. Version 2.0.0
+   * raises it for the body of a <em>successful</em> POST response its JSON mapper could not read,
+   * and for a 400 or a 404 from a streamable HTTP server that issues no session id — cases in which
+   * the server received the request, may have executed it, and only the answer went wrong.
+   * Repeating a {@code tools/call} there would run its side effect twice, which is a worse outcome
+   * than reporting a connection that really was lost. A connection that is genuinely gone is healed
+   * one operation later anyway: the validation ping of the next operation has no side effect to
+   * repeat and replaces the generation on any failure at all.
+   *
+   * <p>An application error, including a tool that failed and a request that timed out, is the
+   * server's answer and is reported to the caller for the same reason.
    *
    * @param failure the failure to classify, may be {@code null}
-   * @return {@code true} if the connection is known to be gone
+   * @return {@code true} if the request may be repeated on a replacement connection
    */
-  static boolean isConnectionLoss(Throwable failure) {
-    return matches(failure, McpFailures::transportFailure);
+  static boolean isRepeatableConnectionLoss(Throwable failure) {
+    return matches(failure, McpFailures::sessionGone);
   }
 
   private static boolean methodNotFound(Throwable candidate) {
@@ -63,10 +75,9 @@ final class McpFailures {
     return code != null && code.intValue() == McpSchema.ErrorCodes.METHOD_NOT_FOUND;
   }
 
-  private static boolean transportFailure(Throwable candidate) {
+  private static boolean sessionGone(Throwable candidate) {
     return candidate instanceof McpTransportSessionNotFoundException
-        || candidate instanceof McpTransportSessionClosedException
-        || candidate instanceof McpTransportException;
+        || candidate instanceof McpTransportSessionClosedException;
   }
 
   private static boolean matches(Throwable failure, Predicate<Throwable> predicate) {

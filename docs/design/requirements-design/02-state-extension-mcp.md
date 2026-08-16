@@ -358,10 +358,11 @@ reused later as a snapshot/checkpoint test fixture, but it does not implement th
 models. `ConnectedMcpClientAdapter` borrows a caller-owned client. `McpStdioTools` and
 `McpStreamableHttpTools` own a stdio or streamable HTTP connection: an explicit `connect()` builds
 one transport and client and completes the handshake, a `ping` validates the session before each
-list or call unless that session answered `-32601`, a validation or connection-loss failure buys at
-most one replacement session and at most one retry of the original operation, and `close()` releases
-the session while leaving the object reusable. Discovery in section 8.2 and invocation in section 8.4
-are shared by both models.
+list or call unless that session answered `-32601`, a failed validation or a session the server no
+longer has buys at most one replacement session and at most one retry of the original operation, and
+`close()` releases the session while leaving the object reusable. A transport failure that leaves it
+unknown whether the server already executed the request is reported rather than repeated. Discovery
+in section 8.2 and invocation in section 8.4 are shared by both models.
 
 Prompts and resources (8.3) and the task lifecycle (8.5) remain absent, as do request headers, trace
 propagation, and sampling. No WebSocket transport exists, because the official SDK 2.0.0 provides no

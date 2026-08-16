@@ -9,6 +9,7 @@ import io.github.hellices.agentframework.mcp.internal.McpOwnedClientSettings;
 import io.github.hellices.agentframework.mcp.internal.OwnedMcpClientLifecycle;
 import io.modelcontextprotocol.spec.McpError;
 import io.modelcontextprotocol.spec.McpSchema;
+import io.modelcontextprotocol.spec.McpTransportException;
 import java.time.Duration;
 import java.util.List;
 import java.util.ServiceConfigurationError;
@@ -105,6 +106,29 @@ class OwnedMcpClientValidationTest {
     assertThat(first.closeCount()).isEqualTo(1);
     assertThat(first.countOf(McpSchema.METHOD_TOOLS_LIST)).isZero();
     assertThat(second.countOf(McpSchema.METHOD_PING)).isZero();
+    assertThat(second.countOf(McpSchema.METHOD_TOOLS_LIST)).isEqualTo(1);
+  }
+
+  @Test
+  void replacesTheGenerationWhenAPingFailsWithAGenericTransportFailure() {
+    // The ping stage does not ask whether a failure may be repeated, because a ping has no side
+    // effect to repeat: any non-cancellation failure buys the one replacement. That is what keeps a
+    // genuinely dead connection healed even though the call stage refuses to repeat this failure
+    // type, and it is the reason narrowing the call stage's rule costs nothing operationally.
+    InMemoryMcpTransport first =
+        toolServer()
+            .failingSend(
+                McpSchema.METHOD_PING, () -> new McpTransportException("connection reset"));
+    InMemoryMcpTransport second = toolServer().answeringPing();
+    ScriptedMcpTransportFactory factory = new ScriptedMcpTransportFactory(first, second);
+    OwnedMcpClientLifecycle lifecycle = new OwnedMcpClientLifecycle(factory, settings());
+    lifecycle.connect().join();
+
+    listTools(lifecycle).join();
+
+    assertThat(factory.createdCount()).isEqualTo(2);
+    assertThat(first.closeCount()).isEqualTo(1);
+    assertThat(first.countOf(McpSchema.METHOD_TOOLS_LIST)).isZero();
     assertThat(second.countOf(McpSchema.METHOD_TOOLS_LIST)).isEqualTo(1);
   }
 
