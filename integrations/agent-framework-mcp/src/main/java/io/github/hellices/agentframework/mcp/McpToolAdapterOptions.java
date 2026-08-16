@@ -52,9 +52,9 @@ public final class McpToolAdapterOptions {
   /**
    * Returns the text prepended to every local tool name.
    *
-   * <p>The prefix is prepended verbatim after name normalization, so a caller that wants a
-   * separator includes it, as in {@code github_}. A prefix keeps tools from two servers apart when
-   * both publish the same remote name.
+   * <p>The prefix and remote name are normalized independently, then concatenated. A caller that
+   * wants a separator includes it, as in {@code github_}. A prefix keeps tools from two servers
+   * apart when both publish the same remote name.
    *
    * @return the prefix, never {@code null}, empty when no prefix applies
    */
@@ -129,7 +129,7 @@ public final class McpToolAdapterOptions {
     private Builder() {}
 
     /**
-     * Sets the text prepended to every local tool name.
+     * Sets the text prepended to every local tool name after the prefix is normalized.
      *
      * @param localNamePrefix the prefix, never {@code null} or blank
      * @return this builder, never {@code null}
