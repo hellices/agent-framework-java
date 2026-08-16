@@ -100,7 +100,7 @@ public final class OwnedMcpClientLifecycle {
       closing = closure;
     }
     if (generation != null) {
-      mirror(generation.close(), closure);
+      release(generation, closure);
       return released(closure);
     }
     settling.whenComplete(
@@ -108,10 +108,31 @@ public final class OwnedMcpClientLifecycle {
           if (settled == null) {
             closure.complete(null);
           } else {
-            mirror(settled.close(), closure);
+            release(settled, closure);
           }
         });
     return released(closure);
+  }
+
+  /**
+   * Starts a generation's cleanup and settles {@code closure} even when starting it does not
+   * return.
+   *
+   * <p>The promise is already published when this runs, so a throwable that leaves {@link
+   * Generation#close()} instead of failing the stage it returns has to settle it here. Otherwise
+   * every other close caller, and every later close, is handed a stage nobody is left to complete —
+   * the same failure mode {@code Generation.close()} guards against, one frame up. The settled
+   * generation branch makes it worse than a wedge: it runs inside a completion callback whose
+   * dependent stage nobody holds, so a throwable that only travels there is one no caller can ever
+   * observe.
+   */
+  private static void release(Generation generation, CompletableFuture<Void> closure) {
+    try {
+      mirror(generation.close(), closure);
+    } catch (RuntimeException | Error failure) {
+      closure.completeExceptionally(failure);
+      throw failure;
+    }
   }
 
   /**

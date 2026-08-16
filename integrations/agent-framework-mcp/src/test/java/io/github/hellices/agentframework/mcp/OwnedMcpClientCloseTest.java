@@ -8,6 +8,8 @@ import io.github.hellices.agentframework.mcp.internal.OwnedMcpClientLifecycle;
 import io.modelcontextprotocol.spec.McpSchema;
 import java.time.Duration;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -222,6 +224,71 @@ class OwnedMcpClientCloseTest {
 
     lifecycle.connect().join();
     assertThat(factory.createdCount()).isEqualTo(2);
+  }
+
+  @Test
+  void aCleanupThatThrowsAnErrorFailsTheStageEveryOtherCloseCallerHolds() {
+    Error fatal = new NoClassDefFoundError("no transport class on this classpath");
+    InMemoryMcpTransport throwing =
+        new InMemoryMcpTransport().answeringPing().throwingCloseError(() -> fatal);
+    InMemoryMcpTransport reopened = new InMemoryMcpTransport().answeringPing();
+    ScriptedMcpTransportFactory factory = new ScriptedMcpTransportFactory(throwing, reopened);
+    OwnedMcpClientLifecycle lifecycle = new OwnedMcpClientLifecycle(factory, settings());
+    lifecycle.connect().join();
+
+    // An Error is not an ordinary failure, so the caller that started the cleanup receives the very
+    // instance rather than a stage carrying it.
+    assertThatThrownBy(lifecycle::close).isSameAs(fatal);
+
+    // Everyone else was handed a view of the promise this close published before it started the
+    // cleanup. A bounded get is the hang detector: if the Error left that promise pending, this
+    // wait ends in a timeout rather than in the failure the caller was owed.
+    CompletableFuture<Void> shared = lifecycle.close();
+    assertThatThrownBy(() -> shared.get(SETTLE.toMillis(), TimeUnit.MILLISECONDS))
+        .isInstanceOf(ExecutionException.class)
+        .hasRootCauseInstanceOf(NoClassDefFoundError.class);
+    assertThat(throwing.closeCount()).isEqualTo(1);
+
+    lifecycle.connect().join();
+    assertThat(factory.createdCount()).isEqualTo(2);
+    assertThat(reopened.countOf(McpSchema.METHOD_INITIALIZE)).isEqualTo(1);
+  }
+
+  @Test
+  void closeDuringAHandshakeFailsWhenTheLateCleanupThrowsAnError() {
+    Error fatal = new NoClassDefFoundError("no transport class on this classpath");
+    InMemoryMcpTransport throwing =
+        new InMemoryMcpTransport()
+            .answeringPing()
+            .withholding(McpSchema.METHOD_INITIALIZE)
+            .throwingCloseError(() -> fatal);
+    InMemoryMcpTransport reopened = new InMemoryMcpTransport().answeringPing();
+    ScriptedMcpTransportFactory factory = new ScriptedMcpTransportFactory(throwing, reopened);
+    OwnedMcpClientLifecycle lifecycle = new OwnedMcpClientLifecycle(factory, settings());
+
+    CompletableFuture<Void> connecting = lifecycle.connect();
+    CompletableFuture<Void> closing = lifecycle.close();
+    throwing.releaseWithheld();
+
+    // The late release starts the cleanup from inside a completion callback, and the stage that
+    // callback returns is held by nobody. An Error that only travels there is one no caller can
+    // ever observe, so a bounded get on the published close stage is what tells a permanent pend
+    // apart from the failure this caller asked for.
+    assertThatThrownBy(() -> closing.get(SETTLE.toMillis(), TimeUnit.MILLISECONDS))
+        .isInstanceOf(ExecutionException.class)
+        .hasRootCauseInstanceOf(NoClassDefFoundError.class);
+    assertThat(connecting).succeedsWithin(SETTLE);
+    assertThat(throwing.closeCount()).isEqualTo(1);
+
+    // A later close is handed the same settled promise rather than a pending one, and the owner is
+    // still reusable, because the generation was dropped before its cleanup was ever started.
+    CompletableFuture<Void> shared = lifecycle.close();
+    assertThatThrownBy(() -> shared.get(SETTLE.toMillis(), TimeUnit.MILLISECONDS))
+        .isInstanceOf(ExecutionException.class)
+        .hasRootCauseInstanceOf(NoClassDefFoundError.class);
+    lifecycle.connect().join();
+    assertThat(factory.createdCount()).isEqualTo(2);
+    assertThat(reopened.countOf(McpSchema.METHOD_INITIALIZE)).isEqualTo(1);
   }
 
   @Test

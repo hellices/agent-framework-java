@@ -53,6 +53,7 @@ final class InMemoryMcpTransport implements McpClientTransport {
   private Function<Mono<McpSchema.JSONRPCMessage>, Mono<McpSchema.JSONRPCMessage>> inbound;
   private Supplier<Throwable> closeFailure;
   private Supplier<RuntimeException> closeThrow;
+  private Supplier<Error> closeThrowError;
   private boolean withholdClose;
 
   /**
@@ -113,6 +114,22 @@ final class InMemoryMcpTransport implements McpClientTransport {
    */
   InMemoryMcpTransport throwingClose(Supplier<RuntimeException> failure) {
     this.closeThrow = failure;
+    return this;
+  }
+
+  /**
+   * Throws an {@link Error} from {@link #closeGracefully()} rather than an ordinary failure, which
+   * is what a linkage error from a consumer's classpath does while a teardown is being set up.
+   *
+   * <p>Reactor deliberately refuses to route a JVM-fatal throwable — {@code VirtualMachineError},
+   * {@code ThreadDeath}, {@code LinkageError} — to an error consumer, so this one keeps travelling
+   * out of {@code subscribe} and out of the caller that started the cleanup. That is the only
+   * scripted input that reaches the guards protecting the memoized and lifecycle-level close
+   * promises. The attempt still counts as a close, for the same reason {@link
+   * #throwingClose(Supplier)} does.
+   */
+  InMemoryMcpTransport throwingCloseError(Supplier<Error> failure) {
+    this.closeThrowError = failure;
     return this;
   }
 
@@ -217,6 +234,12 @@ final class InMemoryMcpTransport implements McpClientTransport {
       closeCount.incrementAndGet();
       closed.set(true);
       throw thrown.get();
+    }
+    Supplier<Error> fatal = closeThrowError;
+    if (fatal != null) {
+      closeCount.incrementAndGet();
+      closed.set(true);
+      throw fatal.get();
     }
     return Mono.defer(
         () -> {
