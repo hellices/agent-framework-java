@@ -93,6 +93,16 @@ class ModuleCompositionPolicyTest {
           ":agent-framework-testkit", List.of(":agent-framework-api"),
           ":integrations:agent-framework-mcp", List.of(":agent-framework-api"));
 
+  /**
+   * Project dependencies a library may compile or run its tests against.
+   *
+   * <p>Separate from {@link #ALLOWED_DEPENDENCIES} because a test-only dependency reaches no
+   * consumer. Folding the two together would mean that permitting a provider to test against the
+   * engine also permitted it to ship against the engine, which the dependency direction rules
+   * forbid.
+   */
+  private static final Map<String, List<String>> ALLOWED_TEST_DEPENDENCIES = Map.of();
+
   static Stream<String> libraryProjects() {
     return LIBRARY_PROJECTS.stream();
   }
@@ -224,14 +234,30 @@ class ModuleCompositionPolicyTest {
   @ParameterizedTest
   @MethodSource("libraryProjects")
   void libraryProjectOnlyDependsOnAllowedProjects(String gradlePath) {
-    assertThat(ProjectLayout.projectDependenciesOf(gradlePath))
+    assertProductionDependenciesAllowed(
+        gradlePath, ProjectLayout.projectDependenciesOf(gradlePath));
+  }
+
+  private static void assertProductionDependenciesAllowed(
+      String gradlePath, List<String> productionDependencies) {
+    assertThat(productionDependencies)
         .containsExactlyInAnyOrderElementsOf(ALLOWED_DEPENDENCIES.get(gradlePath));
+  }
+
+  @ParameterizedTest
+  @MethodSource("libraryProjects")
+  void libraryProjectOnlyTestsAgainstAllowedProjects(String gradlePath) {
+    assertThat(ProjectLayout.testProjectDependenciesOf(gradlePath))
+        .containsExactlyInAnyOrderElementsOf(
+            ALLOWED_TEST_DEPENDENCIES.getOrDefault(gradlePath, List.of()));
   }
 
   @Test
   void noProductProjectDependsOnAHarnessProject() {
     for (String gradlePath : LIBRARY_PROJECTS) {
       assertThat(ProjectLayout.projectDependenciesOf(gradlePath))
+          .noneMatch(dependency -> dependency.startsWith(HARNESS_PREFIX));
+      assertThat(ProjectLayout.testProjectDependenciesOf(gradlePath))
           .noneMatch(dependency -> dependency.startsWith(HARNESS_PREFIX));
     }
   }

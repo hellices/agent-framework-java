@@ -16,7 +16,10 @@ final class ProjectLayout {
   private static final Pattern INCLUDE =
       Pattern.compile("^\\s*include\\(\"(:[A-Za-z0-9:_-]+)\"\\)\\s*$", Pattern.MULTILINE);
 
-  private static final Pattern PROJECT_DEPENDENCY =
+  private static final Pattern CONFIGURATION =
+      Pattern.compile("^\\s*([A-Za-z][A-Za-z0-9]*)\\s*\\(");
+
+  private static final Pattern PROJECT_REFERENCE =
       Pattern.compile("project\\(\"(:[A-Za-z0-9:_-]+)\"\\)");
 
   private ProjectLayout() {}
@@ -66,16 +69,64 @@ final class ProjectLayout {
   }
 
   /**
-   * Returns the project dependencies declared in a build file.
+   * Returns the project dependencies a build file declares on a production configuration.
+   *
+   * <p>Test configurations are excluded on purpose. A test-only project dependency does not reach a
+   * consumer, so treating it as a shipped dependency would force the allowlist to permit a
+   * production dependency in order to permit a test.
    *
    * @param gradlePath the Gradle project path
-   * @return the Gradle paths this project depends on
+   * @return the Gradle paths this project ships against
    */
   static List<String> projectDependenciesOf(String gradlePath) {
-    Matcher matcher = PROJECT_DEPENDENCY.matcher(buildFileText(gradlePath));
+    return projectDependenciesIn(buildFileText(gradlePath));
+  }
+
+  /**
+   * Returns the project dependencies a build file declares on a test configuration.
+   *
+   * @param gradlePath the Gradle project path
+   * @return the Gradle paths this project compiles or runs its tests against
+   */
+  static List<String> testProjectDependenciesOf(String gradlePath) {
+    return testProjectDependenciesIn(buildFileText(gradlePath));
+  }
+
+  static List<String> projectDependenciesIn(String buildFileText) {
+    return dependenciesIn(buildFileText, false);
+  }
+
+  static List<String> testProjectDependenciesIn(String buildFileText) {
+    return dependenciesIn(buildFileText, true);
+  }
+
+  private static List<String> dependenciesIn(String buildFileText, boolean testConfigurations) {
     List<String> dependencies = new ArrayList<>();
-    while (matcher.find()) {
-      dependencies.add(matcher.group(1));
+    for (String line : buildFileText.split("\\R", -1)) {
+      Matcher reference = PROJECT_REFERENCE.matcher(line);
+      if (!reference.find()) {
+        continue;
+      }
+      Matcher configuration = CONFIGURATION.matcher(line);
+      // "project(" and "platform(" also match the configuration shape, so a declaration whose
+      // configuration sits on an earlier line would otherwise be classified as a configuration
+      // called "project" and silently escape the allowlist.
+      if (!configuration.find()
+          || "project".equals(configuration.group(1))
+          || "platform".equals(configuration.group(1))) {
+        throw new IllegalStateException(
+            "Cannot read the configuration of the project dependency "
+                + reference.group(1)
+                + ". Declare a project dependency on one line so the module composition policy can"
+                + " tell a production dependency from a test dependency.");
+      }
+      boolean isTest = configuration.group(1).startsWith("test");
+      if (isTest == testConfigurations) {
+        dependencies.add(reference.group(1));
+        while (reference.find()) {
+          dependencies.add(reference.group(1));
+        }
+      }
     }
     return List.copyOf(dependencies);
   }

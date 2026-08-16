@@ -112,13 +112,17 @@ the package of an existing coordinate.
 3. `:agent-framework-engine`, `:agent-framework-testkit`, and `:integrations:agent-framework-mcp`
    depend on `:agent-framework-api` only. An integration additionally depends on the protocol or
    provider SDK it adapts, which never reaches the API or engine modules.
-4. No project depends on `:agent-framework-bom`, and the BOM lists every published library.
-5. No product project depends on `:build-tools:harness-policy`.
-6. Every project registered in `settings.gradle.kts` exists on disk with a build file.
-7. Dependency versions come from `gradle/libs.versions.toml`. Build files declare no inline version.
-8. The group is `io.github.hellices.agentframework` and the version is repository wide.
-9. Java packages start with `io.github.hellices.agentframework`. Harness build code uses
-   `io.github.hellices.agentframework.build.harness`.
+4. A production project dependency is what a consumer inherits, so it is what the dependency
+   direction rules constrain. A test-only project dependency reaches no consumer and is allowlisted
+   separately in `ModuleCompositionPolicyTest`. Declare every project dependency on one line; the
+   policy reads the configuration from the same line and refuses a declaration it cannot classify.
+5. No project depends on `:agent-framework-bom`, and the BOM lists every published library.
+6. No product project depends on `:build-tools:harness-policy`.
+7. Every project registered in `settings.gradle.kts` exists on disk with a build file.
+8. Dependency versions come from `gradle/libs.versions.toml`. Build files declare no inline version.
+9. The group is `io.github.hellices.agentframework` and the version is repository wide.
+10. Java packages start with `io.github.hellices.agentframework`. Harness build code uses
+    `io.github.hellices.agentframework.build.harness`.
 
 ## Why the graph points this way
 
