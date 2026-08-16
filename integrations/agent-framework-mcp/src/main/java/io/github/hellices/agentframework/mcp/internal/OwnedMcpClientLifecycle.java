@@ -24,10 +24,13 @@ import reactor.core.publisher.Mono;
  *
  * <p>An operation replaces the generation it was given at most once, and only after the connection
  * behind it was lost: either the validation ping went unanswered, or the call itself failed the way
- * the SDK reports a connection that is gone. The call is then repeated once on the replacement, so
- * one request reaches at most two generations and each of them exactly once. The stale generation
- * is always released before the replacement is created, so an owner never holds two live servers,
- * and concurrent failures on one generation produce one replacement rather than one each.
+ * the SDK reports a connection that is gone. A single request is then repeated once on the
+ * replacement, so one request reaches at most two generations and each of them exactly once. A
+ * paged read is one operation spanning many requests and is never repeated that way, because its
+ * cursor belongs to the session that issued it; its reader is told the connection was replaced and
+ * starts the read again. The stale generation is always released before the replacement is created,
+ * so an owner never holds two live servers, and concurrent failures on one generation produce one
+ * replacement rather than one each.
  *
  * <p>The handshake runs on a subscription the caller cannot dispose. Disposing it would leave the
  * SDK initializer holding a permanently pending initialization, after which every later operation
@@ -156,6 +159,11 @@ public final class OwnedMcpClientLifecycle {
    * that timed out are the server's answer, and repeating a tool call the server may already have
    * run would run its side effect twice.
    *
+   * <p>This entry point is one request, so it is the shape that repeats. An operation made of
+   * several requests takes its attempt from {@link #pagedAttempt()} and passes it to every request
+   * of the read, which spends the budget once for all of them and reports the replacement to the
+   * caller rather than repeating a request the new session cannot interpret.
+   *
    * <p>Cancelling the returned stage before the operation was dispatched stops it from being
    * dispatched at all, so a cancelled call never reaches the server; a cancellation that arrives
    * after dispatch disposes the in-flight request instead. Either way the generation stays open.
@@ -165,10 +173,35 @@ public final class OwnedMcpClientLifecycle {
    * @return a stage completing with the operation result, never {@code null}
    */
   public <T> CompletableFuture<T> execute(Function<McpAsyncClient, Mono<T>> operation) {
+    return execute(operation, new Attempt(true));
+  }
+
+  /**
+   * Creates the shared attempt of one paged read.
+   *
+   * <p>A paged read is many requests and one operation, so its attempt is created once by the
+   * caller that drives the pages and handed to every request of that read. That is what makes the
+   * reconnect budget cover the read rather than each page, and what tells {@link #recover} to
+   * report a replacement instead of repeating a request whose cursor died with its session.
+   *
+   * @return an attempt whose single reconnect covers every request of the read, never {@code null}
+   */
+  static Attempt pagedAttempt() {
+    return new Attempt(false);
+  }
+
+  /**
+   * Runs one operation on the current generation as part of the given attempt.
+   *
+   * @param operation produces the SDK call for a given client, never {@code null}
+   * @param attempt the attempt this operation belongs to, never {@code null}
+   * @param <T> the operation result type
+   * @return a stage completing with the operation result, never {@code null}
+   */
+  <T> CompletableFuture<T> execute(Function<McpAsyncClient, Mono<T>> operation, Attempt attempt) {
     if (operation == null) {
       return AsyncStages.failed(new IllegalArgumentException("operation must not be null"));
     }
-    Attempt attempt = new Attempt();
     CompletableFuture<T> result =
         currentGeneration().thenCompose(generation -> validate(operation, generation, attempt));
     return AsyncStages.cancellable(result, attempt::cancel);
@@ -246,6 +279,12 @@ public final class OwnedMcpClientLifecycle {
    * <p>The caller is failed with what actually stopped its operation. A replacement that could not
    * be built is attached to that failure rather than substituted for it: the caller asked for a
    * tool call, and the reason it did not happen is the failure, not the cleanup that came after.
+   *
+   * <p>What happens once the replacement exists is the attempt's decision. A single request is
+   * repeated on it, because the request carries everything the new session needs. A paged read is
+   * not: the request that failed carries a cursor the dead session issued, so the reader is told
+   * the connection was replaced and starts its catalogue again from the first page. Either way the
+   * replacement is already adopted, so the next request lands on it without asking for another one.
    */
   private <T> CompletableFuture<T> recover(
       Function<McpAsyncClient, Mono<T>> operation,
@@ -258,11 +297,14 @@ public final class OwnedMcpClientLifecycle {
     return replaceGeneration(stale)
         .handle(
             (replacement, replacementFailure) -> {
-              if (replacementFailure == null) {
-                return invoke(operation, replacement, attempt);
+              if (replacementFailure != null) {
+                return AsyncStages.<T>failed(
+                    annotate(failure, AsyncStages.unwrap(replacementFailure)));
               }
-              return AsyncStages.<T>failed(
-                  annotate(failure, AsyncStages.unwrap(replacementFailure)));
+              if (!attempt.repeatsOnReplacement()) {
+                return AsyncStages.<T>failed(new McpConnectionReplacedException(failure));
+              }
+              return invoke(operation, replacement, attempt);
             })
         .thenCompose(Function.identity());
   }
@@ -371,12 +413,35 @@ public final class OwnedMcpClientLifecycle {
     }
   }
 
-  /** Tracks the in-flight call of one {@code execute} so cancellation can reach it. */
-  private static final class Attempt {
+  /**
+   * Tracks the in-flight call of one operation so cancellation can reach it, and carries that
+   * operation's single reconnect budget.
+   *
+   * <p>An operation is not always one request. A paged read is one attempt spanning many requests,
+   * and it is the attempt that decides what happens after a replacement: a single request repeats
+   * itself, a paged read cannot and asks its reader to start over instead.
+   */
+  static final class Attempt {
 
+    private final boolean repeatOnReplacement;
     private final AtomicBoolean cancelled = new AtomicBoolean();
     private final AtomicBoolean reconnect = new AtomicBoolean(true);
     private final AtomicReference<CompletableFuture<?>> inFlight = new AtomicReference<>();
+
+    Attempt(boolean repeatOnReplacement) {
+      this.repeatOnReplacement = repeatOnReplacement;
+    }
+
+    /**
+     * Reports whether the operation that failed may be dispatched again on the replacement.
+     *
+     * <p>It is a property of the operation, not of the failure: the failure is the same lost
+     * connection either way. What differs is whether the request means the same thing to a session
+     * that never issued it.
+     */
+    boolean repeatsOnReplacement() {
+      return repeatOnReplacement;
+    }
 
     /**
      * Reports whether the caller already withdrew, so the dispatch can be suppressed before the

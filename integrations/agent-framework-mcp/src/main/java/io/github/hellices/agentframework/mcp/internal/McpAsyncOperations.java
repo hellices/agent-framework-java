@@ -33,4 +33,18 @@ public interface McpAsyncOperations {
    * @return a stage completing with the result, never {@code null}
    */
   CompletionStage<McpSchema.CallToolResult> callTool(McpSchema.CallToolRequest request);
+
+  /**
+   * Returns the operations to use for one paged read, such as a whole tool discovery.
+   *
+   * <p>Reading a catalogue is one logical operation even though it is many requests, and an
+   * implementation that owns its connection needs to know that in order to spend a recovery budget
+   * once for the whole read rather than once per page. An implementation that borrows its
+   * connection recovers from nothing and returns itself, which is why this is a default method.
+   *
+   * @return the operations for one paged read, never {@code null}
+   */
+  default McpAsyncOperations forPagedOperation() {
+    return this;
+  }
 }

@@ -260,6 +260,21 @@ class ConnectedMcpClientAdapterTest {
   }
 
   @Test
+  void rejectsAPortThatHandsOutNoScopeForAPagedRead() {
+    // The scope of a paged read is taken once, before the first page is requested, so a port that
+    // answers with nothing is reported as the broken port it is rather than as a null pointer
+    // failure from inside the reader.
+    FakeMcpAsyncOperations operations =
+        new FakeMcpAsyncOperations().pages(page(List.of(tool("alpha", SEARCH_SCHEMA)), null));
+
+    assertThatThrownBy(() -> discover(adapter(operations.withoutPagedScope())))
+        .rootCause()
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("scope");
+    assertThat(operations.requestedCursors()).isEmpty();
+  }
+
+  @Test
   void turnsASynchronousListFailureIntoAFailedStage() {
     FakeMcpAsyncOperations operations =
         new FakeMcpAsyncOperations()
