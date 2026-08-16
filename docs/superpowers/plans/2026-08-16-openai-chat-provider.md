@@ -6,8 +6,17 @@
 `providers/agent-framework-openai`, implements the neutral `ModelClient` port over the official
 `com.openai:openai-java` Chat Completions async API, and `samples/sample-standalone` stops faking a
 model and calls a real endpoint. After this slice, `./gradlew :samples:sample-standalone:run` is a
-real model call, and the ordinary response and the function-tool loop both work end to end against a
-live OpenAI-compatible service without changing the agent definition.
+real model call, the sample registers one harmless deterministic local function tool on every
+request, and its default prompt asks the model to use that tool, so the default run exercises a real
+function-tool loop against a live OpenAI-compatible service without changing the agent definition.
+
+Two things this goal deliberately does **not** claim. It does not claim that a live model must call
+the tool: tool selection is the model's decision, and an arbitrary user prompt may be answered
+without a call, which is the ordinary response path and not an adapter failure. And it does not use
+the live run as the correctness proof for the loop; the fan-out, the echo, and the byte-identical
+arguments are proved deterministically and offline in Task 10. What the live run adds is that the
+loop is really wired end to end, and the sample's footer reports the tool-call count so the loop is
+observable rather than asserted.
 
 **Architecture:** One public final class, `OpenAiChatModelClient`, with a nested `Builder`. The
 builder takes a **borrowed** `OpenAIClientAsync` and a required model name; the adapter never
@@ -48,6 +57,9 @@ the adapter and the real tool loop agree.
 - `quality` runs spotless with google-java-format, checkstyle with `maxWarnings = 0`, PMD, and
   SpotBugs at `Effort.MAX` / `Confidence.MEDIUM`. Blanket suppressions are prohibited; only narrow
   class-and-method `Match` entries with a justification comment in `config/spotbugs/exclude.xml`.
+  A `Match` is added only after an unfiltered run has reported that exact finding, never
+  speculatively and never as one deferred batch at the end: Tasks 4, 6, 7, and 8 each run the
+  provider module's `quality` task so a finding is met next to the code that caused it.
 - Checkstyle forbids catching or declaring `java.lang.Throwable`. A `whenComplete` callback whose
   **parameter** is a `Throwable` is not a catch and is fine; an actual `catch (Throwable)` is not.
 - PMD runs `CompareObjectsWithEquals`, so production code never compares two object references with
@@ -216,8 +228,11 @@ These are stated, not fixed, in this slice.
   requires one tool message per `tool_call_id`. The adapter fans out, and Task 4 pins that with a
   named test so nobody later "simplifies" it by dropping results.
 - **G3 — `ToolCallContent.arguments` is `Map<String, Object>`.** OpenAI returns an arbitrary JSON
-  string. A non-object argument value cannot round-trip, so the mapper fails explicitly. Fixing it
-  properly means carrying the raw JSON in the core contract, which is a core change.
+  string. A non-object argument value cannot round-trip, so the mapper fails explicitly. A JSON
+  `null` *inside* an object is not affected: the key is kept with a `null` value, which
+  `ToolCallContent` and `ToolArguments` both store, so an optional parameter the model explicitly
+  nulled is still distinguishable from one it omitted. Fixing the non-object case properly means
+  carrying the raw JSON in the core contract, which is a core change.
 - **G4 — no request-id or rate-limit surface.** Response headers are reachable only through
   `withRawResponse()`. Deferred and listed as a README limitation.
 - **G5 — no shared `ModelClient` contract-test base.** `agent-framework-testkit` holds only
@@ -275,6 +290,7 @@ keeps a caller-constructed history working.
 | blank or absent tool-call id | fail | `IllegalStateException`; never a synthesised id |
 | blank function name | fail | `IllegalStateException` naming the call id |
 | `arguments()` equal to `""` | `Map.of()` | OpenAI emits `""` or `{}` for a zero-argument tool |
+| an argument value that is JSON `null`, for example `{"unit":null}` | the key survives, mapped to a `null` value | models routinely emit `null` for an optional parameter; the parsed map is returned as `Collections.unmodifiableMap(new LinkedHashMap<>(...))` because `Map.copyOf` throws `NullPointerException` on a null value, and `ToolCallContent` copies it into a `LinkedHashMap`, which tolerates it |
 | `arguments()` that is valid JSON but not an object | fail | `IllegalStateException` naming tool and call id, no payload (G3) |
 | `arguments()` that is not valid JSON | fail | same failure, cause preserved, no payload |
 | `finish_reason` `stop` | `FinishReason.STOP` | |
@@ -326,6 +342,13 @@ Task 1 therefore teaches the policy the difference: production project dependenc
 end-to-end loop test then lives in the provider module, next to the adapter it proves, over the
 package-private operations seam, and no public API grows to make a cross-module test possible.
 
+Nothing about the production rule is relaxed. The production parse gets *stricter*, because a
+declaration whose configuration it cannot read is now a failure rather than an unclassified match,
+and both allowlists keep exact set equality. Task 2 adds the mutation proof: it takes the provider's
+real build file, flips `testImplementation` to `implementation`, and asserts the production
+allowlist assertion fails on the result. That is what makes "the test allowlist cannot legalise a
+shipped engine dependency" an executed statement rather than a claim in a commit message.
+
 The alternative considered and rejected was hosting that test in `:samples:sample-standalone`, which
 is exempt from the library policy and already depends on the engine. It was rejected because the
 sample cannot reach a package-private seam, so it would have forced either a public
@@ -355,17 +378,24 @@ Production, under `providers/agent-framework-openai/src/main/java/io/github/hell
 
 Tests, under `providers/agent-framework-openai/src/test/java/io/github/hellices/agentframework/openai/`:
 
-- `internal/ChatCompletionRequestMapperTest.java` (create)
-- `internal/ChatCompletionRequestMapperToolsTest.java` (create)
-- `internal/ChatCompletionResponseMapperTest.java` (create)
-- `internal/ChatCompletionResponseMapperToolCallTest.java` (create)
-- `internal/OpenAiChatSettingsTest.java` (create)
-- `FakeChatCompletionsOperations.java` (create) - records params, answers from a script, counts
-  invocations.
-- `OpenAiChatModelClientTest.java` (create) - builder validation, option precedence, provider-option
-  rejection, failure preservation.
-- `OpenAiChatModelClientCancellationTest.java` (create)
-- `OpenAiChatModelClientToolLoopTest.java` (create) - the end-to-end proof over `AgentEngine`.
+Nine test classes and two support files. The README instruction in Task 12 names the nine test
+classes; the two support files are fixtures, not evidence.
+
+- `internal/ChatCompletionRequestMapperTest.java` (create) - test class
+- `internal/ChatCompletionRequestMapperToolsTest.java` (create) - test class
+- `internal/ChatCompletionResponseMapperTest.java` (create) - test class
+- `internal/ChatCompletionResponseMapperToolCallTest.java` (create) - test class
+- `internal/OpenAiChatSettingsTest.java` (create) - test class
+- `internal/OpenAiCallBridgeTest.java` (create) - test class
+- `internal/ChatCompletionsFixture.java` (create) - support: hand-built `ChatCompletion` values whose
+  non-obvious required fields (fact 16) live in one place
+- `FakeChatCompletionsOperations.java` (create) - support: records params, answers from a script,
+  counts invocations
+- `OpenAiChatModelClientTest.java` (create) - test class: builder validation, option precedence,
+  provider-option rejection, failure preservation
+- `OpenAiChatModelClientCancellationTest.java` (create) - test class
+- `OpenAiChatModelClientToolLoopTest.java` (create) - test class: the end-to-end proof over
+  `AgentEngine`
 
 Sample:
 
@@ -384,6 +414,7 @@ Build and policy:
 - `build-tools/harness-policy/src/test/java/io/github/hellices/agentframework/build/harness/ProjectLayout.java` (modify)
 - `build-tools/harness-policy/src/test/java/io/github/hellices/agentframework/build/harness/ProjectLayoutTest.java` (create)
 - `build-tools/harness-policy/src/test/java/io/github/hellices/agentframework/build/harness/ModuleCompositionPolicyTest.java` (modify)
+- `build-tools/harness-policy/src/test/java/io/github/hellices/agentframework/build/harness/PublishedBomContractTest.java` (modify)
 
 Documentation:
 
@@ -392,6 +423,7 @@ Documentation:
 - `docs/design/requirements-design/requirements-traceability-matrix.md` (modify)
 - `docs/operations/getting-started.md` (modify)
 - `README.md` (modify)
+- `docs/ko/README.md` (modify)
 
 ---
 
@@ -506,8 +538,36 @@ class ProjectLayoutTest {
         .hasMessageContaining(":agent-framework-api")
         .hasMessageContaining("one line");
   }
+
+  @Test
+  void classifiesEveryProjectReferenceAsExactlyOneKind() {
+    // The narrowed production parse must lose nothing. If a configuration name the policy does not
+    // recognise ever fell out of both lists, a shipped dependency would become invisible instead of
+    // rejected, which is the whole failure mode this parse exists to prevent.
+    String buildFile =
+        """
+        dependencies {
+            api(project(":agent-framework-api"))
+            implementation(project(":agent-framework-engine"))
+            compileOnly(project(":agent-framework-testkit"))
+            testImplementation(project(":agent-framework-engine"))
+            testFixturesApi(project(":agent-framework-api"))
+        }
+        """;
+
+    assertThat(ProjectLayout.projectDependenciesIn(buildFile))
+        .containsExactly(
+            ":agent-framework-api", ":agent-framework-engine", ":agent-framework-testkit");
+    assertThat(ProjectLayout.testProjectDependenciesIn(buildFile))
+        .containsExactly(":agent-framework-engine", ":agent-framework-api");
+  }
 }
 ```
+
+`testFixturesApi` is classified as a test configuration by the `test` prefix, which is the intended
+reading: nothing published from a library reaches a consumer through it in this repository, and no
+module uses it today. If one ever should be treated as production, that is a policy decision to make
+explicitly, not a parse to loosen quietly.
 
 - [ ] **Step 2: Run the test to verify it fails**
 
@@ -598,7 +658,7 @@ and add the four methods:
 
 Run: `./gradlew :build-tools:harness-policy:test --tests 'io.github.hellices.agentframework.build.harness.ProjectLayoutTest'`
 
-Expected: PASS, 4 tests. Confirm the count with
+Expected: PASS, 5 tests. Confirm the count with
 `grep -o 'tests="[0-9]*"' build-tools/harness-policy/build/test-results/test/TEST-io.github.hellices.agentframework.build.harness.ProjectLayoutTest.xml`.
 
 - [ ] **Step 5: Add the test-dependency allowlist to the module composition policy**
@@ -617,9 +677,24 @@ In `ModuleCompositionPolicyTest.java`, add the map next to `ALLOWED_DEPENDENCIES
   private static final Map<String, List<String>> ALLOWED_TEST_DEPENDENCIES = Map.of();
 ```
 
-and the check:
+Both allowlists keep exact set equality; neither becomes a "contains" check. Extract the production
+assertion so the mutation proof in Task 2 can exercise the very assertion the policy runs, rather
+than a copy of it that could drift:
 
 ```java
+  @ParameterizedTest
+  @MethodSource("libraryProjects")
+  void libraryProjectOnlyDependsOnAllowedProjects(String gradlePath) {
+    assertProductionDependenciesAllowed(
+        gradlePath, ProjectLayout.projectDependenciesOf(gradlePath));
+  }
+
+  private static void assertProductionDependenciesAllowed(
+      String gradlePath, List<String> productionDependencies) {
+    assertThat(productionDependencies)
+        .containsExactlyInAnyOrderElementsOf(ALLOWED_DEPENDENCIES.get(gradlePath));
+  }
+
   @ParameterizedTest
   @MethodSource("libraryProjects")
   void libraryProjectOnlyTestsAgainstAllowedProjects(String gradlePath) {
@@ -714,6 +789,7 @@ is governed before any code depends on it. This task also turns PRV-001 from a c
 - Create: `providers/agent-framework-openai/gradle.lockfile`
 - Modify: `agent-framework-bom/build.gradle.kts`
 - Modify: `build-tools/harness-policy/src/test/java/io/github/hellices/agentframework/build/harness/ModuleCompositionPolicyTest.java`
+- Modify: `build-tools/harness-policy/src/test/java/io/github/hellices/agentframework/build/harness/PublishedBomContractTest.java`
 - Modify: `docs/design/module-composition.md`
 
 **Interfaces:**
@@ -786,15 +862,74 @@ Add the executable evidence for PRV-001, which until now had none:
   }
 ```
 
+Then add the mutation proof that the new test allowlist cannot legalise a shipped engine dependency.
+It reads the provider's real build file, flips the one configuration, and asserts the production
+assertion from Task 1 fails on the result:
+
+```java
+  @Test
+  void aProductionEngineDependencyOnTheProviderFailsTheAllowlist() {
+    // The point of splitting the allowlists is that permitting a test dependency must not permit a
+    // shipped one. Asserting the split exists proves nothing; this mutates the real build file and
+    // proves the production assertion rejects the result.
+    String buildFile = ProjectLayout.buildFileText(":providers:agent-framework-openai");
+    String testDeclaration = "testImplementation(project(\":agent-framework-engine\"))";
+    assertThat(buildFile)
+        .withFailMessage(
+            "This proof mutates %s. If the declaration was reworded, update the mutation rather"
+                + " than deleting the test.",
+            testDeclaration)
+        .contains(testDeclaration);
+
+    String mutated =
+        buildFile.replace(testDeclaration, "implementation(project(\":agent-framework-engine\"))");
+
+    assertThat(ProjectLayout.testProjectDependenciesIn(mutated)).isEmpty();
+    assertThat(ProjectLayout.projectDependenciesIn(mutated))
+        .contains(":agent-framework-engine");
+    assertThatThrownBy(
+            () ->
+                assertProductionDependenciesAllowed(
+                    ":providers:agent-framework-openai",
+                    ProjectLayout.projectDependenciesIn(mutated)))
+        .isInstanceOf(AssertionError.class);
+  }
+```
+
+This test needs `assertThatThrownBy` imported and the provider build file to exist, so it fails
+until Step 4 lands, together with the rest of this step.
+
+Finally, give the new artifact published-BOM evidence. In
+`build-tools/harness-policy/src/test/java/io/github/hellices/agentframework/build/harness/PublishedBomContractTest.java`,
+add the module to the hard-coded list, which still names only the four modules that shipped before
+this slice:
+
+```java
+  private static final List<String> MANAGED_ARTIFACTS =
+      List.of(
+          "agent-framework-api",
+          "agent-framework-engine",
+          "agent-framework-testkit",
+          "agent-framework-mcp",
+          "agent-framework-openai");
+```
+
+Without this the BOM constraint added in Step 6 would be checked only by a build file match, and the
+published BOM could stop managing the new artifact without any test noticing.
+
 - [ ] **Step 2: Run the policy to verify it fails**
 
 Run: `./gradlew :build-tools:harness-policy:test --tests 'io.github.hellices.agentframework.build.harness.ModuleCompositionPolicyTest'`
 
 Expected: FAILS. `settingsRegistersEveryProductProject` reports the missing
 `:providers:agent-framework-openai`, `platformDeclaresConstraintsRatherThanDependencies` reports the
-missing BOM constraint, and the parameterized checks fail with an `UncheckedIOException` because the
-build file does not exist. `noProviderSdkReachesACoreClasspath` passes already, which is the point:
-it must keep passing after the provider lands.
+missing BOM constraint, and the parameterized checks plus
+`aProductionEngineDependencyOnTheProviderFailsTheAllowlist` fail with an `UncheckedIOException`
+because the build file does not exist. `noProviderSdkReachesACoreClasspath` passes already, which is
+the point: it must keep passing after the provider lands.
+
+`PublishedBomContractTest` skips locally when nothing has been published, so it is not the RED
+signal here; Task 13 step 4 is where it runs against a published BOM.
 
 - [ ] **Step 3: Register the project and the dependency versions**
 
@@ -806,24 +941,31 @@ include(":providers:agent-framework-openai")
 include(":samples:sample-standalone")
 ```
 
-`gradle/libs.versions.toml`, keeping both blocks alphabetical:
+`gradle/libs.versions.toml`. **Two library entries are new, not one**: `jackson-bom` does not exist
+in the catalog today, which declares only `jackson-databind` and `jackson-dataformat-yaml`. Adding
+only `openai-java` makes `platform(libs.jackson.bom)` fail at configuration time with
+`Unresolved reference: bom` in Step 10. Keep both blocks alphabetical:
 
 ```toml
 [versions]
 ...
 mcpSdk = "2.0.0"
-openaiJava = "4.51.0"
+openaiJava = "4.51.0"   # new
 pmd = "7.26.0"
 ...
 
 [libraries]
 assertj-core = { module = "org.assertj:assertj-core", version.ref = "assertj" }
-jackson-bom = { module = "com.fasterxml.jackson:jackson-bom", version.ref = "jackson" }
+jackson-bom = { module = "com.fasterxml.jackson:jackson-bom", version.ref = "jackson" }          # new
 jackson-databind = { module = "com.fasterxml.jackson.core:jackson-databind", version.ref = "jackson" }
 ...
 networknt-json-schema-validator = { module = "com.networknt:json-schema-validator", version.ref = "jsonSchemaValidator" }
-openai-java = { module = "com.openai:openai-java", version.ref = "openaiJava" }
+openai-java = { module = "com.openai:openai-java", version.ref = "openaiJava" }                  # new
 ```
+
+The `# new` markers are for the implementer; drop them when writing the file, since the catalog
+carries no comments today. `jackson-bom` reuses the existing `jackson = "2.22.1"` version, so no new
+version key is needed for it.
 
 - [ ] **Step 4: Create the build file**
 
@@ -847,12 +989,13 @@ dependencies {
     // `integrations/agent-framework-mcp`, which takes an `McpAsyncClient`.
     api(libs.openai.java)
 
-    // Tool-call arguments are parsed and re-serialised inside the adapter and never appear on the
-    // public surface, so Jackson stays `implementation`. The platform pins the SDK's own Jackson
-    // modules to the repository version instead of leaving them at the version the SDK POM
-    // declares, which keeps the resolved graph deterministic rather than dependent on conflict
-    // resolution order.
-    implementation(platform(libs.jackson.bom))
+    // The Jackson platform is `api` for the same reason the MCP module uses `api(platform(...))`:
+    // a constraint declared on `implementation` lands only in `runtimeElements`, so a consumer -
+    // including `:samples:sample-standalone` - would compile against the 2.18.9 jackson-databind
+    // the SDK POM declares at compile scope while running on 2.22.1. That split is the skew this
+    // line exists to remove. Jackson itself stays `implementation`: it is used to parse and
+    // re-serialise tool arguments inside the adapter and appears nowhere on the public surface.
+    api(platform(libs.jackson.bom))
     implementation(libs.jackson.databind)
 
     // Test only, never shipped: the end-to-end proof that this adapter and the real tool loop agree
@@ -861,6 +1004,20 @@ dependencies {
     testImplementation(project(":agent-framework-engine"))
 }
 ```
+
+**The trade-off this makes public.** A platform on `api` is published metadata, not a private
+detail. In the POM it appears as a `<dependencyManagement>` entry with `<scope>import</scope>`,
+exactly as `agent-framework-mcp` publishes `mcp-bom` today, and in the Gradle module metadata it
+appears in both the `apiElements` and `runtimeElements` variants. So every consumer of this artifact
+inherits an alignment of *all* Jackson modules at the repository pin, and a Gradle constraint raises
+a version but never lowers one: a consumer that deliberately runs an older Jackson must say so
+explicitly with its own platform, a `strictly` version, or a resolution rule. That is the price of
+removing the compile/runtime skew, it is the precedent this repository already set for an SDK BOM,
+and it is recorded in the adapter README rather than left for a consumer to discover.
+
+The narrower alternative — `implementation(platform(...))` plus a second `constraints { }` block on
+`api` — buys nothing here: the constraint would still be published, and it would state the same
+version twice.
 
 The archive name needs no configuration: Gradle already names the project after its leaf directory,
 so `:providers:agent-framework-openai` publishes as `agent-framework-openai`.
@@ -873,10 +1030,10 @@ so `:providers:agent-framework-openai` publishes as `agent-framework-openai`.
 /**
  * OpenAI Chat Completions model client for Agent Framework for Java.
  *
- * <p>{@link io.github.hellices.agentframework.openai.OpenAiChatModelClient} implements the neutral
- * {@code ModelClient} port over the official {@code com.openai:openai-java} Chat Completions async
- * API. It supports ordinary text responses and the function-tool loop. Streaming, the Responses
- * API, structured output, embeddings, and multimodal content are not supported here.
+ * <p>{@code OpenAiChatModelClient} implements the neutral {@code ModelClient} port over the
+ * official {@code com.openai:openai-java} Chat Completions async API. It supports ordinary text
+ * responses and the function-tool loop. Streaming, the Responses API, structured output,
+ * embeddings, and multimodal content are not supported here.
  *
  * <p>The SDK client is borrowed, never owned. The adapter never builds, configures, reconnects, or
  * closes it, because the client owns an HTTP dispatcher, a connection pool, and an executor that
@@ -907,6 +1064,13 @@ package io.github.hellices.agentframework.openai;
 package io.github.hellices.agentframework.openai.internal;
 ```
 
+Note the deliberate `{@code OpenAiChatModelClient}` in the first file rather than an `{@link}`. The
+publishing convention runs javadoc with `-Xdoclint:all,-missing`, which turns an unresolvable
+reference into an **error**, and that class does not exist until Task 8. Task 8 upgrades it to
+`{@link io.github.hellices.agentframework.openai.OpenAiChatModelClient}` once the target exists, so
+`./gradlew build` or `:providers:agent-framework-openai:javadoc` succeeds at every commit on this
+branch rather than only at the end.
+
 - [ ] **Step 6: Add the BOM constraint**
 
 In `agent-framework-bom/build.gradle.kts`, inside `constraints`:
@@ -915,6 +1079,9 @@ In `agent-framework-bom/build.gradle.kts`, inside `constraints`:
         api(project(":integrations:agent-framework-mcp"))
         api(project(":providers:agent-framework-openai"))
 ```
+
+`PublishedBomContractTest.MANAGED_ARTIFACTS` already gained `agent-framework-openai` in Step 1, so
+this constraint is checked against the published BOM rather than only against this build file.
 
 - [ ] **Step 7: Document the module**
 
@@ -935,19 +1102,49 @@ Run: `./gradlew :providers:agent-framework-openai:resolveAndLockAll --write-lock
 Expected: a new `providers/agent-framework-openai/gradle.lockfile` listing `com.openai:openai-java`,
 `com.openai:openai-java-client-okhttp`, `com.openai:openai-java-core`, `com.squareup.okhttp3:okhttp`,
 `com.squareup.okio:okio`, the Kotlin standard library, `org.jetbrains.kotlin:kotlin-reflect`, the
-Jackson modules at 2.22.1, `io.swagger.core.v3:swagger-annotations`,
+Jackson modules at the repository pin, `io.swagger.core.v3:swagger-annotations`,
 `com.google.errorprone:error_prone_annotations`, and the three `com.github.victools` artifacts.
 
-Read the file before committing it. If Jackson appears at 2.18.9 rather than 2.22.1, the platform
-line in the build file is missing or misspelled. If `kotlin-reflect` is absent, something excluded
-`jackson-module-kotlin` and the SDK will fail at its first request.
+Read the file before committing it, and read it **per configuration**: each line ends with the
+classpaths that resolved that module. Because the platform is on `api`, the Jackson lines must name
+`compileClasspath` as well as `runtimeClasspath`, not runtime alone:
+
+```bash
+grep '^com.fasterxml.jackson' providers/agent-framework-openai/gradle.lockfile
+```
+
+Expected shape, matching what `agent-framework-engine/gradle.lockfile` already shows for the same
+pin: `jackson-databind:2.22.1`, `jackson-core:2.22.1`, and `jackson-bom:2.22.1` on
+`compileClasspath,runtimeClasspath,testCompileClasspath,testRuntimeClasspath`, with
+`jackson-annotations:2.22`, which is the version the Jackson BOM aligns annotations to. Do not
+"fix" the annotations line to 2.22.1; the pin is the BOM, not one coordinate.
+
+Then check for skew explicitly:
+
+```bash
+grep '^com.fasterxml.jackson' providers/agent-framework-openai/gradle.lockfile | grep '2\.18\.'
+```
+
+Expected: no output. A `2.18.9` line means the platform is missing, misspelled, or declared on
+`implementation`, which is the compile/runtime split this build file exists to avoid. If
+`kotlin-reflect` is absent, something excluded `jackson-module-kotlin` and the SDK will fail at its
+first request.
 
 - [ ] **Step 9: Confirm the core lockfiles did not move**
 
-Run: `git diff --stat -- '*/gradle.lockfile'`
+Run:
 
-Expected: only the new provider lockfile appears. `agent-framework-api/gradle.lockfile` and
-`agent-framework-engine/gradle.lockfile` must be untouched, which is PRV-001 holding.
+```bash
+git status --short -- '*/gradle.lockfile'
+git diff --stat -- agent-framework-api/gradle.lockfile agent-framework-engine/gradle.lockfile \
+    agent-framework-testkit/gradle.lockfile
+```
+
+Expected: `git status` shows exactly one untracked file, the new provider lockfile, and `git diff`
+prints nothing. `git diff` alone would have been a no-op check here, because a brand-new untracked
+lockfile never appears in a diff, so an unnoticed change to a core lockfile could have passed as
+"only the new provider lockfile appears". An empty diff over the three named core lockfiles is
+PRV-001 holding.
 
 - [ ] **Step 10: Run the policy and compile**
 
@@ -962,17 +1159,20 @@ check now sees the module.
 git add settings.gradle.kts gradle/libs.versions.toml agent-framework-bom/build.gradle.kts \
         providers/agent-framework-openai \
         build-tools/harness-policy/src/test/java/io/github/hellices/agentframework/build/harness/ModuleCompositionPolicyTest.java \
+        build-tools/harness-policy/src/test/java/io/github/hellices/agentframework/build/harness/PublishedBomContractTest.java \
         docs/design/module-composition.md
 git commit -m "$(cat <<'MSG'
 build: register the OpenAI provider module
 
 Adds providers/agent-framework-openai with the official openai-java 4.51.0
-aggregator on its own classpath, the BOM constraint, the module composition row,
-and the lockfile. The SDK is `api` because the public builder takes a borrowed
-OpenAIClientAsync, and the engine is a test-only dependency for the end-to-end
-tool loop proof that lands later in this branch. PRV-001 now has executable
-evidence: a policy test reads the core lockfiles and fails if a provider SDK ever
-resolves onto them.
+aggregator on its own classpath, the Jackson platform on api so a consumer's
+compile and runtime classpaths agree, the BOM constraint, the module composition
+row, and the lockfile. The SDK is `api` because the public builder takes a
+borrowed OpenAIClientAsync, and the engine is a test-only dependency for the
+end-to-end tool loop proof that lands later in this branch. PRV-001 now has
+executable evidence: a policy test reads the core lockfiles and fails if a
+provider SDK ever resolves onto them, and a mutation test proves that flipping
+the engine dependency to a production configuration fails the allowlist.
 
 Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
 MSG
@@ -1540,9 +1740,13 @@ original SDK object so the `arguments` string stays byte-identical to what the m
 
 **Interfaces:**
 - Consumes: `ChatCompletionRequestMapper` and `OpenAiChatSettings` from Task 3.
-- Produces: no new type. `ChatCompletionRequestMapper.map` gains tool, tool-result, and echo
-  behaviour, and `ChatCompletionRequestMapper()` gains a package-private constructor taking an
-  `ObjectMapper` so the reconstruction path can be exercised with a deterministic mapper.
+- Produces: no new type and no new constructor. `ChatCompletionRequestMapper.map` gains tool,
+  tool-result, and echo behaviour, and the class gains a private `ObjectMapper` field it creates
+  itself. An earlier draft added a package-private constructor taking an `ObjectMapper` "so the
+  reconstruction path can be exercised with a deterministic mapper"; no test in this plan uses it,
+  a default `ObjectMapper` already serialises a `LinkedHashMap` deterministically in insertion
+  order, and an unused seam is untested code that also gives SpotBugs a stored-collaborator finding
+  to report. It is not added.
 
 - [ ] **Step 1: Write the failing tool mapping test**
 
@@ -1761,19 +1965,27 @@ tests fail because the assistant branch sets content unconditionally and drops t
 
 - [ ] **Step 3: Implement tools, the tool-result fan-out, and the echo**
 
-Add to `ChatCompletionRequestMapper`:
+Add these imports to `ChatCompletionRequestMapper`; none of them is in the Task 3 import list, and
+every one of them is used by the code below:
 
 ```java
-  private final ObjectMapper json;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.openai.core.JsonValue;
+import com.openai.models.FunctionDefinition;
+import com.openai.models.FunctionParameters;
+import com.openai.models.chat.completions.ChatCompletionFunctionTool;
+import com.openai.models.chat.completions.ChatCompletionMessage;
+import com.openai.models.chat.completions.ChatCompletionMessageFunctionToolCall;
+import com.openai.models.chat.completions.ChatCompletionToolMessageParam;
+import io.github.hellices.agentframework.api.tool.ToolDefinition;
+import java.util.Map;
+```
 
-  /** Creates a mapper with the adapter's own JSON writer. */
-  public ChatCompletionRequestMapper() {
-    this(new ObjectMapper());
-  }
+Then add the JSON writer the reconstruction path needs:
 
-  ChatCompletionRequestMapper(ObjectMapper json) {
-    this.json = Objects.requireNonNull(json, "json must not be null");
-  }
+```java
+  private final ObjectMapper json = new ObjectMapper();
 ```
 
 Call `applyTools(request, params)` from `map` after `applyOptions`, then change the two branches of
@@ -1895,7 +2107,21 @@ Run: `./gradlew :providers:agent-framework-openai:test --tests 'io.github.hellic
 Expected: PASS, 18 tests (10 in `ChatCompletionRequestMapperTest`, 8 in
 `ChatCompletionRequestMapperToolsTest`).
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: Run the module quality gate**
+
+Run: `./gradlew :providers:agent-framework-openai:quality`
+
+Expected: PASS. This runs here, and again in Tasks 6 and 8, so a static-analysis finding is met next
+to the code that caused it instead of arriving as one batch at the end, where the cheapest response
+is a broad suppression.
+
+`ChatCompletionRequestMapper` stores no caller-supplied collaborator — it creates its own
+`ObjectMapper` — so no `EI_EXPOSE_REP2` finding is expected here. If spotless reports formatting,
+run `./gradlew spotlessApply` and re-run. If SpotBugs or PMD reports something else, fix the code;
+add an exclusion only for a finding an unfiltered run actually produced, as one `Match` naming the
+exact class and method with a comment saying why the reference is the design.
+
+- [ ] **Step 6: Commit**
 
 ```bash
 git add providers/agent-framework-openai/src
@@ -2288,7 +2514,11 @@ public final class ChatCompletionResponseMapper {
   }
 ```
 
-Do not leave this stub in the branch beyond Task 6.
+Do not leave this stub in the branch beyond Task 6, and do not run
+`:providers:agent-framework-openai:quality` while it exists: PMD's `UnusedFormalParameter` rule
+inspects private methods, and this stub uses neither parameter. That is why the module quality gate
+sits in Task 6, once the body is real, rather than here. It is also why the stub is bounded to one
+task instead of being a convenient placeholder.
 
 - [ ] **Step 5: Run the test again**
 
@@ -2332,8 +2562,11 @@ coerced.
 
 **Interfaces:**
 - Consumes: `ChatCompletionResponseMapper` and `ChatCompletionsFixture` from Task 5.
-- Produces: `ChatCompletionResponseMapper()` keeps its no-argument form and gains a package-private
-  `ChatCompletionResponseMapper(ObjectMapper json)` for deterministic parsing in tests.
+- Produces: no new constructor. `ChatCompletionResponseMapper()` keeps its no-argument form and the
+  class gains a private `ObjectMapper` field it creates itself. As in Task 4, the package-private
+  `ChatCompletionResponseMapper(ObjectMapper)` seam an earlier draft proposed is not added: no test
+  in this plan uses it, `readTree` is deterministic without configuration, and an unused seam is
+  untested code.
 
 - [ ] **Step 1: Write the failing tool-call test**
 
@@ -2401,6 +2634,26 @@ class ChatCompletionResponseMapperToolCallTest {
 
     assertThat(toolCall(mapper.map(empty)).arguments()).isEmpty();
     assertThat(toolCall(mapper.map(object)).arguments()).isEmpty();
+  }
+
+  @Test
+  void keepsAnArgumentWhoseJsonValueIsNull() {
+    // Models routinely send null for an optional parameter: {"unit":null} means "I did not choose a
+    // unit", which is not the same as omitting the key. Map.copyOf rejects a null value with a bare
+    // NullPointerException, so a perfectly ordinary tool call would crash the loop with an
+    // unexplained failure. ToolCallContent copies into a LinkedHashMap and keeps the null.
+    ChatCompletion completion =
+        ChatCompletionsFixture.completion(
+            ChatCompletionsFixture.withToolCalls(
+                null,
+                ChatCompletionsFixture.functionCall(
+                    "call_1", "lookup", "{\"unit\":null,\"city\":\"Seoul\"}")),
+            ChatCompletion.Choice.FinishReason.TOOL_CALLS);
+
+    Map<String, Object> arguments = toolCall(mapper.map(completion)).arguments();
+
+    assertThat(arguments).hasSize(2).containsKey("unit").containsEntry("city", "Seoul");
+    assertThat(arguments.get("unit")).isNull();
   }
 
   @Test
@@ -2496,24 +2749,34 @@ class ChatCompletionResponseMapperToolCallTest {
 
 Run: `./gradlew :providers:agent-framework-openai:test --tests 'io.github.hellices.agentframework.openai.internal.ChatCompletionResponseMapperToolCallTest'`
 
-Expected: FAILS, 7 tests. Every case fails on an empty content list, because `appendToolCalls` is
+Expected: FAILS, 8 tests. Every case fails on an empty content list, because `appendToolCalls` is
 still the Task 5 stub.
 
+`keepsAnArgumentWhoseJsonValueIsNull` must stay red for a second reason as well: it also fails
+against the obvious implementation. `Map.copyOf(values)` throws `NullPointerException: null` with no
+message naming the tool, the call, or the key, which is exactly the unexplained failure the failure
+contract forbids. Do not write that line and then delete this test.
+
 - [ ] **Step 3: Implement tool-call mapping**
+
+Add these imports; none is in the Task 5 import list:
+
+```java
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.openai.models.chat.completions.ChatCompletionMessageFunctionToolCall;
+import com.openai.models.chat.completions.ChatCompletionMessageToolCall;
+import io.github.hellices.agentframework.api.message.ToolCallContent;
+import java.util.Collections;
+```
+
+`java.util.LinkedHashMap` and `java.util.Map` are already imported by Task 5.
 
 Replace the stub:
 
 ```java
-  private final ObjectMapper json;
-
-  /** Creates a mapper with the adapter's own JSON reader. */
-  public ChatCompletionResponseMapper() {
-    this(new ObjectMapper());
-  }
-
-  ChatCompletionResponseMapper(ObjectMapper json) {
-    this.json = Objects.requireNonNull(json, "json must not be null");
-  }
+  private final ObjectMapper json = new ObjectMapper();
 
   private void appendToolCalls(ChatCompletionMessage message, List<Content> content) {
     for (ChatCompletionMessageToolCall toolCall : message.toolCalls().orElse(List.of())) {
@@ -2557,7 +2820,12 @@ Replace the stub:
     parsed
         .properties()
         .forEach(entry -> values.put(entry.getKey(), json.convertValue(entry.getValue(), Object.class)));
-    return Map.copyOf(values);
+    // Collections.unmodifiableMap, never Map.copyOf. A JSON null argument value converts to a Java
+    // null, and Map.copyOf rejects it with a bare NullPointerException that names neither the tool
+    // nor the key. {"unit":null} is an ordinary thing for a model to send about an optional
+    // parameter, and dropping or refusing the key would change what the model said.
+    // ToolCallContent copies this into a LinkedHashMap, which keeps the null.
+    return Collections.unmodifiableMap(values);
   }
 
   private static String argumentFailure(String name, String callId) {
@@ -2574,17 +2842,32 @@ Replace the stub:
 Note the raw representation: the `ToolCallContent` carries the SDK function call, which keeps the
 exact arguments string reachable even after the map has been parsed.
 
+`metadataOf` in Task 5 keeps `Map.copyOf`: `id()`, `model()`, and `created()` are all non-null, so
+there is nothing for it to reject. The rule is not "never use `Map.copyOf`"; it is "never copy a map
+whose values came from the model".
+
 If `JsonNode.properties()` is unavailable on the pinned Jackson, use
 `json.convertValue(parsed, new TypeReference<LinkedHashMap<String, Object>>() {})` after the
-`isObject` check; do not fall back to an unchecked cast, which `-Werror` would fail anyway.
+`isObject` check, then wrap that map the same way; do not fall back to an unchecked cast, which
+`-Werror` would fail anyway. That alternative keeps null values too, and the same
+`Collections.unmodifiableMap` rule applies to it.
 
 - [ ] **Step 4: Run both response mapper tests**
 
 Run: `./gradlew :providers:agent-framework-openai:test --tests 'io.github.hellices.agentframework.openai.internal.ChatCompletionResponseMapper*'`
 
-Expected: PASS, 20 tests (13 from Task 5 plus 7 here).
+Expected: PASS, 21 tests (13 from Task 5 plus 8 here).
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: Run the module quality gate**
+
+Run: `./gradlew :providers:agent-framework-openai:quality`
+
+Expected: PASS. Same rule as Task 4: `ChatCompletionResponseMapper` creates its own `ObjectMapper`
+and stores no caller-supplied collaborator, so no `EI_EXPOSE_REP2` finding is expected. Fix what is
+reported; add a `Match` only for a finding an unfiltered run produced, naming the exact class and
+method with a reason.
+
+- [ ] **Step 6: Commit**
 
 ```bash
 git add providers/agent-framework-openai/src
@@ -2594,9 +2877,12 @@ openai: map function tool calls and their arguments
 A function tool call becomes a ToolCallContent carrying the SDK call as its raw
 representation, with text first and calls in wire order. Empty and "{}" arguments
 both mean no arguments; a JSON array, a scalar, or invalid JSON fails naming the
-tool and the call id and never quoting the payload. A blank id or name and a
-non-function tool call fail rather than being coerced, because a synthesised id
-would key a tool result the model never asked for.
+tool and the call id and never quoting the payload. An argument whose JSON value
+is null keeps its key with a null value, because a model sending {"unit":null} is
+ordinary and Map.copyOf would have crashed the loop with a bare
+NullPointerException. A blank id or name and a non-function tool call fail rather
+than being coerced, because a synthesised id would key a tool result the model
+never asked for.
 
 Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
 MSG
@@ -2904,7 +3190,18 @@ Run: `./gradlew :providers:agent-framework-openai:test --tests 'io.github.hellic
 
 Expected: PASS, 7 tests.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: Run the module quality gate**
+
+Run: `./gradlew :providers:agent-framework-openai:quality`
+
+Expected: PASS. The bridge is static methods over a narrow interface and stores no caller-supplied
+collaborator, so no `EI_EXPOSE_REP2` finding is expected. Watch instead for the two rules this code
+is closest to: Checkstyle forbids catching or declaring `java.lang.Throwable`, and a `whenComplete`
+parameter of that type is not a catch; PMD's `CompareObjectsWithEquals` forbids `==` between
+references, and comparison against `null` is unaffected. Fix what is reported rather than excluding
+it.
+
+- [ ] **Step 6: Commit**
 
 ```bash
 git add providers/agent-framework-openai/src
@@ -2936,6 +3233,8 @@ pins that surface so a testing convenience cannot quietly become a supported met
 - Create: `providers/agent-framework-openai/src/main/java/io/github/hellices/agentframework/openai/internal/ChatCompletionsOperations.java`
 - Create: `providers/agent-framework-openai/src/main/java/io/github/hellices/agentframework/openai/internal/SdkChatCompletionsOperations.java`
 - Create: `providers/agent-framework-openai/src/main/java/io/github/hellices/agentframework/openai/OpenAiChatModelClient.java`
+- Modify: `providers/agent-framework-openai/src/main/java/io/github/hellices/agentframework/openai/package-info.java`
+- Modify, only if SpotBugs reports a finding: `config/spotbugs/exclude.xml`
 - Test: `providers/agent-framework-openai/src/test/java/io/github/hellices/agentframework/openai/FakeChatCompletionsOperations.java`
 - Test: `providers/agent-framework-openai/src/test/java/io/github/hellices/agentframework/openai/OpenAiChatModelClientTest.java`
 
@@ -3430,15 +3729,59 @@ Run: `./gradlew :providers:agent-framework-openai:test --tests 'io.github.hellic
 
 Expected: PASS, 10 tests.
 
-If SpotBugs reports `EI_EXPOSE_REP2` on the constructor storing the operations port, add a narrow
-match to `config/spotbugs/exclude.xml` next to the MCP entries, naming the exact class and method and
-explaining that the port is a borrowed collaborator that cannot be copied through its interface. Do
-not add a package-level match or a class-wide `@SuppressWarnings`.
+- [ ] **Step 7: Upgrade the package documentation link**
 
-- [ ] **Step 7: Commit**
+`OpenAiChatModelClient` now exists, so change the first sentence of
+`io/github/hellices/agentframework/openai/package-info.java` from `{@code OpenAiChatModelClient}` to
+`{@link io.github.hellices.agentframework.openai.OpenAiChatModelClient}`. Task 2 deliberately used
+`{@code}` because `-Xdoclint:all,-missing` turns an unresolvable reference into a javadoc error.
+
+Verify with: `./gradlew :providers:agent-framework-openai:javadoc`
+
+Expected: PASS, no warnings.
+
+- [ ] **Step 8: Run the module quality gate**
+
+Run: `./gradlew :providers:agent-framework-openai:quality`
+
+Expected: PASS, or a small number of `EI_EXPOSE_REP2` findings on the collaborators this task
+introduces. This is the task that adds them, which is why the gate runs here rather than at the end.
+
+Run it **unfiltered first** and let it report. Only then add a `Match` per finding, to
+`config/spotbugs/exclude.xml`, next to the existing MCP entries, naming the exact class and method
+and saying why the stored reference is the design. The sites this task could plausibly produce are:
+
+- `SdkChatCompletionsOperations.<init>`, storing the borrowed `OpenAIClientAsync`
+- `OpenAiChatModelClient.<init>`, storing the `ChatCompletionsOperations` port
+- `OpenAiChatModelClient$Builder.client`, a setter storing the same borrowed client
+- `OpenAiChatModelClient$Builder.operations`, a setter storing the test seam
+
+The builder setters are on this list because SpotBugs at `Effort.MAX` / `Confidence.MEDIUM` already
+flags builder setters in this repository: `McpStdioTools$Builder.jsonMapper` and
+`McpStreamableHttpTools$Builder.toolOptions` are both in `exclude.xml` today. `OpenAiChatSettings`
+and `Duration` are immutable values and are not expected to be flagged.
+
+This is a list of candidates, not a list of entries to write. Add nothing SpotBugs did not report,
+and never a package-level match, a class-wide `Match` without a method, or a `@SuppressWarnings`. If
+a finding is real, fix the code. One entry looks like:
+
+```xml
+  <!--
+    SdkChatCompletionsOperations stores the caller's OpenAIClientAsync by reference on purpose: it
+    must call the very client the host built and still owns, and copying it through its interface is
+    not possible and would take over a lifecycle the host must keep.
+  -->
+  <Match>
+    <Class name="io.github.hellices.agentframework.openai.internal.SdkChatCompletionsOperations"/>
+    <Method name="&lt;init&gt;"/>
+    <Bug pattern="EI_EXPOSE_REP2"/>
+  </Match>
+```
+
+- [ ] **Step 9: Commit**
 
 ```bash
-git add providers/agent-framework-openai/src
+git add providers/agent-framework-openai/src config/spotbugs/exclude.xml
 git commit -m "$(cat <<'MSG'
 openai: add the OpenAiChatModelClient facade
 
@@ -3447,7 +3790,9 @@ SDK-backed implementation that borrows an OpenAIClientAsync and never creates,
 configures, or closes one. Building a client dispatches nothing, every call
 carries the configured request timeout with a 60 second default, and a provider
 failure keeps its original instance as the cause. A test pins the supported
-builder surface so the operations seam cannot become an API promise.
+builder surface so the operations seam cannot become an API promise. Any SpotBugs
+exclusion added here names one class and one method and says why the borrowed
+reference is the design.
 
 Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
 MSG
@@ -3784,8 +4129,8 @@ Run: `./gradlew :providers:agent-framework-openai:test`
 
 Expected: PASS. Confirm the total with
 `grep -ho 'tests="[0-9]*"' providers/agent-framework-openai/build/test-results/test/*.xml`, which
-should sum to 66 across nine test classes: 6 settings, 10 request mapping, 8 request tool mapping,
-13 response mapping, 7 response tool-call mapping, 7 bridge, 10 client, 4 cancellation, and 1 tool
+should sum to 67 across nine test classes: 6 settings, 10 request mapping, 8 request tool mapping,
+13 response mapping, 8 response tool-call mapping, 7 bridge, 10 client, 4 cancellation, and 1 tool
 loop. Treat the total as a checksum, not a target: if it differs, find out which case moved before
 changing the number.
 
@@ -3811,9 +4156,22 @@ MSG
 
 ### Task 11: The standalone sample calls a real endpoint
 
-The sample stops pretending. `createAgent(ModelClient)` stays injectable so the sample keeps a
+The sample stops pretending. `createAgent(ModelClient, Clock)` stays injectable so the sample keeps a
 deterministic test, and `main` resolves credentials from the environment, owns the SDK client, and
 closes it. No fallback to a fake, no demo mode, and no network in any test.
+
+The sample also registers one function tool: `current_utc_time`, which reads an injected
+`java.time.Clock` and returns an ISO-8601 instant. It takes no arguments, touches no file, no socket,
+and no process, and it logs nothing, so it is safe to ship in a sample that anyone may run against
+their own credentials. The default prompt asks the model to use it, which is what turns
+`:samples:sample-standalone:run` into an observable function-tool loop instead of a plain
+completion. An explicit user prompt still wins: `--args="..."` is passed through unchanged, and the
+model may answer it without calling the tool, which is the ordinary path and not a failure.
+
+The tool exists in `main`, so the live milestone exercises the real loop. Its correctness is not
+proved by the live run: the sample's own tests inject a scripted `ModelClient` and a fixed `Clock`
+and assert registration, the loop, and the tool output deterministically, with no network and no
+credential.
 
 **Files:**
 - Modify: `samples/sample-standalone/build.gradle.kts`
@@ -3824,8 +4182,11 @@ closes it. No fallback to a fake, no demo mode, and no network in any test.
 **Interfaces:**
 - Consumes: `OpenAiChatModelClient` from Task 8.
 - Produces, in `io.github.hellices.agentframework.samples.standalone`:
-  - `public static Agent createAgent(ModelClient modelClient)`
-  - package-private `static String requiredApiKey(Map<String, String> environment)`,
+  - `public static Agent createAgent(ModelClient modelClient, Clock clock)`
+  - package-private `static final String TOOL_NAME = "current_utc_time"`
+  - package-private `static FunctionTool currentTimeTool(Clock clock)`,
+    `static String defaultPrompt()`, `static String prompt(String[] args)`,
+    `static String requiredApiKey(Map<String, String> environment)`,
     `static String baseUrl(Map<String, String> environment)`,
     `static String model(Map<String, String> environment)`,
     `static String footer(AgentResponse response, String model)`
@@ -3840,41 +4201,116 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.github.hellices.agentframework.api.agent.Agent;
+import io.github.hellices.agentframework.api.agent.AgentResponse;
 import io.github.hellices.agentframework.api.message.FinishReason;
 import io.github.hellices.agentframework.api.message.Message;
 import io.github.hellices.agentframework.api.message.Role;
 import io.github.hellices.agentframework.api.message.TextContent;
+import io.github.hellices.agentframework.api.message.ToolCallContent;
+import io.github.hellices.agentframework.api.message.ToolResultContent;
+import io.github.hellices.agentframework.api.message.Usage;
 import io.github.hellices.agentframework.spi.model.ModelClient;
+import io.github.hellices.agentframework.spi.model.ModelRequest;
 import io.github.hellices.agentframework.spi.model.ModelResponse;
+import java.time.Clock;
+import java.time.Instant;
+import java.time.ZoneOffset;
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Deque;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 import org.junit.jupiter.api.Test;
 
 /**
- * Covers the sample without a network call or a credential.
+ * Covers the sample without a network call, a credential, or a wall clock.
  *
- * <p>The agent assembly is exercised through the injectable model client, and credential resolution
- * is exercised as a pure function over a supplied environment map. Nothing here reads the real
- * process environment or builds an SDK client, so the suite runs identically on a laptop and in CI.
+ * <p>The agent assembly, the registered tool, and the whole function-tool loop are exercised
+ * through an injected model client and an injected clock, and credential resolution is a pure
+ * function over a supplied environment map. Nothing here reads the real process environment, the
+ * real time, or builds an SDK client, so the suite runs identically on a laptop and in CI.
+ *
+ * <p>What these tests deliberately do not claim is that a live model calls the tool. Tool selection
+ * belongs to the model. What is proved here is that the tool is registered on every request, that
+ * the loop completes when the model does call it, and that the default prompt asks for it by name.
  */
 class StandaloneAgentApplicationTest {
 
-  @Test
-  void runsWithAnInjectedModelClient() {
-    ModelClient modelClient =
-        request ->
-            CompletableFuture.completedFuture(
-                new ModelResponse(
-                    List.of(new Message(Role.ASSISTANT, List.of(new TextContent("pong")))),
-                    null,
-                    FinishReason.STOP,
-                    Map.of(),
-                    null));
+  private static final Clock FIXED_CLOCK =
+      Clock.fixed(Instant.parse("2026-08-16T00:00:00Z"), ZoneOffset.UTC);
+  private static final String FIXED_TIME = "2026-08-16T00:00:00Z";
 
-    Agent agent = StandaloneAgentApplication.createAgent(modelClient);
+  @Test
+  void runsWithAnInjectedModelClientAndOffersTheLocalTool() {
+    ScriptedModelClient modelClient = new ScriptedModelClient(text("pong", null));
+
+    Agent agent = StandaloneAgentApplication.createAgent(modelClient, FIXED_CLOCK);
 
     assertThat(agent.run("ping").response().toCompletableFuture().join().text()).isEqualTo("pong");
+    // The tool reaches the wire on the very first request, which is what makes the live run a tool
+    // loop rather than a plain completion.
+    assertThat(modelClient.requests().get(0).tools())
+        .singleElement()
+        .satisfies(tool -> assertThat(tool.name()).isEqualTo(StandaloneAgentApplication.TOOL_NAME));
+  }
+
+  @Test
+  void runsTheFunctionToolLoopWithTheInjectedClock() {
+    // The loop the live milestone is supposed to exercise, proved here with no network: the model
+    // asks for the tool, the sample's tool answers from the injected clock, and the second request
+    // carries that answer back.
+    ScriptedModelClient modelClient =
+        new ScriptedModelClient(
+            toolCall("call_1", new Usage(3L, 1L, 4L)),
+            text("It is " + FIXED_TIME, new Usage(5L, 2L, 7L)));
+
+    AgentResponse response =
+        StandaloneAgentApplication.createAgent(modelClient, FIXED_CLOCK)
+            .run(StandaloneAgentApplication.defaultPrompt())
+            .response()
+            .toCompletableFuture()
+            .join();
+
+    assertThat(modelClient.requests()).hasSize(2);
+    List<Message> second = modelClient.requests().get(1).messages();
+    ToolResultContent result =
+        (ToolResultContent)
+            second.stream()
+                .filter(message -> Role.TOOL.equals(message.role()))
+                .flatMap(message -> message.content().stream())
+                .findFirst()
+                .orElseThrow();
+    assertThat(result.callId()).isEqualTo("call_1");
+    assertThat(result.content())
+        .singleElement()
+        .extracting(content -> ((TextContent) content).value())
+        .isEqualTo(FIXED_TIME);
+    assertThat(response.text()).isEqualTo("It is " + FIXED_TIME);
+  }
+
+  @Test
+  void namesTheSameToolInTheDefaultPromptAndTheToolDefinition() {
+    // If these two drift apart, the default run silently stops exercising the loop while every test
+    // still passes, which is exactly the gap this sample exists to close.
+    assertThat(StandaloneAgentApplication.currentTimeTool(FIXED_CLOCK).definition().name())
+        .isEqualTo(StandaloneAgentApplication.TOOL_NAME);
+    assertThat(StandaloneAgentApplication.defaultPrompt())
+        .contains(StandaloneAgentApplication.TOOL_NAME);
+  }
+
+  @Test
+  void usesTheDefaultPromptWhenNoArgumentIsGiven() {
+    assertThat(StandaloneAgentApplication.prompt(new String[0]))
+        .isEqualTo(StandaloneAgentApplication.defaultPrompt());
+  }
+
+  @Test
+  void keepsArbitraryUserArguments() {
+    // The default prompt is a convenience, not a cage. Whatever the user passes is what is asked.
+    assertThat(StandaloneAgentApplication.prompt(new String[] {"summarise", "this"}))
+        .isEqualTo("summarise this");
   }
 
   @Test
@@ -3915,27 +4351,73 @@ class StandaloneAgentApplicationTest {
   }
 
   @Test
-  void printsANonSensitiveFooter() {
-    // The footer must never carry the prompt or the answer beyond what was already printed.
-    var response =
-        StandaloneAgentApplication.createAgent(
-                request ->
-                    CompletableFuture.completedFuture(
-                        new ModelResponse(
-                            List.of(
-                                new Message(Role.ASSISTANT, List.of(new TextContent("pong")))),
-                            new io.github.hellices.agentframework.api.message.Usage(3L, 1L, 4L),
-                            FinishReason.STOP,
-                            Map.of(),
-                            null)))
-            .run("ping")
+  void printsANonSensitiveFooterThatCountsToolCalls() {
+    // The footer is how a human sees that the loop ran. It carries a count, never the prompt, the
+    // reply, or the tool's output.
+    ScriptedModelClient modelClient =
+        new ScriptedModelClient(
+            toolCall("call_1", new Usage(3L, 1L, 4L)),
+            text("It is " + FIXED_TIME, new Usage(5L, 2L, 7L)));
+    AgentResponse response =
+        StandaloneAgentApplication.createAgent(modelClient, FIXED_CLOCK)
+            .run(StandaloneAgentApplication.defaultPrompt())
             .response()
             .toCompletableFuture()
             .join();
 
     assertThat(StandaloneAgentApplication.footer(response, "gpt-4.1-mini"))
-        .isEqualTo("[model=gpt-4.1-mini finishReason=STOP inputTokens=3 outputTokens=1]")
-        .doesNotContain("ping");
+        .isEqualTo(
+            "[model=gpt-4.1-mini finishReason=STOP toolCalls=1 inputTokens=8 outputTokens=3]")
+        .doesNotContain(FIXED_TIME)
+        .doesNotContain(StandaloneAgentApplication.defaultPrompt());
+  }
+
+  private static ModelResponse text(String value, Usage usage) {
+    return new ModelResponse(
+        List.of(new Message(Role.ASSISTANT, List.of(new TextContent(value)))),
+        usage,
+        FinishReason.STOP,
+        Map.of(),
+        null);
+  }
+
+  private static ModelResponse toolCall(String callId, Usage usage) {
+    return new ModelResponse(
+        List.of(
+            new Message(
+                Role.ASSISTANT,
+                List.of(
+                    new ToolCallContent(
+                        callId, StandaloneAgentApplication.TOOL_NAME, Map.of())))),
+        usage,
+        FinishReason.TOOL_CALLS,
+        Map.of(),
+        null);
+  }
+
+  /** Answers from a script and records what the sample asked for. */
+  private static final class ScriptedModelClient implements ModelClient {
+
+    private final List<ModelRequest> requests = new ArrayList<>();
+    private final Deque<ModelResponse> answers;
+
+    ScriptedModelClient(ModelResponse... answers) {
+      this.answers = new ArrayDeque<>(List.of(answers));
+    }
+
+    @Override
+    public CompletionStage<ModelResponse> run(ModelRequest request) {
+      requests.add(request);
+      ModelResponse answer = answers.poll();
+      if (answer == null) {
+        throw new IllegalStateException("the sample called the model more times than scripted");
+      }
+      return CompletableFuture.completedFuture(answer);
+    }
+
+    List<ModelRequest> requests() {
+      return List.copyOf(requests);
+    }
   }
 }
 ```
@@ -3944,8 +4426,9 @@ class StandaloneAgentApplicationTest {
 
 Run: `./gradlew :samples:sample-standalone:test`
 
-Expected: compilation FAILS with `cannot find symbol: method requiredApiKey`, `baseUrl`, `model`,
-`footer`, and `createAgent(ModelClient)`.
+Expected: compilation FAILS with `cannot find symbol` for `TOOL_NAME`, `currentTimeTool`,
+`defaultPrompt`, `prompt`, `requiredApiKey`, `baseUrl`, `model`, `footer`, and
+`createAgent(ModelClient, Clock)`.
 
 - [ ] **Step 3: Add the provider dependency**
 
@@ -3971,12 +4454,22 @@ import com.openai.client.okhttp.OpenAIOkHttpClientAsync;
 import io.github.hellices.agentframework.api.agent.Agent;
 import io.github.hellices.agentframework.api.agent.AgentFactory;
 import io.github.hellices.agentframework.api.agent.AgentResponse;
+import io.github.hellices.agentframework.api.message.Content;
+import io.github.hellices.agentframework.api.message.Message;
+import io.github.hellices.agentframework.api.message.TextContent;
+import io.github.hellices.agentframework.api.message.ToolCallContent;
 import io.github.hellices.agentframework.api.message.Usage;
+import io.github.hellices.agentframework.api.tool.FunctionTool;
+import io.github.hellices.agentframework.api.tool.ToolResult;
 import io.github.hellices.agentframework.engine.AgentEngine;
 import io.github.hellices.agentframework.openai.OpenAiChatModelClient;
 import io.github.hellices.agentframework.spi.model.ModelCatalog;
 import io.github.hellices.agentframework.spi.model.ModelClient;
+import java.time.Clock;
+import java.time.format.DateTimeFormatter;
+import java.time.temporal.ChronoUnit;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 
 /**
  * Runs one agent turn against a real OpenAI-compatible endpoint with no host framework.
@@ -3986,9 +4479,20 @@ import java.util.Map;
  * fallback: a sample that answers without a key would teach that the call succeeded when it never
  * happened.
  *
+ * <p>One local function tool, {@value #TOOL_NAME}, is registered on every request. It reads the
+ * supplied {@link java.time.Clock} and returns an ISO-8601 instant; it takes no arguments, opens no
+ * file, socket, or process, and logs nothing. The default prompt asks the model to use it, so the
+ * default run exercises the whole function-tool loop end to end. Passing arguments replaces that
+ * prompt with whatever was asked, and the model is free to answer without calling the tool, which
+ * is the ordinary response path rather than a failure. The footer reports how many tool calls the
+ * run actually made.
+ *
  * <p>This class owns the SDK client, and closes it, because the adapter deliberately does not.
  */
 public final class StandaloneAgentApplication {
+
+  /** The one tool this sample registers. Named in the default prompt so the two cannot drift. */
+  static final String TOOL_NAME = "current_utc_time";
 
   private static final String API_KEY_VARIABLE = "OPENAI_API_KEY";
   private static final String BASE_URL_VARIABLE = "OPENAI_BASE_URL";
@@ -3999,12 +4503,12 @@ public final class StandaloneAgentApplication {
   private StandaloneAgentApplication() {}
 
   /**
-   * Builds the agent over a supplied model client.
+   * Builds the agent over a supplied model client and clock.
    *
-   * <p>The client is a parameter so the sample's own test can run the same assembly deterministically
-   * without a credential or a socket.
+   * <p>Both are parameters so the sample's own test can run the same assembly, including the tool
+   * loop, deterministically and without a credential or a socket.
    */
-  public static Agent createAgent(ModelClient modelClient) {
+  public static Agent createAgent(ModelClient modelClient, Clock clock) {
     ModelCatalog catalog =
         ModelCatalog.builder().add("openai", modelClient).defaultModel("openai").build();
     AgentFactory factory = AgentEngine.factory(catalog);
@@ -4013,6 +4517,7 @@ public final class StandaloneAgentApplication {
         .id("standalone-agent")
         .name("Standalone Agent")
         .description("Runs without a host framework, calling an OpenAI-compatible endpoint.")
+        .tools(currentTimeTool(clock))
         .build();
   }
 
@@ -4027,15 +4532,44 @@ public final class StandaloneAgentApplication {
     try {
       Agent agent =
           createAgent(
-              OpenAiChatModelClient.builder().client(client).model(model).build());
-      String input = args.length == 0 ? "hello" : String.join(" ", args);
-      AgentResponse response = agent.run(input).response().toCompletableFuture().join();
+              OpenAiChatModelClient.builder().client(client).model(model).build(),
+              Clock.systemUTC());
+      AgentResponse response =
+          agent.run(prompt(args)).response().toCompletableFuture().join();
       System.out.println(response.text());
       System.out.println(footer(response, model));
     } finally {
       // The sample created the client, so the sample closes it. A long-lived host would not.
       client.close();
     }
+  }
+
+  /**
+   * The one tool the sample offers: the current UTC time, to the second, from the supplied clock.
+   *
+   * <p>Deliberately boring. It reads no argument, reaches nothing outside the process, and prints
+   * nothing, so registering it in a sample that runs against someone's own credentials is safe.
+   */
+  static FunctionTool currentTimeTool(Clock clock) {
+    return FunctionTool.create(
+        TOOL_NAME,
+        "Returns the current UTC time as an ISO-8601 instant.",
+        Map.of("type", "object", "properties", Map.of()),
+        (arguments, context) ->
+            CompletableFuture.completedFuture(
+                ToolResult.success(
+                    new TextContent(
+                        DateTimeFormatter.ISO_INSTANT.format(
+                            clock.instant().truncatedTo(ChronoUnit.SECONDS))))));
+  }
+
+  /** The prompt used when the sample is run with no arguments. Names the tool on purpose. */
+  static String defaultPrompt() {
+    return "Call the " + TOOL_NAME + " tool and tell me the current UTC time.";
+  }
+
+  static String prompt(String[] args) {
+    return args.length == 0 ? defaultPrompt() : String.join(" ", args);
   }
 
   static String requiredApiKey(Map<String, String> environment) {
@@ -4056,18 +4590,37 @@ public final class StandaloneAgentApplication {
     return valueOrDefault(environment, MODEL_VARIABLE, DEFAULT_MODEL);
   }
 
-  /** A short run summary that carries no prompt text and no model output. */
+  /**
+   * A short run summary that carries no prompt text and no model output.
+   *
+   * <p>The tool-call count is what makes the loop observable: zero means the model answered without
+   * calling the tool, which is its decision to make.
+   */
   static String footer(AgentResponse response, String model) {
     Usage usage = response.usage();
     return "[model="
         + model
         + " finishReason="
         + response.finishReason()
+        + " toolCalls="
+        + toolCallCount(response)
         + " inputTokens="
         + (usage == null ? "n/a" : usage.inputTokens())
         + " outputTokens="
         + (usage == null ? "n/a" : usage.outputTokens())
         + "]";
+  }
+
+  private static long toolCallCount(AgentResponse response) {
+    long calls = 0;
+    for (Message message : response.messages()) {
+      for (Content content : message.content()) {
+        if (content instanceof ToolCallContent) {
+          calls++;
+        }
+      }
+    }
+    return calls;
   }
 
   private static String valueOrDefault(
@@ -4084,18 +4637,52 @@ Run: `./gradlew :samples:sample-standalone:resolveAndLockAll --write-locks`
 
 Expected: the sample lockfile grows by the SDK graph: okhttp, okio, the Kotlin standard library,
 `kotlin-reflect`, the SDK jars, swagger annotations, error-prone annotations, and the three victools
-artifacts. Jackson must stay at 2.22.1.
+artifacts.
+
+Read the Jackson lines **per configuration**, because that is what the `api(platform(...))` decision
+in Task 2 is for:
+
+```bash
+grep '^com.fasterxml.jackson' samples/sample-standalone/gradle.lockfile
+```
+
+Before this task the sample resolved Jackson on `runtimeClasspath,testRuntimeClasspath` only, since
+the engine declares it as `implementation`. After it, `openai-java` is an `api` dependency of the
+provider and its POM puts `jackson-databind` at **compile** scope, so Jackson now appears on
+`compileClasspath` too. The platform is on `api` precisely so that the compile side lands at the
+repository pin rather than at the SDK's 2.18.9: expect `jackson-databind:2.22.1`,
+`jackson-core:2.22.1`, and `jackson-bom:2.22.1` naming both compile and runtime classpaths, and
+`jackson-annotations:2.22`, which is the version the Jackson BOM aligns annotations to.
+
+Then check for skew:
+
+```bash
+grep '^com.fasterxml.jackson' samples/sample-standalone/gradle.lockfile | grep '2\.18\.'
+```
+
+Expected: no output, and no coordinate listed twice at two versions. Had the platform stayed on
+`implementation`, this is exactly where two versions of `jackson-databind` would have appeared, one
+per classpath, and "Jackson stays at the repository pin" would have looked like a failure of this
+step rather than of the build file.
 
 - [ ] **Step 6: Run the sample test and confirm nothing reaches the network**
 
 Run: `./gradlew :samples:sample-standalone:test`
 
-Expected: PASS, 6 tests. Then confirm the suite is credential free and offline by running it with an
+Expected: PASS, 10 tests. Then confirm the suite is credential free and offline by running it with an
 empty environment and no network: `env -u OPENAI_API_KEY -u OPENAI_BASE_URL -u OPENAI_MODEL ./gradlew
 :samples:sample-standalone:test --rerun-tasks`. Expected: PASS. If it ever fails without a key, a
 test has started resolving the real environment and must be fixed, not skipped.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 7: Run the sample quality gate**
+
+Run: `./gradlew :samples:sample-standalone:quality`
+
+Expected: PASS. The sample applies the same quality conventions as a library, and this task adds a
+lambda-captured `Clock`, a tool definition, and a counting loop, so run the gate here rather than
+discovering it in Task 13.
+
+- [ ] **Step 8: Commit**
 
 ```bash
 git add samples/sample-standalone
@@ -4105,9 +4692,14 @@ sample: run the standalone agent against a real endpoint
 The sample now assembles OpenAiChatModelClient over an SDK client it creates and
 closes, reading OPENAI_API_KEY, OPENAI_BASE_URL, and OPENAI_MODEL. A missing key
 fails with an explicit message instead of falling back to the old deterministic
-lambda, which answered without ever calling a model. createAgent takes the model
-client so the sample test keeps running offline with no credential, and
-credential resolution is tested as a pure function over a supplied environment.
+lambda, which answered without ever calling a model. It registers one harmless
+local tool, current_utc_time, reading an injected Clock, and its default prompt
+asks the model to use it, so the default run exercises the real function-tool
+loop and the footer reports how many calls it made. An explicit prompt is passed
+through unchanged and the model may still answer without a call. createAgent
+takes the model client and the clock so the sample test proves registration, the
+loop, and the tool output offline with no credential, and credential resolution
+is tested as a pure function over a supplied environment.
 
 Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
 MSG
@@ -4127,6 +4719,7 @@ provider requirement statuses to what the code now supports, no further.
 - Modify: `docs/design/module-composition.md`
 - Modify: `docs/operations/getting-started.md`
 - Modify: `README.md`
+- Modify: `docs/ko/README.md`
 
 **Interfaces:**
 - Consumes: everything from Tasks 2 to 11.
@@ -4143,7 +4736,11 @@ Create `providers/agent-framework-openai/README.md` covering, in this order:
    the builder takes an `OpenAIClientAsync`.
 3. **Configure and run.** The three environment variables the sample uses, the default base URL and
    model, and the exact failure text for a missing key. A short Java snippet showing the host
-   building the SDK client, passing it to the builder, and closing it.
+   building the SDK client, passing it to the builder, and closing it. State that the sample
+   registers one local `current_utc_time` tool and that its default prompt asks for it, so the
+   default run exercises the function-tool loop; state equally plainly that whether a live model
+   calls the tool is the model's decision, and that the footer's `toolCalls` count is how a reader
+   sees which path ran.
 4. **Ownership.** The client is borrowed. The adapter creates no client, thread, connection, or
    shutdown hook, and has no `close()`. Retry belongs to the SDK's `maxRetries` and to the host, not
    to the adapter.
@@ -4154,12 +4751,18 @@ Create `providers/agent-framework-openai/README.md` covering, in this order:
    - Per-run `ModelRequestOptions` do not reach a provider yet (G1); the builder defaults are the
      only way to set temperature and token limits today.
    - Provider options are rejected rather than ignored, until a typed OpenAI option surface exists.
-   - Tool-call arguments must be a JSON object (G3).
+   - Tool-call arguments must be a JSON object (G3). A `null` *value* inside that object is kept as
+     a null-valued key, so an explicitly nulled optional parameter is not confused with an omitted
+     one.
    - A server that returns a partial `usage` object surfaces `OpenAIInvalidDataException`; usage is
      not guessed.
    - A tool result marked as an error is sent as its text, because Chat Completions has no error
      flag on a tool message.
    - No request-id or rate-limit metadata yet (G4).
+   - The module publishes a Jackson platform on `api`, so a consumer inherits an alignment of every
+     Jackson module at the repository pin and must override it explicitly to run an older Jackson.
+     That is deliberate: without it a consumer would compile against the SDK's Jackson and run
+     against this repository's.
 6. **Test evidence.** Name the nine test classes and what each proves, and state that the suite is
    deterministic, offline, and credential free, so a reader can verify the claim by running
    `./gradlew :providers:agent-framework-openai:test` with no environment set.
@@ -4204,61 +4807,96 @@ AGT-015: this slice ships no streaming. Do not add or remove rows; the matrix in
 
 The `:samples:sample-standalone` row still says "explicit model-client assembly", which now
 understates it. Change the responsibility to "Runnable standalone `Agent.run` example over a real
-OpenAI-compatible endpoint." and add `:providers:agent-framework-openai` to its allowed
-dependencies.
+OpenAI-compatible endpoint, with one local function tool." and add
+`:providers:agent-framework-openai` to its allowed dependencies.
 
 - [ ] **Step 4: Update the root README**
 
-Three edits:
+Four edits:
 
 - The layout tree gains `providers/agent-framework-openai/`, and the sentence listing planned
   grouping directories drops `providers/`.
-- "Run a standalone agent" now states that the sample calls a real endpoint, lists the three
-  environment variables with their defaults, shows the export plus `./gradlew
+- "Run a standalone agent" currently says the sample assembles "an explicit deterministic
+  `ModelClient`" and runs "without a server, dependency-injection container, provider credentials,
+  or global registry". Both halves become false. It now states that the sample calls a real
+  endpoint, lists the three environment variables with their defaults, says it registers one local
+  `current_utc_time` tool that the default prompt asks for, shows the export plus `./gradlew
   :samples:sample-standalone:run --args="hello"`, and replaces the old expected output with a
-  description of what is printed: the model's reply and a non-sensitive footer. Do not paste a
-  fabricated model reply; the output is not deterministic any more.
+  description of what is printed: the model's reply and a non-sensitive footer whose `toolCalls`
+  count shows whether the model used the tool. Do not paste a fabricated model reply; the output is
+  not deterministic any more.
 - "Current state": the standalone sample bullet becomes a real-provider bullet, a bullet for the
-  OpenAI Chat Completions adapter is added, and "direct provider integrations" is removed from "Not
-  started" while streaming for the provider and Spring hosting stay listed.
+  OpenAI Chat Completions adapter is added, "Four published product modules" becomes five, and
+  "direct provider integrations" is removed from "Not started" while streaming for the provider and
+  Spring hosting stay listed.
+- The closing sentence "The next implementation stages add provider adapters and host integration"
+  now overlaps what shipped; narrow it to host integration, streaming, and further providers.
 
-- [ ] **Step 5: Note the credential requirement in the getting started guide**
+- [ ] **Step 5: Correct the Korean entry point**
+
+`docs/ko/README.md` is a first-class entry point and `DocumentationLanguagePolicyTest` only checks
+that it exists, is written in Hangul, and links back, so a false claim there ships silently. Two
+sentences become wrong with this slice, and both must be rewritten in Korean. Locate them by the
+English meaning rather than by copying Korean text into this plan, which is a canonical English
+document that the same policy forbids Korean text in:
+
+- In the "current state" paragraph, the sentence that claims `samples/sample-standalone` can run
+  `agent.run(...)` *without an external service*. After this task the sample requires
+  `OPENAI_API_KEY` and calls a real endpoint, so state that instead, and mention the local
+  `current_utc_time` tool the default prompt asks for.
+- In the opening paragraph, the sentence listing *provider adapter* among the follow-up stages
+  alongside session persistence and host integration. Session persistence already shipped and one
+  provider adapter now ships; leave host integration and streaming as the follow-up.
+
+Find both with `grep -n 'sample-standalone' docs/ko/README.md` and by reading the first and the
+"current state" paragraphs; there is no other claim to change.
+
+The module list line for `samples/sample-standalone` says the sample runs without a server or a
+dependency-injection container, which stays true: it still needs neither. Do not rewrite what is
+still correct, do not translate the sample's failure message, and keep environment variable names in
+Latin script.
+
+- [ ] **Step 6: Note the credential requirement in the getting started guide**
 
 Add one short paragraph: the whole verification contract still runs with no credentials, and
 `:samples:sample-standalone:run` is the only task that needs `OPENAI_API_KEY`. Tests never call a
 network.
 
-- [ ] **Step 6: Run the policy suite**
+- [ ] **Step 7: Run the policy suite**
 
 Run: `./gradlew policyCheck`
 
 Expected: PASS. This is the step that most easily breaks: `DocumentationLanguagePolicyTest` requires
-English, `MarkdownLinkPolicyTest` resolves every local link in every document under `docs/`, the
-repository root, and `.github`, and `ModuleCompositionPolicyTest` requires every registered Gradle
-path to appear in `docs/design/module-composition.md`. Keep the matrix rows in the existing
+English outside `docs/ko` and Hangul inside it, `MarkdownLinkPolicyTest` resolves every local link in
+every document under `docs/`, the repository root, and `.github`, and `ModuleCompositionPolicyTest`
+requires every registered Gradle path to appear in `docs/design/module-composition.md`. Keep the
+matrix rows in the existing
 `[04-hosting-operations-providers.md](04-hosting-operations-providers.md)` form and do not turn a
 file path into a link.
 
 Note that `providers/agent-framework-openai/README.md` is outside the scanned locations, so the link
 policy does not check it. Write its links correctly anyway.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
 git add providers/agent-framework-openai/README.md \
         docs/design/requirements-design/requirements-traceability-matrix.md \
-        docs/design/module-composition.md docs/operations/getting-started.md README.md
+        docs/design/module-composition.md docs/operations/getting-started.md README.md \
+        docs/ko/README.md
 git commit -m "$(cat <<'MSG'
 docs: record the OpenAI Chat Completions adapter
 
 Adds the adapter README with its Preview maturity, install and run instructions,
-borrowed-client ownership, the full limitation list, and the deterministic test
-evidence PRV-010 asks for. PRV-001 and PRV-002 move to implemented with the
-lockfile and module policy that prove them. PRV-004, PRV-007, and PRV-010 move to
-partial: one P1 adapter is not the whole priority table, no typed OpenAI option
-surface exists yet, and facade preservation has no subject until a repo split.
-AGT-011 and AGT-012 stay partial because the engine still cannot carry request
-options to a provider, and AGT-015 is untouched because no streaming ships here.
+borrowed-client ownership, the full limitation list including the published
+Jackson alignment, and the deterministic test evidence PRV-010 asks for. PRV-001
+and PRV-002 move to implemented with the lockfile and module policy that prove
+them. PRV-004, PRV-007, and PRV-010 move to partial: one P1 adapter is not the
+whole priority table, no typed OpenAI option surface exists yet, and facade
+preservation has no subject until a repo split. AGT-011 and AGT-012 stay partial
+because the engine still cannot carry request options to a provider, and AGT-015
+is untouched because no streaming ships here. The root and Korean entry points
+stop claiming the standalone sample runs without an external service.
 
 Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
 MSG
@@ -4284,26 +4922,16 @@ Run: `./gradlew quality`
 Expected: PASS. Spotless applies google-java-format, Checkstyle allows zero warnings, PMD runs the
 eight-rule ruleset, and SpotBugs runs at maximum effort with medium confidence.
 
-If Spotless reports a formatting violation, run `./gradlew spotlessApply` and re-run. If SpotBugs
-reports `EI_EXPOSE_REP2` on a constructor that stores a caller-supplied collaborator, add a narrow
-match to `config/spotbugs/exclude.xml` next to the existing MCP entries, naming the exact class and
-method and explaining why the stored reference is the design, for example:
+Nothing new should appear here. Tasks 4, 6, 7, 8, and 11 each ran their module's `quality` task,
+which is deliberate: a static-analysis wave met for the first time at the end of a branch is the
+situation in which a broad suppression looks reasonable. If a finding does appear now, it is a
+finding in code those gates did not cover; treat it as new work, not as a cleanup pass. Fix the code
+where the finding is real, and where a stored reference is genuinely the design, add one `Match`
+naming the exact class and method with a comment explaining why, as Task 8 step 8 describes. Never a
+package-level match, never a class-wide `Match` without a method, never `@SuppressWarnings`, and
+never a batch of matches added together "to get quality green".
 
-```xml
-  <!--
-    SdkChatCompletionsOperations stores the caller's OpenAIClientAsync by reference on purpose: it
-    must call the very client the host built and still owns, and copying it through its interface is
-    not possible and would take over a lifecycle the host must keep.
-  -->
-  <Match>
-    <Class name="io.github.hellices.agentframework.openai.internal.SdkChatCompletionsOperations"/>
-    <Method name="&lt;init&gt;"/>
-    <Bug pattern="EI_EXPOSE_REP2"/>
-  </Match>
-```
-
-Do not add a blanket suppression, a package-level match, or a class-wide `@SuppressWarnings`. If a
-finding is real, fix the code.
+If Spotless reports a formatting violation, run `./gradlew spotlessApply` and re-run.
 
 - [ ] **Step 3: Run the compatibility test matrix**
 
@@ -4338,19 +4966,32 @@ Check each of these and write the answer in the pull request body:
   `ChatCompletionRequestMapper`, `ChatCompletionResponseMapper`, and `OpenAiCallBridge` live in
   `io.github.hellices.agentframework.openai.internal`, which the package documentation declares
   unsupported, so the pull request body must not describe them as public API. The sample's
-  `createAgent()` becomes `createAgent(ModelClient)`; the sample is not published, so this is not a
-  compatibility event, but say it plainly. Nothing in `agent-framework-api` or
+  `createAgent()` becomes `createAgent(ModelClient, Clock)`; the sample is not published, so this is
+  not a compatibility event, but say it plainly. Nothing in `agent-framework-api` or
   `agent-framework-engine` changed shape.
-- **Dependencies:** two new catalog entries, `openai-java` and `jackson-bom`; one new module with its
-  own lockfile; the sample lockfile grows by the SDK graph. Confirm the core lockfiles are untouched
-  with `git diff main...HEAD -- agent-framework-api/gradle.lockfile agent-framework-engine/gradle.lockfile
-  agent-framework-testkit/gradle.lockfile`, which must be empty.
+- **Dependencies:** two new catalog entries, `openai-java` and `jackson-bom`, both new lines rather
+  than one new and one existing; one new module with its own lockfile; the sample lockfile grows by
+  the SDK graph and gains Jackson on its compile classpath. The Jackson platform is declared on
+  `api`, so the constraint is published: the POM gains a `<dependencyManagement>` import and the
+  Gradle metadata carries it in both the `apiElements` and `runtimeElements` variants, which is the
+  same shape `agent-framework-mcp` already publishes for `mcp-bom`. Say so in the body rather than
+  describing Jackson as an internal detail. Confirm the core lockfiles are untouched with
+  `git diff main...HEAD -- agent-framework-api/gradle.lockfile agent-framework-engine/gradle.lockfile
+  agent-framework-testkit/gradle.lockfile`, which must be empty, and confirm no Jackson skew with
+  `grep '^com.fasterxml.jackson' providers/agent-framework-openai/gradle.lockfile
+  samples/sample-standalone/gradle.lockfile | grep '2\.18\.'`, which must print nothing.
 - **Session format:** unaffected; this slice persists nothing.
-- **Telemetry:** unaffected; this slice emits nothing and logs nothing.
-- **Compatibility:** additive for every published artifact. The BOM gains one constraint.
+- **Telemetry:** unaffected; this slice emits nothing and logs nothing. The sample prints the model's
+  reply and a footer that carries the model name, the finish reason, a tool-call count, and token
+  counts, and never the prompt, the tool arguments, or the tool output.
+- **Compatibility:** additive for every published artifact. The BOM gains one constraint, and the
+  published-BOM contract test now covers the new artifact.
 - **Requirements:** PRV-001 and PRV-002 implemented; PRV-004, PRV-007, and PRV-010 partial; AGT-009
   still implemented with new provider evidence; AGT-011 and AGT-012 still partial and why; AGT-015
   untouched.
+- **Scope honesty:** the body states that the live sample run exercises the function-tool loop by
+  default because the sample registers a tool and asks for it, and that whether the model calls it
+  is the model's decision. Do not write that the live run proves the loop; Task 10 proves the loop.
 
 - [ ] **Step 7: Push and run the review loop**
 
@@ -4371,10 +5012,28 @@ defect found in this repository so far was found while all checks were passing.
 Merge with squash so `main` receives one coherent commit, and make sure the pull request title
 describes that squashed commit and the body records the completed change.
 
-Then **stop**. This is the user review milestone. The user runs
-`OPENAI_API_KEY=... ./gradlew :samples:sample-standalone:run --args="hello"` against a real endpoint
-and reviews the result before any streaming, Responses, or Spring Boot work is planned. Do not start
-the next slice.
+Then **stop**. This is the user review milestone. The user runs, against a real endpoint:
+
+```bash
+export OPENAI_API_KEY=...
+./gradlew :samples:sample-standalone:run
+./gradlew :samples:sample-standalone:run --args="hello"
+```
+
+The first run uses the default prompt, which asks for the registered `current_utc_time` tool, so it
+is the one that exercises the function-tool loop end to end: the model asks for the tool, the sample
+answers from its clock, and the reply comes back on a second request. The footer reports
+`toolCalls=`, which is how that is visible without turning on any logging. The second run is an
+arbitrary prompt and will normally show `toolCalls=0`, which is the ordinary response path.
+
+`toolCalls=0` on the first run is a model decision, not an adapter defect. A smaller or a
+non-OpenAI compatible model may answer the question from its own knowledge. If that happens, the
+loop is still proved by Task 10's offline test, and the live check to repeat is that a request with
+`tools` was sent and the reply arrived; an adapter defect would surface as an exception or a
+malformed request, not as a model declining to call a tool.
+
+Review the result before any streaming, Responses, or Spring Boot work is planned. Do not start the
+next slice.
 
 ---
 
@@ -4391,22 +5050,23 @@ rather than re-deriving it.
 | Chat Completions async only; no Spring AI, raw protocol, Responses, Azure, streaming, vision, audio, embeddings, structured output | Global Constraints, Task 12 README limitations |
 | Public facade is final `OpenAiChatModelClient` with a nested `Builder` taking a borrowed client and a required model | Task 8 |
 | Adapter never creates or closes an SDK client; the host owns OkHttp, executors, and resources | Task 8, Task 11 |
-| SDK is `api` because it is on the public surface; Jackson is `implementation` | Task 2 |
+| SDK is `api` because it is on the public surface; Jackson is `implementation` behind an `api` platform | Task 2 |
 | No provider SDK reaches api or engine | Task 2 policy test on the core lockfiles |
 | Internal one-method `ChatCompletionsOperations` seam, SDK bridge, request mapper, response mapper, cancellation and error helper | Tasks 3 to 8 |
 | No network, mock server, or test-server dependency | Global Constraints, Task 8 fake, Task 13 step 5 |
-| Ordinary text and function-tool loop both work | Tasks 3 to 6, Task 10 |
+| Ordinary text and function-tool loop both work | Tasks 3 to 6, Task 10 offline, Task 11 in the live sample |
 | Request mapping: five roles, deterministic text join, echo reconstruction, tool-message fan-out, JSON-schema tools, explicit rejections | Tasks 3 and 4, request mapping table |
 | Response mapping: exactly one choice, ordered text and tool calls, argument rules, finish reasons, usage, metadata, raw object, null continuation | Tasks 5 and 6, response mapping table |
 | Builder defaults with a positive request timeout and optional temperature and token limit; request options win; provider options rejected | Tasks 3 and 8 |
 | AGT-011 and AGT-012 stay partial with no metadata side channel | Global Constraints, recorded gap G1, Task 12 |
 | Cancellation: pre-cancel never dispatches, post-dispatch fails promptly and de-registers, no hard cancellation claim, timeout bounds abandoned work, exceptions preserved, no adapter retry | Cancellation contract, Tasks 7 and 9 |
-| Sample moves from a fake to the real provider, keeps an injectable deterministic entry point, resolves three environment variables, fails explicitly on a missing key, owns and closes the client | Task 11 |
+| Sample moves from a fake to the real provider, keeps an injectable deterministic entry point, resolves three environment variables, fails explicitly on a missing key, owns and closes the client, registers one local tool the default prompt asks for | Task 11 |
 | Provider README with maturity, install, environment, run, ownership, limitations, test evidence, packaging facts | Task 12 |
 | Traceability updates for PRV-001, PRV-002, PRV-004, PRV-007, PRV-010, AGT-009, AGT-011, AGT-012, AGT-015 | Task 12 |
 | Build: settings, catalog, BOM, policy, module docs, provider build file, lockfiles, sample dependency and lock | Tasks 1, 2, 11, 12 |
 | Whether provider tests may use `testImplementation` on the engine | Module and build policy decision, Tasks 1 and 2 |
-| Tests are TDD and deterministic, covering the mapping table, cancellation races, listener cleanup, exception preservation, two-choice failure, the engine tool loop, the sample environment, the public surface, laziness, and ownership | Tasks 3 to 11 |
+| Static analysis is met next to the code that causes it, never as one deferred wave | Tasks 4, 6, 7, 8, and 11 quality gates; Task 13 step 2 |
+| Tests are TDD and deterministic, covering the mapping table, cancellation races, listener cleanup, exception preservation, two-choice failure, the engine tool loop, the sample environment, the sample tool loop, the public surface, laziness, and ownership | Tasks 3 to 11 |
 | The user review milestone | Task 13 step 8 |
 
 ### SDK signatures
@@ -4436,11 +5096,26 @@ test is written in one task and rewritten in another: the tool-message failure c
 Task 4, where the code that produces its message exists, rather than being asserted loosely in
 Task 3 and tightened later.
 
+Static analysis is part of a task rather than a phase after all of them. Tasks 4, 6, 7, 8, and 11 run
+their module's `quality` gate, so the only work left for Task 13 step 2 is confirmation. That
+ordering exists because a wave of findings met at the end is what makes a broad suppression look
+like a reasonable response. Task 5 is the one task that deliberately does not run the gate, because
+the stub it leaves has two unused private parameters that PMD would report; Task 6 replaces the stub
+and runs the gate.
+
 ### No placeholders
 
 No task says "implement the rest", and no test is written to pass trivially. Every RED step names
 the compilation error or the assertion that fails, and every GREEN step names an expected count that
 can be checked against the XML report. The one intentional stub is bounded to a single task.
+
+Every production behaviour in this plan is preceded by a failing test in the same or an earlier
+task. There is no characterization test in this slice: nothing here documents existing behaviour
+without changing it, so no test is exempt from the RED-first rule. Two proofs are worth naming
+because they are easy to write the wrong way round. The JSON-null argument case is a RED test before
+`Collections.unmodifiableMap` exists, not a note added after `Map.copyOf` threw. And the mutation
+proof in Task 2 asserts that the production allowlist assertion *fails* on a mutated build file,
+which cannot pass by accident.
 
 ### Type consistency
 
@@ -4453,13 +5128,22 @@ an empty string rather than null, so the mapper tests for blank rather than for 
 `ModelRequestOptions.maxOutputTokens` is an `OptionalInt` while the SDK takes a `long`, so the
 widening is explicit at the call.
 
+Null tolerance is the one place where the core types and the obvious JDK idiom disagree.
+`ToolCallContent` stores arguments as `Collections.unmodifiableMap(new LinkedHashMap<>(...))` and
+`ToolArguments` does the same, so both keep a null value; `Map.of` and `Map.copyOf` reject one. The
+response mapper therefore never uses `Map.copyOf` for parsed arguments. `metadataOf` keeps
+`Map.copyOf` because `id()`, `model()`, and `created()` are all non-null.
+
 ### Sensitive data
 
 No prompt, model output, or tool argument is logged, printed, or embedded in an exception message.
 Two tests assert the negative directly: extension content fails naming only its type, and invalid
 tool arguments fail naming only the tool and the call id. The sample prints the model's reply
 because that is the point of a sample, and its footer carries only the model name, the finish
-reason, and token counts. No test uses a real credential and no workflow gains one.
+reason, a tool-call count, and token counts, which a test pins by exact string equality. The
+sample's own tool reads a clock and returns a timestamp; it takes no argument, opens nothing, and
+prints nothing, so registering it in a sample someone runs with their own credentials adds no
+exposure. No test uses a real credential and no workflow gains one.
 
 ### Tool-call round trip
 
@@ -4484,19 +5168,31 @@ orders.
 ### Dependency and public API impact
 
 The provider's production dependencies are `:agent-framework-api`, the SDK as `api`, and Jackson as
-`implementation`. The engine is a test-only dependency, which the policy now allowlists separately
-so it cannot silently become a production one. The core lockfiles must not move, and a policy test
+`implementation` behind a platform declared on `api`. That platform is the one deliberately public
+constraint this slice adds: it is published in the POM as a `<dependencyManagement>` import and in
+both Gradle metadata variants, so a consumer inherits Jackson alignment at the repository pin and
+must override it explicitly to run an older Jackson. The alternative, a platform on `implementation`,
+leaves the constraint in `runtimeElements` only and makes every consumer compile against the SDK's
+Jackson and run against this repository's, which is a worse and quieter outcome. `agent-framework-mcp`
+already publishes the same shape for `mcp-bom`.
+
+The engine is a test-only dependency, which the policy now allowlists separately so it cannot
+silently become a production one, and Task 2's mutation test proves that flipping it to
+`implementation` fails the production allowlist. The core lockfiles must not move, and a policy test
 fails if a provider SDK ever resolves onto them. The published surface grows by exactly one class
 and its builder, and a reflection test pins the builder's public method names so the operations seam
-cannot drift into the supported API.
+cannot drift into the supported API. The published BOM contract test gains the new artifact, so the
+BOM constraint has published evidence rather than a build file match.
 
 ### Known risks
 
 | Risk | Response |
 | --- | --- |
 | An SDK accessor name differs from the verified form and a test will not compile | Every name was read at tag `v4.51.0`; the two residual cases are named above with a non-weakening alternative |
-| SpotBugs flags storing the borrowed client or the operations port | Task 8 and Task 13 give the exact narrow match and forbid a blanket suppression |
+| SpotBugs flags storing the borrowed client or the operations port | Task 8 step 8 runs the gate where those types are introduced, pre-lists the candidate sites, and requires an unfiltered report before any `Match` is written |
+| The `api` Jackson platform surprises a consumer that pins an older Jackson | Stated in the build file comment, in the adapter README limitations, and in the pull request body; a consumer overrides it with its own platform or a `strictly` version |
 | The 53 MB core jar surprises someone reading the sample distribution | Documented in the README packaging notes |
 | `kotlin-reflect` is excluded by a future dependency cleanup and the SDK fails at its first request | Documented in the README and visible in both lockfiles |
-| A reviewer reads the new test-only allowlist as a weakening of the dependency rules | Task 1 lands separately, with its own self-test and its own commit message explaining that the production allowlist got stricter, not looser |
+| A reviewer reads the new test-only allowlist as a weakening of the dependency rules | Task 1 lands separately, with its own self-test and its own commit message explaining that the production allowlist got stricter, not looser, and Task 2 adds a mutation test that fails when a production engine dependency is declared |
+| The live milestone run shows `toolCalls=0` and is read as a broken tool loop | The Goal, the sample javadoc, the README, and Task 13 step 8 all say tool selection is the model's decision; the loop itself is proved offline in Task 10 and in the sample's own test |
 | The sample now needs a credential, so someone adds a CI job that runs it | Task 13 step 5 proves the whole `check` runs with an empty environment; a live smoke run, if ever wanted, belongs in a manually triggered workflow outside `check` |
