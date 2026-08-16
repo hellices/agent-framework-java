@@ -93,6 +93,79 @@ class McpStreamableHttpToolsTest {
   }
 
   @Test
+  void rejectsAnEndpointThatWouldMoveTheConnectionToAnotherOrigin() {
+    // A network-path reference carries no scheme, so it is not absolute and the SDK's own origin
+    // check never runs on it; resolving it against the base replaces the authority, which would
+    // send the whole session — handshake, session id, and every tool argument — to another server.
+    // The builder rejects it at the setter, before any transport or client exists, so no network
+    // work can happen first.
+    assertThatThrownBy(
+            () ->
+                McpStreamableHttpTools.builder("https://example.com/api")
+                    .endpoint("//evil.example.com/mcp"))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessage(
+            "endpoint must stay on the base URI's origin, but resolved to:"
+                + " https://evil.example.com/mcp");
+    assertThatThrownBy(
+            () ->
+                McpStreamableHttpTools.builder("https://example.com/api")
+                    .endpoint("//evil.example.com:8443/mcp"))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessage(
+            "endpoint must stay on the base URI's origin, but resolved to:"
+                + " https://evil.example.com:8443/mcp");
+    // The same host on another port is another origin.
+    assertThatThrownBy(
+            () ->
+                McpStreamableHttpTools.builder("https://example.com/api")
+                    .endpoint("//example.com:8443/mcp"))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessage(
+            "endpoint must stay on the base URI's origin, but resolved to:"
+                + " https://example.com:8443/mcp");
+    // Credentials smuggled into the authority change who the request authenticates as, so the
+    // origin no longer matches the configured base either.
+    assertThatThrownBy(
+            () ->
+                McpStreamableHttpTools.builder("https://example.com/api")
+                    .endpoint("//user@example.com/mcp"))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessage(
+            "endpoint must stay on the base URI's origin, but resolved to:"
+                + " https://user@example.com/mcp");
+    // A plain HTTP base compares against port 80, not 443.
+    assertThatThrownBy(
+            () ->
+                McpStreamableHttpTools.builder("http://example.com/api")
+                    .endpoint("//example.com:8080/mcp"))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessage(
+            "endpoint must stay on the base URI's origin, but resolved to:"
+                + " http://example.com:8080/mcp");
+  }
+
+  @Test
+  void acceptsAnEndpointThatStaysOnTheBaseOrigin() {
+    // The origin guard must not narrow anything the facade accepted before: a rooted endpoint, a
+    // relative endpoint, and an absolute endpoint the SDK's own rule accepts all still resolve
+    // exactly as they did.
+    assertThat(builder("https://example.com/api").endpoint("/mcp").requestUri())
+        .isEqualTo(URI.create("https://example.com/mcp"));
+    assertThat(builder("https://example.com/api/").endpoint("mcp").requestUri())
+        .isEqualTo(URI.create("https://example.com/api/mcp"));
+    assertThat(
+            builder("https://example.com/api").endpoint("https://example.com/api/mcp").requestUri())
+        .isEqualTo(URI.create("https://example.com/api/mcp"));
+    // Scheme and host compare without case, and the scheme's default port is the same origin as no
+    // port, so a network-path reference back to the base's own origin stays accepted.
+    assertThat(builder("https://example.com/api").endpoint("//EXAMPLE.com:443/mcp").requestUri())
+        .isEqualTo(URI.create("https://EXAMPLE.com:443/mcp"));
+    assertThat(builder("http://example.com/api").endpoint("//example.com:80/mcp").requestUri())
+        .isEqualTo(URI.create("http://example.com:80/mcp"));
+  }
+
+  @Test
   void rejectsAnEndpointNoRequestCouldBeBuiltFrom() {
     // Blank is rejected here because the SDK transport builder's own endpoint check runs at
     // connect, where this facade builds the transport, so a blank endpoint would otherwise fail

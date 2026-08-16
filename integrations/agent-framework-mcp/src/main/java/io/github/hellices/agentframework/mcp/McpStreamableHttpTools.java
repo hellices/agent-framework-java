@@ -13,6 +13,7 @@ import java.net.URISyntaxException;
 import java.time.Duration;
 import java.util.List;
 import java.util.Locale;
+import java.util.Objects;
 import java.util.concurrent.CompletionStage;
 
 /**
@@ -24,11 +25,16 @@ import java.util.concurrent.CompletionStage;
  * required before {@link #discoverTools()}, and {@link #close()} ends the current session while
  * leaving this object reusable.
  *
- * <p>The base URI and the endpoint are validated when they are set, using the same rule the SDK
- * applies when it finally builds a request URL: a relative endpoint is resolved against the base,
- * and an absolute endpoint must share the base's scheme and authority and start with its path. The
- * SDK applies that rule per request and this facade builds the transport at {@link #connect()}, so
- * a mistyped URL would otherwise surface on the first connect instead of at configuration time.
+ * <p>The base URI and the endpoint are validated when they are set. The endpoint goes through the
+ * same rule the SDK applies when it finally builds a request URL — a relative endpoint is resolved
+ * against the base, and an absolute endpoint must share the base's scheme and authority and start
+ * with its path — and then through one additional check this facade adds: the resolved request URI
+ * must be on the base URI's origin, which the SDK's rule does not cover for a scheme-less endpoint
+ * beginning with {@code //}. That extra check is deliberately stricter than the SDK, which would
+ * have re-targeted such an endpoint to the authority it names at request time; a caller who wants
+ * another origin sets another base URI. The SDK applies its rule per request and this facade builds
+ * the transport at {@link #connect()}, so a mistyped URL would otherwise surface on the first
+ * connect instead of at configuration time.
  *
  * <p>Each connection generation builds one SDK transport, and that transport allocates a {@link
  * java.net.http.HttpClient}. On Java 17 an {@code HttpClient} cannot be closed; its resources are
@@ -128,10 +134,15 @@ public final class McpStreamableHttpTools {
     /**
      * Sets the MCP endpoint, relative to the base URI or absolute under it.
      *
+     * <p>The endpoint must resolve to a request URI on the base URI's origin — the same scheme,
+     * host, userinfo, and effective port. A scheme-less endpoint beginning with {@code //} is a
+     * network-path reference, which resolution would re-target to the authority it names, so it is
+     * accepted only when that authority is the base's own.
+     *
      * @param endpoint the endpoint, never {@code null} or blank
      * @return this builder, never {@code null}
-     * @throws IllegalArgumentException if the endpoint is {@code null}, blank, unparseable, or
-     *     absolute and outside the base URI
+     * @throws IllegalArgumentException if the endpoint is {@code null}, blank, unparseable,
+     *     absolute and outside the base URI, or resolves off the base URI's origin
      */
     public Builder endpoint(String endpoint) {
       if (endpoint == null) {
@@ -144,9 +155,10 @@ public final class McpStreamableHttpTools {
         throw new IllegalArgumentException("endpoint must not be blank");
       }
       // Parsed here only so the failure names the endpoint; Utils.resolveUri then applies the
-      // pinned origin rule, and its message is the SDK's own and is left untouched.
+      // pinned SDK rule, whose message is the SDK's own and is left untouched, and the resolved
+      // request URI is finally checked against the base's origin.
       requireUri(endpoint, "endpoint");
-      Utils.resolveUri(parsedBaseUri, endpoint);
+      requireSameOrigin(parsedBaseUri, Utils.resolveUri(parsedBaseUri, endpoint));
       this.endpoint = endpoint;
       return this;
     }
@@ -338,6 +350,41 @@ public final class McpStreamableHttpTools {
       } catch (URISyntaxException failure) {
         throw new IllegalArgumentException(name + " is not a valid URI: " + value, failure);
       }
+    }
+
+    /**
+     * Fails unless the resolved request URI is on the base URI's origin.
+     *
+     * <p>{@code Utils.resolveUri} only applies its origin rule to an <em>absolute</em> endpoint. A
+     * network-path reference such as {@code //other.example.com/mcp} carries no scheme, so it is
+     * not absolute, and resolving it against the base replaces the authority — the session would go
+     * to another server than the one configured. This check closes that gap, and it can only reject
+     * more than the SDK does, never accept more, because it runs after the SDK's own rule.
+     */
+    private static void requireSameOrigin(URI base, URI resolved) {
+      if (!sameOrigin(base, resolved)) {
+        throw new IllegalArgumentException(
+            "endpoint must stay on the base URI's origin, but resolved to: " + resolved);
+      }
+    }
+
+    private static boolean sameOrigin(URI base, URI resolved) {
+      // The base always has a scheme and a host; equalsIgnoreCase is null-safe, so a resolution
+      // that lost either one fails here too.
+      return base.getScheme().equalsIgnoreCase(resolved.getScheme())
+          && base.getHost().equalsIgnoreCase(resolved.getHost())
+          // Credentials in the authority change who the request authenticates as, so an endpoint
+          // may neither add nor alter them.
+          && Objects.equals(base.getUserInfo(), resolved.getUserInfo())
+          && effectivePort(base) == effectivePort(resolved);
+    }
+
+    /** Returns the port a request would use, resolving the scheme's default for an absent one. */
+    private static int effectivePort(URI uri) {
+      if (uri.getPort() != -1) {
+        return uri.getPort();
+      }
+      return "https".equalsIgnoreCase(uri.getScheme()) ? 443 : 80;
     }
   }
 }
