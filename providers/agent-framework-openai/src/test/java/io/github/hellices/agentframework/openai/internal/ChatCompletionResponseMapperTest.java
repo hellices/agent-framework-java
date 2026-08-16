@@ -4,7 +4,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.openai.models.chat.completions.ChatCompletion;
-import com.openai.models.chat.completions.ChatCompletionAssistantMessageParam;
 import com.openai.models.chat.completions.ChatCompletionCreateParams;
 import com.openai.models.chat.completions.ChatCompletionMessage;
 import io.github.hellices.agentframework.api.agent.CancellationSignal;
@@ -195,9 +194,10 @@ class ChatCompletionResponseMapperTest {
   void contributesNoAssistantMessageTheRequestMapperCouldNotSendBack() {
     // Why "no message at all" rather than an empty assistant message: the engine appends
     // response.messages() to the history it echoes on the next iteration, and an assistant Message
-    // with no content maps to an assistant param with neither content nor tool calls - the
-    // {"role":"assistant"} shape Chat Completions rejects. The counterfactual is asserted below so
-    // that this rule cannot be dropped in the belief that the request mapper would catch it.
+    // with no content is the {"role":"assistant"} shape Chat Completions rejects. The request
+    // mapper now refuses that shape outright, so dropping this rule would no longer send an
+    // unsendable request - it would fail an ordinary empty completion the model was entitled to
+    // give. The counterfactual is asserted below so both halves stay pinned together.
     ChatCompletion completion =
         ChatCompletionsFixture.completion(
             ChatCompletionsFixture.withoutContent(), ChatCompletion.Choice.FinishReason.STOP);
@@ -211,12 +211,12 @@ class ChatCompletionResponseMapperTest {
     assertThat(params.messages()).hasSize(1);
     assertThat(params.messages().get(0).isUser()).isTrue();
 
-    ChatCompletionCreateParams withAnEmptyAssistantTurn =
-        requestMapper.map(request(List.of(new Message(Role.ASSISTANT, List.of()))), DEFAULTS);
-    ChatCompletionAssistantMessageParam unsendable =
-        withAnEmptyAssistantTurn.messages().get(0).asAssistant();
-    assertThat(unsendable.content()).isEmpty();
-    assertThat(unsendable.toolCalls()).isEmpty();
+    assertThatThrownBy(
+            () ->
+                requestMapper.map(
+                    request(List.of(new Message(Role.ASSISTANT, List.of()))), DEFAULTS))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("neither content nor tool_calls");
   }
 
   private static ModelRequest request(List<Message> messages) {

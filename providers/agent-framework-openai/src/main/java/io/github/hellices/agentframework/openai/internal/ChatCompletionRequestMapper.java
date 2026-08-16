@@ -33,6 +33,10 @@ public final class ChatCompletionRequestMapper {
 
   private static final Role DEVELOPER = Role.of("developer");
 
+  private static final String UNSENDABLE_ASSISTANT_MESSAGE =
+      "an assistant message must carry text or a tool call: openai chat completions rejects an"
+          + " assistant message with neither content nor tool_calls";
+
   private final ObjectMapper json = new ObjectMapper();
 
   /**
@@ -43,6 +47,17 @@ public final class ChatCompletionRequestMapper {
    * the originating SDK message so the {@code arguments} string the model produced is sent back
    * unchanged.
    *
+   * <p>Two histories have no message shape at all, and both fail here rather than reaching the
+   * wire. A {@code Role.TOOL} message carrying no result would fan out into no message, leaving the
+   * assistant's tool call unanswered in a request the provider rejects, and no {@code tool_call_id}
+   * can be invented for it. An assistant turn that would carry neither {@code content} nor {@code
+   * tool_calls} - a framework message with no text part and no tool call, or an echoed SDK message
+   * with no content, no refusal, and no tool call - is the {@code {"role":"assistant"}} shape Chat
+   * Completions rejects; the SDK builder accepts it silently, so nothing downstream would catch it.
+   * An assistant turn that carries a text part sends it even when it is empty, because {@code
+   * content: ""} is representable, and omits {@code content} only when it carries no text part at
+   * all.
+   *
    * <p>{@code ToolResultContent.error()} has no representation: a Chat Completions tool message
    * carries no error flag. A failed result is sent as its text, which is what the model reads, and
    * the flag is dropped rather than disguised as an invented prefix the model would have to guess
@@ -51,8 +66,8 @@ public final class ChatCompletionRequestMapper {
    * @param request the neutral request, never {@code null}
    * @param settings the adapter defaults, never {@code null}
    * @return parameters ready to send
-   * @throws IllegalArgumentException if a role, a content placement, a tool call's arguments, or a
-   *     provider option cannot be represented
+   * @throws IllegalArgumentException if a role, a content placement, a message with nothing the
+   *     wire can carry, a tool call's arguments, or a provider option cannot be represented
    * @throws UnsupportedOperationException if the request carries adapter-owned extension content
    */
   public ChatCompletionCreateParams map(ModelRequest request, OpenAiChatSettings settings) {
@@ -134,16 +149,21 @@ public final class ChatCompletionRequestMapper {
     if (message.rawRepresentation() instanceof ChatCompletionMessage sdkMessage) {
       // The SDK object still carries the exact arguments string the model produced, which
       // re-serialising a parsed map cannot reproduce.
+      requireSendable(sdkMessage);
       params.addMessage(sdkMessage);
       return;
     }
     ChatCompletionAssistantMessageParam.Builder assistant =
         ChatCompletionAssistantMessageParam.builder();
-    if (!text.isEmpty()) {
-      assistant.content(text);
-    }
+    boolean carriesText = false;
+    boolean carriesToolCall = false;
     for (Content content : message.content()) {
-      if (content instanceof ToolCallContent call) {
+      if (content instanceof TextContent) {
+        // Keyed on the part rather than on its length: an explicitly empty text is representable
+        // as content "", while a turn with no text part at all omits content instead.
+        carriesText = true;
+      } else if (content instanceof ToolCallContent call) {
+        carriesToolCall = true;
         assistant.addToolCall(
             ChatCompletionMessageFunctionToolCall.builder()
                 .id(call.callId())
@@ -155,12 +175,40 @@ public final class ChatCompletionRequestMapper {
                 .build());
       }
     }
+    if (!carriesText && !carriesToolCall) {
+      throw new IllegalArgumentException(UNSENDABLE_ASSISTANT_MESSAGE);
+    }
+    if (carriesText) {
+      assistant.content(text);
+    }
     params.addMessage(assistant.build());
+  }
+
+  /**
+   * Refuses an echoed SDK message that would reach the wire carrying nothing.
+   *
+   * <p>The echo path adds the SDK object itself, so the rule the reconstruction path enforces on
+   * framework content has to be enforced here on the object. A refusal counts as something to send:
+   * the rule is about a message the API rejects, not about a message without text.
+   */
+  private void requireSendable(ChatCompletionMessage sdkMessage) {
+    boolean carriesToolCall = sdkMessage.toolCalls().map(calls -> !calls.isEmpty()).orElse(false);
+    if (sdkMessage.content().isEmpty() && sdkMessage.refusal().isEmpty() && !carriesToolCall) {
+      throw new IllegalArgumentException(UNSENDABLE_ASSISTANT_MESSAGE);
+    }
   }
 
   private void appendToolMessages(Message message, ChatCompletionCreateParams.Builder params) {
     // One framework tool message holds every result of one round; Chat Completions wants one
     // message per tool_call_id. Dropping the fan-out leaves a call without a result.
+    if (message.content().isEmpty()) {
+      // Zero results used to fan out into zero messages, so the request went out with the
+      // assistant's tool call unanswered. There is no tool_call_id this adapter could invent to
+      // make such a message legal, so it says so instead of dropping the turn.
+      throw new IllegalArgumentException(
+          "a tool message must carry at least one tool result: openai chat completions identifies"
+              + " a tool message by its tool_call_id, which an empty message cannot supply");
+    }
     for (Content content : message.content()) {
       requireRepresentable(content, message.role());
       if (!(content instanceof ToolResultContent result)) {

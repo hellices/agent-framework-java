@@ -370,6 +370,86 @@ class ChatCompletionRequestMapperToolsTest {
         .hasCauseInstanceOf(JsonProcessingException.class);
   }
 
+  @Test
+  void refusesAToolTurnWithNoResultToReport() {
+    // One framework tool message fans out into one param per result, so a message carrying none
+    // used to contribute nothing at all: the assistant's tool call left the adapter unanswered and
+    // the request went out anyway, which the provider rejects. The adapter cannot invent the
+    // tool_call_id that would make such a message legal, so it refuses instead of dropping it.
+    Message empty = new Message(Role.TOOL, List.of());
+
+    assertThatThrownBy(() -> mapper.map(request(List.of(empty)), DEFAULTS))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessage(
+            "a tool message must carry at least one tool result: openai chat completions"
+                + " identifies a tool message by its tool_call_id, which an empty message cannot"
+                + " supply");
+  }
+
+  @Test
+  void refusesAnAssistantTurnThatWouldCarryNeitherContentNorAToolCall() {
+    // The {"role":"assistant"} shape Chat Completions rejects. The SDK builder accepts it, so
+    // without this rule the adapter would spend a billed request to be told it is invalid.
+    Message empty = new Message(Role.ASSISTANT, List.of());
+
+    assertThatThrownBy(() -> mapper.map(request(List.of(empty)), DEFAULTS))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessage(
+            "an assistant message must carry text or a tool call: openai chat completions rejects"
+                + " an assistant message with neither content nor tool_calls");
+  }
+
+  @Test
+  void refusesAnEchoedSdkAssistantMessageWithNothingToSend() {
+    // The echo path builds no param of its own, so the same rule has to be checked on the SDK
+    // object: a message with no content, no refusal, and no tool call is the same unsendable shape.
+    Message echoed =
+        new Message(
+            Role.ASSISTANT,
+            List.of(),
+            null,
+            Map.of(),
+            ChatCompletionMessage.builder().content((String) null).refusal((String) null).build());
+
+    assertThatThrownBy(() -> mapper.map(request(List.of(echoed)), DEFAULTS))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessage(
+            "an assistant message must carry text or a tool call: openai chat completions rejects"
+                + " an assistant message with neither content nor tool_calls");
+  }
+
+  @Test
+  void echoesAnSdkAssistantMessageThatOnlyRefuses() {
+    // A refusal is content on the wire, so the rule is "nothing to send", not "no text": echoing a
+    // refusal-only turn keeps the history the model produced intact.
+    Message echoed =
+        new Message(
+            Role.ASSISTANT,
+            List.of(),
+            null,
+            Map.of(),
+            ChatCompletionMessage.builder()
+                .content((String) null)
+                .refusal("I cannot help with that")
+                .build());
+
+    ChatCompletionCreateParams params = mapper.map(request(List.of(echoed)), DEFAULTS);
+
+    assertThat(params.messages().get(0).asAssistant().refusal())
+        .contains("I cannot help with that");
+  }
+
+  @Test
+  void sendsAnExplicitlyEmptyAssistantTextRatherThanRefusingIt() {
+    // An empty text part is representable - {"role":"assistant","content":""} is a legal message -
+    // so it is sent as what it is. Only a turn with no part at all has nothing the wire can carry.
+    Message assistant = new Message(Role.ASSISTANT, List.of(new TextContent("")));
+
+    ChatCompletionCreateParams params = mapper.map(request(List.of(assistant)), DEFAULTS);
+
+    assertThat(params.messages().get(0).asAssistant().content().orElseThrow().asText()).isEmpty();
+  }
+
   private static ModelRequest request(List<Message> messages) {
     return new ModelRequest(
         messages, ModelRequestOptions.empty(), new CancellationSignal(), List.of(), Map.of());

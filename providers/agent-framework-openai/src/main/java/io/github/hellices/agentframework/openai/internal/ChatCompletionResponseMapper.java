@@ -63,8 +63,8 @@ public final class ChatCompletionResponseMapper {
    * to say contributes no message at all. An assistant message with neither text nor a tool call is
    * not what the model produced, and it is not representable on the wire either: the engine echoes
    * {@code ModelResponse.messages()} back into the next request, where {@link
-   * ChatCompletionRequestMapper} would turn it into an assistant message param carrying neither
-   * content nor tool calls, which Chat Completions rejects. Such a turn is still reported in full
+   * ChatCompletionRequestMapper} refuses an assistant message that would carry neither content nor
+   * tool calls, because Chat Completions rejects that shape. Such a turn is still reported in full
    * through the finish reason, the usage, the metadata, and the raw completion, so it is visible
    * rather than silent. The engine draws the same line for the messages it rewrites itself, where a
    * message left with nothing to say is dropped instead of echoed empty.
