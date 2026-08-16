@@ -12,6 +12,7 @@ import io.modelcontextprotocol.spec.McpTransportSessionNotFoundException;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -106,6 +107,43 @@ class InMemoryMcpTransportTest {
         .isInstanceOf(IllegalStateException.class)
         .hasMessage("close failed");
     assertThat(transport.isClosed()).isTrue();
+  }
+
+  @Test
+  void throwsFromCloseWhenScriptedToAndStaysClosed() {
+    InMemoryMcpTransport transport =
+        new InMemoryMcpTransport()
+            .answeringPing()
+            .throwingClose(() -> new IllegalStateException("close threw"));
+    transport.connect(inbound -> inbound).block(BLOCK);
+
+    // The throw arrives where the publisher should have been returned, which is the failure mode a
+    // scripted Mono.error cannot reproduce and the one an owner must not let wedge a close caller.
+    assertThatThrownBy(transport::closeGracefully)
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessage("close threw");
+    assertThat(transport.isClosed()).isTrue();
+    assertThat(transport.closeCount()).isEqualTo(1);
+  }
+
+  @Test
+  void withholdsACloseUntilItIsReleased() {
+    InMemoryMcpTransport transport = new InMemoryMcpTransport().answeringPing().withholdingClose();
+    transport.connect(inbound -> inbound).block(BLOCK);
+
+    CompletableFuture<Void> closing = transport.closeGracefully().toFuture();
+
+    // Teardown has begun and not finished: the transport already refuses everything, which is what
+    // makes it a faithful model of a cleanup that is still running.
+    assertThat(closing).isNotDone();
+    assertThat(transport.closeCount()).isEqualTo(1);
+    assertThat(transport.isClosed()).isTrue();
+    assertThatThrownBy(() -> transport.sendMessage(pingRequest()).block(BLOCK))
+        .isInstanceOf(McpTransportSessionClosedException.class);
+
+    transport.releaseWithheldClose();
+
+    assertThat(closing).succeedsWithin(BLOCK);
   }
 
   @Test

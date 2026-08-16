@@ -30,6 +30,7 @@ public final class OwnedMcpClientLifecycle {
 
   private CompletableFuture<Generation> pending;
   private Generation current;
+  private CompletableFuture<Void> closing;
   private long epoch;
 
   /**
@@ -64,6 +65,68 @@ public final class OwnedMcpClientLifecycle {
     return connectGeneration().thenApply(generation -> null);
   }
 
+  /**
+   * Closes the current generation and leaves the owner reusable.
+   *
+   * <p>Close ends one generation, not this object. The generation reference and everything cached
+   * on it are dropped whether or not the underlying close succeeded, because a generation whose
+   * close failed is not safe to keep using; a cleanup failure is reported to this caller instead of
+   * being swallowed. A later explicit {@link #connect()} creates a fresh generation. Closing while
+   * a handshake is in flight waits for that handshake to settle and then closes what it produced,
+   * rather than abandoning a client the SDK is still initializing.
+   *
+   * <p>The cleanup itself is the SDK's, so this method imposes no deadline of its own: no timeout,
+   * no blocking wait, and no thread or executor this module would have to own. A cleanup that never
+   * completes therefore leaves the returned stage pending, and a caller that cannot wait forever
+   * applies its own deadline to that stage. What it cannot do is wedge the owner, because the
+   * generation is dropped before the cleanup starts and a later {@link #connect()} opens a fresh
+   * one while the previous cleanup is still running.
+   *
+   * @return a stage completing when the generation is released, never {@code null}
+   */
+  public CompletableFuture<Void> close() {
+    Generation generation;
+    CompletableFuture<Generation> settling;
+    CompletableFuture<Void> closure = new CompletableFuture<>();
+    synchronized (lock) {
+      epoch++;
+      if (current == null && pending == null) {
+        return closing == null ? CompletableFuture.completedFuture(null) : released(closing);
+      }
+      generation = current;
+      settling = pending;
+      current = null;
+      pending = null;
+      closing = closure;
+    }
+    if (generation != null) {
+      mirror(generation.close(), closure);
+      return released(closure);
+    }
+    settling.whenComplete(
+        (settled, failure) -> {
+          if (settled == null) {
+            closure.complete(null);
+          } else {
+            mirror(settled.close(), closure);
+          }
+        });
+    return released(closure);
+  }
+
+  /**
+   * Gives one close caller its own view of the cleanup every close caller shares.
+   *
+   * <p>Repeated closes join one teardown, so handing the shared promise itself to each of them
+   * would let any one caller decide the outcome for all the others, or abandon a teardown that is
+   * already running, simply by cancelling or completing the stage it was given. A dependent stage
+   * carries the same outcome and none of that authority, which is the same reason {@link
+   * #connect()} never hands back the handshake promise itself.
+   */
+  private static CompletableFuture<Void> released(CompletableFuture<Void> closure) {
+    return closure.thenApply(release -> release);
+  }
+
   private CompletableFuture<Generation> connectGeneration() {
     long ticket;
     CompletableFuture<Generation> adopted;
@@ -74,6 +137,7 @@ public final class OwnedMcpClientLifecycle {
       if (pending != null) {
         return pending.thenApply(generation -> generation);
       }
+      closing = null;
       ticket = ++epoch;
       adopted = adopt();
     }
@@ -114,18 +178,28 @@ public final class OwnedMcpClientLifecycle {
    * so a publishing callback would run after every caller it was meant to unblock.
    *
    * <p>Neither statement runs while {@code lock} is held, so a caller woken by the completion can
-   * connect again from inside its own callback.
+   * connect again from inside its own callback. A generation the owner refused to adopt is released
+   * last, after the callers have been told what happened, because releasing it runs SDK cleanup
+   * that must not delay the outcome anyone is waiting for.
    */
   private void settle(
       long ticket,
       CompletableFuture<Generation> adopted,
       Generation generation,
       Throwable failure) {
-    publish(ticket, failure == null ? generation : null);
+    Generation orphan = publish(ticket, failure == null ? generation : null);
     if (failure == null) {
       adopted.complete(generation);
     } else {
       adopted.completeExceptionally(AsyncStages.unwrap(failure));
+    }
+    if (orphan != null) {
+      // Nothing reaches this generation any more: the owner moved on while its handshake was still
+      // running, so it is released here rather than left running as an unreachable client and
+      // process. A close() chained onto the same handshake asks for the very same cleanup, and
+      // Generation.close is idempotent, so this releases the generation exactly once whichever of
+      // the two got there first.
+      orphan.close();
     }
   }
 
@@ -133,16 +207,22 @@ public final class OwnedMcpClientLifecycle {
    * Records the generation the owner ended up with, or none when the handshake failed.
    *
    * <p>The ticket is a counter rather than the promise itself so that nothing in this class has to
-   * compare two object references for identity, and so that {@code close()} can orphan a handshake
+   * compare two object references for identity, and so that {@link #close()} can orphan a handshake
    * simply by moving the counter on.
+   *
+   * @return the generation the owner refused to adopt because the ticket no longer matches, or
+   *     {@code null} when there is none. It is returned rather than closed here, because closing a
+   *     client dismisses its in-flight requests on the closing thread and no external call runs
+   *     while this lock is held.
    */
-  private void publish(long ticket, Generation generation) {
+  private Generation publish(long ticket, Generation generation) {
     synchronized (lock) {
       if (ticket != epoch) {
-        return;
+        return generation;
       }
       pending = null;
       current = generation;
+      return null;
     }
   }
 
@@ -286,11 +366,27 @@ public final class OwnedMcpClientLifecycle {
       return client;
     }
 
+    /**
+     * Releases this generation once, and reports that one release to every caller.
+     *
+     * <p>The closure is memoized, so the flag that guards it is also a promise nothing else will
+     * ever complete: a cleanup that fails while it is being set up has to settle it here, or every
+     * close caller waits on a stage no one is left to finish.
+     */
     CompletableFuture<Void> close() {
       if (!closed.compareAndSet(false, true)) {
         return closure;
       }
-      mirror(AsyncStages.fromMono(client.closeGracefully()), closure);
+      try {
+        mirror(AsyncStages.fromMono(client.closeGracefully()), closure);
+      } catch (RuntimeException failure) {
+        closure.completeExceptionally(failure);
+      } catch (Error failure) {
+        // Not an ordinary failure, so it keeps travelling as the same instance; the memoized
+        // closure is settled first because it is what every later close call is handed.
+        closure.completeExceptionally(failure);
+        throw failure;
+      }
       return closure;
     }
   }

@@ -47,10 +47,13 @@ final class InMemoryMcpTransport implements McpClientTransport {
   private final AtomicInteger closeCount = new AtomicInteger();
   private final AtomicBoolean closed = new AtomicBoolean();
   private final List<Runnable> withheld = new ArrayList<>();
+  private final List<Runnable> withheldCloses = new ArrayList<>();
   private final Set<String> withholdMethods = new LinkedHashSet<>();
 
   private Function<Mono<McpSchema.JSONRPCMessage>, Mono<McpSchema.JSONRPCMessage>> inbound;
   private Supplier<Throwable> closeFailure;
+  private Supplier<RuntimeException> closeThrow;
+  private boolean withholdClose;
 
   /**
    * Stops answering the given method until {@link #releaseWithheld()} is called, which is how a
@@ -101,6 +104,42 @@ final class InMemoryMcpTransport implements McpClientTransport {
   InMemoryMcpTransport failingClose(Supplier<Throwable> failure) {
     this.closeFailure = failure;
     return this;
+  }
+
+  /**
+   * Throws from {@link #closeGracefully()} instead of returning a failed publisher, which is what a
+   * transport that fails while setting its own teardown up does. The attempt still counts as a
+   * close, because the transport was asked to close and is unusable afterwards either way.
+   */
+  InMemoryMcpTransport throwingClose(Supplier<RuntimeException> failure) {
+    this.closeThrow = failure;
+    return this;
+  }
+
+  /**
+   * Starts {@link #closeGracefully()} but withholds its completion until {@link
+   * #releaseWithheldClose()}, which is how a test observes a teardown that has begun and not
+   * finished.
+   *
+   * <p>The transport counts the close and refuses sends from the moment teardown starts, because a
+   * real transport is unusable as soon as it begins tearing down, not when it finishes.
+   */
+  InMemoryMcpTransport withholdingClose() {
+    this.withholdClose = true;
+    return this;
+  }
+
+  /**
+   * Completes every withheld close and stops withholding, on the calling thread.
+   *
+   * <p>Withholding stops permanently for the same reason {@link #releaseWithheld()} does: a later
+   * close must not wait for a release nobody is going to issue.
+   */
+  void releaseWithheldClose() {
+    List<Runnable> pending = List.copyOf(withheldCloses);
+    withheldCloses.clear();
+    withholdClose = false;
+    pending.forEach(Runnable::run);
   }
 
   List<String> methodsSent() {
@@ -173,12 +212,24 @@ final class InMemoryMcpTransport implements McpClientTransport {
 
   @Override
   public Mono<Void> closeGracefully() {
+    Supplier<RuntimeException> thrown = closeThrow;
+    if (thrown != null) {
+      closeCount.incrementAndGet();
+      closed.set(true);
+      throw thrown.get();
+    }
     return Mono.defer(
         () -> {
           closeCount.incrementAndGet();
           closed.set(true);
           Supplier<Throwable> failure = closeFailure;
-          return failure == null ? Mono.empty() : Mono.error(failure.get());
+          if (failure != null) {
+            return Mono.error(failure.get());
+          }
+          if (!withholdClose) {
+            return Mono.empty();
+          }
+          return Mono.<Void>create(sink -> withheldCloses.add(sink::success));
         });
   }
 
