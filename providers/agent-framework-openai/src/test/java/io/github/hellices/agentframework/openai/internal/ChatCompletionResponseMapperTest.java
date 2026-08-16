@@ -98,8 +98,15 @@ class ChatCompletionResponseMapperTest {
   @ParameterizedTest(name = "{0} maps to {1}")
   @MethodSource("finishReasons")
   void mapsEveryFinishReason(ChatCompletion.Choice.FinishReason wireValue, FinishReason expected) {
-    ChatCompletion completion =
-        ChatCompletionsFixture.completion(ChatCompletionsFixture.text("hi"), wireValue);
+    // A tool-call finish reason only ever describes a turn that carries a call, and the mapper
+    // rejects the contradiction, so those two rows send the shape their wire value means. What is
+    // pinned here is unchanged: which neutral reason each wire value maps to.
+    ChatCompletionMessage message =
+        expected == FinishReason.TOOL_CALLS
+            ? ChatCompletionsFixture.withToolCalls(
+                "hi", ChatCompletionsFixture.functionCall("call_1", "ping", "{}"))
+            : ChatCompletionsFixture.text("hi");
+    ChatCompletion completion = ChatCompletionsFixture.completion(message, wireValue);
 
     assertThat(mapper.map(completion).finishReason()).isEqualTo(expected);
   }

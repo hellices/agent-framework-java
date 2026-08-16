@@ -75,6 +75,23 @@ final class ChatCompletionsFixture {
     return message.build();
   }
 
+  /**
+   * A message carrying the deprecated {@code function_call} payload instead of {@code tool_calls},
+   * which is what a server still speaking the pre-tools shape returns. The payload has no call id
+   * of its own, which is what makes it unmappable rather than merely old.
+   */
+  // The SDK deprecates the field because the wire shape is deprecated; a fixture for the shape the
+  // mapper must reject has to build exactly that shape.
+  @SuppressWarnings("deprecation")
+  static ChatCompletionMessage withDeprecatedFunctionCall(String name, String arguments) {
+    return ChatCompletionMessage.builder()
+        .content((String) null)
+        .refusal((String) null)
+        .functionCall(
+            ChatCompletionMessage.FunctionCall.builder().name(name).arguments(arguments).build())
+        .build();
+  }
+
   static ChatCompletionMessageToolCall functionCall(String id, String name, String arguments) {
     return ChatCompletionMessageToolCall.ofFunction(
         ChatCompletionMessageFunctionToolCall.builder()
