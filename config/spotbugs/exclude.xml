@@ -55,4 +55,21 @@
     <Method name="&lt;init&gt;"/>
     <Bug pattern="EI_EXPOSE_REP2"/>
   </Match>
+  <!-- The owned stdio builder records the collaborators the caller configured. The JSON mapper must
+       be the very instance the caller passed, because the SDK transport encodes every message with
+       it and an implementation of that interface cannot be copied. McpToolAdapterOptions is a
+       deeply immutable value whose collections are already copied at construction, which is why
+       McpToolDiscovery stores it the same way. The mutable part of the configuration, the process
+       command line, is deliberately not stored: the builder copies it into a String, a List.copyOf,
+       and a Map.copyOf, so no exclusion is needed for it. -->
+  <Match>
+    <Class name="io.github.hellices.agentframework.mcp.McpStdioTools$Builder"/>
+    <Method name="jsonMapper"/>
+    <Bug pattern="EI_EXPOSE_REP2"/>
+  </Match>
+  <Match>
+    <Class name="io.github.hellices.agentframework.mcp.McpStdioTools$Builder"/>
+    <Method name="toolOptions"/>
+    <Bug pattern="EI_EXPOSE_REP2"/>
+  </Match>
 </FindBugsFilter>
