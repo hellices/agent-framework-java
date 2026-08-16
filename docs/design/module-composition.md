@@ -71,7 +71,7 @@ level would add path depth without adding published identity.
 | `:agent-framework-engine` | `agent-framework-engine` | Embedded execution state machine. | `:agent-framework-api` |
 | `:agent-framework-testkit` | `agent-framework-testkit` | Deterministic fixtures and contract-test bases. | `:agent-framework-api` |
 | `:agent-framework-bom` | `agent-framework-bom` | `java-platform` listing every published artifact. | none |
-| `:integrations:agent-framework-mcp` | `agent-framework-mcp` | Model Context Protocol client integration over a borrowed SDK client. | `:agent-framework-api` |
+| `:integrations:agent-framework-mcp` | `agent-framework-mcp` | Model Context Protocol client integration over a borrowed SDK client or an owned stdio or streamable HTTP connection. | `:agent-framework-api` |
 | `:samples:sample-standalone` | not published | Runnable standalone `Agent.run` example with explicit model-client assembly. | `:agent-framework-api`, `:agent-framework-engine` |
 
 ## Harness projects

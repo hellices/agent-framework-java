@@ -111,6 +111,11 @@ public final class McpToolAdapterOptions {
    * cursors would be followed until the process gives up. The bound turns that into a protocol
    * failure that names the limit.
    *
+   * <p>The bound is per pass, not per discovery. An owned connection that is replaced mid-catalogue
+   * restarts the read from the first page with everything read so far discarded, because a cursor
+   * belongs to the session that issued it, so one discovery may read up to twice this many pages
+   * before it fails or finishes.
+   *
    * @return the page bound, always positive
    */
   public int maxDiscoveryPages() {
@@ -208,6 +213,10 @@ public final class McpToolAdapterOptions {
 
     /**
      * Sets the highest number of {@code tools/list} pages one discovery may read.
+     *
+     * <p>The bound applies to one pass over the catalogue; see {@link
+     * McpToolAdapterOptions#maxDiscoveryPages()} for the restart that an owned connection's
+     * replacement forces.
      *
      * @param maxDiscoveryPages the page bound, always positive
      * @return this builder, never {@code null}

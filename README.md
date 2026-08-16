@@ -82,7 +82,7 @@ agent-framework-engine/     Embedded execution state machine
 agent-framework-testkit/    Deterministic fixtures for tests
 agent-framework-bom/        Version alignment for published artifacts
 integrations/               Protocol and service integrations
-  agent-framework-mcp/      MCP client tool adapter
+  agent-framework-mcp/      MCP client tools, borrowed or owned connection
 build-logic/                Gradle convention plugins
 build-tools/harness-policy/ Executable repository policy
 config/                     Checkstyle, PMD, SpotBugs configuration

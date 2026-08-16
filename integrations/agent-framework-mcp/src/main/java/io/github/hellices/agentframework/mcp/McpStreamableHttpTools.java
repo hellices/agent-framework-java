@@ -37,10 +37,19 @@ import java.util.concurrent.CompletionStage;
  * connect instead of at configuration time.
  *
  * <p>Each connection generation builds one SDK transport, and that transport allocates a {@link
- * java.net.http.HttpClient}. On Java 17 an {@code HttpClient} cannot be closed; its resources are
- * released when it becomes unreachable. That is the main reason a lost connection is allowed
- * exactly one replacement: an unbounded reconnect loop would accumulate clients that this module
- * cannot release.
+ * java.net.http.HttpClient}. The SDK never closes that client: {@code closeGracefully()} ends the
+ * transport session only, on every JDK, so the client's resources are released when it becomes
+ * unreachable. The Java version changes only whether closing it would have been possible at all,
+ * because {@code HttpClient} is not {@code AutoCloseable} on Java 17. That is the main reason a
+ * lost connection is allowed exactly one replacement: an unbounded reconnect loop would accumulate
+ * clients that this module cannot release. The bound is per operation, so a caller that cycles
+ * {@link #connect()}, {@link #close()}, and {@link #connect()} again allocates one more client per
+ * cycle.
+ *
+ * <p>A base URI or endpoint rejected for its content is named in the exception message, and the
+ * same-origin failure names the URI it resolved to, so a caller that puts credentials or a token in
+ * either should expect them in what it catches and logs. Nothing here is logged by this module, and
+ * {@link McpStdioTools} deliberately echoes neither its command nor its environment.
  *
  * <p>This first version exposes no request headers, no custom {@code HttpClient} or client
  * customizer, no redirect policy, and no tracing hook. Those are separate requirements and are
