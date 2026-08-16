@@ -26,6 +26,7 @@ final class ClientHostileMcpTransport implements McpClientTransport {
 
   private Supplier<RuntimeException> refusal =
       () -> new IllegalStateException("transport refuses to negotiate");
+  private Supplier<Error> errorRefusal;
   private Supplier<Throwable> closeFailure;
 
   /**
@@ -40,6 +41,20 @@ final class ClientHostileMcpTransport implements McpClientTransport {
     return this;
   }
 
+  /**
+   * Refuses the client build with an {@link Error} rather than an ordinary failure.
+   *
+   * <p>A {@code NoClassDefFoundError} or another linkage error is exactly the shape a consumer's
+   * classpath can produce from {@code protocolVersions()}. It is not a {@link RuntimeException}, so
+   * it must keep travelling out of the caller rather than being reported through a failed stage —
+   * this is the fixture for the resource-leak case where a transport exists but a client never
+   * does.
+   */
+  ClientHostileMcpTransport refusingWithError(Supplier<Error> refusal) {
+    this.errorRefusal = refusal;
+    return this;
+  }
+
   /** Fails {@link #closeGracefully()}; the transport still counts as closed afterwards. */
   ClientHostileMcpTransport failingClose(Supplier<Throwable> failure) {
     this.closeFailure = failure;
@@ -48,6 +63,9 @@ final class ClientHostileMcpTransport implements McpClientTransport {
 
   @Override
   public List<String> protocolVersions() {
+    if (errorRefusal != null) {
+      throw errorRefusal.get();
+    }
     throw refusal.get();
   }
 

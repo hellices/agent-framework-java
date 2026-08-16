@@ -166,6 +166,36 @@ class OwnedMcpClientConnectTest {
   }
 
   @Test
+  void aFatalClientBuildFailureClosesTheTransportOnceAndDoesNotWedgeTheOwner() {
+    Error refusal = new NoClassDefFoundError("no JSON provider on this classpath");
+    ClientHostileMcpTransport hostile =
+        new ClientHostileMcpTransport().refusingWithError(() -> refusal);
+    InMemoryMcpTransport healthy = new InMemoryMcpTransport().answeringPing();
+    AtomicInteger created = new AtomicInteger();
+    McpClientTransportFactory factory =
+        () -> {
+          if (created.incrementAndGet() == 1) {
+            return hostile;
+          }
+          return healthy;
+        };
+    OwnedMcpClientLifecycle lifecycle = new OwnedMcpClientLifecycle(factory, settings());
+
+    // The transport already exists when the client build rejects it: an Error is not a protocol
+    // failure, so it must keep travelling as the very same instance rather than being reported
+    // through connect()'s returned stage, yet the transport this frame created must still be
+    // closed on the way out.
+    assertThatThrownBy(lifecycle::connect).isSameAs(refusal);
+    assertThat(hostile.closeCount()).isEqualTo(1);
+
+    // A fatal error during client build must leave nothing adopted, so the next connect asks the
+    // factory again instead of joining a promise nobody is left to complete.
+    assertThat(lifecycle.connect()).succeedsWithin(SETTLE);
+    assertThat(created.get()).isEqualTo(2);
+    assertThat(healthy.countOf(McpSchema.METHOD_INITIALIZE)).isEqualTo(1);
+  }
+
+  @Test
   void aFatalStartFailurePropagatesWithoutWedgingTheOwner() {
     InMemoryMcpTransport healthy = new InMemoryMcpTransport().answeringPing();
     AtomicInteger created = new AtomicInteger();

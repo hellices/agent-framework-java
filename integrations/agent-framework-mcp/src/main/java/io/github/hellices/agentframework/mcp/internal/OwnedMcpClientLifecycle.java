@@ -185,6 +185,12 @@ public final class OwnedMcpClientLifecycle {
               .build();
     } catch (RuntimeException failure) {
       return reportAfterCleanup(closeUnowned(transport), failure);
+    } catch (Error failure) {
+      // Not an ordinary failure: it must keep travelling as the same instance rather than being
+      // reported through this method's returned stage. The transport still exists and only this
+      // method knows about it, so its close is started (not awaited) before the rethrow.
+      closeUnowned(transport);
+      throw failure;
     }
     Generation generation = new Generation(client);
     CompletableFuture<Generation> handshake = new CompletableFuture<>();
@@ -197,6 +203,11 @@ public final class OwnedMcpClientLifecycle {
               () -> handshake.complete(generation));
     } catch (RuntimeException failure) {
       return reportAfterCleanup(generation.close(), failure);
+    } catch (Error failure) {
+      // Same rule as the client-build case: the generation already exists, so its close is
+      // started (not awaited) before the same Error instance keeps travelling.
+      generation.close();
+      throw failure;
     }
     return handshake;
   }
