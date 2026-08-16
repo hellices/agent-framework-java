@@ -23,9 +23,11 @@ import reactor.core.publisher.Mono;
  * own.
  *
  * <p>An operation replaces the generation it was given at most once, and only after the connection
- * behind it failed to answer a ping. The stale generation is always released before the replacement
- * is created, so an owner never holds two live servers, and concurrent failures on one generation
- * produce one replacement rather than one each.
+ * behind it was lost: either the validation ping went unanswered, or the call itself failed the way
+ * the SDK reports a connection that is gone. The call is then repeated once on the replacement, so
+ * one request reaches at most two generations and each of them exactly once. The stale generation
+ * is always released before the replacement is created, so an owner never holds two live servers,
+ * and concurrent failures on one generation produce one replacement rather than one each.
  *
  * <p>The handshake runs on a subscription the caller cannot dispose. Disposing it would leave the
  * SDK initializer holding a permanently pending initialization, after which every later operation
@@ -147,6 +149,13 @@ public final class OwnedMcpClientLifecycle {
    * generation once and runs the operation on the replacement; a validation that was cancelled
    * replaces nothing, because a caller changing its mind says nothing about the connection.
    *
+   * <p>A connection can also be lost between the ping and the answer, so a call that fails the way
+   * the SDK reports a lost connection is repeated once on a replacement generation. Validation and
+   * the call share one reconnect budget, which bounds an operation at two generations and one
+   * repeat whichever stage spent it. Nothing else is repeated: an application error and a request
+   * that timed out are the server's answer, and repeating a tool call the server may already have
+   * run would run its side effect twice.
+   *
    * <p>Cancelling the returned stage before the operation was dispatched stops it from being
    * dispatched at all, so a cancelled call never reaches the server; a cancellation that arrives
    * after dispatch disposes the in-flight request instead. Either way the generation stays open.
@@ -227,9 +236,12 @@ public final class OwnedMcpClientLifecycle {
   /**
    * Spends this operation's single reconnect on one replacement generation, then runs on it.
    *
-   * <p>The budget is one per {@code execute} rather than one per failure, because a generation that
-   * cannot be validated twice in a row is a server that is not coming back, and an owner that kept
-   * replacing it would start one process after another on behalf of a single tool call.
+   * <p>The budget is one per {@code execute} rather than one per failure or one per stage, because
+   * a generation whose connection is gone twice in a row is a server that is not coming back, and
+   * an owner that kept replacing it would start one process after another on behalf of a single
+   * tool call. The validation and the call it guards therefore draw on the same budget: an
+   * operation whose ping already bought a replacement reports the call's own connection loss
+   * instead of buying a third generation.
    *
    * <p>The caller is failed with what actually stopped its operation. A replacement that could not
    * be built is attached to that failure rather than substituted for it: the caller asked for a
@@ -269,6 +281,15 @@ public final class OwnedMcpClientLifecycle {
     return failure instanceof CancellationException;
   }
 
+  /**
+   * Dispatches the operation on one generation, and repeats it once if the connection was lost.
+   *
+   * <p>This runs at most twice per {@code execute}: once on the generation the operation was given,
+   * and once on the generation that replaced it. The two guards below are checked on both passes,
+   * because both windows are real. The first pass can be handed a generation the owner released
+   * while the validation ping was in flight; the second is dispatched from the completion of a
+   * replacement handshake the caller may have withdrawn from or the owner may already have closed.
+   */
   private <T> CompletableFuture<T> invoke(
       Function<McpAsyncClient, Mono<T>> operation, Generation generation, Attempt attempt) {
     if (!isCurrent(generation)) {
@@ -299,7 +320,42 @@ public final class OwnedMcpClientLifecycle {
       return AsyncStages.failed(failure);
     }
     attempt.track(inFlight);
-    return inFlight;
+    return inFlight
+        .handle(
+            (result, failure) -> {
+              if (failure == null) {
+                return CompletableFuture.completedFuture(result);
+              }
+              Throwable reported = AsyncStages.unwrap(failure);
+              return retryable(reported, generation)
+                  ? recover(operation, generation, attempt, reported)
+                  : AsyncStages.<T>failed(reported);
+            })
+        .thenCompose(Function.identity());
+  }
+
+  /**
+   * Decides whether a failed call may be repeated on a replacement generation.
+   *
+   * <p>This is the call stage's own guard, separate from the validation guard, because the two
+   * answer different questions. Validation only has to decide whether the ping failure says
+   * anything about the connection; a call also has to decide whether repeating it is safe. They
+   * share only the cancellation rule.
+   *
+   * <p>A cancelled call is never repeated: the caller asked for it to stop. A generation this owner
+   * closed makes its failure repeatable regardless of type, because the SDK dismisses the in-flight
+   * calls of a closed client with an untyped failure, and that dismissal is the direct consequence
+   * of a replacement this owner started for another operation, not of anything the server did.
+   * Reading that state off the generation is what keeps the decision out of message matching, which
+   * an untyped dismissal would otherwise invite. When the close came from {@link #close()} rather
+   * than from a replacement, the repeat finds no generation and fails on the connect requirement,
+   * which is the correct answer: an explicit close must not bring the server back.
+   */
+  private static boolean retryable(Throwable failure, Generation generation) {
+    if (cancelled(failure)) {
+      return false;
+    }
+    return McpFailures.isConnectionLoss(failure) || generation.closedByOwner();
   }
 
   /**
@@ -757,6 +813,17 @@ public final class OwnedMcpClientLifecycle {
     /** Reports whether this server already answered a ping with {@code -32601}. */
     boolean pingUnsupported() {
       return pingUnsupported.get();
+    }
+
+    /**
+     * Reports whether this owner closed this generation.
+     *
+     * <p>It is the same flag {@link #close()} claims, read rather than taken. A call dismissed by
+     * that close failed because of something this owner did, which is what makes it repeatable
+     * without inspecting the untyped failure the SDK dismisses it with.
+     */
+    boolean closedByOwner() {
+      return closed.get();
     }
 
     /**
