@@ -81,6 +81,8 @@ agent-framework-api/        Public contracts and value types
 agent-framework-engine/     Embedded execution state machine
 agent-framework-testkit/    Deterministic fixtures for tests
 agent-framework-bom/        Version alignment for published artifacts
+integrations/               Protocol and service integrations
+  agent-framework-mcp/      MCP client tool adapter
 build-logic/                Gradle convention plugins
 build-tools/harness-policy/ Executable repository policy
 config/                     Checkstyle, PMD, SpotBugs configuration
@@ -89,8 +91,8 @@ samples/sample-standalone/  Runnable standalone Agent.run example
 .harness/                   Agent artifact JSON schemas
 ```
 
-Planned grouping directories are `providers/`, `integrations/`, `starters/`, `protocols/`,
-`workflow/`, and `compatibility-tests/`. Each is created when its first module lands.
+Planned grouping directories are `providers/`, `starters/`, `protocols/`, `workflow/`, and
+`compatibility-tests/`. Each is created when its first module lands.
 
 Module rules are defined in [module composition](docs/design/module-composition.md) and enforced by
 `./gradlew policyCheck`.

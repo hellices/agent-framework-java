@@ -31,4 +31,28 @@
     <Class name="io.github.hellices.agentframework.api.session.ContextMessageContribution"/>
     <Bug pattern="EI_EXPOSE_REP,EI_EXPOSE_REP2"/>
   </Match>
+  <!-- The MCP adapter borrows its collaborators on purpose. It must call the very client the caller
+       connected, so copying or re-wrapping it would either lose the live connection or take over a
+       lifecycle the caller owns, which is exactly what MCP-001 forbids. McpToolAdapterOptions is a
+       deeply immutable value whose collections are already copied at construction. -->
+  <Match>
+    <Class name="io.github.hellices.agentframework.mcp.internal.BorrowedMcpAsyncOperations"/>
+    <Method name="&lt;init&gt;"/>
+    <Bug pattern="EI_EXPOSE_REP2"/>
+  </Match>
+  <Match>
+    <Class name="io.github.hellices.agentframework.mcp.internal.McpToolDiscovery"/>
+    <Method name="&lt;init&gt;"/>
+    <Bug pattern="EI_EXPOSE_REP2"/>
+  </Match>
+  <Match>
+    <Class name="io.github.hellices.agentframework.mcp.internal.McpArgumentMapper"/>
+    <Method name="&lt;init&gt;"/>
+    <Bug pattern="EI_EXPOSE_REP2"/>
+  </Match>
+  <Match>
+    <Class name="io.github.hellices.agentframework.mcp.internal.McpResultMapper"/>
+    <Method name="&lt;init&gt;"/>
+    <Bug pattern="EI_EXPOSE_REP2"/>
+  </Match>
 </FindBugsFilter>

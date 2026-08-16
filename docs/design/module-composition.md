@@ -30,9 +30,10 @@ config/                         Checkstyle, PMD, SpotBugs configuration
 docs/                           Requirements, design, upstream analysis
 ```
 
-Planned grouping directories are `providers/`, `integrations/`, `hosting/`, `starters/`, `protocols/`,
-`workflow/`, and `compatibility-tests/`. `samples/` now contains the standalone example, and
-`build-tools/` already exists for harness code.
+Grouping directories are `providers/`, `integrations/`, `hosting/`, `starters/`, `protocols/`,
+`workflow/`, and `compatibility-tests/`. `integrations/` now contains the MCP client integration,
+`samples/` contains the standalone example, and `build-tools/` already exists for harness code; the
+remaining directories are planned.
 This list is closed and mirrored in `ModuleCompositionPolicyTest`; a project registered outside it,
 or nested more than one level deep, fails `policyCheck`.
 
@@ -70,6 +71,7 @@ level would add path depth without adding published identity.
 | `:agent-framework-engine` | `agent-framework-engine` | Embedded execution state machine. | `:agent-framework-api` |
 | `:agent-framework-testkit` | `agent-framework-testkit` | Deterministic fixtures and contract-test bases. | `:agent-framework-api` |
 | `:agent-framework-bom` | `agent-framework-bom` | `java-platform` listing every published artifact. | none |
+| `:integrations:agent-framework-mcp` | `agent-framework-mcp` | Model Context Protocol client integration over a borrowed SDK client. | `:agent-framework-api` |
 | `:samples:sample-standalone` | not published | Runnable standalone `Agent.run` example with explicit model-client assembly. | `:agent-framework-api`, `:agent-framework-engine` |
 
 ## Harness projects
@@ -107,7 +109,9 @@ the package of an existing coordinate.
    `agentframework.test-conventions`, `agentframework.quality-conventions`, and
    `agentframework.library-publishing-conventions`.
 2. `:agent-framework-api` declares no project dependency. It is the root of the graph.
-3. `:agent-framework-engine` and `:agent-framework-testkit` depend on `:agent-framework-api` only.
+3. `:agent-framework-engine`, `:agent-framework-testkit`, and `:integrations:agent-framework-mcp`
+   depend on `:agent-framework-api` only. An integration additionally depends on the protocol or
+   provider SDK it adapts, which never reaches the API or engine modules.
 4. No project depends on `:agent-framework-bom`, and the BOM lists every published library.
 5. No product project depends on `:build-tools:harness-policy`.
 6. Every project registered in `settings.gradle.kts` exists on disk with a build file.

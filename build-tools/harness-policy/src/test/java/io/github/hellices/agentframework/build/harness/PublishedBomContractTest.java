@@ -34,7 +34,11 @@ import org.junit.jupiter.api.Test;
 class PublishedBomContractTest {
 
   private static final List<String> MANAGED_ARTIFACTS =
-      List.of("agent-framework-api", "agent-framework-engine", "agent-framework-testkit");
+      List.of(
+          "agent-framework-api",
+          "agent-framework-engine",
+          "agent-framework-testkit",
+          "agent-framework-mcp");
 
   private static final String PUBLISH_COMMAND =
       "./gradlew publishAllPublicationsToBuildDirectoryRepository";

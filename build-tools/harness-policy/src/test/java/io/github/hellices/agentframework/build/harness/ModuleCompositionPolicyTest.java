@@ -23,7 +23,11 @@ import org.junit.jupiter.params.provider.MethodSource;
 class ModuleCompositionPolicyTest {
 
   private static final List<String> LIBRARY_PROJECTS =
-      List.of(":agent-framework-api", ":agent-framework-engine", ":agent-framework-testkit");
+      List.of(
+          ":agent-framework-api",
+          ":agent-framework-engine",
+          ":agent-framework-testkit",
+          ":integrations:agent-framework-mcp");
 
   private static final String PLATFORM_PROJECT = ":agent-framework-bom";
 
@@ -86,7 +90,8 @@ class ModuleCompositionPolicyTest {
       Map.of(
           ":agent-framework-api", List.of(),
           ":agent-framework-engine", List.of(":agent-framework-api"),
-          ":agent-framework-testkit", List.of(":agent-framework-api"));
+          ":agent-framework-testkit", List.of(":agent-framework-api"),
+          ":integrations:agent-framework-mcp", List.of(":agent-framework-api"));
 
   static Stream<String> libraryProjects() {
     return LIBRARY_PROJECTS.stream();
