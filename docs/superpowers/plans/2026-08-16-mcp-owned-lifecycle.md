@@ -3586,11 +3586,12 @@ exception, unwrapped, exactly like `failingSend` does.
 
 Run: `./gradlew :integrations:agent-framework-mcp:test --tests 'io.github.hellices.agentframework.mcp.McpDiscoveryPagingTest'`
 
-Expected: FAIL, 3 of 5. `readsEveryPageOfOneGenerationInOrder` and `leavesBorrowedPagingUntouched`
-pass, because neither reconnects. `restartsFromTheFirstPageOnTheReplacementGeneration` fails with
-`expected: [null, "page-2"] but was: ["page-2", ...]`: the replacement is asked to continue the dead
-session's cursor. `surfacesASecondConnectionFailureWithoutAThirdGeneration` and
-`givesEachDiscoveredToolItsOwnReconnectBudget` fail for the same reason.
+Expected: FAIL, 2 of 5. `readsEveryPageOfOneGenerationInOrder` and `leavesBorrowedPagingUntouched`
+pass, because neither reconnects. `givesEachDiscoveredToolItsOwnReconnectBudget` is a
+characterization test for the existing unscoped invocation path and also passes; it must fail if a
+later change routes tool invocation through the discovery attempt. `restartsFromTheFirstPageOnTheReplacementGeneration`
+fails with `expected: [null, "page-2"] but was: ["page-2", ...]`: the replacement is asked to continue
+the dead session's cursor. `surfacesASecondConnectionFailureWithoutAThirdGeneration` also fails.
 
 - [ ] **Step 3: Add the internal restart signal**
 
@@ -5475,13 +5476,14 @@ The places where the ordering needed correcting, and how:
 - The transport-leak case in Task 2 needed a fixture whose client build fails after the transport
   exists. `ClientHostileMcpTransport` is added as a fixture step, the test is written and run red,
   and only then does `startGeneration` learn to clean up.
-- Task 8's paging test is written first and is expected to fail in three of its five cases, with the
+- Task 8's paging test is written first and is expected to fail in two of its five cases, with the
   exact failure named, before any of `McpConnectionReplacedException`, `forPagedOperation()`, the
   `Attempt` flag, or the reader's restart exists.
-- Task 11's MCP-002 test is the single exception, and it is called out in the step itself: the
-  behavior already ships, and what is missing is a test that would fail if someone removed it. A
-  characterization test that passes immediately is the honest instrument for that, and manufacturing a
-  temporary defect to make it go red would have tested the defect.
+- Two characterization tests pass immediately and are called out in their steps: Task 8's
+  `givesEachDiscoveredToolItsOwnReconnectBudget` pins the existing unscoped invocation path, and Task
+  11's MCP-002 test pins the existing borrowed-client ownership rule. In both cases the behavior
+  already ships, and manufacturing a temporary defect to force RED would test the defect rather than
+  the retained contract.
 
 Per-task expected results, which a reviewer can check against the run output: Task 1 six tests, Task 2
 nine, Task 3 six, Task 4 eight, Task 5 eight, Task 6 eight, Task 7 seven, Task 8 five, Task 9 six,
