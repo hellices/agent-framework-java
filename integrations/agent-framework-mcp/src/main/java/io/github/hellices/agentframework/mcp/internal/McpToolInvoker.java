@@ -13,6 +13,10 @@ import java.util.concurrent.CompletableFuture;
  * <p>The handler keeps the name the server published, so a local name that was normalized or
  * prefixed for the model never reaches the wire. The accepted argument names are computed once at
  * discovery, because the input schema of a discovered tool does not change while the tool exists.
+ *
+ * <p>An invocation stops on either cancellation channel: the stage the framework holds and the
+ * cancellation signal of the run that asked for the call. The tool loop uses the second one, so
+ * without it a cancelled run would leave the borrowed client working until the SDK request timeout.
  */
 public final class McpToolInvoker {
 
@@ -29,7 +33,7 @@ public final class McpToolInvoker {
   public McpToolInvoker(McpAsyncOperations operations, McpToolAdapterOptions options) {
     this.operations = operations;
     this.argumentMapper = new McpArgumentMapper(options);
-    this.resultMapper = new McpResultMapper();
+    this.resultMapper = new McpResultMapper(options);
   }
 
   /**
@@ -50,9 +54,12 @@ public final class McpToolInvoker {
                   argumentMapper.toRequest(remoteName, acceptedArgumentNames, arguments, context);
               CompletableFuture<McpSchema.CallToolResult> call =
                   AsyncStages.requireStage(operations.callTool(request), "tools/call");
-              return AsyncStages.cancellable(
-                  call.thenApply(result -> resultMapper.toToolResult(localName, result)),
-                  () -> call.cancel(true));
+              return AsyncStages.cancelledWithRun(
+                  context.cancellationSignal(),
+                  () -> call.cancel(true),
+                  AsyncStages.cancellable(
+                      call.thenApply(result -> resultMapper.toToolResult(localName, result)),
+                      () -> call.cancel(true)));
             });
   }
 }

@@ -82,7 +82,7 @@ family is an architectural owner, not necessarily a current file path.
 | MCP-002 | Lifecycle is divided by connection ownership | [02-state-extension-mcp.md](02-state-extension-mcp.md) | `integrations/agent-framework-mcp` | `absent` | owned/borrowed lifecycle contract |
 | MCP-003 | Connection validation and reconnection are standardized | [02-state-extension-mcp.md](02-state-extension-mcp.md) | `integrations/agent-framework-mcp` | `absent` | reconnect/cache contract |
 | MCP-004 | Tool discovery includes prefix and collision checking | [02-state-extension-mcp.md](02-state-extension-mcp.md) | `integrations/agent-framework-mcp` | `implemented` | discovery pagination/collision test |
-| MCP-005 | Call arguments and metadata are separated | [02-state-extension-mcp.md](02-state-extension-mcp.md) | `integrations/agent-framework-mcp` | `implemented` | invocation mapping + argument/metadata separation test |
+| MCP-005 | Call arguments and metadata are separated | [02-state-extension-mcp.md](02-state-extension-mcp.md) | `integrations/agent-framework-mcp` | `partial` | invocation mapping + argument/metadata separation test (framework/user `_meta` merge absent) |
 | MCP-006 | Prompts are exposed as functions and resources are kept as payload | [02-state-extension-mcp.md](02-state-extension-mcp.md) | `integrations/agent-framework-mcp` | `absent` | prompt/resource mapping test |
 | MCP-007 | Sampling is denied by default | [02-state-extension-mcp.md](02-state-extension-mcp.md) | `integrations/agent-framework-mcp` | `absent` | sampling default-deny test |
 | MCP-008 | Sampling request count and token count are limited | [02-state-extension-mcp.md](02-state-extension-mcp.md) | `integrations/agent-framework-mcp` | `absent` | sampling budget test |

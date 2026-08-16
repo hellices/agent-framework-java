@@ -1,5 +1,6 @@
 package io.github.hellices.agentframework.mcp.internal;
 
+import io.github.hellices.agentframework.api.agent.CancellationSignal;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
@@ -57,6 +58,27 @@ final class AsyncStages {
             stage.completeExceptionally(failure);
           }
         });
+    return stage;
+  }
+
+  /**
+   * Stops work when the run that asked for it is cancelled, and detaches once the work is done.
+   *
+   * <p>The tool loop cancels the run, not the stage a tool returned, so a tool that listens only
+   * for stage cancellation keeps a borrowed client working for a caller that has already left. The
+   * listener is removed when the stage completes, because one signal spans a whole run and a
+   * listener per completed call would accumulate for its lifetime.
+   *
+   * @param signal the run's cancellation signal, never {@code null}
+   * @param cancellation the work to stop when the run is cancelled, never {@code null}
+   * @param stage the stage the tool returns, never {@code null}
+   * @param <T> the value type
+   * @return the stage that was passed in, never {@code null}
+   */
+  static <T> CompletableFuture<T> cancelledWithRun(
+      CancellationSignal signal, Runnable cancellation, CompletableFuture<T> stage) {
+    Runnable detach = signal.onCancel(cancellation);
+    stage.whenComplete((value, failure) -> detach.run());
     return stage;
   }
 
@@ -139,8 +161,13 @@ final class AsyncStages {
 
     @Override
     public boolean cancel(boolean mayInterruptIfRunning) {
+      // Only a cancellation that actually took effect stops the work behind the stage: a stage that
+      // has already completed carries a result its caller kept, and stopping the request that
+      // produced it would act on a call that succeeded.
       boolean cancelled = super.cancel(mayInterruptIfRunning);
-      onCancel.run();
+      if (cancelled) {
+        onCancel.run();
+      }
       return cancelled;
     }
   }

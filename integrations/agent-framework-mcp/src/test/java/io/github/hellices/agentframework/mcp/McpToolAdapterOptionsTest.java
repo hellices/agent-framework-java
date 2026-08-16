@@ -20,6 +20,8 @@ class McpToolAdapterOptionsTest {
     assertThat(options.additionalArgumentNames()).isEmpty();
     assertThat(options.callMetadataProvider().metadata(new ToolContext(null, Map.of("runId", "r"))))
         .isEmpty();
+    assertThat(options.includeResultPayload()).isFalse();
+    assertThat(options.maxDiscoveryPages()).isEqualTo(256);
   }
 
   @Test
@@ -29,12 +31,16 @@ class McpToolAdapterOptionsTest {
             .localNamePrefix("github_")
             .additionalArgumentNames(List.of("tenant", "region"))
             .callMetadataProvider(context -> Map.of("traceId", "t"))
+            .includeResultPayload(true)
+            .maxDiscoveryPages(8)
             .build();
 
     assertThat(options.localNamePrefix()).isEqualTo("github_");
     assertThat(options.additionalArgumentNames()).containsExactlyInAnyOrder("tenant", "region");
     assertThat(options.callMetadataProvider().metadata(new ToolContext(null, Map.of())))
         .containsEntry("traceId", "t");
+    assertThat(options.includeResultPayload()).isTrue();
+    assertThat(options.maxDiscoveryPages()).isEqualTo(8);
   }
 
   @Test
@@ -56,10 +62,16 @@ class McpToolAdapterOptionsTest {
         McpToolAdapterOptions.builder().additionalArgumentNames(List.of("tenant"));
     McpToolAdapterOptions options = builder.build();
 
-    builder.localNamePrefix("late_").addAdditionalArgumentName("late");
+    builder
+        .localNamePrefix("late_")
+        .addAdditionalArgumentName("late")
+        .includeResultPayload(true)
+        .maxDiscoveryPages(4);
 
     assertThat(options.localNamePrefix()).isEmpty();
     assertThat(options.additionalArgumentNames()).containsExactly("tenant");
+    assertThat(options.includeResultPayload()).isFalse();
+    assertThat(options.maxDiscoveryPages()).isEqualTo(256);
   }
 
   @Test
@@ -79,6 +91,10 @@ class McpToolAdapterOptionsTest {
     assertThatThrownBy(() -> builder.addAdditionalArgumentName(" "))
         .isInstanceOf(IllegalArgumentException.class);
     assertThatThrownBy(() -> builder.callMetadataProvider(null))
+        .isInstanceOf(IllegalArgumentException.class);
+    assertThatThrownBy(() -> builder.maxDiscoveryPages(0))
+        .isInstanceOf(IllegalArgumentException.class);
+    assertThatThrownBy(() -> builder.maxDiscoveryPages(-1))
         .isInstanceOf(IllegalArgumentException.class);
   }
 }

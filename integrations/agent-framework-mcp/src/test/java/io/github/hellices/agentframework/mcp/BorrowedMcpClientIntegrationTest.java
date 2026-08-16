@@ -3,6 +3,7 @@ package io.github.hellices.agentframework.mcp;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import io.github.hellices.agentframework.api.agent.CancellationSignal;
 import io.github.hellices.agentframework.api.tool.FunctionTool;
 import io.github.hellices.agentframework.api.tool.ToolArguments;
 import io.github.hellices.agentframework.api.tool.ToolContext;
@@ -13,6 +14,7 @@ import io.modelcontextprotocol.spec.McpSchema;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -32,25 +34,7 @@ class BorrowedMcpClientIntegrationTest {
 
   @Test
   void discoversAndInvokesToolsOverARealClient() {
-    InMemoryMcpTransport transport =
-        new InMemoryMcpTransport()
-            .answering(
-                McpSchema.METHOD_TOOLS_LIST,
-                params ->
-                    new McpSchema.ListToolsResult(
-                        List.of(
-                            new McpSchema.Tool(
-                                "search-issues", null, "search", SCHEMA, null, null, null, null)),
-                        null,
-                        null))
-            .answering(
-                McpSchema.METHOD_TOOLS_CALL,
-                params ->
-                    new McpSchema.CallToolResult(
-                        List.of(new McpSchema.TextContent(null, "found 2 issues", null)),
-                        Boolean.FALSE,
-                        null,
-                        null));
+    InMemoryMcpTransport transport = searchServer();
     McpAsyncClient client = initializedClient(transport);
 
     ConnectedMcpClientAdapter adapter =
@@ -130,6 +114,126 @@ class BorrowedMcpClientIntegrationTest {
     assertThatThrownBy(() -> new ConnectedMcpClientAdapter(client))
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessageContaining("initialize");
+  }
+
+  @Test
+  void refusesEveryOperationOnceTheOwnerClosedTheClient() {
+    InMemoryMcpTransport transport = searchServer();
+    McpAsyncClient client = initializedClient(transport);
+    ConnectedMcpClientAdapter adapter = new ConnectedMcpClientAdapter(client);
+    FunctionTool tool = adapter.discoverTools().toCompletableFuture().join().get(0);
+
+    client.closeGracefully().block(Duration.ofSeconds(5));
+
+    assertThat(client.isInitialized()).isFalse();
+    assertThatThrownBy(() -> adapter.discoverTools().toCompletableFuture().join())
+        .rootCause()
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("initialized");
+    assertThatThrownBy(
+            () ->
+                tool.execute(new ToolArguments(Map.of()), new ToolContext(null, Map.of()))
+                    .toCompletableFuture()
+                    .join())
+        .rootCause()
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("initialized");
+    assertThat(transport.methodsSent())
+        .containsExactly(
+            McpSchema.METHOD_INITIALIZE,
+            McpSchema.METHOD_NOTIFICATION_INITIALIZED,
+            McpSchema.METHOD_TOOLS_LIST);
+  }
+
+  @Test
+  void failsAPostCloseDiscoveryOnTheGuardBeforeThereIsAnythingToCancel() {
+    InMemoryMcpTransport transport = searchServer();
+    McpAsyncClient client = initializedClient(transport);
+    ConnectedMcpClientAdapter adapter = new ConnectedMcpClientAdapter(client);
+    client.closeGracefully().block(Duration.ofSeconds(5));
+
+    CompletableFuture<List<FunctionTool>> discovery = adapter.discoverTools().toCompletableFuture();
+
+    // The guard rejects the operation before a request leaves, so the stage is already failed and
+    // the cancel finds nothing to stop. That is the point: neither path may drive a handshake on a
+    // client its owner has closed, and the cancellation that once wedged such a client is now
+    // unreachable rather than merely harmless.
+    assertThat(discovery.cancel(true)).isFalse();
+    assertThatThrownBy(discovery::join)
+        .rootCause()
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("initialized");
+    assertThat(client.isInitialized()).isFalse();
+    assertThat(transport.methodsSent())
+        .containsExactly(McpSchema.METHOD_INITIALIZE, McpSchema.METHOD_NOTIFICATION_INITIALIZED);
+    assertThat(transport.closeCount()).isEqualTo(1);
+  }
+
+  @Test
+  void keepsTheBorrowedClientInitializedWhenAnInFlightDiscoveryIsCancelled() {
+    // The defect this guards against is a cancellation that reaches the SDK's shared lifecycle:
+    // the client must still be initialized, still open, and still usable afterwards.
+    InMemoryMcpTransport transport = searchServer();
+    McpAsyncClient client = initializedClient(transport);
+    ConnectedMcpClientAdapter adapter = new ConnectedMcpClientAdapter(client);
+    transport.withholding(McpSchema.METHOD_TOOLS_LIST);
+
+    CompletableFuture<List<FunctionTool>> discovery = adapter.discoverTools().toCompletableFuture();
+    assertThat(discovery.cancel(true)).isTrue();
+    transport.releaseWithheld();
+
+    assertThat(client.isInitialized()).isTrue();
+    assertThat(transport.closeCount()).isZero();
+    assertThat(transport.methodsSent())
+        .containsExactly(
+            McpSchema.METHOD_INITIALIZE,
+            McpSchema.METHOD_NOTIFICATION_INITIALIZED,
+            McpSchema.METHOD_TOOLS_LIST);
+    assertThat(adapter.discoverTools().toCompletableFuture().join()).hasSize(1);
+  }
+
+  @Test
+  void stopsAnInFlightCallOverARealClientWhenTheRunIsCancelled() {
+    // The tool loop cancels the run rather than the stage, so a real client would otherwise stay
+    // busy with a call whose caller has already left.
+    InMemoryMcpTransport transport = searchServer();
+    McpAsyncClient client = initializedClient(transport);
+    ConnectedMcpClientAdapter adapter = new ConnectedMcpClientAdapter(client);
+    FunctionTool tool = adapter.discoverTools().toCompletableFuture().join().get(0);
+    CancellationSignal signal = new CancellationSignal();
+    transport.withholding(McpSchema.METHOD_TOOLS_CALL);
+
+    CompletableFuture<ToolResult> call =
+        tool.execute(new ToolArguments(Map.of()), new ToolContext(signal, Map.of()))
+            .toCompletableFuture();
+    signal.cancel();
+
+    assertThat(call).isCompletedExceptionally();
+    transport.releaseWithheld();
+    assertThat(transport.closeCount()).isZero();
+    assertThat(client.isInitialized()).isTrue();
+    assertThat(adapter.discoverTools().toCompletableFuture().join()).hasSize(1);
+  }
+
+  private static InMemoryMcpTransport searchServer() {
+    return new InMemoryMcpTransport()
+        .answering(
+            McpSchema.METHOD_TOOLS_LIST,
+            params ->
+                new McpSchema.ListToolsResult(
+                    List.of(
+                        new McpSchema.Tool(
+                            "search-issues", null, "search", SCHEMA, null, null, null, null)),
+                    null,
+                    null))
+        .answering(
+            McpSchema.METHOD_TOOLS_CALL,
+            params ->
+                new McpSchema.CallToolResult(
+                    List.of(new McpSchema.TextContent(null, "found 2 issues", null)),
+                    Boolean.FALSE,
+                    null,
+                    null));
   }
 
   private static McpAsyncClient initializedClient(InMemoryMcpTransport transport) {

@@ -15,15 +15,20 @@ import java.util.Set;
 public final class McpToolAdapterOptions {
 
   private static final McpCallMetadataProvider NO_METADATA = context -> Map.of();
+  private static final int DEFAULT_MAX_DISCOVERY_PAGES = 256;
 
   private final String localNamePrefix;
   private final Set<String> additionalArgumentNames;
   private final McpCallMetadataProvider callMetadataProvider;
+  private final boolean includeResultPayload;
+  private final int maxDiscoveryPages;
 
   private McpToolAdapterOptions(Builder builder) {
     this.localNamePrefix = builder.localNamePrefix;
     this.additionalArgumentNames = Set.copyOf(builder.additionalArgumentNames);
     this.callMetadataProvider = builder.callMetadataProvider;
+    this.includeResultPayload = builder.includeResultPayload;
+    this.maxDiscoveryPages = builder.maxDiscoveryPages;
   }
 
   /**
@@ -79,12 +84,47 @@ public final class McpToolAdapterOptions {
     return callMetadataProvider;
   }
 
+  /**
+   * Returns whether a result's structured content and result {@code _meta} are carried as a
+   * trailing {@link McpPayloadContent}.
+   *
+   * <p>Off by default, because both are ordinary features of a server that answers in text:
+   * carrying them would turn a plain text result into adapter owned content, and the session format
+   * only defines the framework content kinds, so a snapshot taken after such a call would fail long
+   * after the call itself succeeded. Turning this on keeps the payload and accepts that a session
+   * holding it cannot be persisted until a content codec for extension content exists.
+   *
+   * <p>A result whose only answer is structured content, with no content entries at all, keeps that
+   * payload whatever this option says, because dropping it would report a successful call that
+   * returned nothing rather than dropping an annotation on an answer.
+   *
+   * @return {@code true} when the trailing result payload is kept
+   */
+  public boolean includeResultPayload() {
+    return includeResultPayload;
+  }
+
+  /**
+   * Returns the highest number of {@code tools/list} pages one discovery may read.
+   *
+   * <p>Pagination is driven by cursors the server chooses, so a server that keeps issuing fresh
+   * cursors would be followed until the process gives up. The bound turns that into a protocol
+   * failure that names the limit.
+   *
+   * @return the page bound, always positive
+   */
+  public int maxDiscoveryPages() {
+    return maxDiscoveryPages;
+  }
+
   /** Builder for {@link McpToolAdapterOptions}. */
   public static final class Builder {
 
     private String localNamePrefix = "";
     private Set<String> additionalArgumentNames = Set.of();
     private McpCallMetadataProvider callMetadataProvider = NO_METADATA;
+    private boolean includeResultPayload;
+    private int maxDiscoveryPages = DEFAULT_MAX_DISCOVERY_PAGES;
 
     private Builder() {}
 
@@ -150,6 +190,34 @@ public final class McpToolAdapterOptions {
         throw new IllegalArgumentException("callMetadataProvider must not be null");
       }
       this.callMetadataProvider = callMetadataProvider;
+      return this;
+    }
+
+    /**
+     * Sets whether a result's structured content and result {@code _meta} are kept as a trailing
+     * payload.
+     *
+     * @param includeResultPayload {@code true} to keep the payload, accepting that a session
+     *     holding it cannot be persisted until a content codec for extension content exists
+     * @return this builder, never {@code null}
+     */
+    public Builder includeResultPayload(boolean includeResultPayload) {
+      this.includeResultPayload = includeResultPayload;
+      return this;
+    }
+
+    /**
+     * Sets the highest number of {@code tools/list} pages one discovery may read.
+     *
+     * @param maxDiscoveryPages the page bound, always positive
+     * @return this builder, never {@code null}
+     * @throws IllegalArgumentException if the bound is not positive
+     */
+    public Builder maxDiscoveryPages(int maxDiscoveryPages) {
+      if (maxDiscoveryPages <= 0) {
+        throw new IllegalArgumentException("maxDiscoveryPages must be positive");
+      }
+      this.maxDiscoveryPages = maxDiscoveryPages;
       return this;
     }
 

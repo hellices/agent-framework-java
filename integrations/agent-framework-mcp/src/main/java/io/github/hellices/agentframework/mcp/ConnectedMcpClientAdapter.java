@@ -75,9 +75,11 @@ public final class ConnectedMcpClientAdapter {
   /**
    * Discovers every tool the connected server publishes.
    *
-   * <p>Every page of the server's tool list is read, so a paginated catalogue is returned whole.
-   * Cancelling the returned stage, or a stage derived from it, cancels the page request that is in
-   * flight and leaves the borrowed client untouched.
+   * <p>Every page of the server's tool list is read, so a paginated catalogue is returned whole. A
+   * server that repeats a cursor or pages beyond {@link McpToolAdapterOptions#maxDiscoveryPages()}
+   * fails the discovery rather than being followed forever. Cancelling the returned stage, or a
+   * stage derived from it, cancels the page request that is in flight, stops any further page from
+   * being requested, and leaves the borrowed client untouched.
    *
    * @return a stage completing with the discovered tools in server order, never {@code null}
    */

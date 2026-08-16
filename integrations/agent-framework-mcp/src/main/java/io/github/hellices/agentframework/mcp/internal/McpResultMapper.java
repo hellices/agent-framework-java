@@ -4,6 +4,7 @@ import io.github.hellices.agentframework.api.message.Content;
 import io.github.hellices.agentframework.api.message.TextContent;
 import io.github.hellices.agentframework.api.tool.ToolResult;
 import io.github.hellices.agentframework.mcp.McpPayloadContent;
+import io.github.hellices.agentframework.mcp.McpToolAdapterOptions;
 import io.modelcontextprotocol.spec.McpSchema;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -17,14 +18,31 @@ import java.util.Map;
  * <p>Content order is preserved because a server orders its content deliberately. Text becomes core
  * text content, and every other protocol variant becomes {@link McpPayloadContent} carrying the
  * server's content type, its descriptive fields, and the untouched SDK value, so no payload is
- * silently dropped and none is misrepresented as text. Structured content and result metadata are
- * appended as one trailing payload rather than folded into the text, because they describe the
- * result rather than being part of it.
+ * silently dropped and none is misrepresented as text.
+ *
+ * <p>Structured content and result metadata describe the result rather than being part of it, and
+ * both are ordinary features of a server that answers in text. Carrying them would turn such a
+ * result into adapter owned content that session persistence cannot encode, so they are kept only
+ * when {@link McpToolAdapterOptions#includeResultPayload()} asks for them, and then as one trailing
+ * payload rather than folded into the text. A server that answers with structured content and no
+ * content at all is the exception: there the structured value is the answer, so it is kept either
+ * way rather than reported as a successful call that returned nothing.
  */
 public final class McpResultMapper {
 
   private static final String RESULT_PAYLOAD_TYPE = "result";
   private static final String META = "_meta";
+
+  private final McpToolAdapterOptions options;
+
+  /**
+   * Creates a result mapper.
+   *
+   * @param options adapter options, never {@code null}
+   */
+  public McpResultMapper(McpToolAdapterOptions options) {
+    this.options = options;
+  }
 
   /**
    * Maps a call result.
@@ -46,11 +64,27 @@ public final class McpResultMapper {
       }
       content.add(toContent(item));
     }
-    Content summary = resultPayload(result);
+    Content summary = payloadFor(result, content.isEmpty());
     if (summary != null) {
       content.add(summary);
     }
     return new ToolResult(content, Boolean.TRUE.equals(result.isError()));
+  }
+
+  /**
+   * Returns the trailing payload for a result, or {@code null} when the result carries none that
+   * this configuration keeps.
+   *
+   * <p>Structured content is normally an annotation on an answer given in content, so keeping it is
+   * the caller's choice. It stops being an annotation when the server returns nothing else: the
+   * serialized text mirror of structured content is a recommendation rather than a rule, so
+   * dropping it there would turn the whole answer into a successful call with nothing in it. Result
+   * metadata alone is not an answer, so a result without content and without structured content
+   * stays empty rather than becoming unpersistable for the sake of a timing field.
+   */
+  private Content payloadFor(McpSchema.CallToolResult result, boolean withoutContent) {
+    boolean structuredIsTheAnswer = withoutContent && result.structuredContent() != null;
+    return options.includeResultPayload() || structuredIsTheAnswer ? resultPayload(result) : null;
   }
 
   private static Content toContent(McpSchema.Content item) {

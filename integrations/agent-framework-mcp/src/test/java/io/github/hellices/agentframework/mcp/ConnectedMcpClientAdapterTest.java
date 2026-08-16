@@ -5,17 +5,25 @@ import static io.github.hellices.agentframework.mcp.FakeMcpAsyncOperations.objec
 import static io.github.hellices.agentframework.mcp.FakeMcpAsyncOperations.page;
 import static io.github.hellices.agentframework.mcp.FakeMcpAsyncOperations.tool;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import io.github.hellices.agentframework.api.agent.AgentSession;
+import io.github.hellices.agentframework.api.agent.CancellationSignal;
 import io.github.hellices.agentframework.api.message.Content;
+import io.github.hellices.agentframework.api.message.Message;
+import io.github.hellices.agentframework.api.message.Role;
 import io.github.hellices.agentframework.api.message.TextContent;
+import io.github.hellices.agentframework.api.session.SessionSnapshot;
 import io.github.hellices.agentframework.api.tool.FunctionTool;
 import io.github.hellices.agentframework.api.tool.ToolArguments;
 import io.github.hellices.agentframework.api.tool.ToolContext;
 import io.github.hellices.agentframework.api.tool.ToolResult;
 import io.github.hellices.agentframework.mcp.internal.McpAsyncOperations;
+import io.github.hellices.agentframework.spi.session.StateCodecRegistry;
 import io.modelcontextprotocol.spec.McpSchema;
 import java.lang.reflect.Method;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
@@ -23,6 +31,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 
 class ConnectedMcpClientAdapterTest {
@@ -82,6 +91,76 @@ class ConnectedMcpClientAdapterTest {
         .hasMessageContaining("repeated tool list cursor")
         .hasMessageContaining("cursor-1");
     assertThat(operations.requestedCursors()).containsExactly(null, "cursor-1");
+  }
+
+  @Test
+  void failsWhenTheServerNeverStopsPublishingNewPages() {
+    // A server that keeps handing out fresh cursors is a protocol fault, not a large catalogue:
+    // followed to the end it exhausts the stack rather than the patience of the caller.
+    FakeMcpAsyncOperations operations = endlesslyPagingServer();
+
+    assertThatThrownBy(() -> discover(adapter(operations)))
+        .rootCause()
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("256");
+    assertThat(operations.requestedCursors()).hasSize(256);
+  }
+
+  @Test
+  void boundsPaginationByTheConfiguredPageLimit() {
+    FakeMcpAsyncOperations operations = endlesslyPagingServer();
+
+    assertThatThrownBy(
+            () ->
+                discover(
+                    adapter(
+                        operations, McpToolAdapterOptions.builder().maxDiscoveryPages(3).build())))
+        .rootCause()
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("3");
+    assertThat(operations.requestedCursors()).containsExactly(null, "cursor-1", "cursor-2");
+  }
+
+  @Test
+  void reportsThePageBoundEvenWhenItIsRaisedFarBeyondTheStackDepthOfAPageChain() {
+    // Chaining each page onto the stage of the page before it exhausted the stack after roughly
+    // 1500 pages that a server answered immediately, so a raised bound turned the protocol fault
+    // into a stack overflow instead of the failure the bound exists to report.
+    FakeMcpAsyncOperations operations = endlesslyPagingServer();
+
+    assertThatThrownBy(
+            () ->
+                discover(
+                    adapter(
+                        operations,
+                        McpToolAdapterOptions.builder().maxDiscoveryPages(4096).build())))
+        .rootCause()
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("4096");
+    assertThat(operations.requestedCursors()).hasSize(4096);
+  }
+
+  @Test
+  void stopsPagingWhenACancelLandsBetweenTwoPages() {
+    // The in-flight page cancel is a no-op once that page has completed, which is the window in
+    // which the old recursion kept paging a borrowed client for a caller that had already left.
+    UncancellableFuture<McpSchema.ListToolsResult> firstPage = new UncancellableFuture<>();
+    FakeMcpAsyncOperations operations =
+        new FakeMcpAsyncOperations()
+            .listing(
+                cursor ->
+                    cursor == null
+                        ? firstPage
+                        : CompletableFuture.completedFuture(
+                            page(List.of(tool("beta", SEARCH_SCHEMA)), null)));
+
+    CompletableFuture<List<FunctionTool>> discovery =
+        adapter(operations).discoverTools().toCompletableFuture();
+    discovery.cancel(true);
+    firstPage.complete(page(List.of(tool("alpha", SEARCH_SCHEMA)), "cursor-1"));
+
+    assertThat(discovery).isCancelled();
+    assertThat(operations.requestedCursors()).containsExactly((String) null);
   }
 
   @Test
@@ -300,7 +379,7 @@ class ConnectedMcpClientAdapterTest {
   }
 
   @Test
-  void rejectsMetadataThatIsNullOrCarriesBlankKeys() {
+  void rejectsMetadataThatIsNullOrCarriesBlankKeysOrNullValues() {
     FakeMcpAsyncOperations operations = new FakeMcpAsyncOperations();
     FunctionTool nullMetadata =
         singleTool(
@@ -312,13 +391,34 @@ class ConnectedMcpClientAdapterTest {
         singleTool(
             new FakeMcpAsyncOperations(),
             McpToolAdapterOptions.builder().callMetadataProvider(context -> blankKey).build());
+    Map<String, Object> nullKey = new LinkedHashMap<>();
+    nullKey.put(null, "value");
+    FunctionTool nullKeyMetadata =
+        singleTool(
+            new FakeMcpAsyncOperations(),
+            McpToolAdapterOptions.builder().callMetadataProvider(context -> nullKey).build());
+    Map<String, Object> nullValue = new LinkedHashMap<>();
+    nullValue.put("traceId", null);
+    FunctionTool nullValueMetadata =
+        singleTool(
+            new FakeMcpAsyncOperations(),
+            McpToolAdapterOptions.builder().callMetadataProvider(context -> nullValue).build());
 
     assertThatThrownBy(() -> invoke(nullMetadata, new ToolArguments(Map.of())))
         .rootCause()
         .isInstanceOf(IllegalStateException.class);
     assertThatThrownBy(() -> invoke(blankKeyMetadata, new ToolArguments(Map.of())))
         .rootCause()
-        .isInstanceOf(IllegalArgumentException.class);
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("null or blank key");
+    assertThatThrownBy(() -> invoke(nullKeyMetadata, new ToolArguments(Map.of())))
+        .rootCause()
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("null or blank key");
+    assertThatThrownBy(() -> invoke(nullValueMetadata, new ToolArguments(Map.of())))
+        .rootCause()
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("traceId");
   }
 
   @Test
@@ -416,7 +516,10 @@ class ConnectedMcpClientAdapterTest {
   }
 
   @Test
-  void preservesStructuredContentAndResultMetadataAsPayload() {
+  void keepsATextResultPersistableWhenTheServerAlsoReturnsStructuredContent() {
+    // Structured output and result `_meta` are ordinary features of a text answering server, so
+    // carrying them by default would make a plain text result unpersistable long after the tool
+    // call itself succeeded.
     McpSchema.CallToolResult result =
         new McpSchema.CallToolResult(
             List.of(new McpSchema.TextContent(null, "done", null)),
@@ -427,12 +530,81 @@ class ConnectedMcpClientAdapterTest {
 
     ToolResult mapped = invoke(singleTool(operations), new ToolArguments(Map.of()));
 
+    assertThat(mapped.content()).singleElement().isInstanceOf(TextContent.class);
+    assertThat(mapped.content().get(0).text()).isEqualTo("done");
+    assertThatCode(() -> snapshotOf(mapped)).doesNotThrowAnyException();
+  }
+
+  @Test
+  void preservesStructuredContentAndResultMetadataAsPayloadWhenAsked() {
+    McpSchema.CallToolResult result =
+        new McpSchema.CallToolResult(
+            List.of(new McpSchema.TextContent(null, "done", null)),
+            Boolean.FALSE,
+            Map.of("count", 2),
+            Map.of("elapsedMs", 12));
+    FakeMcpAsyncOperations operations = new FakeMcpAsyncOperations().answering(result);
+    McpToolAdapterOptions options =
+        McpToolAdapterOptions.builder().includeResultPayload(true).build();
+
+    ToolResult mapped = invoke(singleTool(operations, options), new ToolArguments(Map.of()));
+
     assertThat(mapped.content()).hasSize(2);
     McpPayloadContent payload = (McpPayloadContent) mapped.content().get(1);
     assertThat(payload.payloadType()).isEqualTo("result");
     assertThat(payload.additionalProperties())
         .containsEntry("structuredContent", Map.of("count", 2))
         .containsEntry("_meta", Map.of("elapsedMs", 12));
+    assertThatThrownBy(() -> snapshotOf(mapped))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("registered content codec");
+  }
+
+  @Test
+  void keepsAStructuredOnlyAnswerRatherThanReportingAnEmptySuccess() {
+    // The serialized text mirror of structured content is a recommendation, not a rule, so a
+    // server may answer with structured content alone. Dropping it with the payload option off
+    // would report a successful call that carries no answer at all.
+    McpSchema.CallToolResult result =
+        new McpSchema.CallToolResult(List.of(), Boolean.FALSE, Map.of("count", 2), null);
+    FakeMcpAsyncOperations operations = new FakeMcpAsyncOperations().answering(result);
+
+    ToolResult mapped = invoke(singleTool(operations), new ToolArguments(Map.of()));
+
+    assertThat(mapped.content()).hasSize(1);
+    McpPayloadContent payload = (McpPayloadContent) mapped.content().get(0);
+    assertThat(payload.payloadType()).isEqualTo("result");
+    assertThat(payload.additionalProperties())
+        .containsEntry("structuredContent", Map.of("count", 2));
+  }
+
+  @Test
+  void leavesAnAnswerlessResultEmptyRatherThanCarryingItsMetadataAlone() {
+    // Result metadata annotates an answer instead of being one, so a server that returns neither
+    // content nor structured content said nothing, and saying nothing stays persistable.
+    McpSchema.CallToolResult result =
+        new McpSchema.CallToolResult(List.of(), Boolean.FALSE, null, Map.of("elapsedMs", 12));
+    FakeMcpAsyncOperations operations = new FakeMcpAsyncOperations().answering(result);
+
+    ToolResult mapped = invoke(singleTool(operations), new ToolArguments(Map.of()));
+
+    assertThat(mapped.content()).isEmpty();
+    assertThatCode(() -> snapshotOf(mapped)).doesNotThrowAnyException();
+  }
+
+  @Test
+  void keepsNonTextContentAsPayloadWhateverTheResultPayloadOptionSays() {
+    List<McpSchema.Content> content =
+        List.of(new McpSchema.ImageContent(null, "aGk=", "image/png", null));
+    FakeMcpAsyncOperations operations =
+        new FakeMcpAsyncOperations().answering(callResult(content, null));
+
+    ToolResult mapped = invoke(singleTool(operations), new ToolArguments(Map.of()));
+
+    assertThat(mapped.content()).singleElement().isInstanceOf(McpPayloadContent.class);
+    assertThatThrownBy(() -> snapshotOf(mapped))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("registered content codec");
   }
 
   @Test
@@ -486,6 +658,70 @@ class ConnectedMcpClientAdapterTest {
   }
 
   @Test
+  void cancellingTheRunCancelsTheCallItStarted() {
+    // The tool loop never cancels the stage a tool returned; it cancels the run. A borrowed client
+    // that keeps working for an abandoned run is exactly what this signal exists to prevent.
+    RecordingFuture<McpSchema.CallToolResult> pending = new RecordingFuture<>();
+    FakeMcpAsyncOperations operations = new FakeMcpAsyncOperations().calling(request -> pending);
+    FunctionTool tool = singleTool(operations);
+    CancellationSignal signal = new CancellationSignal();
+
+    CompletionStage<ToolResult> execution =
+        tool.execute(new ToolArguments(Map.of()), new ToolContext(signal, Map.of()));
+    signal.cancel();
+
+    assertThat(execution.toCompletableFuture()).isCompletedExceptionally();
+    assertThat(pending).isCancelled();
+  }
+
+  @Test
+  void cancelsACallStartedByAnAlreadyCancelledRun() {
+    RecordingFuture<McpSchema.CallToolResult> pending = new RecordingFuture<>();
+    FakeMcpAsyncOperations operations = new FakeMcpAsyncOperations().calling(request -> pending);
+    FunctionTool tool = singleTool(operations);
+    CancellationSignal signal = new CancellationSignal();
+    signal.cancel();
+
+    CompletionStage<ToolResult> execution =
+        tool.execute(new ToolArguments(Map.of()), new ToolContext(signal, Map.of()));
+
+    assertThat(execution.toCompletableFuture()).isCompletedExceptionally();
+    assertThat(pending).isCancelled();
+  }
+
+  @Test
+  void detachesTheRunListenerWhenTheCallCompletes() {
+    // A run signal outlives a single tool call, so a listener left behind by every completed call
+    // would accumulate for the whole run.
+    RecordingFuture<McpSchema.CallToolResult> pending = new RecordingFuture<>();
+    FakeMcpAsyncOperations operations = new FakeMcpAsyncOperations().calling(request -> pending);
+    FunctionTool tool = singleTool(operations);
+    CancellationSignal signal = new CancellationSignal();
+
+    CompletionStage<ToolResult> execution =
+        tool.execute(new ToolArguments(Map.of()), new ToolContext(signal, Map.of()));
+    pending.complete(callResult(List.of(new McpSchema.TextContent(null, "ok", null)), null));
+    signal.cancel();
+
+    assertThat(execution.toCompletableFuture().join().content().get(0).text()).isEqualTo("ok");
+    assertThat(pending.cancelAttempts()).isZero();
+  }
+
+  @Test
+  void leavesACompletedCallAloneWhenItsStageIsCancelledAfterwards() {
+    RecordingFuture<McpSchema.CallToolResult> pending = new RecordingFuture<>();
+    FakeMcpAsyncOperations operations = new FakeMcpAsyncOperations().calling(request -> pending);
+    FunctionTool tool = singleTool(operations);
+
+    CompletionStage<ToolResult> execution =
+        tool.execute(new ToolArguments(Map.of()), new ToolContext(null, Map.of()));
+    pending.complete(callResult(List.of(new McpSchema.TextContent(null, "ok", null)), null));
+
+    assertThat(execution.toCompletableFuture().cancel(true)).isFalse();
+    assertThat(pending.cancelAttempts()).isZero();
+  }
+
+  @Test
   void cancellingDiscoveryCancelsThePendingPageRequest() {
     CompletableFuture<McpSchema.ListToolsResult> pending = new CompletableFuture<>();
     FakeMcpAsyncOperations operations = new FakeMcpAsyncOperations().listing(cursor -> pending);
@@ -527,6 +763,17 @@ class ConnectedMcpClientAdapterTest {
     return adapter.discoverTools().toCompletableFuture().join();
   }
 
+  private static FakeMcpAsyncOperations endlesslyPagingServer() {
+    AtomicInteger pageNumber = new AtomicInteger();
+    return new FakeMcpAsyncOperations()
+        .listing(
+            cursor -> {
+              int number = pageNumber.incrementAndGet();
+              return CompletableFuture.completedFuture(
+                  page(List.of(tool("search-" + number, SEARCH_SCHEMA)), "cursor-" + number));
+            });
+  }
+
   private static FunctionTool singleTool(FakeMcpAsyncOperations operations) {
     return singleTool(operations, McpToolAdapterOptions.defaults());
   }
@@ -539,5 +786,37 @@ class ConnectedMcpClientAdapterTest {
 
   private static ToolResult invoke(FunctionTool tool, ToolArguments arguments) {
     return tool.execute(arguments, new ToolContext(null, Map.of())).toCompletableFuture().join();
+  }
+
+  private static SessionSnapshot snapshotOf(ToolResult result) {
+    AgentSession session =
+        new AgentSession(
+            "session-1", null, Map.of("message", new Message(Role.TOOL, result.content())));
+    return StateCodecRegistry.builder().build().snapshot(session, 0, Instant.EPOCH);
+  }
+
+  /** Records every cancellation attempt, including the ones a completed future would ignore. */
+  private static final class RecordingFuture<T> extends CompletableFuture<T> {
+
+    private final AtomicInteger cancelAttempts = new AtomicInteger();
+
+    @Override
+    public boolean cancel(boolean mayInterruptIfRunning) {
+      cancelAttempts.incrementAndGet();
+      return super.cancel(mayInterruptIfRunning);
+    }
+
+    int cancelAttempts() {
+      return cancelAttempts.get();
+    }
+  }
+
+  /** Models a page request that had already completed when the cancellation reached it. */
+  private static final class UncancellableFuture<T> extends CompletableFuture<T> {
+
+    @Override
+    public boolean cancel(boolean mayInterruptIfRunning) {
+      return false;
+    }
   }
 }

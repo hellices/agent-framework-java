@@ -36,6 +36,13 @@ public final class McpArgumentMapper {
   /**
    * Returns the argument names accepted for a tool.
    *
+   * <p>Only a literal top level {@code properties} map is read. A schema that declares its shape
+   * through {@code $ref}, {@code allOf}, {@code anyOf}, or {@code additionalProperties} alone
+   * therefore declares no property here, and a call for such a tool carries only the names a host
+   * allowed explicitly through {@link McpToolAdapterOptions#additionalArgumentNames()}. Composing
+   * schemas is deliberately not attempted: a partial composition would accept some arguments and
+   * silently drop others, which is harder to diagnose than an empty set that a host can override.
+   *
    * @param inputSchema the input schema the server published, never {@code null}
    * @return the accepted names, never {@code null}
    */
@@ -61,7 +68,8 @@ public final class McpArgumentMapper {
    * @param context execution context of the invocation, never {@code null}
    * @return the request to send, never {@code null}
    * @throws IllegalStateException if the metadata provider returns {@code null}
-   * @throws IllegalArgumentException if the metadata provider returns a blank key
+   * @throws IllegalArgumentException if the metadata provider returns a null or blank key, or a
+   *     null value
    */
   public McpSchema.CallToolRequest toRequest(
       String remoteName,
@@ -89,7 +97,14 @@ public final class McpArgumentMapper {
     for (Map.Entry<String, Object> entry : metadata.entrySet()) {
       String key = entry.getKey();
       if (key == null || key.isBlank()) {
-        throw new IllegalArgumentException("call metadata must not hold a blank key");
+        throw new IllegalArgumentException("call metadata must not hold a null or blank key");
+      }
+      if (entry.getValue() == null) {
+        // A null reaches the server as a JSON null the protocol does not define for `_meta`, and
+        // it is far more often a provider that failed to resolve a value than a value that is
+        // meaningfully absent, so it fails here with the key that produced it.
+        throw new IllegalArgumentException(
+            "call metadata value for '" + key + "' must not be null");
       }
       copy.put(key, entry.getValue());
     }

@@ -81,7 +81,7 @@ Build the MCP argument map in caller order from schema `properties` plus configu
 
 - [ ] **Step 7: Map tool results**
 
-Map SDK text content to core `TextContent`. Preserve image/audio/resource/resource-link/structured payloads as `McpPayloadContent` with the SDK value only as integration-level raw representation. Map `isError == true` to `ToolResult.error=true`; null is false. Preserve result order.
+Map SDK text content to core `TextContent`. Preserve image/audio/resource/resource-link payloads as `McpPayloadContent` with the SDK value only as integration-level raw representation. Carry `structuredContent` and result `_meta` as a trailing `McpPayloadContent` only when `McpToolAdapterOptions.includeResultPayload()` asks for it, because that content is adapter-owned and no session content codec exists for it yet. Map `isError == true` to `ToolResult.error=true`; null is false. Preserve result order.
 
 - [ ] **Step 8: Verify lifecycle and failures**
 
@@ -97,7 +97,10 @@ Test client/list/call synchronous throws, failed Monos, null stages/results/cont
 
 - [ ] **Step 10: Update traceability and commit**
 
-Set MCP-001 to `partial` (borrowed adapter only), MCP-004 and MCP-005 to `implemented`.
+Set MCP-001 to `partial` (borrowed adapter only) and MCP-004 to `implemented`. MCP-005 stays
+`partial`: schema filtering and the separate `_meta` path are built and tested, but the
+criterion "user `_meta` and framework metadata are merged without overwriting each other" has
+no framework metadata contributor and no merge rule in this slice.
 
 ```bash
 git add settings.gradle.kts gradle/libs.versions.toml agent-framework-bom integrations docs
