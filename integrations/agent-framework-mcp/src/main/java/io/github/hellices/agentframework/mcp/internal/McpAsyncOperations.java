@@ -9,9 +9,16 @@ import java.util.concurrent.CompletionStage;
  *
  * <p>The port exists for two reasons. The SDK client types are final with non public constructors,
  * so adapter logic could otherwise only be exercised against a live server or a process. And the
- * port names exactly the two operations the adapter is allowed to perform, which keeps the borrowed
- * client's lifecycle out of reach: there is deliberately no method to connect, initialize,
- * reconnect, or close.
+ * port names the operations the adapter may perform plus one scoping method that carries no
+ * lifecycle: {@link #listTools}, {@link #callTool}, and {@link #forPagedOperation()}. None of the
+ * three connects, initializes, reconnects, or closes anything: there is deliberately no such
+ * method.
+ *
+ * <p>Both the borrowed and the owned implementation use this port. The borrowed implementation
+ * cannot own a lifecycle it was never given, so its {@link #forPagedOperation()} is the inherited
+ * default that returns {@code this}. The owned implementation's {@link #forPagedOperation()}
+ * instead scopes a fresh paging attempt — one reconnect budget for one paged read — without
+ * exposing a lifecycle method of its own.
  *
  * <p>Implementations are used concurrently and must be thread safe.
  */
