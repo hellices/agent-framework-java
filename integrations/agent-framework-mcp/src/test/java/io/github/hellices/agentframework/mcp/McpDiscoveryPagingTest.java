@@ -98,6 +98,65 @@ class McpDiscoveryPagingTest {
   }
 
   @Test
+  void aFailedReplacementDuringAPagedReadReportsTheFailureThatStoppedIt() {
+    List<String> staleCursors = new ArrayList<>();
+    List<String> refusedCursors = new ArrayList<>();
+    InMemoryMcpTransport stale = catalogue(staleCursors, 1);
+    InMemoryMcpTransport refused =
+        catalogue(refusedCursors, Integer.MAX_VALUE)
+            .failingSend(
+                McpSchema.METHOD_INITIALIZE, () -> new IllegalStateException("handshake refused"));
+    ScriptedMcpTransportFactory factory = new ScriptedMcpTransportFactory(stale, refused);
+    OwnedMcpClientLifecycle lifecycle = new OwnedMcpClientLifecycle(factory, settings());
+    lifecycle.connect().join();
+
+    Throwable failure = catchThrowable(() -> discover(lifecycle));
+
+    // No replacement exists, so there is nothing to restart on and nothing to call a read replaced
+    // by. The caller is told what actually stopped the second page — the session that issued the
+    // cursor is gone — and the handshake that could not repair it is attached to that failure
+    // rather than reported in its place.
+    assertThat(failure)
+        .rootCause()
+        .isInstanceOf(McpTransportSessionNotFoundException.class)
+        .satisfies(
+            stopped ->
+                assertThat(stopped.getSuppressed())
+                    .singleElement()
+                    .satisfies(
+                        suppressed ->
+                            assertThat(suppressed).hasStackTraceContaining("handshake refused")));
+    assertThat(staleCursors).containsExactly(null, "page-2");
+    assertThat(refusedCursors).isEmpty();
+    assertThat(factory.createdCount()).isEqualTo(2);
+  }
+
+  @Test
+  void aSecondDiscoveryThroughTheSamePortGetsItsOwnBudget() {
+    InMemoryMcpTransport first = catalogue(new ArrayList<>(), 1);
+    InMemoryMcpTransport second = catalogue(new ArrayList<>(), 3);
+    InMemoryMcpTransport third = catalogue(new ArrayList<>(), Integer.MAX_VALUE);
+    ScriptedMcpTransportFactory factory = new ScriptedMcpTransportFactory(first, second, third);
+    OwnedMcpClientLifecycle lifecycle = new OwnedMcpClientLifecycle(factory, settings());
+    lifecycle.connect().join();
+    OwnedMcpAsyncOperations operations = new OwnedMcpAsyncOperations(lifecycle);
+    McpToolDiscovery discovery = new McpToolDiscovery(operations, McpToolAdapterOptions.defaults());
+
+    List<FunctionTool> firstCatalogue = discovery.discover().toCompletableFuture().join();
+    assertThat(factory.createdCount()).isEqualTo(2);
+
+    List<FunctionTool> secondCatalogue = discovery.discover().toCompletableFuture().join();
+
+    // The budget belongs to one read, not to the port that served it. The first discovery spent its
+    // reconnect on the second generation; the second loses its own connection mid-read and must
+    // still be able to buy the third, or a long-lived adapter could re-discover exactly once in its
+    // lifetime.
+    assertThat(names(firstCatalogue)).containsExactly("search-issues", "close-issues");
+    assertThat(names(secondCatalogue)).containsExactly("search-issues", "close-issues");
+    assertThat(factory.createdCount()).isEqualTo(3);
+  }
+
+  @Test
   void givesEachDiscoveredToolItsOwnReconnectBudget() {
     InMemoryMcpTransport stale = catalogue(new ArrayList<>(), 1);
     InMemoryMcpTransport fresh =
