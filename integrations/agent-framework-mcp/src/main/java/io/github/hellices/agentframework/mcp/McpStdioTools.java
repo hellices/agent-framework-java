@@ -209,15 +209,10 @@ public final class McpStdioTools {
      * Builds the provider without starting the server process.
      *
      * @return a provider, never {@code null}
-     * @throws IllegalArgumentException if a required value is missing or a timeout is not positive
+     * @throws IllegalArgumentException if a required value is missing, a timeout is {@code null} or
+     *     not positive, or the tool options are {@code null}
      */
     public McpStdioTools build() {
-      if (jsonMapper == null) {
-        throw new IllegalArgumentException(JSON_MAPPER_REQUIRED);
-      }
-      if (schemaValidator == null) {
-        throw new IllegalArgumentException(SCHEMA_VALIDATOR_REQUIRED);
-      }
       // Read into locals so the factory captures the recorded values rather than this builder: a
       // builder reused after build() must not be able to change what an already built provider
       // starts.
@@ -225,10 +220,35 @@ public final class McpStdioTools {
       List<String> processArgs = args;
       Map<String, String> processEnv = env;
       McpJsonMapper mapper = jsonMapper;
-      return new McpStdioTools(
+      return build(
           () ->
               new StdioClientTransport(
-                  serverParameters(processCommand, processArgs, processEnv), mapper),
+                  serverParameters(processCommand, processArgs, processEnv), mapper));
+    }
+
+    /**
+     * Builds the provider over a supplied transport factory.
+     *
+     * <p>Package-private: it exists so a test can drive the configured build end to end — the same
+     * requirement checks, the same settings, the same tool options, the same provider — without a
+     * server process. The public {@link #build()} is exactly this method plus the one factory that
+     * starts a process, so nothing it verifies can drift from what a caller gets. The factory is
+     * only called at {@link McpStdioTools#connect() connect}, here as there.
+     *
+     * @param transportFactory creates each generation's transport, never {@code null}
+     * @return a provider, never {@code null}
+     * @throws IllegalArgumentException if a required value is missing, a timeout is {@code null} or
+     *     not positive, or the tool options are {@code null}
+     */
+    McpStdioTools build(McpClientTransportFactory transportFactory) {
+      if (jsonMapper == null) {
+        throw new IllegalArgumentException(JSON_MAPPER_REQUIRED);
+      }
+      if (schemaValidator == null) {
+        throw new IllegalArgumentException(SCHEMA_VALIDATOR_REQUIRED);
+      }
+      return new McpStdioTools(
+          transportFactory,
           new McpOwnedClientSettings(schemaValidator, requestTimeout, initializationTimeout),
           toolOptions);
     }

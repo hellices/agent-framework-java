@@ -129,18 +129,7 @@ class McpStdioToolsTest {
 
   @Test
   void connectsDiscoversAndClosesThroughTheSeam() {
-    InMemoryMcpTransport transport =
-        new InMemoryMcpTransport()
-            .answeringPing()
-            .answering(
-                McpSchema.METHOD_TOOLS_LIST,
-                params ->
-                    new McpSchema.ListToolsResult(
-                        List.of(
-                            new McpSchema.Tool(
-                                "search-issues", null, "search", SCHEMA, null, null, null, null)),
-                        null,
-                        null));
+    InMemoryMcpTransport transport = publishingSearchIssues();
     ScriptedMcpTransportFactory factory = new ScriptedMcpTransportFactory(transport);
     McpStdioTools tools =
         new McpStdioTools(
@@ -160,6 +149,55 @@ class McpStdioToolsTest {
   }
 
   @Test
+  void carriesEveryConfiguredValueIntoTheProviderTheBuilderProduces() {
+    InMemoryMcpTransport transport = publishingSearchIssues();
+    ScriptedMcpTransportFactory factory = new ScriptedMcpTransportFactory(transport);
+
+    McpStdioTools tools =
+        builder()
+            .toolOptions(McpToolAdapterOptions.builder().localNamePrefix("github_").build())
+            .build(factory);
+
+    // Nothing may be created by build(): the public path would have started a server process here.
+    assertThat(factory.createdCount()).isZero();
+
+    tools.connect().toCompletableFuture().join();
+    List<FunctionTool> discovered = tools.discoverTools().toCompletableFuture().join();
+    tools.close().toCompletableFuture().join();
+
+    assertThat(discovered).hasSize(1);
+    assertThat(discovered.get(0).definition().name()).isEqualTo("github_search-issues");
+    assertThat(factory.createdCount()).isEqualTo(1);
+    assertThat(transport.closeCount()).isEqualTo(1);
+  }
+
+  @Test
+  void appliesTheSameRequirementsWhetherOrNotTheTransportIsSupplied() {
+    ScriptedMcpTransportFactory factory = new ScriptedMcpTransportFactory();
+    assertThatThrownBy(
+            () ->
+                McpStdioTools.builder(ServerParameters.builder("no-such-command").build())
+                    .schemaValidator(new PermissiveJsonSchemaValidator())
+                    .build(factory))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("jsonMapper");
+    assertThatThrownBy(
+            () ->
+                McpStdioTools.builder(ServerParameters.builder("no-such-command").build())
+                    .jsonMapper(new RejectingMcpJsonMapper())
+                    .build(factory))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("schemaValidator");
+    assertThatThrownBy(() -> builder().requestTimeout(Duration.ZERO).build(factory))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessage("requestTimeout must be positive");
+    assertThatThrownBy(() -> builder().initializationTimeout(null).build(factory))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessage("initializationTimeout must not be null");
+    assertThat(factory.createdCount()).isZero();
+  }
+
+  @Test
   void rejectsNullToolOptionsAtTheSeamWithoutDereferencingThem() {
     assertThatThrownBy(
             () ->
@@ -172,6 +210,20 @@ class McpStdioToolsTest {
                     null))
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessage("options must not be null");
+  }
+
+  private static InMemoryMcpTransport publishingSearchIssues() {
+    return new InMemoryMcpTransport()
+        .answeringPing()
+        .answering(
+            McpSchema.METHOD_TOOLS_LIST,
+            params ->
+                new McpSchema.ListToolsResult(
+                    List.of(
+                        new McpSchema.Tool(
+                            "search-issues", null, "search", SCHEMA, null, null, null, null)),
+                    null,
+                    null));
   }
 
   private static McpStdioTools.Builder builder() {
