@@ -65,7 +65,8 @@ public final class OwnedMcpClientLifecycle {
   }
 
   private CompletableFuture<Generation> connectGeneration() {
-    CompletableFuture<Generation> handshake;
+    long ticket;
+    CompletableFuture<Generation> adopted;
     synchronized (lock) {
       if (current != null) {
         return CompletableFuture.completedFuture(current);
@@ -73,10 +74,20 @@ public final class OwnedMcpClientLifecycle {
       if (pending != null) {
         return pending.thenApply(generation -> generation);
       }
-      handshake = adopt(++epoch);
+      ticket = ++epoch;
+      adopted = adopt();
     }
-    mirror(startGeneration(), handshake);
-    return handshake.thenApply(generation -> generation);
+    try {
+      startGeneration()
+          .whenComplete((generation, failure) -> settle(ticket, adopted, generation, failure));
+    } catch (RuntimeException | Error failure) {
+      // A throwable that is not an ordinary failure keeps travelling, but the promise is already
+      // published, so it has to be settled before this frame unwinds. Otherwise the owner stays in
+      // connecting forever and every later connect joins a promise nobody is left to complete.
+      settle(ticket, adopted, null, failure);
+      throw failure;
+    }
+    return adopted.thenApply(generation -> generation);
   }
 
   /**
@@ -85,18 +96,46 @@ public final class OwnedMcpClientLifecycle {
    * <p>The promise is published inside the lock but completed outside it. That ordering is what
    * makes concurrent connects coalesce: a second caller that takes the lock while the first is
    * still building a transport already sees a pending handshake to join.
-   *
-   * <p>The ticket is a counter rather than the handshake future itself so that nothing in this
-   * class has to compare two object references for identity, and so that {@code close()} can orphan
-   * a handshake simply by moving the counter on.
    */
-  private CompletableFuture<Generation> adopt(long ticket) {
-    CompletableFuture<Generation> handshake = new CompletableFuture<>();
-    pending = handshake;
-    handshake.whenComplete((generation, failure) -> publish(ticket, generation));
-    return handshake;
+  private CompletableFuture<Generation> adopt() {
+    CompletableFuture<Generation> adopted = new CompletableFuture<>();
+    pending = adopted;
+    return adopted;
   }
 
+  /**
+   * Moves the owner out of connecting, then hands the outcome to the callers waiting for it.
+   *
+   * <p>The order is the point, and it is expressed as two statements rather than as two callbacks
+   * on the same promise. A caller that reacts to the outcome — a retry issued from a failure
+   * callback is the ordinary shape — must find owner state that already reflects it, or it joins
+   * the promise that just failed and no new generation is ever built. Registration order cannot
+   * provide that: {@link CompletableFuture} runs dependents in the reverse order of registration,
+   * so a publishing callback would run after every caller it was meant to unblock.
+   *
+   * <p>Neither statement runs while {@code lock} is held, so a caller woken by the completion can
+   * connect again from inside its own callback.
+   */
+  private void settle(
+      long ticket,
+      CompletableFuture<Generation> adopted,
+      Generation generation,
+      Throwable failure) {
+    publish(ticket, failure == null ? generation : null);
+    if (failure == null) {
+      adopted.complete(generation);
+    } else {
+      adopted.completeExceptionally(AsyncStages.unwrap(failure));
+    }
+  }
+
+  /**
+   * Records the generation the owner ended up with, or none when the handshake failed.
+   *
+   * <p>The ticket is a counter rather than the promise itself so that nothing in this class has to
+   * compare two object references for identity, and so that {@code close()} can orphan a handshake
+   * simply by moving the counter on.
+   */
   private void publish(long ticket, Generation generation) {
     synchronized (lock) {
       if (ticket != epoch) {
@@ -108,9 +147,18 @@ public final class OwnedMcpClientLifecycle {
   }
 
   /**
-   * Builds one generation. Never called while {@code lock} is held, and never throws: every failure
-   * is reported through the returned stage, so a caller that already published a pending handshake
-   * cannot be left with a promise nobody completes.
+   * Builds one generation and reports its outcome through the returned stage. Never called while
+   * {@code lock} is held.
+   *
+   * <p>The returned stage is private to this class: it carries the handshake outcome to the caller
+   * that adopted the generation, which settles the published promise from it. Nothing outside ever
+   * sees it, so completing it cannot run caller code.
+   *
+   * <p>Every failure the three steps produce as an ordinary failure is reported through that stage
+   * rather than thrown. A throwable that is not a {@link RuntimeException} — a service loader or
+   * linkage error from a consumer's classpath, say — is not an ordinary failure and still leaves
+   * this frame, which is why {@link #connectGeneration()} settles the published promise before
+   * letting it propagate.
    *
    * <p>The three steps fail differently. A factory failure leaves nothing to clean up. A client
    * build failure leaves a live transport that only this method still knows about, so it closes it.
@@ -157,9 +205,7 @@ public final class OwnedMcpClientLifecycle {
       Generation generation, Throwable failure, CompletableFuture<Generation> handshake) {
     generation
         .close()
-        .whenComplete(
-            (ignored, cleanupFailure) ->
-                handshake.completeExceptionally(reported(failure, cleanupFailure)));
+        .whenComplete((ignored, cleanupFailure) -> report(handshake, failure, cleanupFailure));
   }
 
   /** Closes a transport no client ever took ownership of. */
@@ -174,18 +220,32 @@ public final class OwnedMcpClientLifecycle {
   private static CompletableFuture<Generation> reportAfterCleanup(
       CompletableFuture<Void> cleanup, Throwable failure) {
     CompletableFuture<Generation> failed = new CompletableFuture<>();
-    cleanup.whenComplete(
-        (ignored, cleanupFailure) ->
-            failed.completeExceptionally(reported(failure, cleanupFailure)));
+    cleanup.whenComplete((ignored, cleanupFailure) -> report(failed, failure, cleanupFailure));
     return failed;
   }
 
-  private static Throwable reported(Throwable failure, Throwable cleanupFailure) {
+  /**
+   * Fails {@code target} with what went wrong, annotated with what went wrong while cleaning up
+   * after it.
+   *
+   * <p>A transport that reports the very instance it failed with — a cached or shared throwable —
+   * would otherwise leave the target incomplete, because a throwable refuses to suppress itself and
+   * that rejection would escape before the target was ever failed. Throwables do not redefine
+   * equality, so comparing them is the identity check that rejection is based on, and completing in
+   * a {@code finally} keeps any remaining trouble in the annotation from skipping it: what gets
+   * dropped is the cleanup failure, never the failure a caller is waiting for.
+   */
+  private static void report(
+      CompletableFuture<Generation> target, Throwable failure, Throwable cleanupFailure) {
     Throwable reported = AsyncStages.unwrap(failure);
-    if (cleanupFailure != null) {
-      reported.addSuppressed(AsyncStages.unwrap(cleanupFailure));
+    try {
+      Throwable cleanup = cleanupFailure == null ? null : AsyncStages.unwrap(cleanupFailure);
+      if (cleanup != null && !cleanup.equals(reported)) {
+        reported.addSuppressed(cleanup);
+      }
+    } finally {
+      target.completeExceptionally(reported);
     }
-    return reported;
   }
 
   /** Completes {@code target} with whatever {@code source} produced, unwrapping the failure. */

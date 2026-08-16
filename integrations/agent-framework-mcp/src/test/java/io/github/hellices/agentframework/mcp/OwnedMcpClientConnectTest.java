@@ -8,7 +8,10 @@ import io.github.hellices.agentframework.mcp.internal.McpOwnedClientSettings;
 import io.github.hellices.agentframework.mcp.internal.OwnedMcpClientLifecycle;
 import io.modelcontextprotocol.spec.McpSchema;
 import java.time.Duration;
+import java.util.ServiceConfigurationError;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 
@@ -160,6 +163,90 @@ class OwnedMcpClientConnectTest {
         .hasRootCauseInstanceOf(IllegalStateException.class);
     assertThat(created.get()).isEqualTo(2);
     assertThat(hostile.closeCount()).isEqualTo(2);
+  }
+
+  @Test
+  void aFatalStartFailurePropagatesWithoutWedgingTheOwner() {
+    InMemoryMcpTransport healthy = new InMemoryMcpTransport().answeringPing();
+    AtomicInteger created = new AtomicInteger();
+    McpClientTransportFactory factory =
+        () -> {
+          if (created.incrementAndGet() == 1) {
+            throw new ServiceConfigurationError("no JSON provider on this classpath");
+          }
+          return healthy;
+        };
+    OwnedMcpClientLifecycle lifecycle = new OwnedMcpClientLifecycle(factory, settings());
+
+    // A fatal error is not a protocol failure, so it keeps travelling rather than being reported as
+    // an ordinary outcome. What it must not do is leave the published handshake behind: the owner
+    // already told every later caller to join a promise that nobody is left to complete.
+    assertThatThrownBy(lifecycle::connect).isInstanceOf(ServiceConfigurationError.class);
+
+    assertThat(lifecycle.connect()).succeedsWithin(SETTLE);
+    assertThat(created.get()).isEqualTo(2);
+    assertThat(healthy.countOf(McpSchema.METHOD_INITIALIZE)).isEqualTo(1);
+  }
+
+  @Test
+  void aRetryIssuedFromTheFailureCallbackStartsANewGeneration() {
+    InMemoryMcpTransport failing =
+        new InMemoryMcpTransport()
+            .answeringWithError(McpSchema.METHOD_INITIALIZE, -32000, "no server")
+            .withholding(McpSchema.METHOD_INITIALIZE);
+    InMemoryMcpTransport healthy = new InMemoryMcpTransport().answeringPing();
+    ScriptedMcpTransportFactory factory = new ScriptedMcpTransportFactory(failing, healthy);
+    OwnedMcpClientLifecycle lifecycle = new OwnedMcpClientLifecycle(factory, settings());
+
+    AtomicInteger generationsWhenRetried = new AtomicInteger();
+    CompletableFuture<Void> retry =
+        lifecycle
+            .connect()
+            .exceptionallyCompose(
+                failure -> {
+                  CompletableFuture<Void> reconnect = lifecycle.connect();
+                  generationsWhenRetried.set(factory.createdCount());
+                  return reconnect;
+                });
+
+    // The handshake fails only now, after connect() returned. That is the ordering a real transport
+    // produces, and it is the ordering in which a caller reacting to the outcome runs before
+    // anything the owner registered on the same promise earlier.
+    failing.releaseWithheld();
+
+    assertThat(retry).succeedsWithin(SETTLE);
+    assertThat(generationsWhenRetried).hasValue(2);
+    assertThat(healthy.countOf(McpSchema.METHOD_INITIALIZE)).isEqualTo(1);
+  }
+
+  @Test
+  void aCleanupFailureThatIsTheReportedFailureStillFailsTheStageOnce() {
+    IllegalStateException refusal = new IllegalStateException("transport refuses to negotiate");
+    ClientHostileMcpTransport hostile =
+        new ClientHostileMcpTransport().refusing(() -> refusal).failingClose(() -> refusal);
+    InMemoryMcpTransport healthy = new InMemoryMcpTransport().answeringPing();
+    AtomicInteger created = new AtomicInteger();
+    McpClientTransportFactory factory =
+        () -> {
+          if (created.incrementAndGet() == 1) {
+            return hostile;
+          }
+          return healthy;
+        };
+    OwnedMcpClientLifecycle lifecycle = new OwnedMcpClientLifecycle(factory, settings());
+
+    CompletableFuture<Void> first = lifecycle.connect();
+
+    // get with a deadline rather than join: a stage nobody completes must fail this line, and
+    // AssertJ's failsWithin accepts a timeout as a failure, so it would pass on a wedged owner.
+    assertThatThrownBy(() -> first.get(SETTLE.toMillis(), TimeUnit.MILLISECONDS))
+        .isInstanceOf(ExecutionException.class)
+        .satisfies(reported -> assertThat(reported.getCause()).isSameAs(refusal));
+    assertThat(refusal.getSuppressed()).isEmpty();
+
+    assertThat(lifecycle.connect()).succeedsWithin(SETTLE);
+    assertThat(hostile.closeCount()).isEqualTo(1);
+    assertThat(created.get()).isEqualTo(2);
   }
 
   @Test

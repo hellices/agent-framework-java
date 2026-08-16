@@ -6,6 +6,7 @@ import io.modelcontextprotocol.spec.McpSchema;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
+import java.util.function.Supplier;
 import reactor.core.publisher.Mono;
 
 /**
@@ -23,9 +24,31 @@ final class ClientHostileMcpTransport implements McpClientTransport {
 
   private final AtomicInteger closeCount = new AtomicInteger();
 
+  private Supplier<RuntimeException> refusal =
+      () -> new IllegalStateException("transport refuses to negotiate");
+  private Supplier<Throwable> closeFailure;
+
+  /**
+   * Refuses the client build with a caller supplied throwable.
+   *
+   * <p>A test that hands the same instance to {@link #failingClose(Supplier)} reaches the collision
+   * where the failure being reported and the failure from cleaning up after it are one object,
+   * which is where suppressing one onto the other is not allowed.
+   */
+  ClientHostileMcpTransport refusing(Supplier<RuntimeException> refusal) {
+    this.refusal = refusal;
+    return this;
+  }
+
+  /** Fails {@link #closeGracefully()}; the transport still counts as closed afterwards. */
+  ClientHostileMcpTransport failingClose(Supplier<Throwable> failure) {
+    this.closeFailure = failure;
+    return this;
+  }
+
   @Override
   public List<String> protocolVersions() {
-    throw new IllegalStateException("transport refuses to negotiate");
+    throw refusal.get();
   }
 
   @Override
@@ -46,7 +69,12 @@ final class ClientHostileMcpTransport implements McpClientTransport {
 
   @Override
   public Mono<Void> closeGracefully() {
-    return Mono.fromRunnable(closeCount::incrementAndGet);
+    return Mono.defer(
+        () -> {
+          closeCount.incrementAndGet();
+          Supplier<Throwable> failure = closeFailure;
+          return failure == null ? Mono.empty() : Mono.error(failure.get());
+        });
   }
 
   int closeCount() {
