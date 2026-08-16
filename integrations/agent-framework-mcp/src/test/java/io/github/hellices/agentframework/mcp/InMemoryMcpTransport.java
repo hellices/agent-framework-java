@@ -3,14 +3,17 @@ package io.github.hellices.agentframework.mcp;
 import io.modelcontextprotocol.json.TypeRef;
 import io.modelcontextprotocol.spec.McpClientTransport;
 import io.modelcontextprotocol.spec.McpSchema;
+import io.modelcontextprotocol.spec.McpTransportSessionClosedException;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
+import java.util.function.Supplier;
 import reactor.core.publisher.Mono;
 
 /**
@@ -19,6 +22,12 @@ import reactor.core.publisher.Mono;
  * <p>The transport records how often it was closed, which is how a test can show that the adapter
  * leaves a borrowed client untouched: closing the client is what would close this transport.
  *
+ * <p>A closed transport refuses every further send. A real transport is single use: the stdio
+ * transport has destroyed its process and disposed its schedulers, and the streamable HTTP
+ * transport has swapped in a closed session. The SDK client does not remember that it was closed
+ * and will happily run a second handshake, so a transport that stayed usable would make every owned
+ * close and reconnect assertion vacuous.
+ *
  * <p>{@link #unmarshalFrom(Object, TypeRef)} returns the scripted result object unchanged, because
  * the results never leave the process, so no JSON mapper implementation is needed on the test
  * runtime.
@@ -26,13 +35,18 @@ import reactor.core.publisher.Mono;
 final class InMemoryMcpTransport implements McpClientTransport {
 
   private final Map<String, Function<Object, Object>> answers = new LinkedHashMap<>();
+  private final Map<String, McpSchema.JSONRPCResponse.JSONRPCError> errorAnswers =
+      new LinkedHashMap<>();
+  private final Map<String, Supplier<Throwable>> sendFailures = new LinkedHashMap<>();
   private final List<String> methodsSent = new ArrayList<>();
   private final Map<String, Object> lastRequests = new LinkedHashMap<>();
   private final AtomicInteger closeCount = new AtomicInteger();
+  private final AtomicBoolean closed = new AtomicBoolean();
   private final List<Runnable> withheld = new ArrayList<>();
   private final Set<String> withholdMethods = new LinkedHashSet<>();
 
   private Function<Mono<McpSchema.JSONRPCMessage>, Mono<McpSchema.JSONRPCMessage>> inbound;
+  private Supplier<Throwable> closeFailure;
 
   /**
    * Stops answering the given method until {@link #releaseWithheld()} is called, which is how a
@@ -43,7 +57,13 @@ final class InMemoryMcpTransport implements McpClientTransport {
     return this;
   }
 
-  /** Delivers every withheld response and stops withholding. */
+  /**
+   * Delivers every withheld response and stops withholding.
+   *
+   * <p>Withholding stops permanently, so a request that arrives after this call is answered at
+   * once. A test that released a withheld handshake and then triggered a second one would otherwise
+   * wait forever for a response nobody is going to release.
+   */
   void releaseWithheld() {
     List<Runnable> pending = List.copyOf(withheld);
     withheld.clear();
@@ -56,8 +76,35 @@ final class InMemoryMcpTransport implements McpClientTransport {
     return this;
   }
 
+  /** Answers {@code ping} with an empty result, which is what a healthy server does. */
+  InMemoryMcpTransport answeringPing() {
+    return answering(McpSchema.METHOD_PING, params -> Map.of());
+  }
+
+  /** Answers the method with a JSON-RPC error, which the SDK surfaces as an {@code McpError}. */
+  InMemoryMcpTransport answeringWithError(String method, int code, String message) {
+    errorAnswers.put(method, new McpSchema.JSONRPCResponse.JSONRPCError(code, message));
+    return this;
+  }
+
+  /** Fails the send of the method, which is how a transport level failure is scripted. */
+  InMemoryMcpTransport failingSend(String method, Supplier<Throwable> failure) {
+    sendFailures.put(method, failure);
+    return this;
+  }
+
+  /** Fails {@link #closeGracefully()}; the transport still counts as closed afterwards. */
+  InMemoryMcpTransport failingClose(Supplier<Throwable> failure) {
+    this.closeFailure = failure;
+    return this;
+  }
+
   List<String> methodsSent() {
     return List.copyOf(methodsSent);
+  }
+
+  int countOf(String method) {
+    return (int) methodsSent.stream().filter(method::equals).count();
   }
 
   Object lastRequestFor(String method) {
@@ -66,6 +113,10 @@ final class InMemoryMcpTransport implements McpClientTransport {
 
   int closeCount() {
     return closeCount.get();
+  }
+
+  boolean isClosed() {
+    return closed.get();
   }
 
   @Override
@@ -77,32 +128,36 @@ final class InMemoryMcpTransport implements McpClientTransport {
 
   @Override
   public Mono<Void> sendMessage(McpSchema.JSONRPCMessage message) {
-    return Mono.fromRunnable(
+    return Mono.defer(
         () -> {
+          if (closed.get()) {
+            return Mono.error(new McpTransportSessionClosedException());
+          }
           if (message instanceof McpSchema.JSONRPCNotification notification) {
             methodsSent.add(notification.method());
-            return;
+            return Mono.empty();
           }
-          if (message instanceof McpSchema.JSONRPCRequest request) {
-            methodsSent.add(request.method());
-            lastRequests.put(request.method(), request.params());
-            Runnable respond =
-                () ->
-                    inbound
-                        .apply(
-                            Mono.just(
-                                new McpSchema.JSONRPCResponse(
-                                    McpSchema.JSONRPC_VERSION,
-                                    request.id(),
-                                    answer(request),
-                                    null)))
-                        .subscribe();
-            if (withholdMethods.contains(request.method())) {
-              withheld.add(respond);
-            } else {
-              respond.run();
-            }
+          if (!(message instanceof McpSchema.JSONRPCRequest request)) {
+            return Mono.empty();
           }
+          methodsSent.add(request.method());
+          lastRequests.put(request.method(), request.params());
+          Supplier<Throwable> failure = sendFailures.get(request.method());
+          if (failure != null) {
+            return Mono.error(failure.get());
+          }
+          Runnable respond =
+              () -> {
+                if (!closed.get()) {
+                  inbound.apply(Mono.just(response(request))).subscribe();
+                }
+              };
+          if (withholdMethods.contains(request.method())) {
+            withheld.add(respond);
+          } else {
+            respond.run();
+          }
+          return Mono.empty();
         });
   }
 
@@ -114,8 +169,22 @@ final class InMemoryMcpTransport implements McpClientTransport {
 
   @Override
   public Mono<Void> closeGracefully() {
-    closeCount.incrementAndGet();
-    return Mono.empty();
+    return Mono.defer(
+        () -> {
+          closeCount.incrementAndGet();
+          closed.set(true);
+          Supplier<Throwable> failure = closeFailure;
+          return failure == null ? Mono.empty() : Mono.error(failure.get());
+        });
+  }
+
+  private McpSchema.JSONRPCResponse response(McpSchema.JSONRPCRequest request) {
+    McpSchema.JSONRPCResponse.JSONRPCError error = errorAnswers.get(request.method());
+    if (error != null) {
+      return new McpSchema.JSONRPCResponse(McpSchema.JSONRPC_VERSION, request.id(), null, error);
+    }
+    return new McpSchema.JSONRPCResponse(
+        McpSchema.JSONRPC_VERSION, request.id(), answer(request), null);
   }
 
   private Object answer(McpSchema.JSONRPCRequest request) {
