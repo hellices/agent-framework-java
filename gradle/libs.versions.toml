@@ -7,6 +7,7 @@ jacoco = "0.8.15"
 jsonSchemaValidator = "3.0.6"
 junit = "6.1.3"
 mcpSdk = "2.0.0"
+openaiJava = "4.51.0"
 pmd = "7.26.0"
 spotbugsPlugin = "6.5.10"
 spotbugsTool = "4.10.3"
@@ -14,6 +15,7 @@ spotless = "8.9.0"
 
 [libraries]
 assertj-core = { module = "org.assertj:assertj-core", version.ref = "assertj" }
+jackson-bom = { module = "com.fasterxml.jackson:jackson-bom", version.ref = "jackson" }
 jackson-databind = { module = "com.fasterxml.jackson.core:jackson-databind", version.ref = "jackson" }
 jackson-dataformat-yaml = { module = "com.fasterxml.jackson.dataformat:jackson-dataformat-yaml", version.ref = "jackson" }
 junit-bom = { module = "org.junit:junit-bom", version.ref = "junit" }
@@ -22,3 +24,4 @@ junit-platform-launcher = { module = "org.junit.platform:junit-platform-launcher
 mcp-bom = { module = "io.modelcontextprotocol.sdk:mcp-bom", version.ref = "mcpSdk" }
 mcp-core = { module = "io.modelcontextprotocol.sdk:mcp-core" }
 networknt-json-schema-validator = { module = "com.networknt:json-schema-validator", version.ref = "jsonSchemaValidator" }
+openai-java = { module = "com.openai:openai-java", version.ref = "openaiJava" }

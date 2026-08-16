@@ -27,6 +27,7 @@ include(":agent-framework-bom")
 include(":agent-framework-engine")
 include(":agent-framework-testkit")
 include(":integrations:agent-framework-mcp")
+include(":providers:agent-framework-openai")
 include(":samples:sample-standalone")
 
 include(":build-tools:harness-policy")

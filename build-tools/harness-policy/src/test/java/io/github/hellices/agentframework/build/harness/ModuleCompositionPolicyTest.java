@@ -2,6 +2,7 @@ package io.github.hellices.agentframework.build.harness;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -28,7 +29,8 @@ class ModuleCompositionPolicyTest {
           ":agent-framework-api",
           ":agent-framework-engine",
           ":agent-framework-testkit",
-          ":integrations:agent-framework-mcp");
+          ":integrations:agent-framework-mcp",
+          ":providers:agent-framework-openai");
 
   private static final String PLATFORM_PROJECT = ":agent-framework-bom";
 
@@ -92,7 +94,8 @@ class ModuleCompositionPolicyTest {
           ":agent-framework-api", List.of(),
           ":agent-framework-engine", List.of(":agent-framework-api"),
           ":agent-framework-testkit", List.of(":agent-framework-api"),
-          ":integrations:agent-framework-mcp", List.of(":agent-framework-api"));
+          ":integrations:agent-framework-mcp", List.of(":agent-framework-api"),
+          ":providers:agent-framework-openai", List.of(":agent-framework-api"));
 
   /**
    * Project dependencies a library may compile or run its tests against.
@@ -102,13 +105,26 @@ class ModuleCompositionPolicyTest {
    * engine also permitted it to ship against the engine, which the dependency direction rules
    * forbid.
    *
+   * <p>The OpenAI adapter proves that its mapping and the real tool loop agree by running {@code
+   * AgentEngine} over a faked operations port. That proof belongs next to the adapter, and the
+   * engine it needs is a test dependency only: it appears on no consumer classpath, which {@code
+   * libraryProjectOnlyDependsOnAllowedProjects} keeps enforcing separately.
+   *
    * <p>A library that tests against no other project needs no entry, which is why the assertion
    * reads this map with a default rather than a lookup: an empty entry per library would be
    * ceremony that says nothing. {@code dependencyAllowlistsCoverExactlyTheLibraryProjects} keeps
    * that convenience honest by refusing a key that names anything but a library project, so a typo
    * cannot sit here looking like a granted permission that no assertion reads.
    */
-  private static final Map<String, List<String>> ALLOWED_TEST_DEPENDENCIES = Map.of();
+  private static final Map<String, List<String>> ALLOWED_TEST_DEPENDENCIES =
+      Map.of(":providers:agent-framework-openai", List.of(":agent-framework-engine"));
+
+  /** Lockfiles of the modules a provider SDK must never reach. */
+  private static final List<String> CORE_LOCKFILES =
+      List.of(
+          "agent-framework-api/gradle.lockfile",
+          "agent-framework-engine/gradle.lockfile",
+          "agent-framework-testkit/gradle.lockfile");
 
   static Stream<String> libraryProjects() {
     return LIBRARY_PROJECTS.stream();
@@ -304,6 +320,49 @@ class ModuleCompositionPolicyTest {
     assertThat(ProjectLayout.testProjectDependenciesOf(gradlePath))
         .containsExactlyInAnyOrderElementsOf(
             ALLOWED_TEST_DEPENDENCIES.getOrDefault(gradlePath, List.of()));
+  }
+
+  @Test
+  void aProductionEngineDependencyOnTheProviderFailsTheAllowlist() {
+    // The point of splitting the allowlists is that permitting a test dependency must not permit a
+    // shipped one. Asserting the split exists proves nothing; this mutates the real build file and
+    // proves the production assertion rejects the result.
+    String buildFile = ProjectLayout.buildFileText(":providers:agent-framework-openai");
+    String testDeclaration = "testImplementation(project(\":agent-framework-engine\"))";
+    assertThat(buildFile)
+        .withFailMessage(
+            "This proof mutates %s. If the declaration was reworded, update the mutation rather"
+                + " than deleting the test.",
+            testDeclaration)
+        .contains(testDeclaration);
+
+    String mutated =
+        buildFile.replace(testDeclaration, "implementation(project(\":agent-framework-engine\"))");
+
+    assertThat(ProjectLayout.testProjectDependenciesIn(mutated)).isEmpty();
+    assertThat(ProjectLayout.projectDependenciesIn(mutated)).contains(":agent-framework-engine");
+    assertThatThrownBy(
+            () ->
+                assertProductionDependenciesAllowed(
+                    ":providers:agent-framework-openai",
+                    ProjectLayout.projectDependenciesIn(mutated)))
+        .isInstanceOf(AssertionError.class);
+  }
+
+  @Test
+  void noProviderSdkReachesACoreClasspath() throws IOException {
+    // PRV-001 is a resolution fact, not a build file fact: a provider SDK could arrive
+    // transitively without any core build file naming it. The lockfiles are the only place that
+    // shows what actually resolves.
+    for (String lockfile : CORE_LOCKFILES) {
+      String resolved =
+          Files.readString(RepositoryPaths.root().resolve(lockfile), StandardCharsets.UTF_8);
+      assertThat(resolved)
+          .withFailMessage(
+              "%s resolves a provider SDK. The core modules must know only the neutral ports.",
+              lockfile)
+          .doesNotContain("com.openai:");
+    }
   }
 
   @Test

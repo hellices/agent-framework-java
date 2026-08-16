@@ -31,7 +31,8 @@ docs/                           Requirements, design, upstream analysis
 ```
 
 Grouping directories are `providers/`, `integrations/`, `hosting/`, `starters/`, `protocols/`,
-`workflow/`, and `compatibility-tests/`. `integrations/` now contains the MCP client integration,
+`workflow/`, and `compatibility-tests/`. `providers/` now contains the OpenAI Chat Completions
+client, `integrations/` contains the MCP client integration,
 `samples/` contains the standalone example, and `build-tools/` already exists for harness code; the
 remaining directories are planned.
 This list is closed and mirrored in `ModuleCompositionPolicyTest`; a project registered outside it,
@@ -72,6 +73,7 @@ level would add path depth without adding published identity.
 | `:agent-framework-testkit` | `agent-framework-testkit` | Deterministic fixtures and contract-test bases. | `:agent-framework-api` |
 | `:agent-framework-bom` | `agent-framework-bom` | `java-platform` listing every published artifact. | none |
 | `:integrations:agent-framework-mcp` | `agent-framework-mcp` | Model Context Protocol client integration over a borrowed SDK client or an owned stdio or streamable HTTP connection. | `:agent-framework-api` |
+| `:providers:agent-framework-openai` | `agent-framework-openai` | OpenAI Chat Completions model client over a borrowed official SDK client. | `:agent-framework-api` (production), `:agent-framework-engine` (test only) |
 | `:samples:sample-standalone` | not published | Runnable standalone `Agent.run` example with explicit model-client assembly. | `:agent-framework-api`, `:agent-framework-engine` |
 
 ## Harness projects
@@ -109,9 +111,11 @@ the package of an existing coordinate.
    `agentframework.test-conventions`, `agentframework.quality-conventions`, and
    `agentframework.library-publishing-conventions`.
 2. `:agent-framework-api` declares no project dependency. It is the root of the graph.
-3. `:agent-framework-engine`, `:agent-framework-testkit`, and `:integrations:agent-framework-mcp`
-   depend on `:agent-framework-api` only. An integration additionally depends on the protocol or
-   provider SDK it adapts, which never reaches the API or engine modules.
+3. `:agent-framework-engine`, `:agent-framework-testkit`, `:integrations:agent-framework-mcp`, and
+   `:providers:agent-framework-openai` depend on `:agent-framework-api` only. An integration or
+   provider additionally depends on the protocol or provider SDK it adapts, which never reaches the
+   API or engine modules. `:providers:agent-framework-openai` also compiles its tests against
+   `:agent-framework-engine`, which rule 4 governs: it ships to no consumer.
 4. A production project dependency is what a consumer inherits, so it is what the dependency
    direction rules constrain. A test-only project dependency reaches no consumer and is allowlisted
    separately in `ModuleCompositionPolicyTest`. Every configuration whose name starts with `test` is
