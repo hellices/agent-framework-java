@@ -55,4 +55,13 @@
     <Method name="&lt;init&gt;"/>
     <Bug pattern="EI_EXPOSE_REP2"/>
   </Match>
+  <!-- The owned operations port must route every call through the very lifecycle that holds the
+       generation, which is mutable by definition: connecting and closing are what it does. Copying
+       or re-wrapping it would create a second owner of the same server process, which is precisely
+       what the owned lifecycle exists to prevent. -->
+  <Match>
+    <Class name="io.github.hellices.agentframework.mcp.internal.OwnedMcpAsyncOperations"/>
+    <Method name="&lt;init&gt;"/>
+    <Bug pattern="EI_EXPOSE_REP2"/>
+  </Match>
 </FindBugsFilter>

@@ -5,6 +5,9 @@ import io.modelcontextprotocol.client.McpClient;
 import io.modelcontextprotocol.spec.McpClientTransport;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Function;
+import reactor.core.publisher.Mono;
 
 /**
  * Owns the MCP client the adapter talks to.
@@ -23,6 +26,11 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * blocks for the initialization timeout and no second handshake is ever attempted.
  */
 public final class OwnedMcpClientLifecycle {
+
+  private static final String NOT_CONNECTED =
+      "the MCP server connection is not open; call connect() before discovering or calling tools,"
+          + " because an owned client never opens a connection implicitly and a lookup that started"
+          + " a server process or a network session on its own would hide that cost from the caller";
 
   private final McpClientTransportFactory transportFactory;
   private final McpOwnedClientSettings settings;
@@ -115,6 +123,103 @@ public final class OwnedMcpClientLifecycle {
   }
 
   /**
+   * Runs one operation on the current generation.
+   *
+   * <p>The operation is a function of the client rather than a prepared publisher because a retry
+   * has to run it against a different client. Nothing here connects: an operation attempted with no
+   * generation fails, and an operation attempted while a handshake is in flight joins that
+   * handshake instead of starting another one. It runs on the generation the owner holds when the
+   * call starts and on no other, so an operation whose generation the owner released while it
+   * waited fails on the same explicit connect requirement rather than reaching a server through a
+   * connection nobody owns any more.
+   *
+   * @param operation produces the SDK call for a given client, never {@code null}
+   * @param <T> the operation result type
+   * @return a stage completing with the operation result, never {@code null}
+   */
+  public <T> CompletableFuture<T> execute(Function<McpAsyncClient, Mono<T>> operation) {
+    if (operation == null) {
+      return AsyncStages.failed(new IllegalArgumentException("operation must not be null"));
+    }
+    Attempt attempt = new Attempt();
+    CompletableFuture<T> result =
+        currentGeneration().thenCompose(generation -> invoke(operation, generation, attempt));
+    return AsyncStages.cancellable(result, attempt::cancel);
+  }
+
+  private CompletableFuture<Generation> currentGeneration() {
+    synchronized (lock) {
+      if (current != null) {
+        return CompletableFuture.completedFuture(current);
+      }
+      if (pending != null) {
+        return pending.thenApply(generation -> generation);
+      }
+    }
+    return AsyncStages.failed(new IllegalStateException(NOT_CONNECTED));
+  }
+
+  private <T> CompletableFuture<T> invoke(
+      Function<McpAsyncClient, Mono<T>> operation, Generation generation, Attempt attempt) {
+    if (!isCurrent(generation)) {
+      // The owner moved on while this operation was waiting for the handshake it joined, so the
+      // generation it was handed is already being released. Running through it would send a request
+      // on a client that is being torn down and, on the SDK's lazy initialization path, could drive
+      // a second handshake on a connection the caller believes is shut down. The caller is told the
+      // connection is not open, which is what every other operation without a generation is told,
+      // and no transport is created to satisfy it.
+      return AsyncStages.failed(new IllegalStateException(NOT_CONNECTED));
+    }
+    CompletableFuture<T> inFlight;
+    try {
+      Mono<T> call = operation.apply(generation.client());
+      if (call == null) {
+        return AsyncStages.failed(new IllegalStateException("operation produced no call"));
+      }
+      inFlight = AsyncStages.fromMono(call);
+    } catch (RuntimeException failure) {
+      return AsyncStages.failed(failure);
+    }
+    attempt.track(inFlight);
+    return inFlight;
+  }
+
+  /**
+   * Reports whether the owner still holds this generation.
+   *
+   * <p>Generations are told apart by the ticket that created them, so the check is a comparison of
+   * two numbers. Nothing is created, called, or closed while {@code lock} is held: the failure the
+   * answer may lead to is built by the caller, outside the lock.
+   */
+  private boolean isCurrent(Generation generation) {
+    synchronized (lock) {
+      return current != null && current.epoch() == generation.epoch();
+    }
+  }
+
+  /** Tracks the in-flight call of one {@code execute} so cancellation can reach it. */
+  private static final class Attempt {
+
+    private final AtomicBoolean cancelled = new AtomicBoolean();
+    private final AtomicReference<CompletableFuture<?>> inFlight = new AtomicReference<>();
+
+    void track(CompletableFuture<?> call) {
+      inFlight.set(call);
+      if (cancelled.get()) {
+        call.cancel(true);
+      }
+    }
+
+    void cancel() {
+      cancelled.set(true);
+      CompletableFuture<?> call = inFlight.get();
+      if (call != null) {
+        call.cancel(true);
+      }
+    }
+  }
+
+  /**
    * Starts a generation's cleanup and settles {@code closure} even when starting it does not
    * return.
    *
@@ -163,7 +268,7 @@ public final class OwnedMcpClientLifecycle {
       adopted = adopt();
     }
     try {
-      startGeneration()
+      startGeneration(ticket)
           .whenComplete((generation, failure) -> settle(ticket, adopted, generation, failure));
     } catch (RuntimeException | Error failure) {
       // A throwable that is not an ordinary failure keeps travelling, but the promise is already
@@ -265,8 +370,11 @@ public final class OwnedMcpClientLifecycle {
    * build failure leaves a live transport that only this method still knows about, so it closes it.
    * A subscription failure leaves a client that owns the transport, so the generation closes it,
    * once, through the same idempotent path every other close uses.
+   *
+   * @param ticket the ticket the generation is tagged with, which is what later tells it apart from
+   *     the generation that replaced it
    */
-  private CompletableFuture<Generation> startGeneration() {
+  private CompletableFuture<Generation> startGeneration(long ticket) {
     McpClientTransport transport;
     try {
       transport = transportFactory.create();
@@ -293,7 +401,7 @@ public final class OwnedMcpClientLifecycle {
       closeUnowned(transport);
       throw failure;
     }
-    Generation generation = new Generation(client);
+    Generation generation = new Generation(ticket, client);
     CompletableFuture<Generation> handshake = new CompletableFuture<>();
     try {
       client
@@ -372,15 +480,28 @@ public final class OwnedMcpClientLifecycle {
         });
   }
 
-  /** One transport and one client, closed at most once. */
+  /**
+   * One transport and one client, closed at most once, tagged with the ticket that created it.
+   *
+   * <p>The ticket makes a generation identifiable without comparing references. A generation is an
+   * identity rather than a value — two generations are never interchangeable, however alike they
+   * look — and the owner's ticket counter only moves forward, so no two generations ever carry the
+   * same one.
+   */
   private static final class Generation {
 
+    private final long epoch;
     private final McpAsyncClient client;
     private final AtomicBoolean closed = new AtomicBoolean();
     private final CompletableFuture<Void> closure = new CompletableFuture<>();
 
-    Generation(McpAsyncClient client) {
+    Generation(long epoch, McpAsyncClient client) {
+      this.epoch = epoch;
       this.client = client;
+    }
+
+    long epoch() {
+      return epoch;
     }
 
     McpAsyncClient client() {
