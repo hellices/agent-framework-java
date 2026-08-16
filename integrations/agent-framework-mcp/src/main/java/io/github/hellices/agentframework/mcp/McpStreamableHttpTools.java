@@ -207,9 +207,10 @@ public final class McpStreamableHttpTools {
      *
      * @param requestTimeout a positive duration, never {@code null}
      * @return this builder, never {@code null}
+     * @throws IllegalArgumentException if the duration is {@code null}, zero, or negative
      */
     public Builder requestTimeout(Duration requestTimeout) {
-      this.requestTimeout = requestTimeout;
+      this.requestTimeout = requirePositive(requestTimeout, "requestTimeout");
       return this;
     }
 
@@ -218,9 +219,10 @@ public final class McpStreamableHttpTools {
      *
      * @param initializationTimeout a positive duration, never {@code null}
      * @return this builder, never {@code null}
+     * @throws IllegalArgumentException if the duration is {@code null}, zero, or negative
      */
     public Builder initializationTimeout(Duration initializationTimeout) {
-      this.initializationTimeout = initializationTimeout;
+      this.initializationTimeout = requirePositive(initializationTimeout, "initializationTimeout");
       return this;
     }
 
@@ -359,6 +361,16 @@ public final class McpStreamableHttpTools {
       } catch (URISyntaxException failure) {
         throw new IllegalArgumentException(name + " is not a valid URI: " + value, failure);
       }
+    }
+
+    private static Duration requirePositive(Duration duration, String name) {
+      if (duration == null) {
+        throw new IllegalArgumentException(name + " must not be null");
+      }
+      if (duration.isZero() || duration.isNegative()) {
+        throw new IllegalArgumentException(name + " must be positive");
+      }
+      return duration;
     }
 
     /**

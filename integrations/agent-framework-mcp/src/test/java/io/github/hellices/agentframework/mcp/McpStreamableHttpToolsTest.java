@@ -260,14 +260,17 @@ class McpStreamableHttpToolsTest {
     assertThatThrownBy(() -> builder("https://example.com").toolOptions(null))
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessage("toolOptions must not be null");
-    assertThatThrownBy(() -> builder("https://example.com").requestTimeout(Duration.ZERO).build())
+    assertThatThrownBy(() -> builder("https://example.com").requestTimeout(null))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessage("requestTimeout must not be null");
+    assertThatThrownBy(() -> builder("https://example.com").requestTimeout(Duration.ZERO))
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessage("requestTimeout must be positive");
+    assertThatThrownBy(() -> builder("https://example.com").initializationTimeout(null))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessage("initializationTimeout must not be null");
     assertThatThrownBy(
-            () ->
-                builder("https://example.com")
-                    .initializationTimeout(Duration.ofSeconds(-1))
-                    .build())
+            () -> builder("https://example.com").initializationTimeout(Duration.ofSeconds(-1)))
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessage("initializationTimeout must be positive");
   }

@@ -173,9 +173,10 @@ public final class McpStdioTools {
      *
      * @param requestTimeout a positive duration, never {@code null}
      * @return this builder, never {@code null}
+     * @throws IllegalArgumentException if the duration is {@code null}, zero, or negative
      */
     public Builder requestTimeout(Duration requestTimeout) {
-      this.requestTimeout = requestTimeout;
+      this.requestTimeout = requirePositive(requestTimeout, "requestTimeout");
       return this;
     }
 
@@ -184,9 +185,10 @@ public final class McpStdioTools {
      *
      * @param initializationTimeout a positive duration, never {@code null}
      * @return this builder, never {@code null}
+     * @throws IllegalArgumentException if the duration is {@code null}, zero, or negative
      */
     public Builder initializationTimeout(Duration initializationTimeout) {
-      this.initializationTimeout = initializationTimeout;
+      this.initializationTimeout = requirePositive(initializationTimeout, "initializationTimeout");
       return this;
     }
 
@@ -276,6 +278,16 @@ public final class McpStdioTools {
         throw new IllegalArgumentException("command must not be blank");
       }
       return command;
+    }
+
+    private static Duration requirePositive(Duration duration, String name) {
+      if (duration == null) {
+        throw new IllegalArgumentException(name + " must not be null");
+      }
+      if (duration.isZero() || duration.isNegative()) {
+        throw new IllegalArgumentException(name + " must be positive");
+      }
+      return duration;
     }
 
     private static List<String> copyArgs(List<String> args) {

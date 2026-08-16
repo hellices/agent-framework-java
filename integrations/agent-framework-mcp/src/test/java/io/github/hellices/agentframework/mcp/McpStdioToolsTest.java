@@ -68,10 +68,16 @@ class McpStdioToolsTest {
     assertThatThrownBy(() -> builder().toolOptions(null))
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessage("toolOptions must not be null");
-    assertThatThrownBy(() -> builder().requestTimeout(Duration.ZERO).build())
+    assertThatThrownBy(() -> builder().requestTimeout(null))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessage("requestTimeout must not be null");
+    assertThatThrownBy(() -> builder().requestTimeout(Duration.ZERO))
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessage("requestTimeout must be positive");
-    assertThatThrownBy(() -> builder().initializationTimeout(Duration.ofSeconds(-1)).build())
+    assertThatThrownBy(() -> builder().initializationTimeout(null))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessage("initializationTimeout must not be null");
+    assertThatThrownBy(() -> builder().initializationTimeout(Duration.ofSeconds(-1)))
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessage("initializationTimeout must be positive");
   }
