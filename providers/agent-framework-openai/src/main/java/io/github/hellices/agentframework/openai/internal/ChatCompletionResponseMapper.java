@@ -1,8 +1,11 @@
 package io.github.hellices.agentframework.openai.internal;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.StreamReadFeature;
+import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.json.JsonMapper;
 import com.openai.models.chat.completions.ChatCompletion;
 import com.openai.models.chat.completions.ChatCompletionMessage;
 import com.openai.models.chat.completions.ChatCompletionMessageFunctionToolCall;
@@ -21,11 +24,32 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 /** Translates a Chat Completions response into a neutral {@code ModelResponse}. */
 public final class ChatCompletionResponseMapper {
 
-  private final ObjectMapper json = new ObjectMapper();
+  // Tool arguments are model output parsed into a Map a tool executor acts on, so the parser is
+  // configured rather than defaulted.
+  //
+  // FAIL_ON_TRAILING_TOKENS: readTree reads one value and stops, so `{"a":1}{"b":2}` would arrive
+  // as {"a":1} and the rest would vanish. Half of a response is not the call the model made.
+  //
+  // STRICT_DUPLICATE_DETECTION: Jackson's default is last-wins, which resolves `{"city":"Seoul",
+  // "city":"Busan"}` to Busan and discards Seoul silently. Which value the model meant is not
+  // knowable here, and choosing one changes the model's intent, so the duplicate fails instead.
+  //
+  // INCLUDE_SOURCE_IN_LOCATION disabled: Jackson's own message would otherwise quote the source it
+  // failed on, and that source is the arguments string. The cause is preserved and printed by every
+  // logger that prints a stack trace, so keeping the payload out of this adapter's message is only
+  // half the rule. This is the pinned Jackson's default; stating it explicitly keeps a future
+  // upgrade from re-enabling it silently.
+  private final ObjectMapper json =
+      JsonMapper.builder()
+          .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)
+          .enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION)
+          .disable(StreamReadFeature.INCLUDE_SOURCE_IN_LOCATION)
+          .build();
 
   /**
    * Maps a completion.
@@ -45,12 +69,15 @@ public final class ChatCompletionResponseMapper {
    *
    * <p>Text comes first and function tool calls follow in wire order, each carrying its SDK call as
    * its raw representation so the {@code arguments} string the model produced stays byte-exact
-   * through the echo. A finish reason of {@code tool_calls} or the deprecated {@code function_call}
-   * that arrives with no tool call fails: {@code AgentEngine} ends its loop on an empty tool-call
-   * list, so such a turn would otherwise be reported as a successful final answer that the model
-   * never gave. The reverse pairing is deliberately not policed - calls that are present are
-   * executable whatever the finish reason says, and only a promise the adapter cannot see is
-   * dangerous.
+   * through the echo. Arguments must be exactly one JSON object with unique keys: trailing input
+   * after the object and a repeated key both fail, because keeping the first value and dropping the
+   * rest would hand a tool a call the model did not make. A finish reason of {@code tool_calls} or
+   * the deprecated {@code function_call} that arrives with no tool call fails: {@code AgentEngine}
+   * ends its loop on an empty tool-call list, so such a turn would otherwise be reported as a
+   * successful final answer that the model never gave. The reverse pairing is deliberately not
+   * policed - a tool call that arrives under {@code stop} or {@code length} is mapped and the
+   * finish reason is reported as the server sent it, because calls that are present are executable
+   * whatever the finish reason says, and only a promise the adapter cannot see is dangerous.
    *
    * @param completion the parsed response, never {@code null}
    * @return the neutral response
@@ -89,20 +116,8 @@ public final class ChatCompletionResponseMapper {
    * model's own key order or spacing, and {@link ChatCompletionRequestMapper} sends the original
    * string back when the handle survives.
    */
-  // functionCall() is deprecated because the wire shape is; reading it is how this adapter refuses
-  // that shape instead of dropping the call it carries.
-  @SuppressWarnings("deprecation")
   private void appendToolCalls(ChatCompletionMessage message, List<Content> content) {
-    if (message.functionCall().isPresent()) {
-      // The pre-tools shape carries no call id, and a tool result is keyed by the id the model
-      // issued. Synthesising one would answer a call that never existed, and ignoring the field
-      // would drop a call the model asked for and end the run with an answer it never gave.
-      throw new IllegalStateException(
-          "openai chat completions returned the deprecated function_call payload for function '"
-              + message.functionCall().orElseThrow().name()
-              + "'; it carries no call id to key a tool result by, so configure the model with"
-              + " tools rather than functions");
-    }
+    rejectTheDeprecatedFunctionCallPayload(message);
     for (ChatCompletionMessageToolCall toolCall : message.toolCalls().orElse(List.of())) {
       if (!toolCall.isFunction()) {
         throw new IllegalStateException(
@@ -124,6 +139,26 @@ public final class ChatCompletionResponseMapper {
       content.add(
           new ToolCallContent(callId, name, argumentsOf(call, callId, name), Map.of(), call));
     }
+  }
+
+  // The suppression covers this method alone, which exists so that reading one deprecated accessor
+  // does not silence a deprecation warning over the whole tool-call loop. functionCall() is
+  // deprecated because the wire shape is; reading it is how this adapter refuses that shape instead
+  // of dropping the call it carries.
+  @SuppressWarnings("deprecation")
+  private static void rejectTheDeprecatedFunctionCallPayload(ChatCompletionMessage message) {
+    Optional<ChatCompletionMessage.FunctionCall> payload = message.functionCall();
+    if (payload.isEmpty()) {
+      return;
+    }
+    // The pre-tools shape carries no call id, and a tool result is keyed by the id the model
+    // issued. Synthesising one would answer a call that never existed, and ignoring the field
+    // would drop a call the model asked for and end the run with an answer it never gave.
+    throw new IllegalStateException(
+        "openai chat completions returned the deprecated function_call payload for function '"
+            + payload.get().name()
+            + "'; it carries no call id to key a tool result by, so configure the model with"
+            + " tools rather than functions");
   }
 
   private static void requireAToolCallWhenTheFinishReasonPromisedOne(
@@ -171,8 +206,11 @@ public final class ChatCompletionResponseMapper {
 
   private static String argumentFailure(String name, String callId) {
     // Names the tool and the call id and stops there. The arguments are model output and are never
-    // put in an exception message.
-    return "openai chat completions returned arguments that are not a JSON object for tool '"
+    // put in an exception message. "exactly one JSON object with unique keys" covers every way the
+    // string can fail to be one: invalid JSON, an array or a scalar, a value followed by more
+    // input, and a repeated key.
+    return "openai chat completions returned arguments that are not exactly one JSON object with"
+        + " unique keys for tool '"
         + name
         + "' call '"
         + callId

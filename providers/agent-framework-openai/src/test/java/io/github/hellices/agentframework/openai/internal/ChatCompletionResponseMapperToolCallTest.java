@@ -2,6 +2,7 @@ package io.github.hellices.agentframework.openai.internal;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowable;
 
 import com.openai.models.chat.completions.ChatCompletion;
 import com.openai.models.chat.completions.ChatCompletionCreateParams;
@@ -213,6 +214,98 @@ class ChatCompletionResponseMapperToolCallTest {
   }
 
   @Test
+  void rejectsArgumentsThatConcatenateTwoJsonObjects() {
+    // Jackson reads one value and stops, so without FAIL_ON_TRAILING_TOKENS the second object is
+    // dropped without a word and the tool is called with the first one. Two objects are not one
+    // argument list, and picking a half of a response the model did not send that way is exactly
+    // the silent coercion this mapper refuses everywhere else.
+    ChatCompletion completion =
+        ChatCompletionsFixture.completion(
+            ChatCompletionsFixture.withToolCalls(
+                null,
+                ChatCompletionsFixture.functionCall(
+                    "call_1", "lookup", "{\"city\":\"Seoul\"}{\"city\":\"Busan\"}")),
+            ChatCompletion.Choice.FinishReason.TOOL_CALLS);
+
+    assertThatThrownBy(() -> mapper.map(completion))
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("lookup")
+        .hasMessageContaining("call_1")
+        .hasMessageNotContaining("Seoul")
+        .hasMessageNotContaining("Busan")
+        .hasCauseInstanceOf(com.fasterxml.jackson.core.JsonProcessingException.class);
+  }
+
+  @Test
+  void rejectsArgumentsThatTrailGarbageAfterAJsonObject() {
+    // The same hole with something that is not even JSON after the object: truncated or doubled
+    // output from a compatible server reaches the tool as a valid-looking call unless the parser
+    // is told that a value has to consume the whole string.
+    ChatCompletion completion =
+        ChatCompletionsFixture.completion(
+            ChatCompletionsFixture.withToolCalls(
+                null,
+                ChatCompletionsFixture.functionCall(
+                    "call_1", "lookup", "{\"city\":\"Seoul\"} oops")),
+            ChatCompletion.Choice.FinishReason.TOOL_CALLS);
+
+    assertThatThrownBy(() -> mapper.map(completion))
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("lookup")
+        .hasMessageContaining("call_1")
+        .hasMessageNotContaining("Seoul")
+        .hasMessageNotContaining("oops")
+        .hasCauseInstanceOf(com.fasterxml.jackson.core.JsonProcessingException.class);
+  }
+
+  @Test
+  void rejectsArgumentsThatRepeatAKey() {
+    // Jackson's default is last-wins, which silently changes what the model asked for: a call that
+    // said Seoul and then Busan would reach the tool as Busan alone, and neither the caller nor the
+    // model would ever learn that a value was discarded. The duplicate is ambiguous rather than
+    // resolvable, so it fails.
+    ChatCompletion completion =
+        ChatCompletionsFixture.completion(
+            ChatCompletionsFixture.withToolCalls(
+                null,
+                ChatCompletionsFixture.functionCall(
+                    "call_1", "lookup", "{\"city\":\"Seoul\",\"city\":\"Busan\"}")),
+            ChatCompletion.Choice.FinishReason.TOOL_CALLS);
+
+    assertThatThrownBy(() -> mapper.map(completion))
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("lookup")
+        .hasMessageContaining("call_1")
+        .hasMessageNotContaining("Seoul")
+        .hasMessageNotContaining("Busan")
+        .hasCauseInstanceOf(com.fasterxml.jackson.core.JsonProcessingException.class);
+  }
+
+  @Test
+  void quotesNoArgumentValueAnywhereInAParseFailureChain() {
+    // The top-level message is this adapter's; the cause is Jackson's, and it is printed by every
+    // logger that prints a stack trace. Jackson quotes the source it failed on unless told not to,
+    // so "the failure names the tool and the call id and nothing else" is a claim about the whole
+    // chain rather than about one message.
+    ChatCompletion completion =
+        ChatCompletionsFixture.completion(
+            ChatCompletionsFixture.withToolCalls(
+                null,
+                ChatCompletionsFixture.functionCall(
+                    "call_1", "lookup", "{\"patient\":\"Kim\"} {\"patient\":\"Lee\"}")),
+            ChatCompletion.Choice.FinishReason.TOOL_CALLS);
+
+    Throwable failure = catchThrowable(() -> mapper.map(completion));
+
+    assertThat(failure)
+        .isInstanceOf(IllegalStateException.class)
+        .hasCauseInstanceOf(com.fasterxml.jackson.core.JsonProcessingException.class);
+    for (Throwable link = failure; link != null; link = link.getCause()) {
+      assertThat(String.valueOf(link.getMessage())).doesNotContain("Kim").doesNotContain("Lee");
+    }
+  }
+
+  @Test
   void rejectsAToolCallWithoutAnId() {
     // ToolCallContent rejects a blank call id, so without this check the failure would surface as
     // an unexplained IllegalArgumentException from the core value type. Never synthesise an id: the
@@ -303,6 +396,40 @@ class ChatCompletionResponseMapperToolCallTest {
         .isInstanceOf(IllegalStateException.class)
         .hasMessageContaining("tool_calls")
         .hasMessageNotContaining("lookup");
+  }
+
+  @ParameterizedTest(name = "a tool call arriving with {0} is mapped and the reason stays {1}")
+  @MethodSource("nonToolFinishReasons")
+  void mapsAToolCallThatArrivesWithANonToolFinishReason(
+      ChatCompletion.Choice.FinishReason wireValue, FinishReason expected) {
+    // The asymmetric half of the pairing rule, stated as an executable fact rather than as a
+    // sentence in a javadoc. A call that is present is executable whatever the finish reason says,
+    // and compatible servers do label a tool-calling turn "stop" or truncate one with "length".
+    // Rejecting that turn, or rewriting its finish reason to TOOL_CALLS to make the pair agree,
+    // would break runs that work today and would report a reason the server never sent.
+    ChatCompletion completion =
+        ChatCompletionsFixture.completion(
+            ChatCompletionsFixture.withToolCalls(
+                "on it",
+                ChatCompletionsFixture.functionCall("call_1", "lookup", "{\"city\":\"Seoul\"}")),
+            wireValue);
+
+    ModelResponse response = mapper.map(completion);
+
+    List<Content> content = response.messages().get(0).content();
+    assertThat(content).hasSize(2);
+    ToolCallContent call = (ToolCallContent) content.get(1);
+    assertThat(call.callId()).isEqualTo("call_1");
+    assertThat(call.name()).isEqualTo("lookup");
+    assertThat(call.arguments()).isEqualTo(Map.of("city", "Seoul"));
+    assertThat(response.finishReason()).isEqualTo(expected);
+  }
+
+  static Stream<Arguments> nonToolFinishReasons() {
+    return Stream.of(
+        Arguments.of(ChatCompletion.Choice.FinishReason.STOP, FinishReason.STOP),
+        // A turn cut off mid-flight still carries whatever calls arrived whole.
+        Arguments.of(ChatCompletion.Choice.FinishReason.LENGTH, FinishReason.LENGTH));
   }
 
   @Test

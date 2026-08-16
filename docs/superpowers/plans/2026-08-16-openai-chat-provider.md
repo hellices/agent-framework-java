@@ -293,11 +293,17 @@ keeps a caller-constructed history working.
 | an argument value that is JSON `null`, for example `{"unit":null}` | the key survives, mapped to a `null` value | models routinely emit `null` for an optional parameter; the parsed map is returned as `Collections.unmodifiableMap(new LinkedHashMap<>(...))` because `Map.copyOf` throws `NullPointerException` on a null value, and `ToolCallContent` copies it into a `LinkedHashMap`, which tolerates it |
 | `arguments()` that is valid JSON but not an object | fail | `IllegalStateException` naming tool and call id, no payload (G3) |
 | `arguments()` that is not valid JSON | fail | same failure, cause preserved, no payload |
+| `arguments()` with input after the first JSON value, for example `{"a":1}{"b":2}` or `{"a":1} oops` | fail | the parser runs with `DeserializationFeature.FAIL_ON_TRAILING_TOKENS`; `readTree` otherwise keeps the first value and drops the rest, which hands a tool a call the model did not make |
+| `arguments()` with a repeated key, for example `{"city":"Seoul","city":"Busan"}` | fail | the parser runs with `StreamReadFeature.STRICT_DUPLICATE_DETECTION`; Jackson's default is last-wins, and silently choosing one of two values the model sent changes its intent, which is not a decision this adapter is entitled to make |
+| any argument parse failure | no payload anywhere in the chain | the message names tool and call id only, and the parser runs with `StreamReadFeature.INCLUDE_SOURCE_IN_LOCATION` disabled so the preserved Jackson cause cannot quote the arguments string into a log either |
+| `message.functionCall()` present, the deprecated pre-tools payload | fail | `IllegalStateException` naming `function_call` and the function, never the arguments; the shape carries no call id, so it can neither be mapped nor be dropped without ending the run with an answer the model never gave |
 | `finish_reason` `stop` | `FinishReason.STOP` | |
 | `length` | `FinishReason.LENGTH` | |
 | `tool_calls` | `FinishReason.TOOL_CALLS` | |
 | `content_filter` | `FinishReason.CONTENT_FILTER` | |
 | `function_call` | `FinishReason.TOOL_CALLS` | deprecated wire value, mapped deliberately and tested |
+| `tool_calls` or `function_call` with no tool call in the message | fail | `IllegalStateException` naming the wire value and nothing else; `AgentEngine` ends its loop on an empty tool-call list, so the turn would otherwise be reported as a successful final answer the model never gave. It fires on a text-only turn too, because returning that text as the answer is the worse outcome |
+| a tool call under `stop`, `length`, or any other finish reason | mapped, and the finish reason is reported as sent | deliberately asymmetric with the row above: a call that is present is executable whatever the reason says, and neither rejecting the turn nor rewriting the reason to `tool_calls` would report what the server actually returned |
 | any unknown value | `FinishReason.UNKNOWN` | read through `value()`, never `known()` |
 | `usage()` empty | `usage == null` | `ModelResponse` allows it and `AgentEngine.combineUsage` tolerates it |
 | `usage()` present | `Usage(promptTokens, completionTokens, totalTokens)` | typed accessors; a partial usage object surfaces the SDK exception |
@@ -2565,8 +2571,10 @@ coerced.
 - Produces: no new constructor. `ChatCompletionResponseMapper()` keeps its no-argument form and the
   class gains a private `ObjectMapper` field it creates itself. As in Task 4, the package-private
   `ChatCompletionResponseMapper(ObjectMapper)` seam an earlier draft proposed is not added: no test
-  in this plan uses it, `readTree` is deterministic without configuration, and an unused seam is
-  untested code.
+  in this plan uses it, and an unused seam is untested code. The mapper it creates is configured
+  rather than defaulted, because Jackson's defaults for this input are wrong in three ways that a
+  caller cannot see (`readTree` stops after the first value, duplicate keys resolve last-wins, and
+  parse failures quote the source they failed on); the field below states each one.
 
 - [ ] **Step 1: Write the failing tool-call test**
 
@@ -2763,8 +2771,11 @@ Add these imports; none is in the Task 5 import list:
 
 ```java
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.StreamReadFeature;
+import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.json.JsonMapper;
 import com.openai.models.chat.completions.ChatCompletionMessageFunctionToolCall;
 import com.openai.models.chat.completions.ChatCompletionMessageToolCall;
 import io.github.hellices.agentframework.api.message.ToolCallContent;
@@ -2776,7 +2787,17 @@ import java.util.Collections;
 Replace the stub:
 
 ```java
-  private final ObjectMapper json = new ObjectMapper();
+  // Tool arguments are model output parsed into a Map a tool executor acts on, so the parser is
+  // configured rather than defaulted: FAIL_ON_TRAILING_TOKENS because readTree otherwise keeps
+  // `{"a":1}` out of `{"a":1}{"b":2}` and drops the rest, STRICT_DUPLICATE_DETECTION because
+  // last-wins silently picks one of two values the model sent, and INCLUDE_SOURCE_IN_LOCATION
+  // disabled so the preserved Jackson cause cannot quote the arguments string into a log.
+  private final ObjectMapper json =
+      JsonMapper.builder()
+          .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)
+          .enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION)
+          .disable(StreamReadFeature.INCLUDE_SOURCE_IN_LOCATION)
+          .build();
 
   private void appendToolCalls(ChatCompletionMessage message, List<Content> content) {
     for (ChatCompletionMessageToolCall toolCall : message.toolCalls().orElse(List.of())) {
@@ -2830,8 +2851,11 @@ Replace the stub:
 
   private static String argumentFailure(String name, String callId) {
     // Names the tool and the call id and stops there. The arguments are model output and are never
-    // put in an exception message.
-    return "openai chat completions returned arguments that are not a JSON object for tool '"
+    // put in an exception message. "exactly one JSON object with unique keys" covers every way the
+    // string can fail to be one: invalid JSON, an array or a scalar, a value followed by more
+    // input, and a repeated key.
+    return "openai chat completions returned arguments that are not exactly one JSON object with"
+        + " unique keys for tool '"
         + name
         + "' call '"
         + callId
@@ -2851,6 +2875,14 @@ If `JsonNode.properties()` is unavailable on the pinned Jackson, use
 `isObject` check, then wrap that map the same way; do not fall back to an unchecked cast, which
 `-Werror` would fail anyway. That alternative keeps null values too, and the same
 `Collections.unmodifiableMap` rule applies to it.
+
+The rejection tests this task's Step 1 lists cover the shape of a single parsed value. The strict
+parser above needs three more that the response mapping table now carries as rows: two concatenated
+objects, an object followed by input that is not JSON, and an object with a repeated key. Each
+asserts the failure names the tool and the call id, and one of them walks the whole cause chain and
+asserts no argument value appears in any message in it, which is what the disabled source location
+buys. Prove them the way the rest of this plan proves a rule: with a mutation that removes the
+feature and the test that then fails.
 
 - [ ] **Step 4: Run both response mapper tests**
 
@@ -4754,6 +4786,19 @@ Create `providers/agent-framework-openai/README.md` covering, in this order:
    - Tool-call arguments must be a JSON object (G3). A `null` *value* inside that object is kept as
      a null-valued key, so an explicitly nulled optional parameter is not confused with an omitted
      one.
+   - Tool-call arguments are parsed strictly, and each of these is a named failure rather than a
+     silent repair, because every alternative would hand a tool a call the model did not make:
+     input after the first JSON value (`{"a":1}{"b":2}`, `{"a":1} oops`) and a repeated key
+     (`{"city":"Seoul","city":"Busan"}`). Say that a parse failure names the tool and the call id
+     and quotes no part of the arguments, in this adapter's message or in the Jackson cause.
+   - A turn whose finish reason is `tool_calls` or the deprecated `function_call` but which carries
+     no tool call fails, because the engine ends its loop on an empty tool-call list and the run
+     would otherwise report a successful final answer the model never gave. State the deliberate
+     asymmetry in the same breath: a tool call that arrives under `stop` or `length` is mapped and
+     the finish reason is reported as the server sent it.
+   - The deprecated `function_call` message payload is rejected rather than mapped: it carries no
+     call id, and a synthesised one would key a tool result to a call that never existed. Name the
+     remedy, which is to configure the model with tools rather than functions.
    - A server that returns a partial `usage` object surfaces `OpenAIInvalidDataException`; usage is
      not guessed.
    - A tool result marked as an error is sent as its text, because Chat Completions has no error
@@ -4769,6 +4814,16 @@ Create `providers/agent-framework-openai/README.md` covering, in this order:
 7. **Packaging notes.** `openai-java-core-4.51.0.jar` is about 53 MB, `kotlin-reflect` is required at
    runtime and arrives only through `jackson-module-kotlin` so it must never be excluded, and the
    module aligns the SDK's Jackson modules to the repository pin.
+
+Before moving on, read the limitations list back against the **fail** rows of the response mapping
+table above and confirm that every rule a caller can hit at runtime appears in one of the two
+places. A limitation the README omits is a behaviour a caller meets first as an exception in
+production, which is the failure mode PRV-010 exists to prevent. The four rules this check exists
+for, because each was added after the mapping table was first written and each is easy to leave
+out, are: strict argument parsing (input after the first JSON value, and a repeated key), a
+`tool_calls` or `function_call` finish reason with no tool call, the deprecated `function_call`
+message payload, and the deliberate acceptance of tool calls under a non-tool finish reason. Task 13
+step 6 checks the same list from the reviewer's side.
 
 - [ ] **Step 2: Update the traceability matrix**
 
@@ -4992,6 +5047,13 @@ Check each of these and write the answer in the pull request body:
 - **Scope honesty:** the body states that the live sample run exercises the function-tool loop by
   default because the sample registers a tool and asks for it, and that whether the model calls it
   is the model's decision. Do not write that the live run proves the loop; Task 10 proves the loop.
+- **Documented failure rules:** every **fail** row of the response mapping table appears either in
+  the adapter README's limitations list or in the mapper's javadoc. Check the four that were added
+  after the table was first written by name: strict argument parsing (input after the first JSON
+  value, and a repeated key), a `tool_calls` or `function_call` finish reason carrying no tool call,
+  the deprecated `function_call` message payload, and tool calls accepted under a non-tool finish
+  reason with the server's own finish reason reported. A rule that only exists in a test is a rule a
+  caller meets first as an exception in production.
 
 - [ ] **Step 7: Push and run the review loop**
 
