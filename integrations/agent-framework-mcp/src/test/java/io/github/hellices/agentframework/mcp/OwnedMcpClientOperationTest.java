@@ -24,6 +24,11 @@ import org.junit.jupiter.api.Test;
  * <p>An owned client that reconnected implicitly would start a server process or open a network
  * connection from a call that reads like a plain tool lookup, so every negative test here also
  * asserts that the transport factory was not called.
+ *
+ * <p>Every operation is validated with a ping before it is dispatched, so an operation that is
+ * itself a ping reaches the transport twice: once as the validation and once as the operation. The
+ * counts below say so rather than hiding it behind a helper, because the count is what tells a
+ * dispatched operation from a suppressed one.
  */
 class OwnedMcpClientOperationTest {
 
@@ -71,7 +76,8 @@ class OwnedMcpClientOperationTest {
 
     lifecycle.execute(client -> client.ping()).join();
 
-    assertThat(transport.countOf(McpSchema.METHOD_PING)).isEqualTo(1);
+    // The validation ping and the operation's own ping: the operation was dispatched.
+    assertThat(transport.countOf(McpSchema.METHOD_PING)).isEqualTo(2);
     assertThat(factory.createdCount()).isEqualTo(1);
   }
 
@@ -93,7 +99,8 @@ class OwnedMcpClientOperationTest {
     assertThat(connecting).succeedsWithin(SETTLE);
     assertThat(operation).succeedsWithin(SETTLE);
     assertThat(factory.createdCount()).isEqualTo(1);
-    assertThat(transport.countOf(McpSchema.METHOD_PING)).isEqualTo(1);
+    // The validation ping and the operation's own ping, both on the generation it joined.
+    assertThat(transport.countOf(McpSchema.METHOD_PING)).isEqualTo(2);
   }
 
   @Test
@@ -236,9 +243,11 @@ class OwnedMcpClientOperationTest {
     assertThat(transport.closeCount()).isZero();
     assertThat(factory.createdCount()).isEqualTo(1);
 
-    // The generation the cancelled operation joined is untouched, so the next operation runs on it.
+    // The generation the cancelled operation joined is untouched, so the next operation runs on it:
+    // one validation ping, then the operation's own ping. The zero above is the stronger half of
+    // the statement — the cancelled operation sent neither.
     lifecycle.execute(client -> client.ping()).join();
-    assertThat(transport.countOf(McpSchema.METHOD_PING)).isEqualTo(1);
+    assertThat(transport.countOf(McpSchema.METHOD_PING)).isEqualTo(2);
     assertThat(factory.createdCount()).isEqualTo(1);
   }
 

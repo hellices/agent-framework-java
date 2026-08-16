@@ -22,6 +22,11 @@ import reactor.core.publisher.Mono;
  * close creates a fresh generation. No operation ever starts a process or opens a connection on its
  * own.
  *
+ * <p>An operation replaces the generation it was given at most once, and only after the connection
+ * behind it failed to answer a ping. The stale generation is always released before the replacement
+ * is created, so an owner never holds two live servers, and concurrent failures on one generation
+ * produce one replacement rather than one each.
+ *
  * <p>The handshake runs on a subscription the caller cannot dispose. Disposing it would leave the
  * SDK initializer holding a permanently pending initialization, after which every later operation
  * blocks for the initialization timeout and no second handshake is ever attempted.
@@ -130,9 +135,17 @@ public final class OwnedMcpClientLifecycle {
    * has to run it against a different client. Nothing here connects: an operation attempted with no
    * generation fails, and an operation attempted while a handshake is in flight joins that
    * handshake instead of starting another one. It runs on the generation the owner holds when the
-   * call starts and on no other, so an operation whose generation the owner released while it
-   * waited fails on the same explicit connect requirement rather than reaching a server through a
-   * connection nobody owns any more.
+   * call starts, or on the one generation that replaced it, so an operation whose generation the
+   * owner released while it waited fails on the same explicit connect requirement rather than
+   * reaching a server through a connection nobody owns any more.
+   *
+   * <p>The generation is validated with a ping before the operation is dispatched, because a stdio
+   * server can have died and an HTTP session can have been dropped since the last call, and finding
+   * that out from a tool call means finding it out after the call may already have run. A server
+   * that answers the ping with {@code -32601} implements no ping, which is recorded on that
+   * generation so it is asked once and never again. Any other validation failure replaces the
+   * generation once and runs the operation on the replacement; a validation that was cancelled
+   * replaces nothing, because a caller changing its mind says nothing about the connection.
    *
    * <p>Cancelling the returned stage before the operation was dispatched stops it from being
    * dispatched at all, so a cancelled call never reaches the server; a cancellation that arrives
@@ -148,7 +161,7 @@ public final class OwnedMcpClientLifecycle {
     }
     Attempt attempt = new Attempt();
     CompletableFuture<T> result =
-        currentGeneration().thenCompose(generation -> invoke(operation, generation, attempt));
+        currentGeneration().thenCompose(generation -> validate(operation, generation, attempt));
     return AsyncStages.cancellable(result, attempt::cancel);
   }
 
@@ -162,6 +175,98 @@ public final class OwnedMcpClientLifecycle {
       }
     }
     return AsyncStages.failed(new IllegalStateException(NOT_CONNECTED));
+  }
+
+  /**
+   * Checks the generation with a ping, then runs the operation on it or on its replacement.
+   *
+   * <p>The ping is the cheapest request that proves the connection is alive without touching the
+   * server's state, and it is sent before the operation rather than after it fails because a tool
+   * call that reached the server may have run its side effect before the failure was reported. The
+   * result of asking is remembered only when the server says it has no ping: that answer belongs to
+   * the server behind this generation and dies with it.
+   */
+  private <T> CompletableFuture<T> validate(
+      Function<McpAsyncClient, Mono<T>> operation, Generation generation, Attempt attempt) {
+    if (!isCurrent(generation)) {
+      // The same rule the dispatch applies, applied before anything is put on the wire. A ping is a
+      // request like any other, so a generation the owner already released must not be pinged
+      // either; and recovering from that ping would be worse than sending it, because it would move
+      // the operation onto the generation the owner holds now, which is the one generation this
+      // operation was never allowed to run on.
+      return AsyncStages.failed(new IllegalStateException(NOT_CONNECTED));
+    }
+    if (attempt.cancelled()) {
+      // The caller withdrew while this operation was waiting for the handshake it joined, so
+      // nothing is sent at all, not even the validation ping.
+      return AsyncStages.failed(new CancellationException());
+    }
+    if (generation.pingUnsupported()) {
+      return invoke(operation, generation, attempt);
+    }
+    CompletableFuture<Object> ping = AsyncStages.fromMono(generation.client().ping());
+    attempt.track(ping);
+    return ping.handle(
+            (ignored, failure) -> {
+              if (failure == null) {
+                return invoke(operation, generation, attempt);
+              }
+              Throwable reported = AsyncStages.unwrap(failure);
+              if (cancelled(reported)) {
+                return AsyncStages.<T>failed(reported);
+              }
+              if (McpFailures.isPingUnsupported(reported)) {
+                generation.markPingUnsupported();
+                return invoke(operation, generation, attempt);
+              }
+              return recover(operation, generation, attempt, reported);
+            })
+        .thenCompose(Function.identity());
+  }
+
+  /**
+   * Spends this operation's single reconnect on one replacement generation, then runs on it.
+   *
+   * <p>The budget is one per {@code execute} rather than one per failure, because a generation that
+   * cannot be validated twice in a row is a server that is not coming back, and an owner that kept
+   * replacing it would start one process after another on behalf of a single tool call.
+   *
+   * <p>The caller is failed with what actually stopped its operation. A replacement that could not
+   * be built is attached to that failure rather than substituted for it: the caller asked for a
+   * tool call, and the reason it did not happen is the failure, not the cleanup that came after.
+   */
+  private <T> CompletableFuture<T> recover(
+      Function<McpAsyncClient, Mono<T>> operation,
+      Generation stale,
+      Attempt attempt,
+      Throwable failure) {
+    if (!attempt.spendReconnect()) {
+      return AsyncStages.failed(failure);
+    }
+    return replaceGeneration(stale)
+        .handle(
+            (replacement, replacementFailure) -> {
+              if (replacementFailure == null) {
+                return invoke(operation, replacement, attempt);
+              }
+              return AsyncStages.<T>failed(
+                  annotate(failure, AsyncStages.unwrap(replacementFailure)));
+            })
+        .thenCompose(Function.identity());
+  }
+
+  /**
+   * Reports whether a failure is a caller or run cancellation rather than a connection problem.
+   *
+   * <p>Cancellation is the one failure that says nothing about the connection. A cancelled agent
+   * run cancels its tool call, which cancels the validation ping in flight, and treating that as a
+   * lost connection would close a healthy generation: a stdio server process would be killed and a
+   * streamable HTTP session dropped because one caller changed its mind. It is matched by type
+   * rather than by message because {@code CancellationException} is what {@code CompletableFuture}
+   * itself raises.
+   */
+  private static boolean cancelled(Throwable failure) {
+    return failure instanceof CancellationException;
   }
 
   private <T> CompletableFuture<T> invoke(
@@ -214,6 +319,7 @@ public final class OwnedMcpClientLifecycle {
   private static final class Attempt {
 
     private final AtomicBoolean cancelled = new AtomicBoolean();
+    private final AtomicBoolean reconnect = new AtomicBoolean(true);
     private final AtomicReference<CompletableFuture<?>> inFlight = new AtomicReference<>();
 
     /**
@@ -223,6 +329,17 @@ public final class OwnedMcpClientLifecycle {
      */
     boolean cancelled() {
       return cancelled.get();
+    }
+
+    /**
+     * Takes this operation's single reconnect, and reports whether it was still there to take.
+     *
+     * <p>The budget is a claim rather than a counter so that two failures racing on the same
+     * operation cannot both decide to replace a generation. Replacing a connection can cost a
+     * process launch and a fresh handshake, so an operation is allowed to cause exactly one.
+     */
+    boolean spendReconnect() {
+      return reconnect.compareAndSet(true, false);
     }
 
     void track(CompletableFuture<?> call) {
@@ -300,6 +417,100 @@ public final class OwnedMcpClientLifecycle {
       throw failure;
     }
     return adopted.thenApply(generation -> generation);
+  }
+
+  /**
+   * Replaces the generation an operation could not validate, once per generation.
+   *
+   * <p>The stale generation is dropped and released <em>before</em> the replacement is created. An
+   * owner that built the replacement first would run two servers at once — a second child process,
+   * or a second HTTP session — for as long as the old one took to go away, which is exactly the
+   * cost owning the connection is supposed to bound.
+   *
+   * <p>The replacement handshake is published as the pending one inside the lock, before the stale
+   * close is started. Closing a client dismisses its in-flight requests on the closing thread, so a
+   * sibling operation fails and re-enters this method on this very thread; a handshake published
+   * after the close began would arrive too late for that sibling, which would then either fail with
+   * no connection or start a second generation of its own.
+   *
+   * <p>Nothing external runs while {@code lock} is held. The stale close is started once it is
+   * released, and the replacement's transport is created later still, from the callback that close
+   * completes.
+   *
+   * @param stale the generation the caller failed to validate, never {@code null}
+   * @return the generation to continue on, never {@code null}
+   */
+  private CompletableFuture<Generation> replaceGeneration(Generation stale) {
+    CompletableFuture<Void> staleClosure;
+    CompletableFuture<Generation> replacement;
+    long ticket;
+    synchronized (lock) {
+      if (current == null) {
+        // The owner moved on: it was closed, or a sibling already dropped this generation and its
+        // replacement is on the way. Either way this operation closes nothing and starts nothing.
+        // It joins the handshake if there is one, and otherwise fails on the same explicit connect
+        // requirement every operation without a generation fails on.
+        return pending != null
+            ? pending.thenApply(generation -> generation)
+            : AsyncStages.failed(new IllegalStateException(NOT_CONNECTED));
+      }
+      if (current.epoch() != stale.epoch()) {
+        // A sibling already replaced the generation this operation failed on, so the work is done.
+        // Replacing again would throw away a connection nothing has shown to be broken.
+        return CompletableFuture.completedFuture(current);
+      }
+      current = null;
+      staleClosure = new CompletableFuture<>();
+      closing = staleClosure;
+      ticket = ++epoch;
+      replacement = adopt();
+    }
+    staleClosure.whenComplete(
+        (released, cleanupFailure) -> continueReplacement(ticket, replacement, cleanupFailure));
+    release(stale, staleClosure);
+    return replacement.thenApply(generation -> generation);
+  }
+
+  /**
+   * Creates the replacement generation once the stale one is really gone.
+   *
+   * <p>A stale close that failed creates nothing. What it left behind is in an unknown state — a
+   * stdio process that would not die, an HTTP session that was not released — and starting a second
+   * server next to it is not a recovery, so the owner ends disconnected and the caller is told.
+   *
+   * <p>A ticket the owner has already moved past creates nothing either: it means the owner was
+   * closed while the stale generation was being released, and a replacement would then be a server
+   * process started for an owner that is shut down. The check is an early exit rather than the
+   * guarantee: a close that lands after it is still caught by {@link #publish(long, Generation)},
+   * which refuses the generation and hands it back to be released.
+   */
+  private void continueReplacement(
+      long ticket, CompletableFuture<Generation> replacement, Throwable cleanupFailure) {
+    if (cleanupFailure != null) {
+      settle(ticket, replacement, null, cleanupFailure);
+      return;
+    }
+    if (!isCurrentTicket(ticket)) {
+      settle(ticket, replacement, null, new IllegalStateException(NOT_CONNECTED));
+      return;
+    }
+    try {
+      startGeneration(ticket)
+          .whenComplete((generation, failure) -> settle(ticket, replacement, generation, failure));
+    } catch (RuntimeException | Error failure) {
+      // Same rule as connectGeneration: the promise is already published, so a throwable that is
+      // not an ordinary failure has to settle it before this frame unwinds, or the owner stays in
+      // connecting forever and every later connect joins a promise nobody is left to complete.
+      settle(ticket, replacement, null, failure);
+      throw failure;
+    }
+  }
+
+  /** Reports whether the owner is still waiting for the generation this ticket was issued for. */
+  private boolean isCurrentTicket(long ticket) {
+    synchronized (lock) {
+      return ticket == epoch;
+    }
   }
 
   /**
@@ -470,24 +681,32 @@ public final class OwnedMcpClientLifecycle {
    * Fails {@code target} with what went wrong, annotated with what went wrong while cleaning up
    * after it.
    *
-   * <p>A transport that reports the very instance it failed with — a cached or shared throwable —
-   * would otherwise leave the target incomplete, because a throwable refuses to suppress itself and
-   * that rejection would escape before the target was ever failed. Throwables do not redefine
-   * equality, so comparing them is the identity check that rejection is based on, and completing in
-   * a {@code finally} keeps any remaining trouble in the annotation from skipping it: what gets
-   * dropped is the cleanup failure, never the failure a caller is waiting for.
+   * <p>Completing in a {@code finally} keeps any remaining trouble in the annotation from skipping
+   * it: what gets dropped is the cleanup failure, never the failure a caller is waiting for.
    */
   private static void report(
       CompletableFuture<Generation> target, Throwable failure, Throwable cleanupFailure) {
     Throwable reported = AsyncStages.unwrap(failure);
     try {
-      Throwable cleanup = cleanupFailure == null ? null : AsyncStages.unwrap(cleanupFailure);
-      if (cleanup != null && !cleanup.equals(reported)) {
-        reported.addSuppressed(cleanup);
-      }
+      annotate(reported, cleanupFailure == null ? null : AsyncStages.unwrap(cleanupFailure));
     } finally {
       target.completeExceptionally(reported);
     }
+  }
+
+  /**
+   * Attaches context to the failure a caller is waiting for, and returns that same failure.
+   *
+   * <p>A throwable refuses to suppress itself, so a transport or a recovery that reported the very
+   * instance that started the trouble — a cached or shared throwable — would otherwise turn the
+   * annotation into a second failure. Throwables do not redefine equality, so comparing them is the
+   * identity check that rejection is based on.
+   */
+  private static Throwable annotate(Throwable failure, Throwable annotation) {
+    if (annotation != null && !annotation.equals(failure)) {
+      failure.addSuppressed(annotation);
+    }
+    return failure;
   }
 
   /** Completes {@code target} with whatever {@code source} produced, unwrapping the failure. */
@@ -509,12 +728,17 @@ public final class OwnedMcpClientLifecycle {
    * identity rather than a value — two generations are never interchangeable, however alike they
    * look — and the owner's ticket counter only moves forward, so no two generations ever carry the
    * same one.
+   *
+   * <p>{@code pingUnsupported} is the only thing this class remembers about a server, and it is
+   * deliberately remembered per generation: the next generation may be a different server process,
+   * or a different HTTP session on a different node, which is free to implement ping.
    */
   private static final class Generation {
 
     private final long epoch;
     private final McpAsyncClient client;
     private final AtomicBoolean closed = new AtomicBoolean();
+    private final AtomicBoolean pingUnsupported = new AtomicBoolean();
     private final CompletableFuture<Void> closure = new CompletableFuture<>();
 
     Generation(long epoch, McpAsyncClient client) {
@@ -528,6 +752,21 @@ public final class OwnedMcpClientLifecycle {
 
     McpAsyncClient client() {
       return client;
+    }
+
+    /** Reports whether this server already answered a ping with {@code -32601}. */
+    boolean pingUnsupported() {
+      return pingUnsupported.get();
+    }
+
+    /**
+     * Records that this server has no ping, so it is not asked again.
+     *
+     * <p>Setting it twice is the ordinary case rather than a race to guard: two operations that
+     * validate at the same time both learn the same answer, and both write the same value.
+     */
+    void markPingUnsupported() {
+      pingUnsupported.set(true);
     }
 
     /**
