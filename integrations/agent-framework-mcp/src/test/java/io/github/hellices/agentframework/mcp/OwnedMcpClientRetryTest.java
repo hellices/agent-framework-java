@@ -17,6 +17,7 @@ import io.modelcontextprotocol.spec.McpTransportSessionNotFoundException;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
@@ -286,6 +287,43 @@ class OwnedMcpClientRetryTest {
     transport.releaseWithheld();
 
     assertThat(inFlight).isCancelled();
+    assertThat(factory.createdCount()).isEqualTo(1);
+    assertThat(neverUsed.methodsSent()).isEmpty();
+    assertThat(transport.closeCount()).isZero();
+    assertThat(transport.countOf(McpSchema.METHOD_TOOLS_CALL)).isEqualTo(1);
+  }
+
+  @Test
+  void doesNotRepeatACancellationThatCarriesALostConnectionCause() {
+    // A cancellation is recognised by its own type, while a lost connection is recognised by
+    // walking the cause chain, so a cancellation that carries a transport failure underneath it
+    // answers to both descriptions. The order of the two questions is what settles it: asked the
+    // other way round, this failure reads as a lost connection, and the caller that withdrew would
+    // get a second server started for it and its tool call sent again on that server, this time
+    // with a side effect nobody is waiting for. Nothing here cancelled the stage, so the
+    // pre-dispatch guard is not watching: the decision belongs to this rule alone.
+    InMemoryMcpTransport transport =
+        toolServer()
+            .answeringPing()
+            .failingSend(
+                McpSchema.METHOD_TOOLS_CALL,
+                () -> {
+                  CancellationException withdrawn = new CancellationException("run cancelled");
+                  withdrawn.initCause(new McpTransportSessionNotFoundException("session expired"));
+                  return withdrawn;
+                });
+    InMemoryMcpTransport neverUsed = toolServer().answeringPing();
+    ScriptedMcpTransportFactory factory = new ScriptedMcpTransportFactory(transport, neverUsed);
+    OwnedMcpClientLifecycle lifecycle = new OwnedMcpClientLifecycle(factory, settings());
+    lifecycle.connect().join();
+
+    CompletableFuture<McpSchema.CallToolResult> cancelled =
+        lifecycle.execute(
+            client -> client.callTool(new McpSchema.CallToolRequest("search-issues", null, null)));
+
+    assertThat(settledFailure(cancelled))
+        .isInstanceOf(CancellationException.class)
+        .hasCauseInstanceOf(McpTransportSessionNotFoundException.class);
     assertThat(factory.createdCount()).isEqualTo(1);
     assertThat(neverUsed.methodsSent()).isEmpty();
     assertThat(transport.closeCount()).isZero();
