@@ -32,6 +32,7 @@ final class FakeMcpAsyncOperations implements McpAsyncOperations {
       new ArrayDeque<>();
 
   private Function<String, CompletionStage<McpSchema.ListToolsResult>> listing;
+  private boolean pagedScopeMissing;
   private Function<McpSchema.CallToolRequest, CompletionStage<McpSchema.CallToolResult>> calling =
       request -> CompletableFuture.completedFuture(callResult(List.of(), null));
 
@@ -82,6 +83,20 @@ final class FakeMcpAsyncOperations implements McpAsyncOperations {
 
   FakeMcpAsyncOperations answering(McpSchema.CallToolResult result) {
     return calling(request -> CompletableFuture.completedFuture(result));
+  }
+
+  /**
+   * Hands out no scope for a paged read, which is the one way an implementation of the port can
+   * break the contract that {@code forPagedOperation()} never returns {@code null}.
+   */
+  FakeMcpAsyncOperations withoutPagedScope() {
+    this.pagedScopeMissing = true;
+    return this;
+  }
+
+  @Override
+  public McpAsyncOperations forPagedOperation() {
+    return pagedScopeMissing ? null : this;
   }
 
   List<String> requestedCursors() {

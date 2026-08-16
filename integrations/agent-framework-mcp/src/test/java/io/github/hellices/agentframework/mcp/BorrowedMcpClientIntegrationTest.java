@@ -215,6 +215,30 @@ class BorrowedMcpClientIntegrationTest {
     assertThat(adapter.discoverTools().toCompletableFuture().join()).hasSize(1);
   }
 
+  @Test
+  void leavesOneSharedClientOpenForEveryAdapterThatBorrowsIt() {
+    InMemoryMcpTransport transport = searchServer();
+    McpAsyncClient client = initializedClient(transport);
+
+    ConnectedMcpClientAdapter first = new ConnectedMcpClientAdapter(client);
+    ConnectedMcpClientAdapter second = new ConnectedMcpClientAdapter(client);
+    List<FunctionTool> firstTools = first.discoverTools().toCompletableFuture().join();
+    List<FunctionTool> secondTools = second.discoverTools().toCompletableFuture().join();
+
+    // Both adapters work off the one session: two borrowers do not mean two handshakes, and neither
+    // borrower may end the session the caller opened.
+    assertThat(firstTools).hasSize(1);
+    assertThat(secondTools).hasSize(1);
+    assertThat(transport.countOf(McpSchema.METHOD_INITIALIZE)).isEqualTo(1);
+    assertThat(transport.countOf(McpSchema.METHOD_TOOLS_LIST)).isEqualTo(2);
+    assertThat(client.isInitialized()).isTrue();
+    assertThat(transport.closeCount()).isZero();
+
+    // The provider closes, once, and only because it chose to.
+    client.closeGracefully().block(Duration.ofSeconds(5));
+    assertThat(transport.closeCount()).isEqualTo(1);
+  }
+
   private static InMemoryMcpTransport searchServer() {
     return new InMemoryMcpTransport()
         .answering(

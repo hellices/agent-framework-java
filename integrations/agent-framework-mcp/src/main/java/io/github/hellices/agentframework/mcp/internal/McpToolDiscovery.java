@@ -22,8 +22,13 @@ import java.util.regex.Pattern;
  * drops the cursor of the last page it read and would silently return a truncated catalogue. Pages
  * are followed until the server reports no further cursor. A repeated cursor and a run of pages
  * longer than the configured bound both fail the discovery, because a server that does not advance
- * and a server that never stops advancing are both faults the borrowed client should not be paged
- * through forever.
+ * and a server that never stops advancing are both faults a client should not be paged through
+ * forever.
+ *
+ * <p>A whole discovery is one logical operation. When the operations port reports that the
+ * connection behind a page was replaced, everything read so far is discarded and the catalogue is
+ * read again from its first page, because a cursor belongs to the session that issued it. A port
+ * over a borrowed client never reports that, so borrowed discovery is unaffected.
  */
 public final class McpToolDiscovery {
 
@@ -51,15 +56,35 @@ public final class McpToolDiscovery {
    * Discovers every tool the server publishes.
    *
    * <p>Cancelling the returned stage cancels the page request that is in flight and stops the
-   * paging, so a caller that gives up does not leave the borrowed client working on its behalf,
-   * including when the cancellation arrives in the gap between one page completing and the next
-   * being requested.
+   * paging, so a caller that gives up does not leave the client working on its behalf, including
+   * when the cancellation arrives in the gap between one page completing and the next being
+   * requested, and including after a restart.
+   *
+   * <p>The pages of one discovery are read through one scope, taken from the port here rather than
+   * per page, because the whole read is one operation: what the scope carries is the single
+   * recovery budget the pages share.
    *
    * @return a stage completing with the tools in server order, never {@code null}
    */
   public CompletableFuture<List<FunctionTool>> discover() {
-    PageReader reader = new PageReader();
-    return AsyncStages.cancellable(reader.readAll(), reader::cancel);
+    return AsyncStages.callSafely(
+        () -> {
+          PageReader reader = new PageReader(requireScope(operations.forPagedOperation()));
+          return AsyncStages.cancellable(reader.readAll(), reader::cancel);
+        });
+  }
+
+  /**
+   * Returns the scope one discovery reads its pages through, rejecting a port that hands out none.
+   *
+   * <p>A port that answers with nothing would otherwise surface as a null pointer failure from the
+   * first page request rather than as a statement about the port that broke its contract.
+   */
+  private static McpAsyncOperations requireScope(McpAsyncOperations scope) {
+    if (scope == null) {
+      throw new IllegalStateException("MCP operations returned no scope for a paged read");
+    }
+    return scope;
   }
 
   /**
@@ -71,14 +96,20 @@ public final class McpToolDiscovery {
    */
   private final class PageReader {
 
+    private final McpAsyncOperations pageOperations;
     private final AtomicReference<CompletableFuture<McpSchema.ListToolsResult>> pending =
         new AtomicReference<>();
     private final AtomicBoolean cancelled = new AtomicBoolean();
+    private final AtomicBoolean restartable = new AtomicBoolean(true);
     private final Set<String> seenCursors = new HashSet<>();
     private final Map<String, String> localNames = new LinkedHashMap<>();
     private final List<FunctionTool> tools = new ArrayList<>();
 
     private String cursor = McpSchema.FIRST_PAGE;
+
+    PageReader(McpAsyncOperations pageOperations) {
+      this.pageOperations = pageOperations;
+    }
 
     CompletableFuture<List<FunctionTool>> readAll() {
       CompletableFuture<List<FunctionTool>> discovered = new CompletableFuture<>();
@@ -114,7 +145,11 @@ public final class McpToolDiscovery {
           page.whenComplete(
               (result, failure) -> {
                 if (failure != null) {
-                  discovered.completeExceptionally(AsyncStages.unwrap(failure));
+                  if (restart(failure)) {
+                    drive(discovered);
+                  } else {
+                    discovered.completeExceptionally(AsyncStages.unwrap(failure));
+                  }
                 } else if (advance(result, requested, discovered)) {
                   drive(discovered);
                 }
@@ -125,6 +160,9 @@ public final class McpToolDiscovery {
         try {
           result = page.join();
         } catch (RuntimeException failure) {
+          if (restart(failure)) {
+            continue;
+          }
           discovered.completeExceptionally(AsyncStages.unwrap(failure));
           return;
         }
@@ -148,7 +186,7 @@ public final class McpToolDiscovery {
       }
       CompletableFuture<McpSchema.ListToolsResult> page;
       try {
-        page = AsyncStages.requireStage(operations.listTools(cursor, null), "tools/list");
+        page = AsyncStages.requireStage(pageOperations.listTools(cursor, null), "tools/list");
       } catch (RuntimeException failure) {
         discovered.completeExceptionally(failure);
         return null;
@@ -158,6 +196,37 @@ public final class McpToolDiscovery {
         page.cancel(true);
       }
       return page;
+    }
+
+    /**
+     * Throws away everything read so far and starts the catalogue again from its first page, when
+     * the page failed only because the connection behind it was replaced.
+     *
+     * <p>Everything has to go, not just the cursor. The collected tools came from a session that no
+     * longer exists, and keeping them would either duplicate the entries the new session
+     * republishes or fail the discovery on a local name collision with them. The seen cursors have
+     * to go for a blunter reason: the new session will very likely hand out the same cursor
+     * strings, and the repeated-cursor guard would read that as a server paging forever. Clearing
+     * them also restores the page bound, so the replacement gets a whole catalogue's worth of pages
+     * rather than whatever the dead session left over.
+     *
+     * <p>The flag bounds this loop on its own. The lifecycle also allows one replacement per paged
+     * read, so in practice the second restart never arrives, but this class already bounds paging
+     * by repeated cursors and by a page count, and a reader that can be restarted by something
+     * outside it should bound that too.
+     */
+    private boolean restart(Throwable failure) {
+      if (!(AsyncStages.unwrap(failure) instanceof McpConnectionReplacedException)) {
+        return false;
+      }
+      if (!restartable.compareAndSet(true, false)) {
+        return false;
+      }
+      tools.clear();
+      localNames.clear();
+      seenCursors.clear();
+      cursor = McpSchema.FIRST_PAGE;
+      return true;
     }
 
     /**

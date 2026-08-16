@@ -9,9 +9,16 @@ import java.util.concurrent.CompletionStage;
  *
  * <p>The port exists for two reasons. The SDK client types are final with non public constructors,
  * so adapter logic could otherwise only be exercised against a live server or a process. And the
- * port names exactly the two operations the adapter is allowed to perform, which keeps the borrowed
- * client's lifecycle out of reach: there is deliberately no method to connect, initialize,
- * reconnect, or close.
+ * port names the operations the adapter may perform plus one scoping method that carries no
+ * lifecycle: {@link #listTools}, {@link #callTool}, and {@link #forPagedOperation()}. None of the
+ * three connects, initializes, reconnects, or closes anything: there is deliberately no such
+ * method.
+ *
+ * <p>Both the borrowed and the owned implementation use this port. The borrowed implementation
+ * cannot own a lifecycle it was never given, so its {@link #forPagedOperation()} is the inherited
+ * default that returns {@code this}. The owned implementation's {@link #forPagedOperation()}
+ * instead scopes a fresh paging attempt — one reconnect budget for one paged read — without
+ * exposing a lifecycle method of its own.
  *
  * <p>Implementations are used concurrently and must be thread safe.
  */
@@ -33,4 +40,18 @@ public interface McpAsyncOperations {
    * @return a stage completing with the result, never {@code null}
    */
   CompletionStage<McpSchema.CallToolResult> callTool(McpSchema.CallToolRequest request);
+
+  /**
+   * Returns the operations to use for one paged read, such as a whole tool discovery.
+   *
+   * <p>Reading a catalogue is one logical operation even though it is many requests, and an
+   * implementation that owns its connection needs to know that in order to spend a recovery budget
+   * once for the whole read rather than once per page. An implementation that borrows its
+   * connection recovers from nothing and returns itself, which is why this is a default method.
+   *
+   * @return the operations for one paged read, never {@code null}
+   */
+  default McpAsyncOperations forPagedOperation() {
+    return this;
+  }
 }

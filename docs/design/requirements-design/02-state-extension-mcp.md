@@ -345,8 +345,31 @@ instance. The final MCP tool result is atomic even if the hosted run streamed in
 
 ## 12. Current implementation
 
-There is no production session/interceptor/MCP code. `DeterministicClock` may be reused later as a
-snapshot/checkpoint test fixture, but it does not implement the required behavior.
+The session aggregate (section 3), the session store (section 4), and `SessionContext` with its
+provider pipeline (section 5) have production code in `api.session`, `spi.session`,
+`engine.session`, and `engine.internal.session`: `SessionCoordinator`, the in-memory and file
+stores, the Jackson snapshot codec, and the in-memory history provider. The `SES` rows of the
+[Requirements traceability matrix](requirements-traceability-matrix.md) are canonical for which of
+those requirements that code closes; several are still `absent`. The typed interceptor pipeline
+(section 6) and compaction (section 7) have no production code, and `DeterministicClock` may be
+reused later as a snapshot/checkpoint test fixture, but it does not implement the required behavior.
+
+`integrations/agent-framework-mcp` implements the client boundary in section 8.1 for both ownership
+models. `ConnectedMcpClientAdapter` borrows a caller-owned client. `McpStdioTools` and
+`McpStreamableHttpTools` own a stdio or streamable HTTP connection: an explicit `connect()` builds
+one transport and client and completes the handshake, a `ping` validates the session before each
+list or call unless that session answered `-32601`, a failed validation or a session the server no
+longer has buys at most one replacement session and at most one retry of the original operation, and
+`close()` releases the session while leaving the object reusable. A transport failure that leaves it
+unknown whether the server already executed the request is reported rather than repeated. So is the
+dismissal the SDK raises when this owner replaces a connection while another request is in flight on
+it: a `tools/call` dismissed that way is reported, because the server may already have run it, while
+a `tools/list` read changes nothing and restarts its paging from the first page on the replacement.
+Discovery in section 8.2 and invocation in section 8.4 are shared by both models.
+
+Prompts and resources (8.3) and the task lifecycle (8.5) remain absent, as do request headers, trace
+propagation, and sampling. No WebSocket transport exists, because the official SDK 2.0.0 provides no
+WebSocket client transport.
 
 ## 13. Requirements mapping
 
