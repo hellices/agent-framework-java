@@ -1,6 +1,7 @@
 package io.github.hellices.agentframework.build.harness;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -100,6 +101,12 @@ class ModuleCompositionPolicyTest {
    * consumer. Folding the two together would mean that permitting a provider to test against the
    * engine also permitted it to ship against the engine, which the dependency direction rules
    * forbid.
+   *
+   * <p>A library that tests against no other project needs no entry, which is why the assertion
+   * reads this map with a default rather than a lookup: an empty entry per library would be
+   * ceremony that says nothing. {@code dependencyAllowlistsCoverExactlyTheLibraryProjects} keeps
+   * that convenience honest by refusing a key that names anything but a library project, so a typo
+   * cannot sit here looking like a granted permission that no assertion reads.
    */
   private static final Map<String, List<String>> ALLOWED_TEST_DEPENDENCIES = Map.of();
 
@@ -229,6 +236,53 @@ class ModuleCompositionPolicyTest {
   @MethodSource("libraryProjects")
   void libraryProjectDeclaresNoInlineDependencyVersion(String gradlePath) {
     assertThat(ProjectLayout.buildFileText(gradlePath)).doesNotContain("version = \"");
+  }
+
+  @Test
+  void everyRegisteredBuildFileParsesUnderTheProjectDependencyRules() {
+    // The parse refuses every form it cannot classify, so a rule that is too strict fails a build
+    // file that is entirely legal, and a policy that fails on legal input gets suppressed. Reading
+    // every registered project, not only the libraries the allowlists cover, keeps that failure
+    // here. `:agent-framework-bom` is the case that matters most: its header comment writes out
+    // `api(project(...))` as prose, and a parse that read comments would refuse the BOM.
+    for (String gradlePath : ProjectLayout.includedProjects()) {
+      assertThatCode(() -> ProjectLayout.projectDependenciesOf(gradlePath))
+          .withFailMessage(
+              "%s declares a project dependency the module composition policy cannot read. Either"
+                  + " the build file needs the canonical form, or the parse is refusing something"
+                  + " legal.",
+              gradlePath)
+          .doesNotThrowAnyException();
+      assertThatCode(() -> ProjectLayout.testProjectDependenciesOf(gradlePath))
+          .withFailMessage(
+              "%s declares a test project dependency the module composition policy cannot read.",
+              gradlePath)
+          .doesNotThrowAnyException();
+    }
+  }
+
+  @Test
+  void dependencyAllowlistsCoverExactlyTheLibraryProjects() {
+    // Both allowlists are read through LIBRARY_PROJECTS, so a key for anything else is a
+    // permission no assertion ever applies: a typo, or a module that moved, would sit here looking
+    // granted while the project it names went unchecked or failed with a null allowlist instead.
+    assertThat(ALLOWED_DEPENDENCIES.keySet())
+        .withFailMessage(
+            "ALLOWED_DEPENDENCIES must hold one entry per library project. Its keys are %s but the"
+                + " library projects are %s. Every library needs an explicit entry, even an empty"
+                + " one, and an entry for anything else is never read.",
+            ALLOWED_DEPENDENCIES.keySet(), LIBRARY_PROJECTS)
+        .containsExactlyInAnyOrderElementsOf(LIBRARY_PROJECTS);
+
+    assertThat(LIBRARY_PROJECTS)
+        .withFailMessage(
+            "ALLOWED_TEST_DEPENDENCIES holds keys that are not library projects: %s. A library"
+                + " with no test project dependency needs no entry, but a key naming anything else"
+                + " grants a permission no assertion reads.",
+            ALLOWED_TEST_DEPENDENCIES.keySet().stream()
+                .filter(gradlePath -> !LIBRARY_PROJECTS.contains(gradlePath))
+                .toList())
+        .containsAll(ALLOWED_TEST_DEPENDENCIES.keySet());
   }
 
   @ParameterizedTest
