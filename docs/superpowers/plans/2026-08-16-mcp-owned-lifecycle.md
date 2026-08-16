@@ -13,11 +13,14 @@ SDK handshake on a subscription that caller cancellation cannot dispose, and con
 calls coalesce onto that one handshake. Every list or call operation first validates the current
 generation with `ping`, unless that generation already learned that the server answers `ping` with
 JSON-RPC `-32601`. A validation failure or a typed connection-loss failure spends a single reconnect
-budget: the stale generation is closed, one replacement generation is created, and the original
-operation is retried exactly once. Two public final facades, `McpStdioTools` and
-`McpStreamableHttpTools`, wrap that state machine, build the SDK transport lazily inside a
-package-private `McpClientTransportFactory` seam, and reuse the already shipped `McpToolDiscovery`
-and `McpToolInvoker` for the tool mapping.
+budget: the stale generation is closed and one replacement generation is created. A single-request
+operation is then retried exactly once on the replacement. A paged operation is not: a whole
+`discoverTools()` is one logical operation with one budget, and a replacement makes it discard every
+page it accumulated and start again from `McpSchema.FIRST_PAGE`, because an MCP cursor belongs to the
+session that issued it. Two public final facades, `McpStdioTools` and `McpStreamableHttpTools`, wrap
+that state machine, build the SDK transport lazily inside a package-private
+`McpClientTransportFactory` seam, and reuse `McpToolDiscovery` and `McpToolInvoker` for the tool
+mapping.
 
 **Tech Stack:** Java 17 source and target, Gradle Kotlin DSL with the `build-logic` included build,
 official `io.modelcontextprotocol.sdk:mcp-core:2.0.0` (`McpAsyncClient`, `StdioClientTransport`,
@@ -43,6 +46,11 @@ the existing `AsyncStages` helper, JUnit 5 and AssertJ for tests.
   Comparisons against `null` are unaffected and are used throughout.
 - Tests are deterministic. No real process, no real socket, no `Thread.sleep`, no wall-clock timeout as
   an assertion mechanism, no retry-on-flake.
+- No external call runs while the lifecycle's state lock is held. The transport factory, the SDK
+  client constructor, the handshake subscription, and every `closeGracefully()` are invoked outside
+  `synchronized (lock)`, because each of them can block, start a process, or re-enter this class:
+  verified SDK fact 15 says closing a client dismisses its in-flight requests synchronously, and
+  those dismissals run our own failure handling on the closing thread.
 - Never construct `StdioClientTransport` in a test. Its constructor allocates three single-thread
   schedulers before any process starts, and nothing closes them if the test does not connect.
 - Scope exclusions for this slice, all deliberate: no discovery caching, no prompts, no resources, no
@@ -50,8 +58,16 @@ the existing `AsyncStages` helper, JUnit 5 and AssertJ for tests.
   no tracing or telemetry escape hatch, no OAuth. MCP-009 and MCP-010 stay `absent`.
 - MCP-001 stays `partial`. Official SDK 2.0.0 ships no WebSocket client transport, so a WebSocket
   facade cannot be written against the pinned upstream snapshot.
-- The existing borrowed adapter `ConnectedMcpClientAdapter` and its tests must not change behavior.
-  Its test class is the regression guard that owned code did not leak into borrowed ownership.
+- MCP-003 stays `partial`. Its third acceptance criterion requires `close()` to clear "the session,
+  capability cache, sampling counter, and pending reload state". This slice has no sampling and no
+  reload state to clear, so only the first two exist; claiming `implemented` would assert coverage of
+  criteria whose subjects do not exist yet.
+- The existing borrowed adapter `ConnectedMcpClientAdapter` does not change behavior, and no existing
+  borrowed test is edited or deleted; they are the regression guard that owned code did not leak into
+  borrowed ownership. Tests may be added to the borrowed suites, and Task 11 adds one, because adding
+  a guard is the opposite of relaxing one. `BorrowedMcpAsyncOperations` is likewise untouched: the one
+  new method on `McpAsyncOperations` is a `default` that returns `this`, so borrowed paging behaves
+  identically before and after this slice.
 
 ## Verified SDK 2.0.0 facts
 
@@ -109,6 +125,22 @@ and then deleted. Do not re-derive them; do not contradict them.
     what makes a dismissed sibling call retryable. This behavior also makes the reconnect tests
     deterministic: closing the stale generation delivers every sibling failure before
     `closeGracefully()` returns.
+16. The `McpAsyncClient` constructor, reached from `McpClient.AsyncSpec.build()`, calls
+    `transport.protocolVersions()` and `transport.setExceptionHandler(...)` on the transport it was
+    given. `protocolVersions()` is a `default` method on `McpTransport`, so a test transport can
+    override it to throw and make client construction fail *after* a transport already exists. That
+    is the deterministic way to exercise the "transport created, client not built" path without a
+    process or a socket.
+17. `McpSchema.FIRST_PAGE` is a `public static final String` assigned `null` in the class
+    initializer. Requesting the first page therefore sends `cursor = null`, and a test that records
+    requested cursors observes `null` for the first page.
+18. `McpAsyncClient.listTools(String cursor, Map<String, Object> meta)` sends `tools/list` with a
+    `McpSchema.PaginatedRequest(cursor, meta)` as its params, and `PaginatedRequest.cursor()` reads
+    that cursor back. The in-memory transport does not serialize, so a scripted answer receives that
+    record instance directly.
+19. `Mono.subscribe(Consumer, Consumer, Runnable)` reports a throw raised during subscription through
+    the error consumer rather than to the caller, so the handshake's failure path is the normal path
+    even when the assembly itself fails.
 
 ## Resolved contradiction
 
@@ -133,17 +165,23 @@ Production, all under `integrations/agent-framework-mcp/src/main/java/io/github/
   by routing `listTools` and `callTool` through the lifecycle, so `McpToolDiscovery` and
   `McpToolInvoker` are reused untouched.
 - `internal/McpFailures.java` (create) - pure failure classification: unsupported ping, connection loss.
+- `internal/McpConnectionReplacedException.java` (create) - package-private internal signal that a
+  paged operation ran into a replacement generation and must start again from the first page.
 - `internal/OwnedMcpTools.java` (create) - the shared body of both public facades: it owns one
   lifecycle and one `McpToolDiscovery` and exposes connect, discover, and close. Both facades hold one
   of these and forward to it, so the transport-specific code in each facade is only its builder.
 - `McpStdioTools.java` (create) - public final owned facade for a stdio server process.
 - `McpStreamableHttpTools.java` (create) - public final owned facade for a streamable HTTP server.
 - `package-info.java` (modify) - the package summary currently promises the module never opens or closes
-  a client. That stops being true in Task 10.
+  a client. That stops being true in Task 11.
+- `internal/McpAsyncOperations.java` (modify) - one new `default` method, `forPagedOperation()`,
+  returning `this`. It is the seam that lets an owned operations port give a whole paged read one
+  shared reconnect budget while leaving the borrowed port's behavior identical.
+- `internal/McpToolDiscovery.java` (modify) - obtain the paged scope once per `discover()`, and
+  restart the whole read from `McpSchema.FIRST_PAGE` when a page reports a replacement generation.
 - `internal/package-info.java` (unchanged).
-- `ConnectedMcpClientAdapter.java`, `McpToolAdapterOptions.java`, `internal/McpToolDiscovery.java`,
-  `internal/McpToolInvoker.java`, `internal/McpAsyncOperations.java`, `internal/AsyncStages.java`
-  (unchanged).
+- `ConnectedMcpClientAdapter.java`, `McpToolAdapterOptions.java`, `internal/McpToolInvoker.java`,
+  `internal/AsyncStages.java`, `internal/BorrowedMcpAsyncOperations.java` (unchanged).
 
 Tests, under `integrations/agent-framework-mcp/src/test/java/io/github/hellices/agentframework/mcp/`:
 
@@ -151,6 +189,9 @@ Tests, under `integrations/agent-framework-mcp/src/test/java/io/github/hellices/
   send failures, script close failures, count occurrences of a method, answer `ping` by default helper.
 - `ScriptedMcpTransportFactory.java` (create) - hands out pre-built in-memory transports in order and
   counts how many generations the lifecycle asked for.
+- `ClientHostileMcpTransport.java` (create) - a transport whose `protocolVersions()` throws, so client
+  construction fails after the transport exists. It is the only way to exercise that path without a
+  process or a socket.
 - `InMemoryMcpTransportTest.java` (create) - fixture self-test, because an unfaithful fixture silently
   invalidates every owned test.
 - `OwnedMcpClientConnectTest.java` (create)
@@ -160,13 +201,18 @@ Tests, under `integrations/agent-framework-mcp/src/test/java/io/github/hellices/
   package-private.
 - `OwnedMcpClientValidationTest.java` (create)
 - `OwnedMcpClientRetryTest.java` (create)
+- `McpDiscoveryPagingTest.java` (create) - paging across a replacement generation, for both ownership
+  models.
 - `RejectingMcpJsonMapper.java` (create) - an `McpJsonMapper` that throws from every method. The stdio
   builder requires a mapper, and no test in this module ever serializes anything, so a mapper that
   fails loudly is safer than one that quietly works.
 - `McpStdioToolsTest.java` (create)
 - `McpStreamableHttpToolsTest.java` (create)
-- `BorrowedMcpClientIntegrationTest.java`, `ConnectedMcpClientAdapterTest.java`,
-  `PermissiveJsonSchemaValidator.java` (unchanged, run as regression).
+- `BorrowedMcpClientIntegrationTest.java` (modify) - one added test: two adapters over one client, so
+  the MCP-002 acceptance criterion about shared connections has an executable test. Every existing
+  test in it stays unchanged and runs as regression.
+- `ConnectedMcpClientAdapterTest.java`, `PermissiveJsonSchemaValidator.java`,
+  `FakeMcpAsyncOperations.java` (unchanged, run as regression).
 
 Documentation:
 
@@ -259,8 +305,16 @@ class InMemoryMcpTransportTest {
     client.initialize().block(BLOCK);
     client.closeGracefully().block(BLOCK);
 
-    assertThatThrownBy(() -> client.listTools(null, null).block(BLOCK)).isInstanceOf(Throwable.class);
+    // The SDK is free to wrap an initialization failure, and this fixture test is not the place to
+    // pin how it does that, so the assertion names the type that must be somewhere in the chain
+    // rather than the wrapper on top of it. The counted initialize is the second half of the
+    // statement: the client tried to hand shake again and the closed transport refused before it
+    // recorded anything.
+    assertThatThrownBy(() -> client.listTools(null, null).block(BLOCK))
+        .isInstanceOf(RuntimeException.class)
+        .hasStackTraceContaining(McpTransportSessionClosedException.class.getName());
     assertThat(transport.countOf(McpSchema.METHOD_INITIALIZE)).isEqualTo(1);
+    assertThat(transport.isClosed()).isTrue();
   }
 
   @Test
@@ -616,6 +670,7 @@ connects, and cleans up a generation whose handshake failed.
 - Create: `integrations/agent-framework-mcp/src/main/java/io/github/hellices/agentframework/mcp/internal/McpOwnedClientSettings.java`
 - Create: `integrations/agent-framework-mcp/src/main/java/io/github/hellices/agentframework/mcp/internal/OwnedMcpClientLifecycle.java`
 - Create: `integrations/agent-framework-mcp/src/test/java/io/github/hellices/agentframework/mcp/ScriptedMcpTransportFactory.java`
+- Create: `integrations/agent-framework-mcp/src/test/java/io/github/hellices/agentframework/mcp/ClientHostileMcpTransport.java`
 - Test: `integrations/agent-framework-mcp/src/test/java/io/github/hellices/agentframework/mcp/OwnedMcpClientConnectTest.java`
 
 **Interfaces:**
@@ -634,6 +689,8 @@ connects, and cleans up a generation whose handshake failed.
   - `ScriptedMcpTransportFactory implements McpClientTransportFactory` with
     `ScriptedMcpTransportFactory(InMemoryMcpTransport... transports)`, `int createdCount()`,
     `InMemoryMcpTransport created(int index)`.
+  - `ClientHostileMcpTransport implements McpClientTransport` with `int closeCount()` and a
+    `protocolVersions()` that throws, so client construction fails after a transport exists.
 
 - [ ] **Step 1: Write the failing connect test**
 
@@ -645,11 +702,13 @@ package io.github.hellices.agentframework.mcp;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import io.github.hellices.agentframework.mcp.internal.McpClientTransportFactory;
 import io.github.hellices.agentframework.mcp.internal.McpOwnedClientSettings;
 import io.github.hellices.agentframework.mcp.internal.OwnedMcpClientLifecycle;
 import io.modelcontextprotocol.spec.McpSchema;
 import java.time.Duration;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -776,6 +835,34 @@ class OwnedMcpClientConnectTest {
   }
 
   @Test
+  void aClientBuildFailureClosesTheTransportOnceAndLeavesTheOwnerDisconnected() {
+    ClientHostileMcpTransport hostile = new ClientHostileMcpTransport();
+    AtomicInteger created = new AtomicInteger();
+    McpClientTransportFactory factory =
+        () -> {
+          created.incrementAndGet();
+          return hostile;
+        };
+    OwnedMcpClientLifecycle lifecycle = new OwnedMcpClientLifecycle(factory, settings());
+
+    // Assigning the stage is itself an assertion: connect() must report a build failure through the
+    // returned stage, so a synchronous throw fails on this line rather than on the next one.
+    CompletableFuture<Void> first = lifecycle.connect();
+
+    assertThatThrownBy(first::join)
+        .hasRootCauseInstanceOf(IllegalStateException.class)
+        .hasRootCauseMessage("transport refuses to negotiate");
+    assertThat(hostile.closeCount()).isEqualTo(1);
+
+    // A failed start must leave nothing adopted, so the next connect has to ask for a new transport
+    // and clean up after itself exactly as the first one did.
+    assertThatThrownBy(() -> lifecycle.connect().join())
+        .hasRootCauseInstanceOf(IllegalStateException.class);
+    assertThat(created.get()).isEqualTo(2);
+    assertThat(hostile.closeCount()).isEqualTo(2);
+  }
+
+  @Test
   void rejectsMissingCollaborators() {
     assertThatThrownBy(() -> new OwnedMcpClientLifecycle(null, settings()))
         .isInstanceOf(IllegalArgumentException.class)
@@ -804,7 +891,8 @@ class OwnedMcpClientConnectTest {
 Run: `./gradlew :integrations:agent-framework-mcp:test --tests 'io.github.hellices.agentframework.mcp.OwnedMcpClientConnectTest'`
 
 Expected: compilation FAILS with `package io.github.hellices.agentframework.mcp.internal does not
-contain OwnedMcpClientLifecycle` and `cannot find symbol: class ScriptedMcpTransportFactory`.
+contain OwnedMcpClientLifecycle`, `cannot find symbol: class ScriptedMcpTransportFactory`, and
+`cannot find symbol: class ClientHostileMcpTransport`.
 
 - [ ] **Step 3: Create the transport factory seam**
 
@@ -989,6 +1077,7 @@ public final class OwnedMcpClientLifecycle {
   }
 
   private CompletableFuture<Generation> connectGeneration() {
+    CompletableFuture<Generation> handshake;
     synchronized (lock) {
       if (current != null) {
         return CompletableFuture.completedFuture(current);
@@ -996,21 +1085,28 @@ public final class OwnedMcpClientLifecycle {
       if (pending != null) {
         return pending.thenApply(generation -> generation);
       }
-      return adopt(++epoch, startGeneration());
+      handshake = adopt(++epoch);
     }
+    mirror(startGeneration(), handshake);
+    return handshake.thenApply(generation -> generation);
   }
 
   /**
-   * Registers a handshake as the pending one. The caller must hold {@code lock}.
+   * Registers a fresh promise as the pending handshake. The caller must hold {@code lock}.
+   *
+   * <p>The promise is published inside the lock but completed outside it. That ordering is what
+   * makes concurrent connects coalesce: a second caller that takes the lock while the first is still
+   * building a transport already sees a pending handshake to join.
    *
    * <p>The ticket is a counter rather than the handshake future itself so that nothing in this class
    * has to compare two object references for identity, and so that {@code close()} can orphan a
    * handshake simply by moving the counter on.
    */
-  private CompletableFuture<Generation> adopt(long ticket, CompletableFuture<Generation> handshake) {
+  private CompletableFuture<Generation> adopt(long ticket) {
+    CompletableFuture<Generation> handshake = new CompletableFuture<>();
     pending = handshake;
     handshake.whenComplete((generation, failure) -> publish(ticket, generation));
-    return handshake.thenApply(generation -> generation);
+    return handshake;
   }
 
   private void publish(long ticket, Generation generation) {
@@ -1023,6 +1119,16 @@ public final class OwnedMcpClientLifecycle {
     }
   }
 
+  /**
+   * Builds one generation. Never called while {@code lock} is held, and never throws: every failure
+   * is reported through the returned stage, so a caller that already published a pending handshake
+   * cannot be left with a promise nobody completes.
+   *
+   * <p>The three steps fail differently. A factory failure leaves nothing to clean up. A client
+   * build failure leaves a live transport that only this method still knows about, so it closes it.
+   * A subscription failure leaves a client that owns the transport, so the generation closes it,
+   * once, through the same idempotent path every other close uses.
+   */
   private CompletableFuture<Generation> startGeneration() {
     McpClientTransport transport;
     try {
@@ -1033,35 +1139,77 @@ public final class OwnedMcpClientLifecycle {
     } catch (RuntimeException failure) {
       return AsyncStages.failed(failure);
     }
-    McpAsyncClient client =
-        McpClient.async(transport)
-            .requestTimeout(settings.requestTimeout())
-            .initializationTimeout(settings.initializationTimeout())
-            .jsonSchemaValidator(settings.schemaValidator())
-            .build();
+    McpAsyncClient client;
+    try {
+      client =
+          McpClient.async(transport)
+              .requestTimeout(settings.requestTimeout())
+              .initializationTimeout(settings.initializationTimeout())
+              .jsonSchemaValidator(settings.schemaValidator())
+              .build();
+    } catch (RuntimeException failure) {
+      return reportAfterCleanup(closeUnowned(transport), failure);
+    }
     Generation generation = new Generation(client);
     CompletableFuture<Generation> handshake = new CompletableFuture<>();
-    client
-        .initialize()
-        .subscribe(
-            result -> handshake.complete(generation),
-            failure -> closeAfterFailedHandshake(generation, failure, handshake),
-            () -> handshake.complete(generation));
+    try {
+      client
+          .initialize()
+          .subscribe(
+              result -> handshake.complete(generation),
+              failure -> closeAfterFailedHandshake(generation, failure, handshake),
+              () -> handshake.complete(generation));
+    } catch (RuntimeException failure) {
+      return reportAfterCleanup(generation.close(), failure);
+    }
     return handshake;
   }
 
-  private void closeAfterFailedHandshake(
+  private static void closeAfterFailedHandshake(
       Generation generation, Throwable failure, CompletableFuture<Generation> handshake) {
     generation
         .close()
         .whenComplete(
-            (ignored, cleanupFailure) -> {
-              Throwable reported = AsyncStages.unwrap(failure);
-              if (cleanupFailure != null) {
-                reported.addSuppressed(AsyncStages.unwrap(cleanupFailure));
-              }
-              handshake.completeExceptionally(reported);
-            });
+            (ignored, cleanupFailure) ->
+                handshake.completeExceptionally(reported(failure, cleanupFailure)));
+  }
+
+  /** Closes a transport no client ever took ownership of. */
+  private static CompletableFuture<Void> closeUnowned(McpClientTransport transport) {
+    try {
+      return AsyncStages.fromMono(transport.closeGracefully());
+    } catch (RuntimeException failure) {
+      return AsyncStages.failed(failure);
+    }
+  }
+
+  private static CompletableFuture<Generation> reportAfterCleanup(
+      CompletableFuture<Void> cleanup, Throwable failure) {
+    CompletableFuture<Generation> failed = new CompletableFuture<>();
+    cleanup.whenComplete(
+        (ignored, cleanupFailure) ->
+            failed.completeExceptionally(reported(failure, cleanupFailure)));
+    return failed;
+  }
+
+  private static Throwable reported(Throwable failure, Throwable cleanupFailure) {
+    Throwable reported = AsyncStages.unwrap(failure);
+    if (cleanupFailure != null) {
+      reported.addSuppressed(AsyncStages.unwrap(cleanupFailure));
+    }
+    return reported;
+  }
+
+  /** Completes {@code target} with whatever {@code source} produced, unwrapping the failure. */
+  private static <T> void mirror(CompletableFuture<T> source, CompletableFuture<T> target) {
+    source.whenComplete(
+        (value, failure) -> {
+          if (failure == null) {
+            target.complete(value);
+          } else {
+            target.completeExceptionally(AsyncStages.unwrap(failure));
+          }
+        });
   }
 
   /** One transport and one client, closed at most once. */
@@ -1083,15 +1231,7 @@ public final class OwnedMcpClientLifecycle {
       if (!closed.compareAndSet(false, true)) {
         return closure;
       }
-      AsyncStages.fromMono(client.closeGracefully())
-          .whenComplete(
-              (ignored, failure) -> {
-                if (failure == null) {
-                  closure.complete(null);
-                } else {
-                  closure.completeExceptionally(AsyncStages.unwrap(failure));
-                }
-              });
+      mirror(AsyncStages.fromMono(client.closeGracefully()), closure);
       return closure;
     }
   }
@@ -1102,6 +1242,20 @@ Note on the handshake subscription: `initialize()` is driven with `Mono.subscrib
 `AsyncStages.fromMono`, precisely because `AsyncStages.fromMono` disposes its subscription when the
 returned future is cancelled. `connect()` hands the caller a dependent future created by
 `thenApply`, so cancelling it never reaches the handshake.
+
+Note on the lock: `startGeneration()` runs outside `synchronized (lock)` because every one of its
+three steps calls out of this class. The factory may start a process, `build()` reads the transport,
+and `subscribe` can run the whole handshake and its failure handling on the calling thread. Holding
+the lock across any of those would let an unrelated caller's `connect()` block behind a process
+start, and would let a close-driven failure re-enter this class on a thread that already holds the
+lock. `adopt` still publishes the pending handshake inside the lock, which is what makes concurrent
+connects coalesce onto one generation.
+
+Note on `catch (RuntimeException)` around `subscribe`: verified SDK fact 19 says Reactor reports a
+throw raised during subscription through the error consumer, so this catch is expected to stay cold.
+It is present because `client.initialize()` itself is a plain method call that runs before any
+Reactor machinery, and because the cost of being wrong here is a leaked process rather than a failed
+request.
 
 `Generation.client()` is unused until Task 4. Leave it; Task 4's `execute` is its only caller and
 splitting it out would churn the file twice.
@@ -1161,13 +1315,75 @@ final class ScriptedMcpTransportFactory implements McpClientTransportFactory {
 }
 ```
 
-- [ ] **Step 7: Run the connect test to verify it passes**
+- [ ] **Step 7: Create the client-hostile transport fixture**
+
+Create `integrations/agent-framework-mcp/src/test/java/io/github/hellices/agentframework/mcp/ClientHostileMcpTransport.java`:
+
+```java
+package io.github.hellices.agentframework.mcp;
+
+import io.modelcontextprotocol.json.TypeRef;
+import io.modelcontextprotocol.spec.McpClientTransport;
+import io.modelcontextprotocol.spec.McpSchema;
+import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Function;
+import reactor.core.publisher.Mono;
+
+/**
+ * A transport the SDK client cannot be built on.
+ *
+ * <p>Verified SDK fact 16: the {@code McpAsyncClient} constructor calls {@code protocolVersions()}
+ * on the transport it was handed. Throwing from there is the deterministic way to reach the state
+ * where a transport exists but a client does not, without starting a process or opening a socket.
+ * That state is exactly where a transport leak hides, so it needs a fixture rather than a comment.
+ *
+ * <p>Every other method throws, because reaching any of them would mean a client was built after
+ * all and the test is no longer testing what it claims to.
+ */
+final class ClientHostileMcpTransport implements McpClientTransport {
+
+  private final AtomicInteger closeCount = new AtomicInteger();
+
+  @Override
+  public List<String> protocolVersions() {
+    throw new IllegalStateException("transport refuses to negotiate");
+  }
+
+  @Override
+  public Mono<Void> connect(
+      Function<Mono<McpSchema.JSONRPCMessage>, Mono<McpSchema.JSONRPCMessage>> handler) {
+    throw new IllegalStateException("no client should have connected this transport");
+  }
+
+  @Override
+  public Mono<Void> sendMessage(McpSchema.JSONRPCMessage message) {
+    throw new IllegalStateException("no client should have sent on this transport");
+  }
+
+  @Override
+  public <T> T unmarshalFrom(Object data, TypeRef<T> type) {
+    throw new IllegalStateException("no client should have unmarshalled on this transport");
+  }
+
+  @Override
+  public Mono<Void> closeGracefully() {
+    return Mono.fromRunnable(closeCount::incrementAndGet);
+  }
+
+  int closeCount() {
+    return closeCount.get();
+  }
+}
+```
+
+- [ ] **Step 8: Run the connect test to verify it passes**
 
 Run: `./gradlew :integrations:agent-framework-mcp:test --tests 'io.github.hellices.agentframework.mcp.OwnedMcpClientConnectTest'`
 
-Expected: PASS, 8 tests.
+Expected: PASS, 9 tests.
 
-- [ ] **Step 8: Run the module test and quality tasks**
+- [ ] **Step 9: Run the module test and quality tasks**
 
 Run: `./gradlew :integrations:agent-framework-mcp:test :integrations:agent-framework-mcp:quality`
 
@@ -1176,13 +1392,14 @@ Expected: PASS. If SpotBugs reports `EI_EXPOSE_REP2` on `McpOwnedClientSettings`
 following the existing MCP entries, with a comment saying the collaborators are borrowed on purpose.
 Do not add a blanket suppression and do not disable the detector.
 
-- [ ] **Step 9: Commit**
+- [ ] **Step 10: Commit**
 
 ```bash
 git add integrations/agent-framework-mcp/src/main/java/io/github/hellices/agentframework/mcp/internal/McpClientTransportFactory.java \
         integrations/agent-framework-mcp/src/main/java/io/github/hellices/agentframework/mcp/internal/McpOwnedClientSettings.java \
         integrations/agent-framework-mcp/src/main/java/io/github/hellices/agentframework/mcp/internal/OwnedMcpClientLifecycle.java \
         integrations/agent-framework-mcp/src/test/java/io/github/hellices/agentframework/mcp/ScriptedMcpTransportFactory.java \
+        integrations/agent-framework-mcp/src/test/java/io/github/hellices/agentframework/mcp/ClientHostileMcpTransport.java \
         integrations/agent-framework-mcp/src/test/java/io/github/hellices/agentframework/mcp/OwnedMcpClientConnectTest.java
 git commit -m "$(cat <<'MSG'
 mcp: own the first client generation
@@ -1191,6 +1408,11 @@ A generation is one new transport and one client built on it. Concurrent
 connects join one handshake, and the handshake runs on a subscription the
 caller cannot dispose, because disposing it leaves the SDK initializer
 permanently pending and no later operation can recover.
+
+Building a generation happens outside the state lock and never throws to the
+caller. Once a transport exists, a failure while building or subscribing the
+client closes that transport once and reports through the returned stage, so a
+refused client cannot leak a process.
 
 Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
 MSG
@@ -1362,19 +1584,20 @@ Expected: FAIL to compile, `cannot find symbol: method close()` on `OwnedMcpClie
 
 - [ ] **Step 3: Add the close state to the lifecycle**
 
-In `OwnedMcpClientLifecycle`, add the import `java.util.function.Function`, add one field next to
-`pending` and `current`:
+In `OwnedMcpClientLifecycle`, add one field next to `pending` and `current`:
 
 ```java
   private CompletableFuture<Void> closing;
 ```
 
 and clear it when a new generation starts, by adding one line to `connectGeneration()` immediately
-before `return adopt(++epoch, startGeneration());`:
+before `handshake = adopt(++epoch);`:
 
 ```java
       closing = null;
 ```
+
+No new import is needed. Task 4 is what introduces `java.util.function.Function`.
 
 - [ ] **Step 4: Add close()**
 
@@ -1394,43 +1617,56 @@ Add this method to `OwnedMcpClientLifecycle`, after `connect()`:
    * @return a stage completing when the generation is released, never {@code null}
    */
   public CompletableFuture<Void> close() {
+    Generation generation;
     CompletableFuture<Generation> settling;
+    CompletableFuture<Void> closure = new CompletableFuture<>();
     synchronized (lock) {
       epoch++;
-      if (current != null) {
-        Generation generation = current;
-        current = null;
-        closing = generation.close();
-        return closing;
-      }
-      if (pending == null) {
+      if (current == null && pending == null) {
         return closing == null ? CompletableFuture.completedFuture(null) : closing;
       }
+      generation = current;
       settling = pending;
+      current = null;
       pending = null;
-      closing =
-          settling
-              .handle(
-                  (generation, failure) ->
-                      generation == null
-                          ? CompletableFuture.<Void>completedFuture(null)
-                          : generation.close())
-              .thenCompose(Function.identity());
-      return closing;
+      closing = closure;
     }
+    if (generation != null) {
+      mirror(generation.close(), closure);
+      return closure;
+    }
+    settling.whenComplete(
+        (settled, failure) -> {
+          if (settled == null) {
+            closure.complete(null);
+          } else {
+            mirror(settled.close(), closure);
+          }
+        });
+    return closure;
   }
 ```
 
-Three details that are easy to get wrong and that the tests above pin down:
+Four details that are easy to get wrong and that the tests above pin down:
 
-1. `current` is set to `null` **before** `generation.close()` is called, so the owner is disconnected
-   even if the close fails. `closing` is returned again by a repeated `close()` so a second caller
-   observes the same outcome instead of a premature success.
-2. `epoch++` is what makes `publish` a no-op when an in-flight handshake settles: `publish` compares
+1. `current` and `pending` are read and cleared inside the lock, but `generation.close()` runs outside
+   it. Verified SDK fact 15 says closing a client dismisses its in-flight requests synchronously, and
+   those dismissals run this module's own failure handling on the closing thread, which in Task 7 can
+   re-enter this class. Holding the lock across the close would also make every concurrent caller
+   wait behind a process teardown. The promise published as `closing` inside the lock is what keeps a
+   concurrent `close()` joined to the same outcome.
+2. `current` is cleared **before** `generation.close()` is called, so the owner is disconnected even
+   if the close fails. `closing` is returned again by a repeated `close()` so a second caller observes
+   the same outcome instead of a premature success.
+3. `epoch++` is what makes `publish` a no-op when an in-flight handshake settles: `publish` compares
    its ticket with the current `epoch` and returns. The generation is therefore never adopted, and
    the close-during-connect branch closes it directly.
-3. A handshake that failed already closed its own generation in `closeAfterFailedHandshake`, and
-   `settling` then completes with `generation == null`, so this method must not close anything.
+4. A handshake that failed already closed its own generation in `closeAfterFailedHandshake`, and
+   `settling` then completes with `settled == null`, so this method must not close anything.
+
+The two branches are exhaustive because `current` and `pending` are never both set:
+`connectGeneration` only adopts a pending handshake when `current` is null, and `publish` swaps one
+for the other while holding the lock. The early return covers the case where neither is set.
 
 - [ ] **Step 5: Run the test to verify it passes**
 
@@ -1497,6 +1733,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.github.hellices.agentframework.api.tool.FunctionTool;
+import io.github.hellices.agentframework.api.tool.ToolArguments;
+import io.github.hellices.agentframework.api.tool.ToolContext;
 import io.github.hellices.agentframework.mcp.internal.McpOwnedClientSettings;
 import io.github.hellices.agentframework.mcp.internal.McpToolDiscovery;
 import io.github.hellices.agentframework.mcp.internal.OwnedMcpAsyncOperations;
@@ -1528,7 +1766,8 @@ class OwnedMcpClientOperationTest {
     OwnedMcpClientLifecycle lifecycle = new OwnedMcpClientLifecycle(factory, settings());
 
     assertThatThrownBy(() -> lifecycle.execute(client -> client.ping()).join())
-        .hasRootCauseInstanceOf(IllegalStateException.class)
+        .rootCause()
+        .isInstanceOf(IllegalStateException.class)
         .hasMessageContaining("connect()");
 
     assertThat(factory.createdCount()).isZero();
@@ -1543,7 +1782,8 @@ class OwnedMcpClientOperationTest {
     lifecycle.close().join();
 
     assertThatThrownBy(() -> lifecycle.execute(client -> client.ping()).join())
-        .hasRootCauseInstanceOf(IllegalStateException.class)
+        .rootCause()
+        .isInstanceOf(IllegalStateException.class)
         .hasMessageContaining("connect()");
 
     assertThat(factory.createdCount()).isEqualTo(1);
@@ -1633,6 +1873,53 @@ class OwnedMcpClientOperationTest {
   }
 
   @Test
+  void aToolRetainedAfterCloseFailsOnTheConnectRequirementAndCreatesNoTransport() {
+    // The realistic engine shape: an agent is configured once, keeps the FunctionTool it was given,
+    // and calls it later. If the owner closed in between, the call must fail on the same explicit
+    // connect requirement as any other operation and must not resurrect the server on its own.
+    InMemoryMcpTransport transport =
+        new InMemoryMcpTransport()
+            .answeringPing()
+            .answering(
+                McpSchema.METHOD_TOOLS_LIST,
+                params ->
+                    new McpSchema.ListToolsResult(
+                        List.of(
+                            new McpSchema.Tool(
+                                "search-issues", null, "search", SCHEMA, null, null, null, null)),
+                        null,
+                        null))
+            .answering(
+                McpSchema.METHOD_TOOLS_CALL,
+                params ->
+                    new McpSchema.CallToolResult(
+                        List.of(new McpSchema.TextContent("ok")), false, null, null));
+    ScriptedMcpTransportFactory factory = new ScriptedMcpTransportFactory(transport);
+    OwnedMcpClientLifecycle lifecycle = new OwnedMcpClientLifecycle(factory, settings());
+    lifecycle.connect().join();
+    FunctionTool tool =
+        new McpToolDiscovery(new OwnedMcpAsyncOperations(lifecycle), McpToolAdapterOptions.defaults())
+            .discover()
+            .toCompletableFuture()
+            .join()
+            .get(0);
+
+    lifecycle.close().join();
+
+    assertThatThrownBy(
+            () ->
+                tool.execute(new ToolArguments(Map.of()), new ToolContext(null, Map.of()))
+                    .toCompletableFuture()
+                    .join())
+        .rootCause()
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("connect()");
+    assertThat(factory.createdCount()).isEqualTo(1);
+    assertThat(transport.countOf(McpSchema.METHOD_TOOLS_CALL)).isZero();
+    assertThat(transport.closeCount()).isEqualTo(1);
+  }
+
+  @Test
   void rejectsAMissingLifecycleAndAMissingOperation() {
     ScriptedMcpTransportFactory factory = new ScriptedMcpTransportFactory();
     OwnedMcpClientLifecycle lifecycle = new OwnedMcpClientLifecycle(factory, settings());
@@ -1641,8 +1928,9 @@ class OwnedMcpClientOperationTest {
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessage("lifecycle must not be null");
     assertThatThrownBy(() -> lifecycle.execute(null).join())
-        .hasRootCauseInstanceOf(IllegalArgumentException.class)
-        .hasMessageContaining("operation must not be null");
+        .rootCause()
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessage("operation must not be null");
   }
 
   private static McpOwnedClientSettings settings() {
@@ -1661,9 +1949,9 @@ Expected: FAIL to compile, `cannot find symbol: method execute` and
 
 - [ ] **Step 3: Add execute() and the attempt holder to the lifecycle**
 
-Add the imports `java.util.concurrent.atomic.AtomicReference`, `java.util.function.Function` (already
-added in Task 3) and `reactor.core.publisher.Mono` to `OwnedMcpClientLifecycle`, add the message
-constant next to the class fields:
+Add the imports `java.util.concurrent.atomic.AtomicReference`, `java.util.function.Function` and
+`reactor.core.publisher.Mono` to `OwnedMcpClientLifecycle`, add the message constant next to the
+class fields:
 
 ```java
   private static final String NOT_CONNECTED =
@@ -1811,7 +2099,7 @@ public final class OwnedMcpAsyncOperations implements McpAsyncOperations {
 
 Run: `./gradlew :integrations:agent-framework-mcp:test --tests 'io.github.hellices.agentframework.mcp.OwnedMcpClientOperationTest'`
 
-Expected: PASS, 7 tests.
+Expected: PASS, 8 tests.
 
 - [ ] **Step 6: Run the module test and quality tasks**
 
@@ -2099,8 +2387,9 @@ MSG
   - `startGeneration(long ticket)` replaces `startGeneration()`.
   - `Attempt` gains `boolean spendReconnect()`, which succeeds exactly once per `execute`.
   - `private <T> CompletableFuture<T> recover(Function<McpAsyncClient, Mono<T>> operation, Generation
-    stale, Attempt attempt, Throwable failure)` and
-    `private CompletableFuture<Generation> replaceGeneration(Generation stale)`.
+    stale, Attempt attempt, Throwable failure)`,
+    `private CompletableFuture<Generation> replaceGeneration(Generation stale)`, and
+    `private static boolean cancelled(Throwable failure)`.
 
 The behavior this task installs, stated once so no step has to guess:
 
@@ -2109,10 +2398,12 @@ The behavior this task installs, stated once so no step has to guess:
    once. That cache is per generation and dies with it.
 3. Any other ping failure spends the single reconnect budget of that operation: the stale generation
    is closed first, one replacement is created, and the operation runs on the replacement.
-4. The replacement is not pinged. It has just completed a handshake.
-5. If the stale close fails, or the replacement handshake fails, the owner ends disconnected and the
+4. A cancelled ping is the exception to rule 3. Cancellation is the caller withdrawing, not the
+   connection failing, so it fails the operation and leaves the generation open and adopted.
+5. The replacement is not pinged. It has just completed a handshake.
+6. If the stale close fails, or the replacement handshake fails, the owner ends disconnected and the
    caller sees the original failure with the cleanup or handshake failure attached as suppressed.
-6. Concurrent failures from the same generation produce exactly one replacement.
+7. Concurrent failures from the same generation produce exactly one replacement.
 
 - [ ] **Step 1: Write the failing validation test**
 
@@ -2270,14 +2561,23 @@ class OwnedMcpClientValidationTest {
 
     Throwable failure = catchThrowable(() -> listTools(lifecycle).join());
 
+    // The caller keeps the failure that actually stopped the operation; the reason the recovery
+    // could not help is attached rather than substituted. The handshake failure is asserted through
+    // the stack trace because the SDK is free to wrap an initialization failure, and pinning that
+    // wrapping would make this test fail on an SDK upgrade for no behavioural reason.
     assertThat(failure).hasRootCauseInstanceOf(McpError.class);
-    assertThat(failure.getCause().getSuppressed()).isNotEmpty();
+    assertThat(failure.getCause().getSuppressed())
+        .singleElement()
+        .satisfies(
+            suppressed ->
+                assertThat(suppressed).hasStackTraceContaining("handshake refused"));
     assertThat(factory.createdCount()).isEqualTo(2);
     assertThat(first.closeCount()).isEqualTo(1);
     assertThat(second.closeCount()).isEqualTo(1);
 
     assertThatThrownBy(() -> listTools(lifecycle).join())
-        .hasRootCauseInstanceOf(IllegalStateException.class)
+        .rootCause()
+        .isInstanceOf(IllegalStateException.class)
         .hasMessageContaining("connect()");
     assertThat(factory.createdCount()).isEqualTo(2);
   }
@@ -2297,12 +2597,41 @@ class OwnedMcpClientValidationTest {
     Throwable failure = catchThrowable(() -> listTools(lifecycle).join());
 
     assertThat(failure).hasRootCauseInstanceOf(McpError.class);
-    assertThat(failure.getCause().getSuppressed()).isNotEmpty();
+    assertThat(failure.getCause().getSuppressed())
+        .singleElement()
+        .satisfies(
+            suppressed ->
+                assertThat(suppressed)
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessage("close failed"));
     assertThat(factory.createdCount()).isEqualTo(1);
 
     assertThatThrownBy(() -> listTools(lifecycle).join())
-        .hasRootCauseInstanceOf(IllegalStateException.class)
+        .rootCause()
+        .isInstanceOf(IllegalStateException.class)
         .hasMessageContaining("connect()");
+    assertThat(factory.createdCount()).isEqualTo(1);
+  }
+
+  @Test
+  void cancellingDuringValidationNeitherClosesNorReplacesTheGeneration() {
+    // A cancelled agent run must not cost the process its MCP server. The ping is withheld, so the
+    // cancellation lands while validation is the only thing in flight, which is precisely where a
+    // classifier that treats "not a known-good failure" as "connection lost" would close a live
+    // generation and ask for a second transport the factory was never given.
+    InMemoryMcpTransport transport =
+        toolServer().answeringPing().withholding(McpSchema.METHOD_PING);
+    ScriptedMcpTransportFactory factory = new ScriptedMcpTransportFactory(transport);
+    OwnedMcpClientLifecycle lifecycle = new OwnedMcpClientLifecycle(factory, settings());
+    lifecycle.connect().join();
+
+    CompletableFuture<McpSchema.ListToolsResult> operation = listTools(lifecycle);
+    assertThat(operation.cancel(true)).isTrue();
+    transport.releaseWithheld();
+
+    assertThat(operation).isCancelled();
+    assertThat(transport.closeCount()).isZero();
+    assertThat(transport.countOf(McpSchema.METHOD_TOOLS_LIST)).isZero();
     assertThat(factory.createdCount()).isEqualTo(1);
   }
 
@@ -2330,7 +2659,10 @@ class OwnedMcpClientValidationTest {
 Run: `./gradlew :integrations:agent-framework-mcp:test --tests 'io.github.hellices.agentframework.mcp.OwnedMcpClientValidationTest'`
 
 Expected: FAIL. `pingsBeforeEveryOperation` fails with `expected: 2 but was: 0`, because nothing pings
-yet, and `replacesTheGenerationWhenValidationFails` fails with `expected: 2 but was: 1`.
+yet, `replacesTheGenerationWhenValidationFails` fails with `expected: 2 but was: 1`, and
+`cancellingDuringValidationNeitherClosesNorReplacesTheGeneration` fails on
+`assertThat(operation.cancel(true)).isTrue()`, because with no validation the withheld ping is never
+sent and `listTools` has already answered.
 
 - [ ] **Step 3: Stamp the generation and cache the ping capability**
 
@@ -2380,15 +2712,7 @@ Replace the `Generation` class in `OwnedMcpClientLifecycle` with:
       if (!closed.compareAndSet(false, true)) {
         return closure;
       }
-      AsyncStages.fromMono(client.closeGracefully())
-          .whenComplete(
-              (ignored, failure) -> {
-                if (failure == null) {
-                  closure.complete(null);
-                } else {
-                  closure.completeExceptionally(AsyncStages.unwrap(failure));
-                }
-              });
+      mirror(AsyncStages.fromMono(client.closeGracefully()), closure);
       return closure;
     }
   }
@@ -2407,10 +2731,15 @@ Then give `startGeneration` the ticket. Change its signature and the line that c
 and change the single existing call in `connectGeneration()`:
 
 ```java
-      long ticket = ++epoch;
       closing = null;
-      return adopt(ticket, startGeneration(ticket));
+      ticket = ++epoch;
+      handshake = adopt(ticket);
+    }
+    mirror(startGeneration(ticket), handshake);
 ```
+
+where `ticket` is a new `long` local declared next to `handshake`, because the value is needed after
+the lock is released.
 
 - [ ] **Step 4: Give the attempt a reconnect budget**
 
@@ -2483,6 +2812,7 @@ Then add these three methods after `invoke`:
   private CompletableFuture<Generation> replaceGeneration(Generation stale) {
     CompletableFuture<Void> staleClosure;
     CompletableFuture<Generation> replacement;
+    long ticket;
     synchronized (lock) {
       if (current == null || current.epoch() != stale.epoch()) {
         if (current != null) {
@@ -2496,25 +2826,24 @@ Then add these three methods after `invoke`:
       current = null;
       staleClosure = new CompletableFuture<>();
       closing = staleClosure;
-      long ticket = ++epoch;
-      replacement = adopt(ticket, staleClosure.thenCompose(ignored -> startGeneration(ticket)));
+      ticket = ++epoch;
+      replacement = adopt(ticket);
     }
-    stale
-        .close()
-        .whenComplete(
-            (ignored, failure) -> {
-              if (failure == null) {
-                staleClosure.complete(null);
-              } else {
-                staleClosure.completeExceptionally(AsyncStages.unwrap(failure));
-              }
-            });
-    return replacement;
+    staleClosure.whenComplete(
+        (ignored, failure) -> {
+          if (failure == null) {
+            mirror(startGeneration(ticket), replacement);
+          } else {
+            replacement.completeExceptionally(failure);
+          }
+        });
+    mirror(stale.close(), staleClosure);
+    return replacement.thenApply(generation -> generation);
   }
 ```
 
-Two ordering rules in `replaceGeneration` are load-bearing, and both are the reason the coalescing test
-exists:
+Three ordering rules in `replaceGeneration` are load-bearing, and the coalescing test exists because
+of the first two:
 
 1. `pending` is published **inside** the lock, before `stale.close()` is called. Closing the client
    dismisses its in-flight requests synchronously, so a sibling operation fails and calls
@@ -2523,24 +2852,76 @@ exists:
 2. `stale.close()` is called **outside** the lock, so nothing that runs during the dismissal is
    executed while holding it, and the replacement handshake only starts once the stale generation is
    really gone. Closing first is also what keeps at most one server process alive per owner.
+3. `startGeneration(ticket)` runs from the `staleClosure` callback, which is also outside the lock, so
+   the transport factory never runs under it either. A stale close that failed short-circuits to
+   `replacement.completeExceptionally`, so no replacement transport is created at all.
 
 `recover` reports the **original** failure and attaches the replacement failure with `addSuppressed`.
 The caller asked for a tool call; the reason it could not happen is the original failure, and the
 failed cleanup is context, not a replacement diagnosis.
 
-- [ ] **Step 6: Run the validation test to verify it passes**
+- [ ] **Step 6: Run the validation test to see the cancellation guard fail**
 
 Run: `./gradlew :integrations:agent-framework-mcp:test --tests 'io.github.hellices.agentframework.mcp.OwnedMcpClientValidationTest'`
 
-Expected: PASS, 7 tests.
+Expected: FAIL, 1 of 8 in this class. `cancellingDuringValidationNeitherClosesNorReplacesTheGeneration`
+fails on `assertThat(transport.closeCount()).isZero()` with `expected: 0 but was: 1`, because
+validation as written in Step 5 reads "the ping did not succeed" as "the connection is gone", and a
+cancelled ping is neither.
 
-- [ ] **Step 7: Run the module test and quality tasks**
+Task 4's `cancellingAnOperationNeverClosesTheGeneration` is failing too at this point, for the same
+reason seen from the other side, so the module suite is red until Step 7. That is expected and is the
+evidence the guard is load-bearing: the defect reaches a test written two tasks ago, which is exactly
+why it is worth a guard rather than a comment.
+
+- [ ] **Step 7: Classify cancellation before recovery**
+
+Add the import `java.util.concurrent.CancellationException` to `OwnedMcpClientLifecycle`, add this
+helper next to `recover`:
+
+```java
+  /**
+   * Reports whether a failure is a caller or run cancellation rather than a connection problem.
+   *
+   * <p>Cancellation is the one failure that says nothing about the connection. A cancelled agent run
+   * cancels its tool call, which cancels the validation ping in flight, and treating that as a lost
+   * connection would close a healthy generation: a stdio server process would be killed and a
+   * streamable HTTP session dropped because one caller changed its mind. It is matched by type
+   * rather than by message because {@code CancellationException} is what {@code CompletableFuture}
+   * itself raises.
+   */
+  private static boolean cancelled(Throwable failure) {
+    return failure instanceof CancellationException;
+  }
+```
+
+and add the guard to `validate`, immediately after `Throwable reported = AsyncStages.unwrap(failure);`
+and **before** the unsupported-ping check:
+
+```java
+              if (cancelled(reported)) {
+                return AsyncStages.<T>failed(reported);
+              }
+```
+
+The guard sits in the failure branch of the validation stage, not around it, because a cancellation
+that arrives before the ping is even sent already fails the operation without reaching this code.
+Task 7 adds a second, separate guard on the call stage; the two are not one guard moved, because the
+call stage also has to decide about connection loss and owner close, and validation does not.
+
+- [ ] **Step 8: Run the validation test to verify it passes**
+
+Run: `./gradlew :integrations:agent-framework-mcp:test --tests 'io.github.hellices.agentframework.mcp.OwnedMcpClientValidationTest'`
+
+Expected: PASS, 8 tests.
+
+- [ ] **Step 9: Run the module test and quality tasks**
 
 Run: `./gradlew :integrations:agent-framework-mcp:test :integrations:agent-framework-mcp:quality`
 
 Expected: PASS, including the Task 2, 3, and 4 test classes unchanged.
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 10: Commit**
 
 ```bash
 git add integrations/agent-framework-mcp/src/main/java/io/github/hellices/agentframework/mcp/internal/OwnedMcpClientLifecycle.java \
@@ -2553,6 +2934,10 @@ that answers -32601 is recorded as having no ping so the generation is not
 pinged again. Any other ping failure closes the stale generation, creates
 one replacement, and runs the operation there. Concurrent failures from one
 generation coalesce, so a broken connection cannot start two servers.
+
+Cancellation is excluded from that rule. A cancelled run says nothing about
+the connection, so it fails the operation and leaves the generation alone
+instead of killing a server process the rest of the application is using.
 
 Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
 MSG
@@ -2573,7 +2958,7 @@ MSG
   `McpToolDiscovery` from Task 4.
 - Produces: `Generation` gains `boolean closedByOwner()`. `invoke` now retries the operation exactly
   once, and only when the failure is a typed connection loss or the generation was closed by this
-  owner. No new public API.
+  owner, and never when the failure is a cancellation. No new public API.
 
 The second condition is not defensive padding. Verified SDK fact 15: when this owner closes a stale
 generation, the SDK dismisses that generation's other in-flight requests with a bare
@@ -2590,6 +2975,7 @@ package io.github.hellices.agentframework.mcp;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowable;
 
 import io.github.hellices.agentframework.api.tool.FunctionTool;
 import io.github.hellices.agentframework.api.tool.ToolArguments;
@@ -2772,6 +3158,40 @@ class OwnedMcpClientRetryTest {
     assertThat(second.countOf(McpSchema.METHOD_TOOLS_CALL)).isEqualTo(1);
   }
 
+  @Test
+  void closingDuringAnInFlightCallFailsThatCallWithoutReconnecting() {
+    // An explicit close is not a lost connection, even though the SDK dismisses the in-flight call
+    // with the same untyped failure a lost connection produces. Retrying here would resurrect the
+    // server the caller just shut down, which is the one thing an owned client must never do.
+    InMemoryMcpTransport transport =
+        toolServer().answeringPing().withholding(McpSchema.METHOD_TOOLS_CALL);
+    ScriptedMcpTransportFactory factory = new ScriptedMcpTransportFactory(transport);
+    OwnedMcpClientLifecycle lifecycle = new OwnedMcpClientLifecycle(factory, settings());
+    lifecycle.connect().join();
+
+    CompletableFuture<McpSchema.CallToolResult> inFlight =
+        lifecycle.execute(
+            client -> client.callTool(new McpSchema.CallToolRequest("search-issues", null, null)));
+
+    lifecycle.close().join();
+
+    // The dismissal type carries no information (verified SDK fact 15), so the assertion is on what
+    // the owner did about it: it looked for a generation to repeat the call on, found none, and
+    // attached that as the reason. One transport, one close, no factory call.
+    Throwable failure = catchThrowable(inFlight::join);
+
+    assertThat(failure.getCause().getSuppressed())
+        .singleElement()
+        .satisfies(
+            suppressed ->
+                assertThat(suppressed)
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("connect()"));
+    assertThat(factory.createdCount()).isEqualTo(1);
+    assertThat(transport.closeCount()).isEqualTo(1);
+    assertThat(transport.countOf(McpSchema.METHOD_TOOLS_CALL)).isEqualTo(1);
+  }
+
   private static CompletableFuture<McpSchema.ListToolsResult> listTools(
       OwnedMcpClientLifecycle lifecycle) {
     return lifecycle.execute(client -> client.listTools(McpSchema.FIRST_PAGE, null));
@@ -2811,7 +3231,8 @@ Run: `./gradlew :integrations:agent-framework-mcp:test --tests 'io.github.hellic
 
 Expected: FAIL. `retriesTheOriginalOperationOnceAfterALostConnection` fails with
 `McpTransportSessionNotFoundException: session expired`, because `invoke` still reports the first
-failure instead of retrying.
+failure instead of retrying, and `closingDuringAnInFlightCallFailsThatCallWithoutReconnecting` fails
+because the dismissal carries no suppressed failure yet.
 
 - [ ] **Step 3: Let a generation report that its owner closed it**
 
@@ -2825,8 +3246,7 @@ Add this accessor to the nested `Generation` class, next to `pingUnsupported()`:
 
 - [ ] **Step 4: Retry the operation once**
 
-Add the import `java.util.concurrent.CancellationException`, then replace the `return inFlight;` line
-at the end of `invoke` with:
+Replace the `return inFlight;` line at the end of `invoke` with:
 
 ```java
     return inFlight
@@ -2849,31 +3269,43 @@ and add this method after `invoke`:
   /**
    * Decides whether a failed call may be repeated on a replacement generation.
    *
+   * <p>This is the call stage's own guard, separate from the validation guard Task 6 installed,
+   * because the two answer different questions. Validation only has to decide whether the ping
+   * failure says anything about the connection; a call also has to decide whether repeating it is
+   * safe. They share only the cancellation rule.
+   *
    * <p>A cancelled call is never repeated: the caller asked for it to stop. A generation this owner
    * closed makes its failure repeatable regardless of type, because the SDK dismisses the in-flight
    * calls of a closed client with an untyped failure, and that dismissal is the direct consequence of
-   * a replacement this owner started for another operation, not of anything the server did.
+   * a replacement this owner started for another operation, not of anything the server did. When the
+   * close came from {@code close()} rather than from a replacement, the repeat finds no generation
+   * and fails on the connect requirement, which is the correct answer: an explicit close must not
+   * bring the server back.
    */
   private static boolean retryable(Throwable failure, Generation generation) {
-    if (failure instanceof CancellationException) {
+    if (cancelled(failure)) {
       return false;
     }
     return McpFailures.isConnectionLoss(failure) || generation.closedByOwner();
   }
 ```
 
+No new import is needed; `java.util.concurrent.CancellationException` arrived in Task 6 with
+`cancelled(Throwable)`.
+
 - [ ] **Step 5: Run the retry test to verify it passes**
 
 Run: `./gradlew :integrations:agent-framework-mcp:test --tests 'io.github.hellices.agentframework.mcp.OwnedMcpClientRetryTest'`
 
-Expected: PASS, 6 tests.
+Expected: PASS, 7 tests.
 
 - [ ] **Step 6: Run the whole module and quality**
 
 Run: `./gradlew :integrations:agent-framework-mcp:test :integrations:agent-framework-mcp:quality`
 
-Expected: PASS. `OwnedMcpClientOperationTest.cancellingAnOperationNeverClosesTheGeneration` is the
-guard that the new retry path does not turn a cancellation into a reconnect.
+Expected: PASS. `OwnedMcpClientOperationTest.cancellingAnOperationNeverClosesTheGeneration` and
+`OwnedMcpClientValidationTest.cancellingDuringValidationNeitherClosesNorReplacesTheGeneration` are the
+guards that the new retry path does not turn a cancellation into a reconnect.
 
 - [ ] **Step 7: Commit**
 
@@ -2895,7 +3327,626 @@ MSG
 
 ---
 
-### Task 8: The stdio facade
+### Task 8: Paged discovery across a replacement
+
+A whole `discoverTools()` is **one** logical operation with **one** reconnect budget. Tasks 6 and 7
+made a single request survive a replacement by repeating it, and that is exactly wrong for a page: an
+MCP cursor is opaque state belonging to the session that issued it, so repeating a page request with
+the old cursor on a new session asks a stranger to continue someone else's sentence. The server may
+reject it, or worse, answer from a different position and hand back a catalogue that is silently
+wrong.
+
+The rule this task installs:
+
+1. A page request never repeats itself on a replacement generation.
+2. When a page fails because the connection was replaced, the reader throws away every tool, every
+   local name, and every cursor it accumulated, and starts again from `McpSchema.FIRST_PAGE`.
+3. That restart happens at most once per discovery, because the whole discovery shares one budget. A
+   second connection failure surfaces to the caller.
+4. The `FunctionTool`s a discovery returns do not share the discovery's budget. Each call they make is
+   a fresh operation with a fresh budget, because a tool call happens long after discovery ended.
+5. Borrowed discovery is unchanged in every respect.
+
+**Files:**
+- Create: `integrations/agent-framework-mcp/src/main/java/io/github/hellices/agentframework/mcp/internal/McpConnectionReplacedException.java`
+- Modify: `integrations/agent-framework-mcp/src/main/java/io/github/hellices/agentframework/mcp/internal/McpAsyncOperations.java`
+- Modify: `integrations/agent-framework-mcp/src/main/java/io/github/hellices/agentframework/mcp/internal/McpToolDiscovery.java`
+- Modify: `integrations/agent-framework-mcp/src/main/java/io/github/hellices/agentframework/mcp/internal/OwnedMcpClientLifecycle.java`
+- Modify: `integrations/agent-framework-mcp/src/main/java/io/github/hellices/agentframework/mcp/internal/OwnedMcpAsyncOperations.java`
+- Test: `integrations/agent-framework-mcp/src/test/java/io/github/hellices/agentframework/mcp/McpDiscoveryPagingTest.java` (create)
+
+**Interfaces:**
+- Consumes: `execute`, `recover`, `replaceGeneration`, `Attempt` from Tasks 4, 6, and 7; the already
+  shipped `McpToolDiscovery`, `McpAsyncOperations`, `BorrowedMcpAsyncOperations`, and
+  `ConnectedMcpClientAdapter`.
+- Produces:
+  - package-private `final class McpConnectionReplacedException extends RuntimeException`.
+  - `default McpAsyncOperations McpAsyncOperations.forPagedOperation()` returning `this`.
+  - `OwnedMcpClientLifecycle.Attempt` becomes package-private and gains
+    `Attempt(boolean repeatOnReplacement)` and `boolean repeatsOnReplacement()`; the lifecycle gains
+    `static Attempt pagedAttempt()` and the package-private overload
+    `<T> CompletableFuture<T> execute(Function<McpAsyncClient, Mono<T>> operation, Attempt attempt)`.
+  - `OwnedMcpAsyncOperations` gains a package-private constructor taking a shared paged attempt and an
+    override of `forPagedOperation()`.
+  - `McpToolDiscovery.PageReader` gains the paged scope and a one-shot restart.
+
+- [ ] **Step 1: Write the failing paging test**
+
+Create `integrations/agent-framework-mcp/src/test/java/io/github/hellices/agentframework/mcp/McpDiscoveryPagingTest.java`:
+
+```java
+package io.github.hellices.agentframework.mcp;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+import io.github.hellices.agentframework.api.tool.FunctionTool;
+import io.github.hellices.agentframework.api.tool.ToolArguments;
+import io.github.hellices.agentframework.api.tool.ToolContext;
+import io.github.hellices.agentframework.api.tool.ToolResult;
+import io.github.hellices.agentframework.mcp.internal.McpOwnedClientSettings;
+import io.github.hellices.agentframework.mcp.internal.McpToolDiscovery;
+import io.github.hellices.agentframework.mcp.internal.OwnedMcpAsyncOperations;
+import io.github.hellices.agentframework.mcp.internal.OwnedMcpClientLifecycle;
+import io.modelcontextprotocol.client.McpAsyncClient;
+import io.modelcontextprotocol.client.McpClient;
+import io.modelcontextprotocol.spec.McpSchema;
+import io.modelcontextprotocol.spec.McpTransportSessionNotFoundException;
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import org.junit.jupiter.api.Test;
+
+/**
+ * A paged discovery is one operation, and a cursor belongs to the session that issued it.
+ *
+ * <p>Every test records the cursors each transport was asked for, because that list is the whole
+ * contract: a cursor from a dead session must never appear in a request to a live one, and a
+ * discovery that had to reconnect must start again from the first page rather than stitch two
+ * catalogues together.
+ */
+class McpDiscoveryPagingTest {
+
+  private static final Duration BLOCK = Duration.ofSeconds(5);
+
+  private static final Map<String, Object> SCHEMA =
+      Map.of("type", "object", "properties", Map.of("query", Map.of("type", "string")));
+
+  @Test
+  void readsEveryPageOfOneGenerationInOrder() {
+    List<String> cursors = new ArrayList<>();
+    InMemoryMcpTransport transport = catalogue(cursors, Integer.MAX_VALUE);
+    ScriptedMcpTransportFactory factory = new ScriptedMcpTransportFactory(transport);
+    OwnedMcpClientLifecycle lifecycle = new OwnedMcpClientLifecycle(factory, settings());
+    lifecycle.connect().join();
+
+    List<FunctionTool> tools = discover(lifecycle);
+
+    assertThat(names(tools)).containsExactly("search-issues", "close-issues");
+    assertThat(cursors).containsExactly(null, "page-2");
+    assertThat(factory.createdCount()).isEqualTo(1);
+  }
+
+  @Test
+  void restartsFromTheFirstPageOnTheReplacementGeneration() {
+    List<String> staleCursors = new ArrayList<>();
+    List<String> freshCursors = new ArrayList<>();
+    InMemoryMcpTransport stale = catalogue(staleCursors, 1);
+    InMemoryMcpTransport fresh = catalogue(freshCursors, Integer.MAX_VALUE);
+    ScriptedMcpTransportFactory factory = new ScriptedMcpTransportFactory(stale, fresh);
+    OwnedMcpClientLifecycle lifecycle = new OwnedMcpClientLifecycle(factory, settings());
+    lifecycle.connect().join();
+
+    List<FunctionTool> tools = discover(lifecycle);
+
+    // The replacement is asked for the first page, not for the cursor the dead session handed out,
+    // and the result is that session's catalogue alone. Page one of the stale generation was
+    // discarded: had it been kept, its "search-issues" would have collided with the replacement's
+    // and failed the discovery, and had it been merged, there would be three tools here.
+    assertThat(staleCursors).containsExactly(null, "page-2");
+    assertThat(freshCursors).containsExactly(null, "page-2");
+    assertThat(names(tools)).containsExactly("search-issues", "close-issues");
+    assertThat(factory.createdCount()).isEqualTo(2);
+    assertThat(stale.closeCount()).isEqualTo(1);
+    assertThat(fresh.closeCount()).isZero();
+  }
+
+  @Test
+  void surfacesASecondConnectionFailureWithoutAThirdGeneration() {
+    List<String> staleCursors = new ArrayList<>();
+    List<String> freshCursors = new ArrayList<>();
+    InMemoryMcpTransport stale = catalogue(staleCursors, 1);
+    InMemoryMcpTransport fresh = catalogue(freshCursors, 1);
+    ScriptedMcpTransportFactory factory = new ScriptedMcpTransportFactory(stale, fresh);
+    OwnedMcpClientLifecycle lifecycle = new OwnedMcpClientLifecycle(factory, settings());
+    lifecycle.connect().join();
+
+    assertThatThrownBy(() -> discover(lifecycle))
+        .rootCause()
+        .isInstanceOf(McpTransportSessionNotFoundException.class);
+
+    assertThat(factory.createdCount()).isEqualTo(2);
+    assertThat(freshCursors).containsExactly(null, "page-2");
+    assertThat(fresh.closeCount()).isZero();
+  }
+
+  @Test
+  void givesEachDiscoveredToolItsOwnReconnectBudget() {
+    InMemoryMcpTransport stale = catalogue(new ArrayList<>(), 1);
+    InMemoryMcpTransport fresh =
+        catalogue(new ArrayList<>(), Integer.MAX_VALUE)
+            .failingSend(
+                McpSchema.METHOD_TOOLS_CALL,
+                () -> new McpTransportSessionNotFoundException("session expired"));
+    InMemoryMcpTransport third = catalogue(new ArrayList<>(), Integer.MAX_VALUE);
+    ScriptedMcpTransportFactory factory = new ScriptedMcpTransportFactory(stale, fresh, third);
+    OwnedMcpClientLifecycle lifecycle = new OwnedMcpClientLifecycle(factory, settings());
+    lifecycle.connect().join();
+
+    List<FunctionTool> tools = discover(lifecycle);
+    assertThat(factory.createdCount()).isEqualTo(2);
+
+    ToolResult result =
+        tools
+            .get(0)
+            .execute(new ToolArguments(Map.of("query", "open")), new ToolContext(null, Map.of()))
+            .toCompletableFuture()
+            .join();
+
+    // The discovery spent its own budget and the tool still has one, because a tool call made
+    // minutes later is not part of the operation that discovered it.
+    assertThat(result.error()).isFalse();
+    assertThat(factory.createdCount()).isEqualTo(3);
+    assertThat(third.countOf(McpSchema.METHOD_TOOLS_CALL)).isEqualTo(1);
+  }
+
+  @Test
+  void leavesBorrowedPagingUntouched() {
+    List<String> cursors = new ArrayList<>();
+    InMemoryMcpTransport transport = catalogue(cursors, 1);
+    McpAsyncClient client =
+        McpClient.async(transport)
+            .requestTimeout(BLOCK)
+            .initializationTimeout(BLOCK)
+            .jsonSchemaValidator(new PermissiveJsonSchemaValidator())
+            .build();
+    client.initialize().block(BLOCK);
+    ConnectedMcpClientAdapter adapter = new ConnectedMcpClientAdapter(client);
+
+    // A borrowed adapter owns no connection, so it cannot replace one. The failure is the caller's
+    // to handle, and the client it was lent stays open and initialized.
+    assertThatThrownBy(() -> adapter.discoverTools().toCompletableFuture().join())
+        .rootCause()
+        .isInstanceOf(McpTransportSessionNotFoundException.class);
+
+    assertThat(cursors).containsExactly(null, "page-2");
+    assertThat(client.isInitialized()).isTrue();
+    assertThat(transport.closeCount()).isZero();
+  }
+
+  private static List<FunctionTool> discover(OwnedMcpClientLifecycle lifecycle) {
+    return new McpToolDiscovery(
+            new OwnedMcpAsyncOperations(lifecycle), McpToolAdapterOptions.defaults())
+        .discover()
+        .toCompletableFuture()
+        .join();
+  }
+
+  private static List<String> names(List<FunctionTool> tools) {
+    return tools.stream().map(tool -> tool.definition().name()).toList();
+  }
+
+  /**
+   * A two page catalogue that records the cursor of every page it was asked for and drops the
+   * connection once it has answered {@code answerablePages} of them.
+   */
+  private static InMemoryMcpTransport catalogue(List<String> cursors, int answerablePages) {
+    return new InMemoryMcpTransport()
+        .answeringPing()
+        .answering(
+            McpSchema.METHOD_TOOLS_CALL,
+            params ->
+                new McpSchema.CallToolResult(
+                    List.of(new McpSchema.TextContent(null, "found 2 issues", null)),
+                    Boolean.FALSE,
+                    null,
+                    null))
+        .answering(
+            McpSchema.METHOD_TOOLS_LIST,
+            params -> {
+              String cursor = ((McpSchema.PaginatedRequest) params).cursor();
+              cursors.add(cursor);
+              if (cursors.size() > answerablePages) {
+                throw new McpTransportSessionNotFoundException("session expired");
+              }
+              return cursor == null
+                  ? new McpSchema.ListToolsResult(List.of(tool("search-issues")), "page-2", null)
+                  : new McpSchema.ListToolsResult(List.of(tool("close-issues")), null, null);
+            });
+  }
+
+  private static McpSchema.Tool tool(String name) {
+    return new McpSchema.Tool(name, null, name, SCHEMA, null, null, null, null);
+  }
+
+  private static McpOwnedClientSettings settings() {
+    return new McpOwnedClientSettings(
+        new PermissiveJsonSchemaValidator(), Duration.ofSeconds(5), Duration.ofSeconds(5));
+  }
+}
+```
+
+The scripted answer throws rather than using `failingSend`, because `failingSend` fails every request
+for a method and this fixture has to answer the first page and then fail the second. A throw inside a
+scripted answer propagates out of the `Mono.defer` in `sendMessage` and reaches the client as that
+exception, unwrapped, exactly like `failingSend` does.
+
+- [ ] **Step 2: Run the test to verify it fails**
+
+Run: `./gradlew :integrations:agent-framework-mcp:test --tests 'io.github.hellices.agentframework.mcp.McpDiscoveryPagingTest'`
+
+Expected: FAIL, 3 of 5. `readsEveryPageOfOneGenerationInOrder` and `leavesBorrowedPagingUntouched`
+pass, because neither reconnects. `restartsFromTheFirstPageOnTheReplacementGeneration` fails with
+`expected: [null, "page-2"] but was: ["page-2", ...]`: the replacement is asked to continue the dead
+session's cursor. `surfacesASecondConnectionFailureWithoutAThirdGeneration` and
+`givesEachDiscoveredToolItsOwnReconnectBudget` fail for the same reason.
+
+- [ ] **Step 3: Add the internal restart signal**
+
+Create `integrations/agent-framework-mcp/src/main/java/io/github/hellices/agentframework/mcp/internal/McpConnectionReplacedException.java`:
+
+```java
+package io.github.hellices.agentframework.mcp.internal;
+
+/**
+ * Reports that the connection behind a paged read was replaced, so the read must start again.
+ *
+ * <p>This is a signal between two collaborators in this package, not a diagnosis for a caller. A
+ * single request survives a replacement by being repeated on the new generation, but a page cannot:
+ * its cursor is opaque state that belongs to the session that issued it, and continuing someone
+ * else's pagination on a new session is either rejected or, worse, answered from a different
+ * position. The operation that caused the replacement is kept as the cause so that a reader which
+ * cannot restart still reports something true.
+ */
+final class McpConnectionReplacedException extends RuntimeException {
+
+  private static final long serialVersionUID = 1L;
+
+  McpConnectionReplacedException(Throwable cause) {
+    super("the MCP connection was replaced while reading a paged result", cause);
+  }
+}
+```
+
+- [ ] **Step 4: Give the operations port a paged scope**
+
+Add this method to `McpAsyncOperations`, after `callTool`:
+
+```java
+  /**
+   * Returns the operations to use for one paged read, such as a whole tool discovery.
+   *
+   * <p>Reading a catalogue is one logical operation even though it is many requests, and an
+   * implementation that owns its connection needs to know that in order to spend a recovery budget
+   * once for the whole read rather than once per page. An implementation that borrows its connection
+   * recovers from nothing and returns itself, which is why this is a default method.
+   *
+   * @return the operations for one paged read, never {@code null}
+   */
+  default McpAsyncOperations forPagedOperation() {
+    return this;
+  }
+```
+
+`BorrowedMcpAsyncOperations` is deliberately left alone: inheriting the default is the statement that
+borrowed paging is unchanged.
+
+- [ ] **Step 5: Let an attempt describe what a replacement means for it**
+
+In `OwnedMcpClientLifecycle`, replace the `Attempt` class comment and declaration, which Task 4
+introduced as `/** Tracks the in-flight call of one {@code execute} so cancellation can reach it. */`
+above `private static final class Attempt {`, with:
+
+```java
+  /**
+   * Tracks the in-flight call of one operation so cancellation can reach it, and carries that
+   * operation's single reconnect budget.
+   *
+   * <p>An operation is not always one request. A paged read is one attempt spanning many requests,
+   * and it is the attempt that decides what happens after a replacement: a single request repeats
+   * itself, a paged read cannot and asks its reader to start over instead.
+   */
+  static final class Attempt {
+```
+
+add the field and constructor:
+
+```java
+    private final boolean repeatOnReplacement;
+
+    Attempt(boolean repeatOnReplacement) {
+      this.repeatOnReplacement = repeatOnReplacement;
+    }
+
+    boolean repeatsOnReplacement() {
+      return repeatOnReplacement;
+    }
+```
+
+add the factory next to `execute`:
+
+```java
+  /**
+   * Creates the shared attempt of one paged read.
+   *
+   * @return an attempt whose single reconnect covers every request of the read, never {@code null}
+   */
+  static Attempt pagedAttempt() {
+    return new Attempt(false);
+  }
+```
+
+split `execute` into the public entry point and a package-private overload:
+
+```java
+  public <T> CompletableFuture<T> execute(Function<McpAsyncClient, Mono<T>> operation) {
+    return execute(operation, new Attempt(true));
+  }
+
+  /**
+   * Runs one operation on the current generation as part of the given attempt.
+   *
+   * @param operation produces the SDK call for a given client, never {@code null}
+   * @param attempt the attempt this operation belongs to, never {@code null}
+   * @param <T> the operation result type
+   * @return a stage completing with the operation result, never {@code null}
+   */
+  <T> CompletableFuture<T> execute(Function<McpAsyncClient, Mono<T>> operation, Attempt attempt) {
+    if (operation == null) {
+      return AsyncStages.failed(new IllegalArgumentException("operation must not be null"));
+    }
+    CompletableFuture<T> result =
+        currentGeneration().thenCompose(generation -> validate(operation, generation, attempt));
+    return AsyncStages.cancellable(result, attempt::cancel);
+  }
+```
+
+and replace the `handle` block of `recover`, which Task 6 wrote with the success branch first, so an
+attempt that does not repeat reports the signal instead of repeating the request. The failure branch
+is unchanged in behavior and only moves to the top so the three outcomes read in the order they
+occur:
+
+```java
+    return replaceGeneration(stale)
+        .handle(
+            (replacement, replacementFailure) -> {
+              if (replacementFailure != null) {
+                failure.addSuppressed(AsyncStages.unwrap(replacementFailure));
+                return AsyncStages.<T>failed(failure);
+              }
+              if (!attempt.repeatsOnReplacement()) {
+                return AsyncStages.<T>failed(new McpConnectionReplacedException(failure));
+              }
+              return invoke(operation, replacement, attempt);
+            })
+        .thenCompose(Function.identity());
+```
+
+The replacement is already adopted by the time this runs, so the reader's next request lands on it
+without asking for another one. The budget is already spent, so a second failure takes the
+`spendReconnect` early return and surfaces the real failure rather than another restart signal.
+
+- [ ] **Step 6: Scope the owned operations to a paged read**
+
+In `OwnedMcpAsyncOperations`, add the field, the second constructor, the override, and route
+`listTools` through a paged attempt:
+
+```java
+  private final OwnedMcpClientLifecycle lifecycle;
+  private final OwnedMcpClientLifecycle.Attempt pagedOperation;
+
+  public OwnedMcpAsyncOperations(OwnedMcpClientLifecycle lifecycle) {
+    this(lifecycle, null);
+  }
+
+  private OwnedMcpAsyncOperations(
+      OwnedMcpClientLifecycle lifecycle, OwnedMcpClientLifecycle.Attempt pagedOperation) {
+    if (lifecycle == null) {
+      throw new IllegalArgumentException("lifecycle must not be null");
+    }
+    this.lifecycle = lifecycle;
+    this.pagedOperation = pagedOperation;
+  }
+
+  @Override
+  public McpAsyncOperations forPagedOperation() {
+    return new OwnedMcpAsyncOperations(lifecycle, OwnedMcpClientLifecycle.pagedAttempt());
+  }
+
+  @Override
+  public CompletionStage<McpSchema.ListToolsResult> listTools(
+      String cursor, Map<String, Object> meta) {
+    // Always a paged attempt, scoped or not. A page request must never be repeated with its own
+    // cursor on a new session, and an unscoped listTools has no reader to restart, so the honest
+    // outcome there is a failure rather than a silently wrong page.
+    OwnedMcpClientLifecycle.Attempt attempt =
+        pagedOperation == null ? OwnedMcpClientLifecycle.pagedAttempt() : pagedOperation;
+    return lifecycle.execute(client -> client.listTools(cursor, meta), attempt);
+  }
+
+  @Override
+  public CompletionStage<McpSchema.CallToolResult> callTool(McpSchema.CallToolRequest request) {
+    if (request == null) {
+      return AsyncStages.failed(new IllegalArgumentException("request must not be null"));
+    }
+    return lifecycle.execute(client -> client.callTool(request));
+  }
+```
+
+`callTool` keeps the plain `execute`, which is what gives every discovered tool its own budget: the
+invoker holds the unscoped operations the discovery was constructed with, never the paged scope.
+
+Task 4's class comment ends with "Instances are immutable and safe to share once constructed", which a
+scoped instance would make false, because it carries one mutable attempt. Replace that sentence with:
+
+```java
+ * <p>The instance a caller constructs is immutable and safe to share. The instance {@link
+ * #forPagedOperation()} returns is not: it carries the single attempt, and therefore the single
+ * reconnect budget, of one paged read, so it belongs to that read and must not outlive it.
+```
+
+- [ ] **Step 7: Restart the reader from the first page**
+
+In `McpToolDiscovery`, take the paged scope once per discovery and hand it to the reader:
+
+```java
+  public CompletableFuture<List<FunctionTool>> discover() {
+    McpAsyncOperations pageOperations = operations.forPagedOperation();
+    if (pageOperations == null) {
+      return AsyncStages.failed(
+          new IllegalStateException("MCP operations returned no scope for a paged read"));
+    }
+    PageReader reader = new PageReader(pageOperations);
+    return AsyncStages.cancellable(reader.readAll(), reader::cancel);
+  }
+```
+
+Give `PageReader` the scope and a one-shot restart flag:
+
+```java
+    private final McpAsyncOperations pageOperations;
+    private final AtomicBoolean restartable = new AtomicBoolean(true);
+
+    PageReader(McpAsyncOperations pageOperations) {
+      this.pageOperations = pageOperations;
+    }
+```
+
+and request pages through it, by changing the one line in `requestPage`:
+
+```java
+        page = AsyncStages.requireStage(pageOperations.listTools(cursor, null), "tools/list");
+```
+
+Add the restart itself, after `requestPage`:
+
+```java
+    /**
+     * Throws away everything read so far and starts the catalogue again from its first page, when
+     * the page failed only because the connection behind it was replaced.
+     *
+     * <p>Everything has to go, not just the cursor. The collected tools came from a session that no
+     * longer exists, and keeping them would either duplicate the entries the new session republishes
+     * or fail the discovery on a local name collision with them. The seen cursors have to go for a
+     * blunter reason: the new session will very likely hand out the same cursor strings, and the
+     * repeated-cursor guard would read that as a server paging forever. Clearing them also restores
+     * the page bound, so the replacement gets a whole catalogue's worth of pages rather than whatever
+     * the dead session left over.
+     *
+     * <p>The flag bounds this loop on its own. The lifecycle also allows one replacement per paged
+     * read, so in practice the second restart never arrives, but this class already bounds paging by
+     * repeated cursors and by a page count, and a reader that can be restarted by something outside
+     * it should bound that too.
+     */
+    private boolean restart(Throwable failure) {
+      if (!(AsyncStages.unwrap(failure) instanceof McpConnectionReplacedException)) {
+        return false;
+      }
+      if (!restartable.compareAndSet(true, false)) {
+        return false;
+      }
+      tools.clear();
+      localNames.clear();
+      seenCursors.clear();
+      cursor = McpSchema.FIRST_PAGE;
+      return true;
+    }
+```
+
+and handle it in both failure branches of `drive`:
+
+```java
+        if (!page.isDone()) {
+          page.whenComplete(
+              (result, failure) -> {
+                if (failure != null) {
+                  if (restart(failure)) {
+                    drive(discovered);
+                  } else {
+                    discovered.completeExceptionally(AsyncStages.unwrap(failure));
+                  }
+                } else if (advance(result, requested, discovered)) {
+                  drive(discovered);
+                }
+              });
+          return;
+        }
+        McpSchema.ListToolsResult result;
+        try {
+          result = page.join();
+        } catch (RuntimeException failure) {
+          if (restart(failure)) {
+            continue;
+          }
+          discovered.completeExceptionally(AsyncStages.unwrap(failure));
+          return;
+        }
+```
+
+Update the class comment of `McpToolDiscovery` so it stops describing the client as borrowed only:
+
+```java
+ * <p>A whole discovery is one logical operation. When the operations port reports that the
+ * connection behind a page was replaced, everything read so far is discarded and the catalogue is
+ * read again from its first page, because a cursor belongs to the session that issued it. A port
+ * over a borrowed client never reports that, so borrowed discovery is unaffected.
+```
+
+- [ ] **Step 8: Run the paging test to verify it passes**
+
+Run: `./gradlew :integrations:agent-framework-mcp:test --tests 'io.github.hellices.agentframework.mcp.McpDiscoveryPagingTest'`
+
+Expected: PASS, 5 tests.
+
+- [ ] **Step 9: Run the module test and quality tasks**
+
+Run: `./gradlew :integrations:agent-framework-mcp:test :integrations:agent-framework-mcp:quality`
+
+Expected: PASS. `ConnectedMcpClientAdapterTest`, `BorrowedMcpClientIntegrationTest`, and
+`OwnedMcpClientOperationTest.discoversToolsThroughTheOwnedPort` are the regression guards that the new
+scope changed neither borrowed discovery nor single-generation discovery.
+
+- [ ] **Step 10: Commit**
+
+```bash
+git add integrations/agent-framework-mcp/src/main/java/io/github/hellices/agentframework/mcp/internal/McpConnectionReplacedException.java \
+        integrations/agent-framework-mcp/src/main/java/io/github/hellices/agentframework/mcp/internal/McpAsyncOperations.java \
+        integrations/agent-framework-mcp/src/main/java/io/github/hellices/agentframework/mcp/internal/McpToolDiscovery.java \
+        integrations/agent-framework-mcp/src/main/java/io/github/hellices/agentframework/mcp/internal/OwnedMcpClientLifecycle.java \
+        integrations/agent-framework-mcp/src/main/java/io/github/hellices/agentframework/mcp/internal/OwnedMcpAsyncOperations.java \
+        integrations/agent-framework-mcp/src/test/java/io/github/hellices/agentframework/mcp/McpDiscoveryPagingTest.java
+git commit -m "$(cat <<'MSG'
+mcp: restart a paged discovery on a replaced connection
+
+A cursor belongs to the session that issued it, so a page request is never
+repeated on a replacement generation. A whole discovery is one operation with
+one reconnect: when the connection is replaced, everything read so far is
+discarded and the catalogue is read again from its first page, once. A second
+connection failure surfaces.
+
+Discovered tools keep their own budget, because a tool call made long after
+discovery is not part of the operation that found it. Borrowed discovery is
+unchanged: it owns no connection, so it can never see a replacement.
+
+Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
+MSG
+)"
+```
+
+---
+
+### Task 9: The stdio facade
 
 **Files:**
 - Create: `integrations/agent-framework-mcp/src/main/java/io/github/hellices/agentframework/mcp/internal/OwnedMcpTools.java`
@@ -2911,7 +3962,7 @@ MSG
   - `public final class OwnedMcpTools` in `…mcp.internal`, constructor
     `OwnedMcpTools(McpClientTransportFactory transportFactory, McpOwnedClientSettings settings,
     McpToolAdapterOptions options)`, methods `CompletionStage<Void> connect()`,
-    `CompletionStage<List<FunctionTool>> discoverTools()`, `CompletionStage<Void> close()`. Task 9
+    `CompletionStage<List<FunctionTool>> discoverTools()`, `CompletionStage<Void> close()`. Task 10
     reuses this class unchanged.
   - `public final class McpStdioTools` in `…mcp`, with `static Builder builder(ServerParameters
     serverParameters)`, the same three instance methods, and a package-private constructor
@@ -3074,7 +4125,8 @@ class McpStdioToolsTest {
     McpStdioTools tools = builder().build();
 
     assertThatThrownBy(() -> tools.discoverTools().toCompletableFuture().join())
-        .hasRootCauseInstanceOf(IllegalStateException.class)
+        .rootCause()
+        .isInstanceOf(IllegalStateException.class)
         .hasMessageContaining("connect()");
     assertThat(tools.close().toCompletableFuture()).succeedsWithin(SETTLE);
   }
@@ -3111,6 +4163,21 @@ class McpStdioToolsTest {
     assertThat(transport.closeCount()).isEqualTo(1);
   }
 
+  @Test
+  void rejectsNullToolOptionsAtTheSeamWithoutDereferencingThem() {
+    assertThatThrownBy(
+            () ->
+                new McpStdioTools(
+                    new ScriptedMcpTransportFactory(),
+                    new McpOwnedClientSettings(
+                        new PermissiveJsonSchemaValidator(),
+                        Duration.ofSeconds(5),
+                        Duration.ofSeconds(5)),
+                    null))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessage("options must not be null");
+  }
+
   private static McpStdioTools.Builder builder() {
     return McpStdioTools.builder(ServerParameters.builder("no-such-command").build())
         .jsonMapper(new RejectingMcpJsonMapper())
@@ -3118,6 +4185,12 @@ class McpStdioToolsTest {
   }
 }
 ```
+
+The last test is the one the review asked for. `McpToolDiscovery` dereferences its options in its own
+constructor, so without a guard a null reaches it and the caller gets a `NullPointerException` naming
+a class the public builder never mentions, contradicting the `@throws IllegalArgumentException`
+contract the provider documents. It is checked at the seam, in argument order, so the failure names
+the argument the caller actually passed.
 
 - [ ] **Step 3: Run the test to verify it fails**
 
@@ -3163,6 +4236,11 @@ public final class OwnedMcpTools {
       McpOwnedClientSettings settings,
       McpToolAdapterOptions options) {
     this.lifecycle = new OwnedMcpClientLifecycle(transportFactory, settings);
+    // Checked here rather than left to McpToolDiscovery, which dereferences options and would
+    // report a NullPointerException naming a class the caller never mentioned.
+    if (options == null) {
+      throw new IllegalArgumentException("options must not be null");
+    }
     this.discovery = new McpToolDiscovery(new OwnedMcpAsyncOperations(lifecycle), options);
   }
 
@@ -3412,7 +4490,7 @@ factory, so the tests above never construct `StdioClientTransport`.
 
 Run: `./gradlew :integrations:agent-framework-mcp:test --tests 'io.github.hellices.agentframework.mcp.McpStdioToolsTest'`
 
-Expected: PASS, 5 tests.
+Expected: PASS, 6 tests.
 
 - [ ] **Step 7: Run the module test and quality tasks**
 
@@ -3445,14 +4523,14 @@ MSG
 
 ---
 
-### Task 9: The streamable HTTP facade
+### Task 10: The streamable HTTP facade
 
 **Files:**
 - Create: `integrations/agent-framework-mcp/src/main/java/io/github/hellices/agentframework/mcp/McpStreamableHttpTools.java`
 - Test: `integrations/agent-framework-mcp/src/test/java/io/github/hellices/agentframework/mcp/McpStreamableHttpToolsTest.java` (create)
 
 **Interfaces:**
-- Consumes: `OwnedMcpTools`, `McpOwnedClientSettings`, `McpClientTransportFactory` from Task 8 and
+- Consumes: `OwnedMcpTools`, `McpOwnedClientSettings`, `McpClientTransportFactory` from Task 9 and
   earlier; `RejectingMcpJsonMapper`, `ScriptedMcpTransportFactory`, `InMemoryMcpTransport`, and
   `PermissiveJsonSchemaValidator` from the test sources.
 - Produces: `public final class McpStreamableHttpTools` with `static Builder builder(String baseUri)`,
@@ -3584,7 +4662,8 @@ class McpStreamableHttpToolsTest {
             .build();
 
     assertThatThrownBy(() -> tools.discoverTools().toCompletableFuture().join())
-        .hasRootCauseInstanceOf(IllegalStateException.class)
+        .rootCause()
+        .isInstanceOf(IllegalStateException.class)
         .hasMessageContaining("connect()");
     assertThat(tools.close().toCompletableFuture()).succeedsWithin(SETTLE);
   }
@@ -3940,7 +5019,7 @@ MSG
 
 ---
 
-### Task 10: Documentation, traceability, and full verification
+### Task 11: Documentation, traceability, and full verification
 
 **Files:**
 - Modify: `integrations/agent-framework-mcp/src/main/java/io/github/hellices/agentframework/mcp/package-info.java`
@@ -3948,18 +5027,61 @@ MSG
 - Modify: `docs/design/requirements-design/02-state-extension-mcp.md:346-349`
 - Modify: `docs/design/module-composition.md:74`
 - Modify: `README.md:85`
-- Test: none new; this task re-runs the whole verification contract
+- Test: `integrations/agent-framework-mcp/src/test/java/io/github/hellices/agentframework/mcp/BorrowedMcpClientIntegrationTest.java` (modify)
 
 **Interfaces:**
-- Consumes: every class produced by Tasks 1-9.
+- Consumes: every class produced by Tasks 1-10.
 - Produces: nothing new in code. This is the task that makes the tree's claims about itself true
   again, and it is the reviewer's gate for "does the documented status match the code".
 
 The package documentation currently states that the module *never* opens, initializes, reconnects,
-or closes a client. After Task 9 that sentence is false, and a false invariant in a package doc is
+or closes a client. After Task 10 that sentence is false, and a false invariant in a package doc is
 worse than no doc: the next contributor will believe it.
 
-- [ ] **Step 1: Update the package documentation**
+- [ ] **Step 1: Add the missing MCP-002 evidence**
+
+This step is deliberately not RED-first, and saying so is the point. MCP-002's third acceptance
+criterion, "even when multiple adapters share the same connection object, close responsibility
+remains with the connection provider", is already satisfied by `ConnectedMcpClientAdapter`, which
+holds no lifecycle code at all. What is missing is not behavior but evidence: nothing in the suite
+fails if someone later adds a `close()` to the adapter, so the matrix would be claiming a guarantee no
+test defends. A characterization test that passes on the first run is the correct instrument here,
+and inventing a temporary defect to make it fail first would test the sabotage rather than the rule.
+
+Add to `integrations/agent-framework-mcp/src/test/java/io/github/hellices/agentframework/mcp/BorrowedMcpClientIntegrationTest.java`:
+
+```java
+  @Test
+  void leavesOneSharedClientOpenForEveryAdapterThatBorrowsIt() {
+    InMemoryMcpTransport transport = searchServer();
+    McpAsyncClient client = initializedClient(transport);
+
+    ConnectedMcpClientAdapter first = new ConnectedMcpClientAdapter(client);
+    ConnectedMcpClientAdapter second = new ConnectedMcpClientAdapter(client);
+    List<FunctionTool> firstTools = first.discoverTools().toCompletableFuture().join();
+    List<FunctionTool> secondTools = second.discoverTools().toCompletableFuture().join();
+
+    // Both adapters work off the one session: two borrowers do not mean two handshakes, and neither
+    // borrower may end the session the caller opened.
+    assertThat(firstTools).hasSize(1);
+    assertThat(secondTools).hasSize(1);
+    assertThat(transport.countOf(McpSchema.METHOD_INITIALIZE)).isEqualTo(1);
+    assertThat(transport.countOf(McpSchema.METHOD_TOOLS_LIST)).isEqualTo(2);
+    assertThat(client.isInitialized()).isTrue();
+    assertThat(transport.closeCount()).isZero();
+
+    // The provider closes, once, and only because it chose to.
+    client.closeGracefully().block(Duration.ofSeconds(5));
+    assertThat(transport.closeCount()).isEqualTo(1);
+  }
+```
+
+Run: `./gradlew :integrations:agent-framework-mcp:test --tests 'io.github.hellices.agentframework.mcp.BorrowedMcpClientIntegrationTest'`
+
+Expected: PASS, 8 tests. If this test fails, stop: the adapter is closing or re-initializing a
+borrowed client and MCP-002 is not implementable by documentation.
+
+- [ ] **Step 2: Update the package documentation**
 
 Replace the whole of
 `integrations/agent-framework-mcp/src/main/java/io/github/hellices/agentframework/mcp/package-info.java`
@@ -3992,7 +5114,7 @@ with:
 package io.github.hellices.agentframework.mcp;
 ```
 
-- [ ] **Step 2: Update the traceability matrix**
+- [ ] **Step 3: Update the traceability matrix**
 
 In `docs/design/requirements-design/requirements-traceability-matrix.md`, replace the three MCP rows
 at lines 81-83. Before:
@@ -4007,14 +5129,27 @@ After:
 
 ```markdown
 | MCP-001 | Transport tools and connection adapters are co-located | [02-state-extension-mcp.md](02-state-extension-mcp.md) | `integrations/agent-framework-mcp` | `partial` | connected-client adapter tests + owned stdio and streamable HTTP facade tests (WebSocket transport tools absent because the official SDK 2.0.0 ships no WebSocket client transport) |
-| MCP-002 | Lifecycle is divided by connection ownership | [02-state-extension-mcp.md](02-state-extension-mcp.md) | `integrations/agent-framework-mcp` | `implemented` | owned/borrowed lifecycle contract |
-| MCP-003 | Connection validation and reconnection are standardized | [02-state-extension-mcp.md](02-state-extension-mcp.md) | `integrations/agent-framework-mcp` | `implemented` | reconnect/cache contract |
+| MCP-002 | Lifecycle is divided by connection ownership | [02-state-extension-mcp.md](02-state-extension-mcp.md) | `integrations/agent-framework-mcp` | `implemented` | owned facades expose `connect()`/`close()`; borrowed adapter never closes the injected client, including when two adapters share one client |
+| MCP-003 | Connection validation and reconnection are standardized | [02-state-extension-mcp.md](02-state-extension-mcp.md) | `integrations/agent-framework-mcp` | `partial` | ping validation before each list or call, per-session unsupported-ping cache, one replacement session and one retry of the original request, session and cache cleared on close (sampling counter and pending reload state not implemented) |
 ```
 
 Do not touch MCP-009 or MCP-010: no header propagation and no trace propagation ship in this slice,
 so both stay `absent`. Do not add or remove rows; the matrix invariant is 244 IDs.
 
-- [ ] **Step 3: Update the MCP design's current-implementation section**
+MCP-002 becomes `implemented` because all three of its acceptance criteria now have executable
+evidence, including the third one, which Step 0 below adds: close responsibility stays with the
+provider even when several adapters share one connection object.
+
+MCP-003 stays `partial`, and that is not pessimism. Its third acceptance criterion requires the
+session, the capability cache, the *sampling counter*, and the *pending reload state* to be cleared on
+close. This slice implements no sampling and no reload, so two of those four pieces of state do not
+exist yet, and marking the row `implemented` would claim a guarantee whose subject is missing. The
+verification column therefore states exactly what is implemented today and names what is outstanding;
+the row moves to `implemented` in the slice that adds sampling and reload. A status legend that lets
+`partial` mean "the parts that exist all work" is the only reading under which the matrix stays
+useful as a gap list.
+
+- [ ] **Step 4: Update the MCP design's current-implementation section**
 
 In `docs/design/requirements-design/02-state-extension-mcp.md`, replace section 12. Before:
 
@@ -4047,7 +5182,7 @@ propagation, and sampling. No WebSocket transport exists, because the official S
 WebSocket client transport.
 ```
 
-- [ ] **Step 4: Update the module composition and README summaries**
+- [ ] **Step 5: Update the module composition and README summaries**
 
 In `docs/design/module-composition.md`, line 74, replace the responsibility cell. Before:
 
@@ -4076,7 +5211,7 @@ After:
 Keep the column alignment of the surrounding block; the description starts at the same column as the
 neighbouring lines.
 
-- [ ] **Step 5: Run the repository policy suite**
+- [ ] **Step 6: Run the repository policy suite**
 
 Run: `./gradlew policyCheck`
 
@@ -4087,7 +5222,7 @@ requires English, `MarkdownLinkPolicyTest` resolves every markdown link, and
 existing `[02-state-extension-mcp.md](02-state-extension-mcp.md)` form and that no path was turned
 into a link.
 
-- [ ] **Step 6: Run the quality suite**
+- [ ] **Step 7: Run the quality suite**
 
 Run: `./gradlew quality`
 
@@ -4115,7 +5250,7 @@ explaining why the stored value is safe to share, for example:
 Do not add a blanket suppression, a package-level match, or a `@SuppressWarnings` on a whole class.
 If a finding is real, fix the code instead.
 
-- [ ] **Step 7: Run the compatibility test matrix**
+- [ ] **Step 8: Run the compatibility test matrix**
 
 Run: `./gradlew testJava17 testJava21 testJava25`
 
@@ -4125,31 +5260,38 @@ most likely a timing assumption in a test. Do not respond by widening a timeout:
 that differs. Deterministic tests do not retry, and a quality failure is never covered by a passing
 compatibility test.
 
-- [ ] **Step 8: Run the full build**
+- [ ] **Step 9: Run the full build**
 
 Run: `./gradlew check`
 
 Expected: PASS.
 
-- [ ] **Step 9: Review the diff for contract impact**
+- [ ] **Step 10: Review the diff for contract impact**
 
 Run: `git diff --stat bd0700c..HEAD` and `git diff bd0700c..HEAD -- '*/src/main/java/*'`
 
 Check each of these and write the answer in the pull request body:
 
-- Public API: `McpStdioTools`, `McpStreamableHttpTools`, their builders, `OwnedMcpTools`,
-  `McpClientTransportFactory`, and `McpOwnedClientSettings` are new. Nothing existing changed shape,
-  so `ConnectedMcpClientAdapter`, `McpToolAdapterOptions`, and `McpAsyncOperations` are unaffected.
+- Public API: exactly two new public types, `McpStdioTools` and `McpStreamableHttpTools`, plus their
+  builders. `OwnedMcpTools`, `McpClientTransportFactory`, `McpOwnedClientSettings`,
+  `OwnedMcpClientLifecycle`, `OwnedMcpAsyncOperations`, and `McpConnectionReplacedException` live in
+  `io.github.hellices.agentframework.mcp.internal` and are internal: the package is documented as
+  internal and is not part of the supported surface, so calling them `public API` in the pull request
+  body would commit the project to a compatibility promise it never intended to make. Nothing existing
+  changed shape, so `ConnectedMcpClientAdapter` and `McpToolAdapterOptions` are unaffected;
+  `McpAsyncOperations`, also internal, gains one default method, which is source and binary compatible
+  for its one external implementor, `BorrowedMcpAsyncOperations`.
 - Dependencies: no new module dependency, no new entry in `gradle/libs.versions.toml`, no lockfile
   change. Confirm with `git diff bd0700c..HEAD -- gradle/ '*/build.gradle.kts'`, which must be empty.
 - Session format: unaffected; this slice persists nothing.
 - Telemetry: unaffected; this slice emits nothing.
 - Compatibility: additive only.
 
-- [ ] **Step 10: Commit**
+- [ ] **Step 11: Commit**
 
 ```bash
 git add integrations/agent-framework-mcp/src/main/java/io/github/hellices/agentframework/mcp/package-info.java \
+        integrations/agent-framework-mcp/src/test/java/io/github/hellices/agentframework/mcp/BorrowedMcpClientIntegrationTest.java \
         docs/design/requirements-design/requirements-traceability-matrix.md \
         docs/design/requirements-design/02-state-extension-mcp.md \
         docs/design/module-composition.md \
@@ -4158,17 +5300,20 @@ git commit -m "$(cat <<'MSG'
 docs: record the owned MCP connection lifecycle
 
 The package documentation promised the module never opens or closes a client,
-which stopped being true once the owned facades landed. MCP-002 and MCP-003
-move to implemented; MCP-001 stays partial because the official SDK 2.0.0 has
-no WebSocket client transport, and MCP-009 and MCP-010 stay absent because this
-slice propagates neither headers nor traces.
+which stopped being true once the owned facades landed. MCP-002 moves to
+implemented, with the shared-client case it always claimed now covered by a
+test. MCP-003 stays partial: ping validation, the capability cache, the single
+reconnect, and clearing on close all ship, but its sampling counter and pending
+reload state do not exist yet. MCP-001 stays partial because the official SDK
+2.0.0 has no WebSocket client transport, and MCP-009 and MCP-010 stay absent
+because this slice propagates neither headers nor traces.
 
 Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
 MSG
 )"
 ```
 
-- [ ] **Step 11: Push and run the review loop**
+- [ ] **Step 12: Push and run the review loop**
 
 ```bash
 git push -u origin feat/mcp-owned-lifecycle
@@ -4195,12 +5340,12 @@ rather than re-deriving it.
 
 | Decision in the brief | Where it lands |
 | --- | --- |
-| Owned stdio and streamable HTTP high-level tool providers | Tasks 8 and 9 |
+| Owned stdio and streamable HTTP high-level tool providers | Tasks 9 and 10 |
 | Lifecycle ownership: build, initialize, close | Tasks 2 and 3 |
 | Ping validation before list and call | Task 6 |
 | Exactly one reconnect, one new generation | Task 6 |
 | Retry of the original operation, exactly once | Task 7 |
-| MCP-002 and MCP-003 implemented, MCP-001 partial, MCP-009 and MCP-010 absent | Task 10 |
+| MCP-002 implemented, MCP-003 partial, MCP-001 partial, MCP-009 and MCP-010 absent | Task 11 |
 | One generation is one new transport plus one new client, never reused after close | Tasks 2, 3, 6 |
 | Initial state disconnected, explicit connect required | Tasks 2 and 4 |
 | Repeated connect while connected is idempotent | Task 2 |
@@ -4210,12 +5355,12 @@ rather than re-deriving it.
 | Handshake runs on an uncancellable subscription | Task 2 |
 | Concurrent connect calls coalesce | Task 2 |
 | Close during connect waits for the handshake to settle, then closes | Task 3 |
-| No executors, schedulers, or global hooks created by this module | Global constraints, Tasks 2 and 8 |
-| Final `McpStdioTools` and `McpStreamableHttpTools` with three public stages | Tasks 8 and 9 |
-| Builders take transport config, explicit mapper and validator, timeouts, tool options | Tasks 8 and 9 |
-| No public transport factory | Tasks 8 and 9, package-private seam constructor |
+| No executors, schedulers, or global hooks created by this module | Global constraints, Tasks 2 and 9 |
+| Final `McpStdioTools` and `McpStreamableHttpTools` with three public stages | Tasks 9 and 10 |
+| Builders take transport config, explicit mapper and validator, timeouts, tool options | Tasks 9 and 10 |
+| No public transport factory | Tasks 9 and 10, package-private seam constructor |
 | Package-private factory seam for deterministic tests | Task 2 |
-| Borrowed adapter unchanged | Task 4 regression step, Task 10 diff review |
+| Borrowed adapter unchanged | Task 4 regression step, Task 11 diff review |
 | Ping capability cached per generation on `-32601` | Task 6 |
 | Any other ping failure spends the single reconnect | Task 6 |
 | Retry only on verified connection loss, never on application errors | Tasks 5 and 7 |
@@ -4225,17 +5370,25 @@ rather than re-deriving it.
 | Reconnect failure leaves the owner disconnected and reconnectable | Tasks 3 and 6 |
 | Returned tools may retry their in-flight call once | Task 7 |
 | Close clears only the generation and the ping capability cache | Tasks 3 and 6 |
-| Stdio limitations documented | Task 8 |
-| Java 17 `HttpClient` non-closeability documented | Task 9 |
+| Stdio limitations documented | Task 9 |
+| Java 17 `HttpClient` non-closeability documented | Task 10 |
 | Deterministic tests, no process and no network | Task 1 and every later task |
-| Facade construction without connecting, no leaked process or thread | Tasks 8 and 9 |
+| Facade construction without connecting, no leaked process or thread | Tasks 9 and 10 |
+| Cancelling a caller during validation fails that caller and keeps the generation | Task 6 |
+| A transport that exists is closed exactly once when its client cannot be built | Task 2 |
+| A tool retained past `close()` fails on the connect requirement and starts nothing | Task 4 |
+| Closing during an in-flight call fails that call without reconnecting | Task 7 |
+| A paged discovery is one operation with one reconnect, restarted from the first page | Task 8 |
+| A cursor is never replayed on a generation that did not issue it | Task 8 |
+| Discovered tools carry their own budget, not the discovery's spent one | Task 8 |
+| Two adapters over one borrowed client, neither closing it | Task 11 |
 
 ### Placeholders
 
 Every code step contains the code. There is no "add error handling", no "similar to an earlier task",
 and no reference to a type that no task defines. The two fixtures shared across tasks,
 `ScriptedMcpTransportFactory` and `RejectingMcpJsonMapper`, are written out in full where they are
-first needed, in Tasks 2 and 8.
+first needed, in Tasks 2 and 9, as is `ClientHostileMcpTransport` in Task 2.
 
 ### Name and type consistency
 
@@ -4279,9 +5432,60 @@ seam constructors are visible.
   creating a second client.
 - **Stale caller after a replacement.** A caller holding an old generation compares epochs, not
   references, so it recognises that the owner has already moved on and reuses the replacement.
+- **Cancellation during validation.** `CompletableFuture` hands the raw stored throwable to a
+  `handle` dependent, so a cancelled caller arrives at the ping's failure branch as a bare
+  `CancellationException`, which is neither a `-32601` nor a connection loss. Left unclassified it
+  would have bought a replacement and closed a perfectly healthy generation on behalf of a caller who
+  had already walked away. Task 6 classifies it first, before the unsupported-ping check, and Task 7
+  reuses the same predicate at the call stage. Both stages keep their own guard because they fail for
+  different reasons and a single guard at one of them would silently stop covering the other.
+- **A tool that outlives its owner.** `FunctionTool`s handed out by a discovery hold the operations
+  port, not a client, so a call made after `close()` finds no generation and fails on the connect
+  requirement rather than opening a transport for an object the caller believes is shut down. Task 4
+  proves it with `createdCount()`.
+- **Close during an in-flight call.** The call is dismissed by the SDK's synchronous request cleanup,
+  which surfaces as a bare `RuntimeException`. It is not connection loss and must not be, or every
+  deliberate shutdown would resurrect the connection it was shutting down. Task 7 pins one transport,
+  one close, and one factory creation.
+- **Replacement during paging.** A cursor is session state. Repeating a page request on a replacement
+  session is the one case where the retry rule of Tasks 6 and 7 is actively harmful, because the
+  server may answer from a different position and the result is a catalogue that is wrong without
+  being an error. Task 8 makes a paged read declare itself as such, so a replacement ends the read's
+  current pass instead of continuing it, and the reader restarts from `McpSchema.FIRST_PAGE` with
+  everything it had accumulated discarded.
+- **Discovery budget versus tool budget.** The discovery's attempt is scoped to the discovery. The
+  tools it returns keep the unscoped operations, so a call made minutes later starts with a full
+  budget instead of inheriting one the discovery already spent.
 - **PMD `CompareObjectsWithEquals`.** The epoch design exists partly because the ruleset forbids
   reference comparison, and adding a suppression to keep an identity check would have been the wrong
   trade.
+
+### Test-first ordering
+
+Every production behavior in this plan is introduced after a test that fails without it, and the plan
+was re-read once specifically for that property because a step that adds behavior and its test
+together looks identical in a diff to one that does not.
+
+The places where the ordering needed correcting, and how:
+
+- The call-stage cancellation guard and the validation-stage cancellation guard are separate
+  behaviors, so Task 6 was split: a step that runs the suite and watches the validation cancellation
+  test fail comes before the step that adds the guard, and Task 7 does the same for its own guard
+  rather than inheriting the earlier one silently.
+- The transport-leak case in Task 2 needed a fixture whose client build fails after the transport
+  exists. `ClientHostileMcpTransport` is added as a fixture step, the test is written and run red,
+  and only then does `startGeneration` learn to clean up.
+- Task 8's paging test is written first and is expected to fail in three of its five cases, with the
+  exact failure named, before any of `McpConnectionReplacedException`, `forPagedOperation()`, the
+  `Attempt` flag, or the reader's restart exists.
+- Task 11's MCP-002 test is the single exception, and it is called out in the step itself: the
+  behavior already ships, and what is missing is a test that would fail if someone removed it. A
+  characterization test that passes immediately is the honest instrument for that, and manufacturing a
+  temporary defect to make it go red would have tested the defect.
+
+Per-task expected results, which a reviewer can check against the run output: Task 1 six tests, Task 2
+nine, Task 3 six, Task 4 eight, Task 5 eight, Task 6 eight, Task 7 seven, Task 8 five, Task 9 six,
+Task 10 six, Task 11 eight in the borrowed integration suite plus the whole verification contract.
 
 ### SDK signatures
 
@@ -4313,3 +5517,25 @@ and shipping a guess at any of them would freeze an API before the requirement e
   the only way to distinguish "the session is gone" from "the tool failed" without guessing from
   error text, and the per-generation capability cache removes the cost against servers that do not
   implement ping at all.
+- MCP-003 stays `partial`. Ping validation, the per-session unsupported-ping cache, one replacement
+  session with one retry of the original request, and clearing the session and cache on close all
+  ship. Its acceptance criteria also require the sampling counter and the pending reload state to be
+  cleared on close, and neither exists in this slice, so the requirement cannot be closed here. The
+  slice that adds sampling and reload owns that move.
+- Restarting a paged discovery re-reads the pages already read, so a catalogue that fails on its last
+  page costs close to twice its page count. The alternative is worse: continuing a cursor on a session
+  that never issued it risks a silently wrong catalogue, and a wrong tool list is not a cost, it is a
+  defect. Servers that page at all are rare, and losing the connection mid-catalogue is rarer.
+- A caller that reaches `OwnedMcpAsyncOperations.listTools` directly, outside a discovery, sees
+  `McpConnectionReplacedException` instead of a repeated request, because there is no reader to
+  restart. That surface is internal and its only production caller is `McpToolDiscovery`; the honest
+  failure is preferable to a repeat that would carry a stale cursor.
+- `addSuppressed` is called on a throwable that a concurrent caller may also be reading, and
+  `Throwable`'s suppressed list is not synchronized. The window is real but narrow, and every safe
+  alternative, copying the throwable or wrapping it, would either lose the caller's type or change the
+  exception a caller already catches. This slice keeps the behavior unchanged and records the risk
+  rather than trading a diagnostic aid for a type change nobody asked for.
+- `PageReader`'s restart flag is, given the shared single-reconnect budget, unreachable a second time.
+  It stays because the reader is driven by a signal from outside itself, and a loop that an external
+  collaborator can restart should bound that restart locally, exactly as it already bounds paging by
+  repeated cursors and by a maximum page count.
