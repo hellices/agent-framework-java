@@ -4,13 +4,18 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.catchThrowable;
 
+import io.github.hellices.agentframework.mcp.internal.McpClientTransportFactory;
 import io.github.hellices.agentframework.mcp.internal.McpOwnedClientSettings;
 import io.github.hellices.agentframework.mcp.internal.OwnedMcpClientLifecycle;
 import io.modelcontextprotocol.spec.McpError;
 import io.modelcontextprotocol.spec.McpSchema;
 import java.time.Duration;
 import java.util.List;
+import java.util.ServiceConfigurationError;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -277,6 +282,121 @@ class OwnedMcpClientValidationTest {
     assertThat(catchThrowable(operation::join)).hasRootCauseInstanceOf(McpError.class);
     assertThat(factory.createdCount()).isEqualTo(1);
     assertThat(second.closeCount()).isZero();
+  }
+
+  @Test
+  void aValidationFailureAfterTheOwnerWasClosedStartsNoReplacement() {
+    // Validation puts a request on the wire before every operation, so the ping is the request most
+    // likely to be in flight when the owner is closed. Closing dismisses it, and the dismissal is
+    // neither a cancellation nor -32601, so it arrives at the replacement path with no generation
+    // left to replace. An owner that reconnected there would start a server process for a caller
+    // that never asked to connect, on an owner the caller just shut down: the second scripted
+    // transport is what such a reconnect would take.
+    InMemoryMcpTransport transport =
+        toolServer().answeringPing().withholding(McpSchema.METHOD_PING);
+    InMemoryMcpTransport neverUsed = toolServer().answeringPing();
+    ScriptedMcpTransportFactory factory = new ScriptedMcpTransportFactory(transport, neverUsed);
+    OwnedMcpClientLifecycle lifecycle = new OwnedMcpClientLifecycle(factory, settings());
+    lifecycle.connect().join();
+
+    CompletableFuture<McpSchema.ListToolsResult> operation = listTools(lifecycle);
+    assertThat(transport.countOf(McpSchema.METHOD_PING)).isEqualTo(1);
+    assertThat(operation).isNotDone();
+
+    assertThat(lifecycle.close()).succeedsWithin(SETTLE);
+    // The server's answer arrives after the connection it belonged to is gone. It changes nothing:
+    // the operation was already settled by the dismissal, and a closed transport delivers nothing.
+    transport.releaseWithheld();
+
+    // Nothing was reconnected and nothing was closed twice: one transport was ever asked for, it
+    // was released exactly once, and the spare the factory still holds was never touched.
+    assertThat(factory.createdCount()).isEqualTo(1);
+    assertThat(neverUsed.methodsSent()).isEmpty();
+    assertThat(neverUsed.closeCount()).isZero();
+    assertThat(transport.closeCount()).isEqualTo(1);
+    assertThat(transport.countOf(McpSchema.METHOD_TOOLS_LIST)).isZero();
+
+    // The caller keeps what stopped its operation — the dismissal — with the reason the owner did
+    // not recover attached: the same explicit connect requirement every operation without a
+    // generation is failed on.
+    Throwable failure = settledFailure(operation);
+    assertThat(failure.getSuppressed())
+        .singleElement()
+        .satisfies(
+            suppressed ->
+                assertThat(suppressed)
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("connect()"));
+  }
+
+  @Test
+  void aFatalStartFailureDuringReplacementLeavesTheOwnerReusableRatherThanWedged() {
+    // A replacement publishes its handshake promise before the stale generation is released, so a
+    // throwable that leaves the start without settling that promise is not a failed operation but a
+    // permanently wedged owner: the caller never hears back and every later connect joins a promise
+    // nobody is left to complete. A ServiceConfigurationError from a consumer's classpath is not an
+    // ordinary failure, so it is the input that reaches the guard.
+    InMemoryMcpTransport failing =
+        toolServer()
+            .answeringWithError(
+                McpSchema.METHOD_PING, McpSchema.ErrorCodes.INTERNAL_ERROR, "ping failed");
+    InMemoryMcpTransport healthy = toolServer().answeringPing();
+    AtomicInteger created = new AtomicInteger();
+    McpClientTransportFactory factory =
+        () -> {
+          int attempt = created.incrementAndGet();
+          if (attempt == 1) {
+            return failing;
+          }
+          if (attempt == 2) {
+            throw new ServiceConfigurationError("no JSON provider on this classpath");
+          }
+          return healthy;
+        };
+    OwnedMcpClientLifecycle lifecycle = new OwnedMcpClientLifecycle(factory, settings());
+    lifecycle.connect().join();
+
+    CompletableFuture<McpSchema.ListToolsResult> operation = listTools(lifecycle);
+
+    Throwable failure = settledFailure(operation);
+    assertThat(failure).isInstanceOf(McpError.class);
+    assertThat(failure.getSuppressed())
+        .singleElement()
+        .satisfies(
+            suppressed ->
+                assertThat(suppressed)
+                    .isInstanceOf(ServiceConfigurationError.class)
+                    .hasMessage("no JSON provider on this classpath"));
+    assertThat(created.get()).isEqualTo(2);
+    assertThat(failing.closeCount()).isEqualTo(1);
+
+    // The owner ends disconnected rather than connecting: no handshake was left published, so this
+    // operation is refused outright instead of joining one nobody is left to complete.
+    assertThat(settledFailure(listTools(lifecycle)))
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("connect()");
+    assertThat(created.get()).isEqualTo(2);
+
+    // Disconnected and reusable: an explicit connect builds a fresh generation, and the operation
+    // the fatal error stopped can be made again.
+    assertThat(lifecycle.connect()).succeedsWithin(SETTLE);
+    assertThat(created.get()).isEqualTo(3);
+    assertThat(listTools(lifecycle)).succeedsWithin(SETTLE);
+    assertThat(healthy.countOf(McpSchema.METHOD_TOOLS_LIST)).isEqualTo(1);
+  }
+
+  /**
+   * Returns the failure a stage settled with, waiting under a bound that only detects a wedge.
+   *
+   * <p>The bound is not a wait for slow work — everything these tests drive completes on the
+   * calling thread — it is how a promise nobody is left to complete is reported as a failing test
+   * instead of a suite that never finishes. It is deliberately not {@code failsWithin}, which
+   * accepts the timeout itself as the failure and would pass on exactly that wedge.
+   */
+  private static Throwable settledFailure(CompletableFuture<?> stage) {
+    Throwable observed = catchThrowable(() -> stage.get(SETTLE.toMillis(), TimeUnit.MILLISECONDS));
+    assertThat(observed).isInstanceOf(ExecutionException.class);
+    return observed.getCause();
   }
 
   private static CompletableFuture<McpSchema.ListToolsResult> listTools(
