@@ -233,6 +233,20 @@ Each of these is a fact about the shipped code, not a roadmap promise.
   exception attached as a cause or as a suppressed throwable**, because Jackson appends the failing
   key to its own message (`through reference chain: ...["<key>"]`) and an argument key is part of
   the arguments. The cost, stated plainly: the Java type Jackson could not write is not reported.
+- **An assistant turn edited away from the completion it carries is refused, not sent as the
+  original.** The echo path sends the `ChatCompletionMessage` and not the content, so it is taken
+  only while the turn still says what that completion says: text parts must join to exactly the
+  completion's `content` — a turn with no text part matches content that is absent or blank, which
+  is the shape the response mapper contributes no text for — and tool calls must match one for one
+  in wire order by call id, tool name, and arguments as read by the same strict reader both mappers
+  share. Anything else — text appended to a tool-call-only turn, a corrected argument, a call added,
+  dropped, reordered, or renamed — is an `IllegalArgumentException` that quotes no part of the
+  message. Silently rebuilding instead would be the same surprise in reverse: the edit sent and the
+  model's own `arguments` string lost. **Build the message without the raw representation** to send
+  an edited turn, which takes the reconstruction path deliberately. A raw handle whose own arguments
+  are not exactly one JSON object with unique keys — which only a caller-built or restored handle
+  can be, since a parsed one came through that reader — cannot be compared at all and fails naming
+  the tool and the call id, with no parser exception attached.
 - **A `tool_calls` or deprecated `function_call` finish reason with no tool call fails.**
   `AgentEngine` ends its loop on an empty tool-call list, so such a turn would otherwise be reported
   as a successful final answer the model never gave. The asymmetry is deliberate: a tool call that
@@ -258,7 +272,7 @@ Each of these is a fact about the shipped code, not a roadmap promise.
 
 ## Test evidence
 
-Nine test classes, 133 executed tests at the time of writing. The whole suite is **deterministic,
+Ten test classes, 151 executed tests at the time of writing. The whole suite is **deterministic,
 offline, and credential free**: no
 test builds an SDK client, opens a socket, reads the process environment, sleeps, or retries. Verify
 that claim by running it with nothing exported:
@@ -272,6 +286,7 @@ that claim by running it with nothing exported:
 | `OpenAiChatSettingsTest` | the adapter-owned defaults validate model, temperature, output token limit, and request timeout at construction, not on the wire |
 | `ChatCompletionRequestMapperTest` | roles, text placement, options, and the refusals for an empty history, an unmappable role, and a provider option |
 | `ChatCompletionRequestMapperToolsTest` | tool definitions and schemas on the request, one tool message per `tool_call_id`, the byte-exact echo of the SDK message, every unsendable-message refusal, and that arguments it cannot serialise fail with no part of them anywhere in the failure chain |
+| `ChatCompletionRequestMapperEchoTest` | the rule that decides between echoing the model's own completion and refusing the turn: an exact echo down to the spacing of the `arguments` string, the turns the response mapper produces staying echoable, and a refusal for every edit — text added, rewritten, or removed, a call added, dropped, reordered, renamed, re-keyed, or re-argued — with the completion's own unreadable arguments refused without quoting them |
 | `ChatCompletionResponseMapperTest` | choices, text, finish reasons including the deprecated wire value and unknown values, usage, metadata, and the raw handles |
 | `ChatCompletionResponseMapperToolCallTest` | tool-call mapping and every strict-argument failure, the finish-reason-without-a-call rule and its deliberate asymmetry, the rejection of the deprecated `function_call` payload, and that no failure carries model output as a message, a cause, or a suppressed throwable |
 | `OpenAiCallBridgeTest` | the cancellation seam: no dispatch when already cancelled, prompt failure after dispatch, listener removal on every completion path, no completion authority handed to the caller, the original failure instance preserved, and one dispatch with no retry |

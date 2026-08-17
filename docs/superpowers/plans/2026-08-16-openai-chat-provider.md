@@ -269,13 +269,18 @@ no payload text.
 | `tool_choice` | omitted | the neutral contract expresses nothing for it yet |
 
 **Assistant echo rule.** When an assistant `Message` carries a `ChatCompletionMessage` in
-`rawRepresentation()`, echo that object with `addMessage(ChatCompletionMessage)` so the `arguments`
-string is byte-identical to what the model produced. Otherwise rebuild a
-`ChatCompletionAssistantMessageParam` from the framework content: joined text when non-empty, then
-one `ChatCompletionMessageFunctionToolCall` per `ToolCallContent`, with `arguments` re-serialised
-from the parsed map. The engine preserves `rawRepresentation` through `echoedMessages` for a
-non-streamed response, so the first branch is the normal one and the second is the fallback that
-keeps a caller-constructed history working.
+`rawRepresentation()` **and its own content still says what that message says**, echo that object
+with `addMessage(ChatCompletionMessage)` so the `arguments` string is byte-identical to what the
+model produced. When there is no such handle, rebuild a `ChatCompletionAssistantMessageParam` from
+the framework content: joined text when non-empty, then one
+`ChatCompletionMessageFunctionToolCall` per `ToolCallContent`, with `arguments` re-serialised from
+the parsed map. When the handle is there but the content was edited away from it — text added,
+rewritten, or removed, a tool call added, dropped, reordered, renamed, re-keyed, or re-argued — the
+turn is refused with an `IllegalArgumentException`, because the echo sends the completion and not
+the content, so sending it would drop the edit, and rebuilding it would drop the model's own
+`arguments` string instead (review round 2). The engine preserves `rawRepresentation` through
+`echoedMessages` for a non-streamed response, so the first branch is the normal one and the second
+is the fallback that keeps a caller-constructed history working.
 
 ## Response mapping table
 
@@ -390,17 +395,22 @@ Production, under `providers/agent-framework-openai/src/main/java/io/github/hell
 - `internal/ChatCompletionRequestMapper.java` (create) - neutral request to
   `ChatCompletionCreateParams`.
 - `internal/ChatCompletionResponseMapper.java` (create) - `ChatCompletion` to `ModelResponse`.
+- `internal/ToolArguments.java` (create, review round 2) - the shared strict reader and writer for a
+  tool call's `arguments` string, so both mappers agree on what one means and neither lets a Jackson
+  exception, which quotes the arguments, escape.
 - `internal/OpenAiCallBridge.java` (create) - cancellation guard, listener de-registration, failure
   unwrapping.
 - `internal/package-info.java` (create) - the "public only because the facade needs it" notice.
 
 Tests, under `providers/agent-framework-openai/src/test/java/io/github/hellices/agentframework/openai/`:
 
-Nine test classes and two support files. The README instruction in Task 12 names the nine test
-classes; the two support files are fixtures, not evidence.
+Nine test classes and two support files, plus one test class added in review round 2. The README
+instruction in Task 12 names the test classes; the two support files are fixtures, not evidence.
 
 - `internal/ChatCompletionRequestMapperTest.java` (create) - test class
 - `internal/ChatCompletionRequestMapperToolsTest.java` (create) - test class
+- `internal/ChatCompletionRequestMapperEchoTest.java` (create, review round 2) - test class: the
+  echo-or-refuse rule for an assistant turn that carries a `ChatCompletionMessage`
 - `internal/ChatCompletionResponseMapperTest.java` (create) - test class
 - `internal/ChatCompletionResponseMapperToolCallTest.java` (create) - test class
 - `internal/OpenAiChatSettingsTest.java` (create) - test class

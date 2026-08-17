@@ -1,11 +1,5 @@
 package io.github.hellices.agentframework.openai.internal;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.core.StreamReadFeature;
-import com.fasterxml.jackson.databind.DeserializationFeature;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.json.JsonMapper;
 import com.openai.models.chat.completions.ChatCompletion;
 import com.openai.models.chat.completions.ChatCompletionMessage;
 import com.openai.models.chat.completions.ChatCompletionMessageFunctionToolCall;
@@ -20,7 +14,6 @@ import io.github.hellices.agentframework.api.message.ToolCallContent;
 import io.github.hellices.agentframework.api.message.Usage;
 import io.github.hellices.agentframework.spi.model.ModelResponse;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -29,29 +22,10 @@ import java.util.Optional;
 /** Translates a Chat Completions response into a neutral {@code ModelResponse}. */
 public final class ChatCompletionResponseMapper {
 
-  // Tool arguments are model output parsed into a Map a tool executor acts on, so the parser is
-  // configured rather than defaulted.
-  //
-  // FAIL_ON_TRAILING_TOKENS: readTree reads one value and stops, so `{"a":1}{"b":2}` would arrive
-  // as {"a":1} and the rest would vanish. Half of a response is not the call the model made.
-  //
-  // STRICT_DUPLICATE_DETECTION: Jackson's default is last-wins, which resolves `{"city":"Seoul",
-  // "city":"Busan"}` to Busan and discards Seoul silently. Which value the model meant is not
-  // knowable here, and choosing one changes the model's intent, so the duplicate fails instead.
-  //
-  // INCLUDE_SOURCE_IN_LOCATION disabled: Jackson's own message would otherwise quote the source it
-  // failed on, and that source is the arguments string. No parse failure escapes this class - the
-  // exception below carries no cause and no suppressed throwable, because Jackson names the token
-  // it choked on in the message text itself, which no source-location setting can redact. This
-  // line is the second layer rather than the rule: it keeps a parser exception that ever escapes
-  // by a route this class does not catch from carrying the payload with it. It is also the pinned
-  // Jackson's default, so stating it keeps a future upgrade from re-enabling it silently.
-  private final ObjectMapper json =
-      JsonMapper.builder()
-          .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)
-          .enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION)
-          .disable(StreamReadFeature.INCLUDE_SOURCE_IN_LOCATION)
-          .build();
+  // The strict reader lives in ToolArguments, which the request mapper reads with too: one meaning
+  // of an arguments string on both sides of the wire, and one place where a parser exception is
+  // dropped rather than attached.
+  private final ToolArguments arguments = new ToolArguments();
 
   /**
    * Maps a completion.
@@ -184,37 +158,16 @@ public final class ChatCompletionResponseMapper {
 
   private Map<String, Object> argumentsOf(
       ChatCompletionMessageFunctionToolCall call, String callId, String name) {
-    String arguments = call.function().arguments();
-    if (arguments.isEmpty()) {
-      return Map.of();
-    }
-    JsonNode parsed;
-    try {
-      parsed = json.readTree(arguments);
-    } catch (JsonProcessingException failure) {
-      // The parser exception is deliberately not attached, as a cause or as a suppressed
-      // throwable. Jackson names the token it choked on, so its message carries the payload
-      // whatever the source location setting is: `{"name": <token>}` yields
-      // "Unrecognized token '<token>'". A cause is printed by every logger that prints a stack
-      // trace, so attaching it would put model output in a log while this adapter's own message
-      // carefully kept it out. What is lost is the column and the parser's wording; what is kept
-      // is the tool, the call id, and the structural requirement, which is what a caller acts on.
-      throw new IllegalStateException(argumentFailure(name, callId));
-    }
-    if (!parsed.isObject()) {
-      throw new IllegalStateException(argumentFailure(name, callId));
-    }
-    Map<String, Object> values = new LinkedHashMap<>();
-    parsed
-        .properties()
-        .forEach(
-            entry -> values.put(entry.getKey(), json.convertValue(entry.getValue(), Object.class)));
-    // Collections.unmodifiableMap, never Map.copyOf. A JSON null argument value converts to a Java
-    // null, and Map.copyOf rejects it with a bare NullPointerException that names neither the tool
-    // nor the key. {"unit":null} is an ordinary thing for a model to send about an optional
-    // parameter, and dropping or refusing the key would change what the model said.
-    // ToolCallContent copies this into a LinkedHashMap, which keeps the null.
-    return Collections.unmodifiableMap(values);
+    // The parser exception behind an absent result is deliberately not attached, as a cause or as
+    // a suppressed throwable. Jackson names the token it choked on, so its message carries the
+    // payload whatever the source location setting is: `{"name": <token>}` yields "Unrecognized
+    // token '<token>'". A cause is printed by every logger that prints a stack trace, so attaching
+    // it would put model output in a log while this adapter's own message carefully kept it out.
+    // What is lost is the column and the parser's wording; what is kept is the tool, the call id,
+    // and the structural requirement, which is what a caller acts on.
+    return arguments
+        .read(call.function().arguments())
+        .orElseThrow(() -> new IllegalStateException(argumentFailure(name, callId)));
   }
 
   private static String argumentFailure(String name, String callId) {
