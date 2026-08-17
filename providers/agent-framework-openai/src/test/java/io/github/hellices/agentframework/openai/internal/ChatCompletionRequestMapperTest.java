@@ -61,6 +61,18 @@ class ChatCompletionRequestMapperTest {
   }
 
   @Test
+  void rejectsAnEmptyHistoryBeforeTheSdkBuilderCanReportItsOwnError() {
+    // An empty `messages` list must fail with this adapter's own message, not
+    // `ChatCompletionCreateParams.Builder.build()`'s generic "messages is not set" -
+    // the caller needs a stable, adapter-owned diagnosis rather than an SDK implementation detail.
+    assertThatThrownBy(() -> mapper.map(request(List.of()), DEFAULTS))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessage(
+            "a model request must carry at least one message: openai chat completions has no"
+                + " representation for an empty history");
+  }
+
+  @Test
   void rejectsAnUnknownRole() {
     assertThatThrownBy(
             () -> mapper.map(request(List.of(message(Role.of("auditor"), "who am i"))), DEFAULTS))

@@ -47,16 +47,20 @@ public final class ChatCompletionRequestMapper {
    * the originating SDK message so the {@code arguments} string the model produced is sent back
    * unchanged.
    *
-   * <p>Two histories have no message shape at all, and both fail here rather than reaching the
-   * wire. A {@code Role.TOOL} message carrying no result would fan out into no message, leaving the
-   * assistant's tool call unanswered in a request the provider rejects, and no {@code tool_call_id}
-   * can be invented for it. An assistant turn that would carry neither {@code content} nor {@code
-   * tool_calls} - a framework message with no text part and no tool call, or an echoed SDK message
-   * with no content, no refusal, and no tool call - is the {@code {"role":"assistant"}} shape Chat
-   * Completions rejects; the SDK builder accepts it silently, so nothing downstream would catch it.
-   * An assistant turn that carries a text part sends it even when it is empty, because {@code
-   * content: ""} is representable, and omits {@code content} only when it carries no text part at
-   * all.
+   * <p>Three histories have no message shape at all, and all three fail here rather than reaching
+   * the wire. An empty {@code request.messages()} is refused first, before anything else is built,
+   * because {@code ChatCompletionCreateParams.Builder.build()} would otherwise throw its own {@code
+   * IllegalStateException} ("`messages` is required, but was not set") - an SDK implementation
+   * detail this adapter does not own and would otherwise leak to a caller in place of a stable
+   * diagnosis. A {@code Role.TOOL} message carrying no result would fan out into no message,
+   * leaving the assistant's tool call unanswered in a request the provider rejects, and no {@code
+   * tool_call_id} can be invented for it. An assistant turn that would carry neither {@code
+   * content} nor {@code tool_calls} - a framework message with no text part and no tool call, or an
+   * echoed SDK message with no content, no refusal, and no tool call - is the {@code
+   * {"role":"assistant"}} shape Chat Completions rejects; the SDK builder accepts it silently, so
+   * nothing downstream would catch it. An assistant turn that carries a text part sends it even
+   * when it is empty, because {@code content: ""} is representable, and omits {@code content} only
+   * when it carries no text part at all.
    *
    * <p>{@code ToolResultContent.error()} has no representation: a Chat Completions tool message
    * carries no error flag. A failed result is sent as its text, which is what the model reads, and
@@ -66,11 +70,17 @@ public final class ChatCompletionRequestMapper {
    * @param request the neutral request, never {@code null}
    * @param settings the adapter defaults, never {@code null}
    * @return parameters ready to send
-   * @throws IllegalArgumentException if a role, a content placement, a message with nothing the
-   *     wire can carry, a tool call's arguments, or a provider option cannot be represented
+   * @throws IllegalArgumentException if the request carries no message, or if a role, a content
+   *     placement, a message with nothing the wire can carry, a tool call's arguments, or a
+   *     provider option cannot be represented
    * @throws UnsupportedOperationException if the request carries adapter-owned extension content
    */
   public ChatCompletionCreateParams map(ModelRequest request, OpenAiChatSettings settings) {
+    if (request.messages().isEmpty()) {
+      throw new IllegalArgumentException(
+          "a model request must carry at least one message: openai chat completions has no"
+              + " representation for an empty history");
+    }
     ChatCompletionCreateParams.Builder params =
         ChatCompletionCreateParams.builder().model(settings.model());
     applyOptions(request, settings, params);

@@ -165,6 +165,26 @@ class OpenAiChatModelClientTest {
   }
 
   @Test
+  void deliversAnEmptyHistoryThroughTheStageWithoutDispatchingIt() {
+    // An empty `messages` list must fail with this adapter's own stable message, before the
+    // operations port is ever reached, rather than as the SDK builder's own "messages is required,
+    // but was not set" once the request finally hits ChatCompletionCreateParams.Builder.build().
+    FakeChatCompletionsOperations operations = new FakeChatCompletionsOperations();
+    ModelClient client = clientOver(operations, builder -> builder.model("gpt-4.1-mini"));
+
+    var stage = client.run(historyOf()).toCompletableFuture();
+
+    assertThat(operations.invocations()).isZero();
+    assertThatThrownBy(stage::join)
+        .isInstanceOf(CompletionException.class)
+        .cause()
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessage(
+            "a model request must carry at least one message: openai chat completions has no"
+                + " representation for an empty history");
+  }
+
+  @Test
   void rejectsANullRequestWhereTheCallWasMade() {
     // A missing request is a call-site programming error, not a provider failure: it fails by name
     // where it was made rather than arriving as a stage a caller might map, retry, or log.

@@ -29,10 +29,17 @@ import java.util.concurrent.CompletionStage;
  * the {@code ModelRequest} wins over the default.
  *
  * <p>{@link #run(ModelRequest)} reports a request this adapter cannot represent as a failed stage
- * rather than a throw, so a caller handles one failure path rather than two. Two things still leave
- * it by throwing: a {@code null} request, which is a call-site programming error rather than a
- * provider outcome, and an {@link Error}, which is not a request failure and must not be offered to
- * a caller to map or retry as if the provider had answered.
+ * rather than a throw, so a caller handles one failure path rather than two. That covers a request
+ * mapping failure - including an empty {@code request.messages()}, which this adapter refuses with
+ * its own stable message before the SDK builder ever sees the request - and a response mapping
+ * failure, which arrives the same way once the provider has answered: a completion with other than
+ * exactly one choice, a {@code tool_calls} or {@code function_call} finish reason with no tool call
+ * to back it up, or a tool call whose id or arguments this adapter cannot represent, whether that
+ * is a duplicate key, trailing input after the JSON object, or anything else the arguments string
+ * does not parse as. Two things still leave it by throwing: a {@code null} request, which is a
+ * call-site programming error rather than a provider outcome, and an {@link Error}, which is not a
+ * request failure and must not be offered to a caller to map or retry as if the provider had
+ * answered.
  *
  * <p>Cancelling the run's signal fails the returned stage promptly and removes the listener, but it
  * does not abort the HTTP request already in flight, and neither does cancelling the future taken
@@ -75,8 +82,10 @@ public final class OpenAiChatModelClient implements ModelClient {
    *
    * @param request the neutral request, never {@code null}
    * @return a stage carrying the mapped response, or the failure of a request this adapter cannot
-   *     represent, of a cancelled run, or of the provider itself, with the provider's own exception
-   *     instance preserved
+   *     map onto the wire - including an empty {@code request.messages()} - a response this adapter
+   *     cannot map back - other than exactly one choice, a tool finish reason with no tool call, or
+   *     a tool call whose id or arguments cannot be represented - a cancelled run, or the provider
+   *     itself, with the provider's own exception instance preserved
    * @throws NullPointerException if {@code request} is {@code null}
    */
   @Override
