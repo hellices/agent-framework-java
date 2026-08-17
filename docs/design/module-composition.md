@@ -74,7 +74,7 @@ level would add path depth without adding published identity.
 | `:agent-framework-bom` | `agent-framework-bom` | `java-platform` listing every published artifact. | none |
 | `:integrations:agent-framework-mcp` | `agent-framework-mcp` | Model Context Protocol client integration over a borrowed SDK client or an owned stdio or streamable HTTP connection. | `:agent-framework-api` |
 | `:providers:agent-framework-openai` | `agent-framework-openai` | OpenAI Chat Completions model client over a borrowed official SDK client. | `:agent-framework-api` (production), `:agent-framework-engine` (test only) |
-| `:samples:sample-standalone` | not published | Runnable standalone `Agent.run` example with explicit model-client assembly. | `:agent-framework-api`, `:agent-framework-engine` |
+| `:samples:sample-standalone` | not published | Runnable standalone `Agent.run` example over a real OpenAI-compatible endpoint, with one local function tool. | `:agent-framework-api`, `:agent-framework-engine`, `:providers:agent-framework-openai` |
 
 ## Harness projects
 

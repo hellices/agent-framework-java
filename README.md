@@ -12,9 +12,9 @@ This project does not build an application server or a dependency injection cont
 deliverable is an embeddable `AgentEngine`. A host runtime such as Spring Boot keeps owning object
 lifecycle, execution resources, security, transactions, and observability configuration.
 
-> **Status:** early. Deterministic single-agent execution and the core function-tool loop are
-> implemented; sessions, provider adapters, and host integrations remain in progress. See
-> [Current state](#current-state).
+> **Status:** early. Deterministic single-agent execution, the core function-tool loop, session
+> persistence, and one Preview provider adapter (OpenAI Chat Completions) are implemented; streaming
+> for that adapter and host integrations remain in progress. See [Current state](#current-state).
 >
 > **API stability:** pre-1.0. Public contracts may evolve between requirement slices while the core
 > execution semantics are being established.
@@ -83,6 +83,8 @@ agent-framework-testkit/    Deterministic fixtures for tests
 agent-framework-bom/        Version alignment for published artifacts
 integrations/               Protocol and service integrations
   agent-framework-mcp/      MCP client tools, borrowed or owned connection
+providers/                  Model provider adapters
+  agent-framework-openai/   OpenAI Chat Completions over a borrowed SDK client
 build-logic/                Gradle convention plugins
 build-tools/harness-policy/ Executable repository policy
 config/                     Checkstyle, PMD, SpotBugs configuration
@@ -91,27 +93,44 @@ samples/sample-standalone/  Runnable standalone Agent.run example
 .harness/                   Agent artifact JSON schemas
 ```
 
-Planned grouping directories are `providers/`, `starters/`, `protocols/`, `workflow/`, and
-`compatibility-tests/`. Each is created when its first module lands.
+Planned grouping directories are `starters/`, `protocols/`, `workflow/`, and `compatibility-tests/`.
+Each is created when its first module lands.
 
 Module rules are defined in [module composition](docs/design/module-composition.md) and enforced by
 `./gradlew policyCheck`.
 
 ## Run a standalone agent
 
-The standalone sample assembles an `Agent` with an explicit deterministic `ModelClient`, then calls
-`agent.run(...)` without a server, dependency-injection container, provider credentials, or global
-registry.
+The standalone sample assembles an `Agent` over the OpenAI Chat Completions adapter and calls
+`agent.run(...)` against a real endpoint, with no server, dependency-injection container, or global
+registry. It needs a credential, because a sample that answered without one would teach that a call
+succeeded when it never happened.
+
+| Variable | Required | Default |
+| --- | --- | --- |
+| `OPENAI_API_KEY` | yes | none |
+| `OPENAI_BASE_URL` | no | `https://api.openai.com/v1` |
+| `OPENAI_MODEL` | no | `gpt-4.1-mini` |
+
+`OPENAI_BASE_URL` points the same sample at any OpenAI-compatible endpoint. The sample also registers
+one local `current_utc_time` function tool, and its default prompt asks for that tool by name, so a
+run with no arguments exercises the whole function-tool loop.
 
 ```bash
+export OPENAI_API_KEY="<your-api-key>"   # a placeholder; never commit a real key
 ./gradlew :samples:sample-standalone:run --args="hello"
 ```
 
-Expected output:
+It prints two lines: the model's answer — the terminal assistant round, so a preamble the model
+emitted alongside a tool call is not printed, though `response.messages()` still carries it — and a
+non-sensitive footer of the shape
+`[model=… finishReason=… toolCalls=… inputTokens=… outputTokens=…]`. The `toolCalls` count is how you
+see whether the model used the tool, which is the model's decision, not the sample's. `n/a` token
+counts mean the endpoint reported no usage, which is common on OpenAI-compatible servers and is not
+the same as a measured `0`. Model output is not deterministic, so no exact reply is documented here.
 
-```text
-Standalone agent received: hello
-```
+The adapter's own maturity, limitations, and test evidence are in the
+[OpenAI adapter README](providers/agent-framework-openai/README.md).
 
 ## Documentation
 
@@ -157,19 +176,23 @@ The repository has a verified foundation and a runnable deterministic single-age
 - Agent artifact JSON schemas under `.harness/`
 - CI on the `arc-java-build` ARC scale set with a fork-safe verification path
 - 244 requirements derived from a pinned upstream snapshot
-- Four published product modules with a compiled and tested surface
+- Five published product modules with a compiled and tested surface
 - Deterministic `AgentEngine` run and function-tool loops, shared by ordinary and streaming runs
 - Session persistence and restoration: versioned snapshots, in-memory and file session stores, the
   context provider pipeline, and default in-memory chat history
-- Runnable standalone `Agent.run(...)` sample with explicit model-client assembly
+- OpenAI Chat Completions adapter (Preview) over a borrowed official SDK client, reaching the engine
+  only through the neutral `ModelClient` port, with a deterministic offline test suite
+- Runnable standalone `Agent.run(...)` sample calling a real OpenAI-compatible endpoint through that
+  adapter, with one local function tool
 
 **Not started**
 
 - Interceptor pipeline and tool approval
-- Workflows, hosting, protocol adapters, and direct provider integrations
+- Provider streaming and Spring Boot hosting
+- Workflows and protocol adapters
 
-The next implementation stages add provider adapters and host integration without changing the
-standalone agent definition.
+The next implementation stages add host integration, provider streaming, and further provider
+adapters without changing the standalone agent definition.
 
 ## Translations
 

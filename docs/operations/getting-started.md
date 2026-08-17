@@ -34,6 +34,15 @@ cd agent-framework-java
 A clean checkout must pass before you change anything. If it does not, that is a repository bug and
 worth an issue rather than a local workaround.
 
+No credential is needed for any of this. The whole verification contract — `policyCheck`, `quality`,
+`testJava17`, `testJava21`, `testJava25`, and `check` — runs offline: no test calls a network or
+reads a provider key. The single exception is `./gradlew :samples:sample-standalone:run`, which calls
+a real OpenAI-compatible endpoint and therefore needs `OPENAI_API_KEY` exported (optionally
+`OPENAI_BASE_URL` and `OPENAI_MODEL`). It is a sample, not part of `check`, so skipping it leaves the
+verification contract complete. See the
+[adapter README](../../providers/agent-framework-openai/README.md) for the variables and the
+credential handling.
+
 ## 3. Understand the layers
 
 Read in this order. Each answers a different question.
