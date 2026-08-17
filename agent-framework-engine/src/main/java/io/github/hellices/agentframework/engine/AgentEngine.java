@@ -74,8 +74,16 @@ public final class AgentEngine {
     return new AgentEngineBuilder();
   }
 
-  public static AgentFactory factory(ModelCatalog catalog) {
-    return new CatalogAgentFactory(catalog);
+  /**
+   * Composes this model-independent engine with a {@link ModelCatalog} into an {@link AgentFactory}
+   * that binds agents to this engine, so one shared engine can produce many agents that differ only
+   * in their declaration and runtime.
+   *
+   * @param catalog the catalog a produced builder resolves default and named models from
+   * @return a factory that binds every agent it produces to this engine
+   */
+  public AgentFactory factory(ModelCatalog catalog) {
+    return new CatalogAgentFactory(this, catalog);
   }
 
   /**

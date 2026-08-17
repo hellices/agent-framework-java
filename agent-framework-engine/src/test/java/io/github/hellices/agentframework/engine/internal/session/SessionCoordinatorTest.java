@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.github.hellices.agentframework.api.agent.Agent;
+import io.github.hellices.agentframework.api.agent.AgentBuilder;
 import io.github.hellices.agentframework.api.agent.AgentResponseUpdate;
 import io.github.hellices.agentframework.api.agent.AgentRun;
 import io.github.hellices.agentframework.api.agent.AgentRunOptions;
@@ -28,6 +29,7 @@ import io.github.hellices.agentframework.api.value.JsonValue;
 import io.github.hellices.agentframework.api.value.JsonValues;
 import io.github.hellices.agentframework.engine.AgentEngine;
 import io.github.hellices.agentframework.engine.session.InMemoryHistoryProvider;
+import io.github.hellices.agentframework.spi.model.ModelCatalog;
 import io.github.hellices.agentframework.spi.model.ModelClient;
 import io.github.hellices.agentframework.spi.model.ModelRequest;
 import io.github.hellices.agentframework.spi.model.ModelResponse;
@@ -57,6 +59,12 @@ import org.junit.jupiter.api.Test;
 
 class SessionCoordinatorTest {
 
+  private static final ModelCatalog EMPTY_CATALOG = ModelCatalog.builder().build();
+
+  private static AgentBuilder boundBuilder(ModelClient client) {
+    return AgentEngine.builder().build().factory(EMPTY_CATALOG).builderWithClient(client);
+  }
+
   private static final Instant SEEDED_CREATED_AT = Instant.parse("2026-01-01T00:00:00Z");
 
   private final StateCodecRegistry registry = StateCodecRegistry.builder().build();
@@ -66,8 +74,7 @@ class SessionCoordinatorTest {
   @Test
   void aRunWithASessionAndNoHistoryProviderResolvesTheDefaultInMemoryHistory() {
     ProbeProvider probe = new ProbeProvider("probe");
-    Agent engine =
-        AgentEngine.builder().modelClient(fixedClient("hello")).contextProviders(probe).build();
+    Agent engine = boundBuilder(fixedClient("hello")).contextProviders(probe).build();
 
     run(engine, session("session-1", null, Map.of()), "hi");
 
@@ -79,8 +86,7 @@ class SessionCoordinatorTest {
   @Test
   void aSessionlessRunResolvesNoDefaultInMemoryHistory() {
     ProbeProvider probe = new ProbeProvider("probe");
-    Agent engine =
-        AgentEngine.builder().modelClient(fixedClient("hello")).contextProviders(probe).build();
+    Agent engine = boundBuilder(fixedClient("hello")).contextProviders(probe).build();
 
     engine.run("hi").response().toCompletableFuture().join();
 
@@ -90,8 +96,7 @@ class SessionCoordinatorTest {
   @Test
   void aServiceManagedConversationResolvesNoDefaultInMemoryHistory() {
     ProbeProvider probe = new ProbeProvider("probe");
-    Agent engine =
-        AgentEngine.builder().modelClient(fixedClient("hello")).contextProviders(probe).build();
+    Agent engine = boundBuilder(fixedClient("hello")).contextProviders(probe).build();
 
     run(engine, session("session-1", "service-1", Map.of()), "hi");
 
@@ -102,8 +107,7 @@ class SessionCoordinatorTest {
   void aConfiguredLoadEnabledHistoryProviderSuppressesTheDefaultInMemoryHistory() {
     ProbeProvider probe = new ProbeProvider("probe");
     Agent engine =
-        AgentEngine.builder()
-            .modelClient(fixedClient("hello"))
+        boundBuilder(fixedClient("hello"))
             .contextProviders(
                 new InMemoryHistoryProvider("primary", HistoryPolicy.defaults()), probe)
             .build();
@@ -120,8 +124,7 @@ class SessionCoordinatorTest {
   void aLoadDisabledHistoryProviderDoesNotSuppressTheDefaultInMemoryHistory() {
     ProbeProvider probe = new ProbeProvider("probe");
     Agent engine =
-        AgentEngine.builder()
-            .modelClient(fixedClient("hello"))
+        boundBuilder(fixedClient("hello"))
             .contextProviders(
                 new InMemoryHistoryProvider(
                     "audit", HistoryPolicy.builder().loadMessages(false).build()),
@@ -182,8 +185,7 @@ class SessionCoordinatorTest {
   void aLoadEnabledHistoryProviderOnTheDefaultNamespaceSuppressesTheDefaultNormally() {
     ProbeProvider probe = new ProbeProvider("probe");
     Agent engine =
-        AgentEngine.builder()
-            .modelClient(fixedClient("hello"))
+        boundBuilder(fixedClient("hello"))
             .contextProviders(
                 new InMemoryHistoryProvider(
                     InMemoryHistoryProvider.DEFAULT_SOURCE_ID, HistoryPolicy.defaults()),
@@ -337,8 +339,7 @@ class SessionCoordinatorTest {
   void aProviderWritingASiblingNamespaceDoesNotPersistThatSlot() {
     ProbeProvider probe = new ProbeProvider("probe");
     Agent engine =
-        AgentEngine.builder()
-            .modelClient(fixedClient("hello"))
+        boundBuilder(fixedClient("hello"))
             .contextProviders(new SiblingWritingProvider("writer", "ghost"), probe)
             .build();
 
@@ -725,8 +726,7 @@ class SessionCoordinatorTest {
   @Test
   void aSessionlessRunWithNoProvidersFailsSynchronouslyWhenTheClientThrows() {
     Agent engine =
-        AgentEngine.builder()
-            .modelClient(
+        boundBuilder(
                 request -> {
                   throw new IllegalStateException("boom");
                 })
@@ -740,8 +740,7 @@ class SessionCoordinatorTest {
   @Test
   void aSessionRunReportsAClientThatThrowsOnTheResponseAndSessionStages() {
     Agent engine =
-        AgentEngine.builder()
-            .modelClient(
+        boundBuilder(
                 request -> {
                   throw new IllegalStateException("boom");
                 })
@@ -761,7 +760,7 @@ class SessionCoordinatorTest {
 
   @Test
   void aStoreLessSessionRunPublishesTheUpdatedSessionWithItsDefaultHistory() {
-    Agent engine = AgentEngine.builder().modelClient(fixedClient("hello")).build();
+    Agent engine = boundBuilder(fixedClient("hello")).build();
 
     AgentRun agentRun = start(engine, session("session-1", null, Map.of()), "hi");
     agentRun.response().toCompletableFuture().join();
@@ -776,7 +775,7 @@ class SessionCoordinatorTest {
   @Test
   void aStoreLessSecondTurnReplaysTheHistoryOfThePublishedSession() {
     AtomicReference<ModelRequest> captured = new AtomicReference<>();
-    Agent engine = AgentEngine.builder().modelClient(capturingClient(captured, "answer")).build();
+    Agent engine = boundBuilder(capturingClient(captured, "answer")).build();
 
     AgentRun first = start(engine, session("session-1", null, Map.of()), "first");
     first.response().toCompletableFuture().join();
@@ -791,10 +790,7 @@ class SessionCoordinatorTest {
 
   @Test
   void aStoreLessStreamingSessionRunPublishesTheUpdatedSession() {
-    Agent engine =
-        AgentEngine.builder()
-            .modelClient(new LoggingStreamingClient(new ArrayList<>(), "hello"))
-            .build();
+    Agent engine = boundBuilder(new LoggingStreamingClient(new ArrayList<>(), "hello")).build();
 
     AgentStreamingRun<AgentResponseUpdate> streamingRun =
         engine.runStreaming(
@@ -814,7 +810,7 @@ class SessionCoordinatorTest {
 
   @Test
   void aSessionRunThatChangesNothingPublishesTheEffectiveSession() {
-    Agent engine = AgentEngine.builder().modelClient(fixedClient("hello")).build();
+    Agent engine = boundBuilder(fixedClient("hello")).build();
     AgentSession requested =
         session(
             "session-1", "service-9", Map.of("audit", MessageHistory.of(List.of(user("kept")))));
@@ -902,7 +898,7 @@ class SessionCoordinatorTest {
 
   @Test
   void aSessionlessRunPublishesNoUpdatedSession() {
-    Agent engine = AgentEngine.builder().modelClient(fixedClient("hello")).build();
+    Agent engine = boundBuilder(fixedClient("hello")).build();
 
     AgentRun agentRun = engine.run("hi");
     agentRun.response().toCompletableFuture().join();
@@ -915,12 +911,7 @@ class SessionCoordinatorTest {
 
   @Test
   void aStateCodecRegistryWithoutASessionStoreIsRejected() {
-    assertThatThrownBy(
-            () ->
-                AgentEngine.builder()
-                    .modelClient(fixedClient("hello"))
-                    .stateCodecRegistry(registry)
-                    .build())
+    assertThatThrownBy(() -> AgentEngine.builder().stateCodecRegistry(registry).build())
         .isInstanceOf(IllegalStateException.class)
         .hasMessage("stateCodecRegistry requires a configured sessionStore");
   }
@@ -946,9 +937,11 @@ class SessionCoordinatorTest {
         StateCodecRegistry.builder().register(new CounterCodec()).build();
     Agent engine =
         AgentEngine.builder()
-            .modelClient(fixedClient("hello"))
             .sessionStore(store)
             .stateCodecRegistry(configured)
+            .build()
+            .factory(EMPTY_CATALOG)
+            .builderWithClient(fixedClient("hello"))
             .contextProviders(new CounterProvider("counter"))
             .build();
 
@@ -968,8 +961,10 @@ class SessionCoordinatorTest {
   private static Agent engineWithStore(
       SessionStore store, ModelClient client, ContextProvider... providers) {
     return AgentEngine.builder()
-        .modelClient(client)
         .sessionStore(store)
+        .build()
+        .factory(EMPTY_CATALOG)
+        .builderWithClient(client)
         .contextProviders(providers)
         .build();
   }

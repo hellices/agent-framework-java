@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.github.hellices.agentframework.api.agent.Agent;
+import io.github.hellices.agentframework.api.agent.AgentBuilder;
 import io.github.hellices.agentframework.api.agent.AgentDefinition;
 import io.github.hellices.agentframework.api.agent.AgentResponse;
 import io.github.hellices.agentframework.api.agent.AgentResponseUpdate;
@@ -36,6 +37,7 @@ import io.github.hellices.agentframework.api.value.JsonValue;
 import io.github.hellices.agentframework.api.value.JsonValues;
 import io.github.hellices.agentframework.engine.session.InMemorySessionStore;
 import io.github.hellices.agentframework.engine.session.JacksonSessionSnapshotCodec;
+import io.github.hellices.agentframework.spi.model.ModelCatalog;
 import io.github.hellices.agentframework.spi.model.ModelClient;
 import io.github.hellices.agentframework.spi.model.ModelRequest;
 import io.github.hellices.agentframework.spi.model.ModelResponse;
@@ -69,6 +71,12 @@ import org.junit.jupiter.api.Test;
  * #consecutiveAssistantChunksAreReconstructedAsOneMessage()} characterises that difference.
  */
 class AgentEngineStreamingToolLoopTest {
+
+  private static final ModelCatalog EMPTY_CATALOG = ModelCatalog.builder().build();
+
+  private static AgentBuilder boundBuilder(ModelClient client) {
+    return AgentEngine.builder().build().factory(EMPTY_CATALOG).builderWithClient(client);
+  }
 
   private static final Map<String, Object> SEOUL = Map.of("city", "Seoul");
 
@@ -733,8 +741,7 @@ class AgentEngineStreamingToolLoopTest {
             });
 
     AgentResponse ordinary =
-        AgentEngine.builder()
-            .modelClient(ordinaryClient)
+        boundBuilder(ordinaryClient)
             .tools(again)
             .maxIterations(2)
             .build()
@@ -743,12 +750,8 @@ class AgentEngineStreamingToolLoopTest {
             .toCompletableFuture()
             .join();
     AgentStreamingRun<AgentResponseUpdate> run =
-        AgentEngine.builder()
-            .modelClient(streamingClient)
-            .tools(again)
-            .maxIterations(2)
-            .build()
-            .runStreaming("loop");
+        boundBuilder(streamingClient).tools(again).maxIterations(2).build().runStreaming("loop");
+
     RecordingSubscriber subscriber = subscribe(run.updates(), Long.MAX_VALUE);
     subscriber.completion.join();
     AgentResponse streaming = run.response().toCompletableFuture().join();
@@ -785,8 +788,7 @@ class AgentEngineStreamingToolLoopTest {
 
     assertThatThrownBy(
             () ->
-                AgentEngine.builder()
-                    .modelClient(ordinaryClient)
+                boundBuilder(ordinaryClient)
                     .tools(tool)
                     .maxIterations(1)
                     .build()
@@ -797,12 +799,8 @@ class AgentEngineStreamingToolLoopTest {
         .hasRootCauseInstanceOf(IllegalStateException.class)
         .hasRootCauseMessage("model returned tool calls after tools were disabled");
     AgentStreamingRun<AgentResponseUpdate> run =
-        AgentEngine.builder()
-            .modelClient(streamingClient)
-            .tools(tool)
-            .maxIterations(1)
-            .build()
-            .runStreaming("hi");
+        boundBuilder(streamingClient).tools(tool).maxIterations(1).build().runStreaming("hi");
+
     RecordingSubscriber subscriber = subscribe(run.updates(), Long.MAX_VALUE);
 
     assertThat(subscriber.terminals).hasValue(1);
@@ -832,10 +830,12 @@ class AgentEngineStreamingToolLoopTest {
     InMemorySessionStore store = new InMemorySessionStore(new JacksonSessionSnapshotCodec());
     Agent engine =
         AgentEngine.builder()
-            .modelClient(client)
+            .sessionStore(store)
+            .build()
+            .factory(EMPTY_CATALOG)
+            .builderWithClient(client)
             .tools(weatherTool())
             .contextProviders(provider)
-            .sessionStore(store)
             .build();
     AgentRunRequest request =
         request(
@@ -1063,8 +1063,7 @@ class AgentEngineStreamingToolLoopTest {
   void demandRejectedFromOnSubscribeStartsNoModelCall() {
     ManualStreams streams = new ManualStreams();
     Agent engine =
-        AgentEngine.builder()
-            .modelClient(streams.client())
+        boundBuilder(streams.client())
             .tools(weatherTool())
             .contextProviders(new CountingProvider("memory", new ArrayList<>()))
             .build();
@@ -1186,12 +1185,7 @@ class AgentEngineStreamingToolLoopTest {
   }
 
   private static Agent engine(ModelClient client, FunctionTool... tools) {
-    return AgentEngine.builder()
-        .id("agent-1")
-        .name("assistant")
-        .modelClient(client)
-        .tools(tools)
-        .build();
+    return boundBuilder(client).id("agent-1").name("assistant").tools(tools).build();
   }
 
   private static FunctionTool tool(

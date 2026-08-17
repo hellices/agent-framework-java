@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.github.hellices.agentframework.api.agent.Agent;
+import io.github.hellices.agentframework.api.agent.AgentBuilder;
 import io.github.hellices.agentframework.api.agent.AgentResponse;
 import io.github.hellices.agentframework.api.agent.AgentResponseUpdate;
 import io.github.hellices.agentframework.api.agent.AgentRun;
@@ -26,6 +27,7 @@ import io.github.hellices.agentframework.api.session.SessionStateValues;
 import io.github.hellices.agentframework.api.value.JsonNumber;
 import io.github.hellices.agentframework.api.value.JsonValue;
 import io.github.hellices.agentframework.api.value.JsonValues;
+import io.github.hellices.agentframework.spi.model.ModelCatalog;
 import io.github.hellices.agentframework.spi.model.ModelClient;
 import io.github.hellices.agentframework.spi.model.ModelRequest;
 import io.github.hellices.agentframework.spi.model.ModelResponse;
@@ -48,12 +50,17 @@ import org.junit.jupiter.api.Test;
 
 class AgentEngineSessionContextTest {
 
+  private static final ModelCatalog EMPTY_CATALOG = ModelCatalog.builder().build();
+
+  private static AgentBuilder boundBuilder(ModelClient client) {
+    return AgentEngine.builder().build().factory(EMPTY_CATALOG).builderWithClient(client);
+  }
+
   @Test
   void builderRejectsNullContextProviderEntries() {
     assertThatThrownBy(
             () ->
-                AgentEngine.builder()
-                    .modelClient(fixedClient("unused"))
+                boundBuilder(fixedClient("unused"))
                     .contextProviders(new RecordingProvider("memory", new ArrayList<>()), null))
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessage("contextProviders must not contain null entries");
@@ -63,8 +70,7 @@ class AgentEngineSessionContextTest {
   void builderRejectsABlankContextProviderSourceId() {
     assertThatThrownBy(
             () ->
-                AgentEngine.builder()
-                    .modelClient(fixedClient("unused"))
+                boundBuilder(fixedClient("unused"))
                     .contextProviders(new RecordingProvider("  ", new ArrayList<>()))
                     .build())
         .isInstanceOf(IllegalArgumentException.class)
@@ -77,8 +83,7 @@ class AgentEngineSessionContextTest {
 
     assertThatThrownBy(
             () ->
-                AgentEngine.builder()
-                    .modelClient(fixedClient("unused"))
+                boundBuilder(fixedClient("unused"))
                     .contextProviders(
                         new RecordingProvider("memory", log), new RecordingProvider("memory", log))
                     .build())
@@ -95,8 +100,7 @@ class AgentEngineSessionContextTest {
           return completedFuture(response("hello"));
         };
     Agent engine =
-        AgentEngine.builder()
-            .modelClient(client)
+        boundBuilder(client)
             .contextProviders(
                 new RecordingProvider("first", log),
                 new RecordingProvider("second", log),
@@ -126,8 +130,7 @@ class AgentEngineSessionContextTest {
         };
     List<String> log = new ArrayList<>();
     Agent engine =
-        AgentEngine.builder()
-            .modelClient(client)
+        boundBuilder(client)
             .contextProviders(
                 new RecordingProvider("first", log), new RecordingProvider("second", log))
             .build();
@@ -149,8 +152,7 @@ class AgentEngineSessionContextTest {
   void afterRunObservesTheFinalResponseThroughTheSharedSessionContext() {
     List<String> log = new ArrayList<>();
     RecordingProvider provider = new RecordingProvider("memory", log);
-    Agent engine =
-        AgentEngine.builder().modelClient(fixedClient("hello")).contextProviders(provider).build();
+    Agent engine = boundBuilder(fixedClient("hello")).contextProviders(provider).build();
 
     AgentResponse response = engine.run("hi").response().toCompletableFuture().join();
 
@@ -163,8 +165,7 @@ class AgentEngineSessionContextTest {
   void oneProviderInstanceKeepsTwoSessionsStateSlotsSeparate() {
     List<String> log = new ArrayList<>();
     RecordingProvider provider = new RecordingProvider("memory", log);
-    Agent engine =
-        AgentEngine.builder().modelClient(fixedClient("hello")).contextProviders(provider).build();
+    Agent engine = boundBuilder(fixedClient("hello")).contextProviders(provider).build();
 
     runWithSession(engine, session("session-1", null, Map.of()));
     runWithSession(engine, session("session-2", null, Map.of("memory", 7)));
@@ -182,11 +183,7 @@ class AgentEngineSessionContextTest {
     List<String> log = new ArrayList<>();
     RecordingProvider first = new RecordingProvider("first", log);
     RecordingProvider second = new RecordingProvider("second", log);
-    Agent engine =
-        AgentEngine.builder()
-            .modelClient(fixedClient("hello"))
-            .contextProviders(first, second)
-            .build();
+    Agent engine = boundBuilder(fixedClient("hello")).contextProviders(first, second).build();
 
     runWithSession(engine, session("session-1", null, Map.of("first", 3)));
 
@@ -204,8 +201,7 @@ class AgentEngineSessionContextTest {
   void streamingRunComposesBeforeRunForwardAndAfterRunInReverseAroundTheModelCall() {
     List<String> log = new ArrayList<>();
     Agent engine =
-        AgentEngine.builder()
-            .modelClient(new StreamingFakeClient(log))
+        boundBuilder(new StreamingFakeClient(log))
             .contextProviders(
                 new RecordingProvider("first", log), new RecordingProvider("second", log))
             .build();
@@ -225,10 +221,7 @@ class AgentEngineSessionContextTest {
     List<String> log = new ArrayList<>();
     StreamingFakeClient client = new StreamingFakeClient(log);
     Agent engine =
-        AgentEngine.builder()
-            .modelClient(client)
-            .contextProviders(new RecordingProvider("first", log))
-            .build();
+        boundBuilder(client).contextProviders(new RecordingProvider("first", log)).build();
 
     AgentStreamingRun<AgentResponseUpdate> run = engine.runStreaming("hi");
     consume(run.updates());
@@ -249,8 +242,7 @@ class AgentEngineSessionContextTest {
         };
     RecordingProvider first = new RecordingProvider("first", log);
     Agent engine =
-        AgentEngine.builder()
-            .modelClient(client)
+        boundBuilder(client)
             .contextProviders(first, new FailingBeforeRunProvider("second", log))
             .build();
 
@@ -267,10 +259,7 @@ class AgentEngineSessionContextTest {
     CountingClient client = new CountingClient("hello");
     RecordingProvider later = new RecordingProvider("later", log);
     Agent engine =
-        AgentEngine.builder()
-            .modelClient(client)
-            .contextProviders(new NullStageProvider("memory"), later)
-            .build();
+        boundBuilder(client).contextProviders(new NullStageProvider("memory"), later).build();
 
     assertThatThrownBy(() -> engine.run("hi").response().toCompletableFuture().join())
         .hasRootCauseInstanceOf(NullPointerException.class)
@@ -288,8 +277,7 @@ class AgentEngineSessionContextTest {
     List<String> log = new ArrayList<>();
     RecordingProvider first = new RecordingProvider("first", log);
     Agent engine =
-        AgentEngine.builder()
-            .modelClient(fixedClient("hello"))
+        boundBuilder(fixedClient("hello"))
             .contextProviders(first, new FailingAfterRunProvider("second", log))
             .build();
 
@@ -310,7 +298,7 @@ class AgentEngineSessionContextTest {
           failed.completeExceptionally(new IllegalStateException("model failure"));
           return failed;
         };
-    Agent engine = AgentEngine.builder().modelClient(client).contextProviders(provider).build();
+    Agent engine = boundBuilder(client).contextProviders(provider).build();
 
     assertThatThrownBy(() -> engine.run("hi").response().toCompletableFuture().join())
         .hasRootCauseInstanceOf(IllegalStateException.class)
@@ -323,7 +311,7 @@ class AgentEngineSessionContextTest {
   @Test
   void anOrdinaryRunWithoutContextProvidersReportsAModelClientFailureSynchronously() {
     BrokenClient client = BrokenClient.throwing();
-    Agent engine = AgentEngine.builder().modelClient(client).build();
+    Agent engine = boundBuilder(client).build();
 
     // With no provider hook to wait for there is nothing to defer, so a run that cannot start
     // still fails from the call that started it, exactly as it did before the provider pipeline.
@@ -335,7 +323,7 @@ class AgentEngineSessionContextTest {
 
   @Test
   void anOrdinaryRunWithoutContextProvidersRejectsANullModelResponseStageSynchronously() {
-    Agent engine = AgentEngine.builder().modelClient(BrokenClient.returningNull()).build();
+    Agent engine = boundBuilder(BrokenClient.returningNull()).build();
 
     assertThatThrownBy(() -> engine.run("hi"))
         .isInstanceOf(NullPointerException.class)
@@ -347,7 +335,7 @@ class AgentEngineSessionContextTest {
     List<String> log = new ArrayList<>();
     GatedBeforeRunProvider gated = new GatedBeforeRunProvider("slow", log);
     BrokenClient client = BrokenClient.throwing();
-    Agent engine = AgentEngine.builder().modelClient(client).contextProviders(gated).build();
+    Agent engine = boundBuilder(client).contextProviders(gated).build();
 
     AgentRun run = engine.run("hi");
 
@@ -373,8 +361,7 @@ class AgentEngineSessionContextTest {
     RecordingProvider provider = new RecordingProvider("memory", log);
     CancellationSignal signal = new CancellationSignal();
     signal.cancel();
-    Agent engine =
-        AgentEngine.builder().modelClient(fixedClient("hello")).contextProviders(provider).build();
+    Agent engine = boundBuilder(fixedClient("hello")).contextProviders(provider).build();
     AgentRunRequest request =
         request(
             Message.normalize("hi"),
@@ -397,7 +384,7 @@ class AgentEngineSessionContextTest {
           return completedFuture(response("hello"));
         };
     GatedBeforeRunProvider gated = new GatedBeforeRunProvider("slow", log);
-    Agent engine = AgentEngine.builder().modelClient(client).contextProviders(gated).build();
+    Agent engine = boundBuilder(client).contextProviders(gated).build();
 
     AgentRun run = engine.run("hi");
     run.cancel();
@@ -418,11 +405,7 @@ class AgentEngineSessionContextTest {
     List<String> log = new ArrayList<>();
     RecordingProvider first = new RecordingProvider("first", log);
     RecordingProvider second = new RecordingProvider("second", log);
-    Agent engine =
-        AgentEngine.builder()
-            .modelClient(fixedClient("hello"))
-            .contextProviders(first, second)
-            .build();
+    Agent engine = boundBuilder(fixedClient("hello")).contextProviders(first, second).build();
 
     runWithSession(engine, session("session-1", null, Map.of("first", 3, "second", 5)));
 
@@ -436,8 +419,7 @@ class AgentEngineSessionContextTest {
   void aProviderUsingOnlyItsBoundViewCarriesStateIntoTheNextRunOfTheSameSession() {
     List<String> log = new ArrayList<>();
     RecordingProvider provider = new RecordingProvider("memory", log);
-    Agent engine =
-        AgentEngine.builder().modelClient(fixedClient("hello")).contextProviders(provider).build();
+    Agent engine = boundBuilder(fixedClient("hello")).contextProviders(provider).build();
 
     runWithSession(engine, session("session-1", null, Map.of()));
     runWithSession(engine, provider.updatedSessions.get(0));
@@ -456,8 +438,7 @@ class AgentEngineSessionContextTest {
     StreamingFakeClient client = new StreamingFakeClient(log);
     RecordingProvider first = new RecordingProvider("first", log);
     Agent engine =
-        AgentEngine.builder()
-            .modelClient(client)
+        boundBuilder(client)
             .contextProviders(first, new FailingBeforeRunProvider("second", log))
             .build();
 
@@ -478,11 +459,7 @@ class AgentEngineSessionContextTest {
   void streamingAfterRunObservesTheFinalResponseThroughTheSharedSessionContext() {
     List<String> log = new ArrayList<>();
     RecordingProvider provider = new RecordingProvider("memory", log);
-    Agent engine =
-        AgentEngine.builder()
-            .modelClient(new StreamingFakeClient(log))
-            .contextProviders(provider)
-            .build();
+    Agent engine = boundBuilder(new StreamingFakeClient(log)).contextProviders(provider).build();
 
     AgentStreamingRun<AgentResponseUpdate> run = engine.runStreaming("hi");
     consume(run.updates());
@@ -497,11 +474,7 @@ class AgentEngineSessionContextTest {
   void oneProviderInstanceKeepsTwoStreamingSessionsStateSlotsSeparate() {
     List<String> log = new ArrayList<>();
     RecordingProvider provider = new RecordingProvider("memory", log);
-    Agent engine =
-        AgentEngine.builder()
-            .modelClient(new StreamingFakeClient(log))
-            .contextProviders(provider)
-            .build();
+    Agent engine = boundBuilder(new StreamingFakeClient(log)).contextProviders(provider).build();
 
     runStreamingWithSession(engine, session("session-1", null, Map.of()));
     runStreamingWithSession(engine, session("session-2", null, Map.of("memory", 7)));
@@ -519,7 +492,7 @@ class AgentEngineSessionContextTest {
     List<String> log = new ArrayList<>();
     StreamingFakeClient client = new StreamingFakeClient(log);
     GatedBeforeRunProvider gated = new GatedBeforeRunProvider("slow", log);
-    Agent engine = AgentEngine.builder().modelClient(client).contextProviders(gated).build();
+    Agent engine = boundBuilder(client).contextProviders(gated).build();
 
     AgentStreamingRun<AgentResponseUpdate> run = engine.runStreaming("hi");
     RecordingSubscriber<AgentResponseUpdate> subscriber = subscribe(run.updates());
@@ -543,7 +516,7 @@ class AgentEngineSessionContextTest {
   @Test
   void aStreamingRunWithoutContextProvidersReportsAModelClientFailureSynchronously() {
     BrokenStreamingClient client = BrokenStreamingClient.throwing();
-    Agent engine = AgentEngine.builder().modelClient(client).build();
+    Agent engine = boundBuilder(client).build();
 
     // With no provider hook to wait for there is nothing to defer, so a run that cannot start
     // still fails from the call that started it, exactly as it did before the provider pipeline.
@@ -555,7 +528,7 @@ class AgentEngineSessionContextTest {
 
   @Test
   void aStreamingRunWithoutContextProvidersRejectsANullUpdatePublisherSynchronously() {
-    Agent engine = AgentEngine.builder().modelClient(BrokenStreamingClient.returningNull()).build();
+    Agent engine = boundBuilder(BrokenStreamingClient.returningNull()).build();
 
     assertThatThrownBy(() -> engine.runStreaming("hi"))
         .isInstanceOf(NullPointerException.class)
@@ -567,10 +540,7 @@ class AgentEngineSessionContextTest {
     List<String> log = new ArrayList<>();
     RecordingProvider provider = new RecordingProvider("memory", log);
     Agent engine =
-        AgentEngine.builder()
-            .modelClient(BrokenStreamingClient.throwing())
-            .contextProviders(provider)
-            .build();
+        boundBuilder(BrokenStreamingClient.throwing()).contextProviders(provider).build();
 
     // A configured provider makes the model call happen after an asynchronous hook, so the same
     // failure can no longer be raised by runStreaming; it is delivered as a terminal onError.
@@ -590,8 +560,7 @@ class AgentEngineSessionContextTest {
   void aStreamingRunWithContextProvidersDeliversANullUpdatePublisherThroughTheStream() {
     List<String> log = new ArrayList<>();
     Agent engine =
-        AgentEngine.builder()
-            .modelClient(BrokenStreamingClient.returningNull())
+        boundBuilder(BrokenStreamingClient.returningNull())
             .contextProviders(new RecordingProvider("memory", log))
             .build();
 
@@ -609,8 +578,7 @@ class AgentEngineSessionContextTest {
   void aStreamingAfterRunFailureFailsTheRunAfterTheUpdateStreamAlreadyCompleted() {
     List<String> log = new ArrayList<>();
     Agent engine =
-        AgentEngine.builder()
-            .modelClient(new StreamingFakeClient(log))
+        boundBuilder(new StreamingFakeClient(log))
             .contextProviders(new FailingAfterRunProvider("memory", log))
             .build();
 
