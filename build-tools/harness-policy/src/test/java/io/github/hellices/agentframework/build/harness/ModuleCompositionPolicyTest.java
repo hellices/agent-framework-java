@@ -1,6 +1,8 @@
 package io.github.hellices.agentframework.build.harness;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -27,7 +29,8 @@ class ModuleCompositionPolicyTest {
           ":agent-framework-api",
           ":agent-framework-engine",
           ":agent-framework-testkit",
-          ":integrations:agent-framework-mcp");
+          ":integrations:agent-framework-mcp",
+          ":providers:agent-framework-openai");
 
   private static final String PLATFORM_PROJECT = ":agent-framework-bom";
 
@@ -91,7 +94,37 @@ class ModuleCompositionPolicyTest {
           ":agent-framework-api", List.of(),
           ":agent-framework-engine", List.of(":agent-framework-api"),
           ":agent-framework-testkit", List.of(":agent-framework-api"),
-          ":integrations:agent-framework-mcp", List.of(":agent-framework-api"));
+          ":integrations:agent-framework-mcp", List.of(":agent-framework-api"),
+          ":providers:agent-framework-openai", List.of(":agent-framework-api"));
+
+  /**
+   * Project dependencies a library may compile or run its tests against.
+   *
+   * <p>Separate from {@link #ALLOWED_DEPENDENCIES} because a test-only dependency reaches no
+   * consumer. Folding the two together would mean that permitting a provider to test against the
+   * engine also permitted it to ship against the engine, which the dependency direction rules
+   * forbid.
+   *
+   * <p>The OpenAI adapter proves that its mapping and the real tool loop agree by running {@code
+   * AgentEngine} over a faked operations port. That proof belongs next to the adapter, and the
+   * engine it needs is a test dependency only: it appears on no consumer classpath, which {@code
+   * libraryProjectOnlyDependsOnAllowedProjects} keeps enforcing separately.
+   *
+   * <p>A library that tests against no other project needs no entry, which is why the assertion
+   * reads this map with a default rather than a lookup: an empty entry per library would be
+   * ceremony that says nothing. {@code dependencyAllowlistsCoverExactlyTheLibraryProjects} keeps
+   * that convenience honest by refusing a key that names anything but a library project, so a typo
+   * cannot sit here looking like a granted permission that no assertion reads.
+   */
+  private static final Map<String, List<String>> ALLOWED_TEST_DEPENDENCIES =
+      Map.of(":providers:agent-framework-openai", List.of(":agent-framework-engine"));
+
+  /** Lockfiles of the modules a provider SDK must never reach. */
+  private static final List<String> CORE_LOCKFILES =
+      List.of(
+          "agent-framework-api/gradle.lockfile",
+          "agent-framework-engine/gradle.lockfile",
+          "agent-framework-testkit/gradle.lockfile");
 
   static Stream<String> libraryProjects() {
     return LIBRARY_PROJECTS.stream();
@@ -221,17 +254,123 @@ class ModuleCompositionPolicyTest {
     assertThat(ProjectLayout.buildFileText(gradlePath)).doesNotContain("version = \"");
   }
 
+  @Test
+  void everyRegisteredBuildFileParsesUnderTheProjectDependencyRules() {
+    // The parse refuses every form it cannot classify, so a rule that is too strict fails a build
+    // file that is entirely legal, and a policy that fails on legal input gets suppressed. Reading
+    // every registered project, not only the libraries the allowlists cover, keeps that failure
+    // here. `:agent-framework-bom` is the case that matters most: its header comment writes out
+    // `api(project(...))` as prose, and a parse that read comments would refuse the BOM.
+    for (String gradlePath : ProjectLayout.includedProjects()) {
+      assertThatCode(() -> ProjectLayout.projectDependenciesOf(gradlePath))
+          .withFailMessage(
+              "%s declares a project dependency the module composition policy cannot read. Either"
+                  + " the build file needs the canonical form, or the parse is refusing something"
+                  + " legal.",
+              gradlePath)
+          .doesNotThrowAnyException();
+      assertThatCode(() -> ProjectLayout.testProjectDependenciesOf(gradlePath))
+          .withFailMessage(
+              "%s declares a test project dependency the module composition policy cannot read.",
+              gradlePath)
+          .doesNotThrowAnyException();
+    }
+  }
+
+  @Test
+  void dependencyAllowlistsCoverExactlyTheLibraryProjects() {
+    // Both allowlists are read through LIBRARY_PROJECTS, so a key for anything else is a
+    // permission no assertion ever applies: a typo, or a module that moved, would sit here looking
+    // granted while the project it names went unchecked or failed with a null allowlist instead.
+    assertThat(ALLOWED_DEPENDENCIES.keySet())
+        .withFailMessage(
+            "ALLOWED_DEPENDENCIES must hold one entry per library project. Its keys are %s but the"
+                + " library projects are %s. Every library needs an explicit entry, even an empty"
+                + " one, and an entry for anything else is never read.",
+            ALLOWED_DEPENDENCIES.keySet(), LIBRARY_PROJECTS)
+        .containsExactlyInAnyOrderElementsOf(LIBRARY_PROJECTS);
+
+    assertThat(LIBRARY_PROJECTS)
+        .withFailMessage(
+            "ALLOWED_TEST_DEPENDENCIES holds keys that are not library projects: %s. A library"
+                + " with no test project dependency needs no entry, but a key naming anything else"
+                + " grants a permission no assertion reads.",
+            ALLOWED_TEST_DEPENDENCIES.keySet().stream()
+                .filter(gradlePath -> !LIBRARY_PROJECTS.contains(gradlePath))
+                .toList())
+        .containsAll(ALLOWED_TEST_DEPENDENCIES.keySet());
+  }
+
   @ParameterizedTest
   @MethodSource("libraryProjects")
   void libraryProjectOnlyDependsOnAllowedProjects(String gradlePath) {
-    assertThat(ProjectLayout.projectDependenciesOf(gradlePath))
+    assertProductionDependenciesAllowed(
+        gradlePath, ProjectLayout.projectDependenciesOf(gradlePath));
+  }
+
+  private static void assertProductionDependenciesAllowed(
+      String gradlePath, List<String> productionDependencies) {
+    assertThat(productionDependencies)
         .containsExactlyInAnyOrderElementsOf(ALLOWED_DEPENDENCIES.get(gradlePath));
+  }
+
+  @ParameterizedTest
+  @MethodSource("libraryProjects")
+  void libraryProjectOnlyTestsAgainstAllowedProjects(String gradlePath) {
+    assertThat(ProjectLayout.testProjectDependenciesOf(gradlePath))
+        .containsExactlyInAnyOrderElementsOf(
+            ALLOWED_TEST_DEPENDENCIES.getOrDefault(gradlePath, List.of()));
+  }
+
+  @Test
+  void aProductionEngineDependencyOnTheProviderFailsTheAllowlist() {
+    // The point of splitting the allowlists is that permitting a test dependency must not permit a
+    // shipped one. Asserting the split exists proves nothing; this mutates the real build file and
+    // proves the production assertion rejects the result.
+    String buildFile = ProjectLayout.buildFileText(":providers:agent-framework-openai");
+    String testDeclaration = "testImplementation(project(\":agent-framework-engine\"))";
+    assertThat(buildFile)
+        .withFailMessage(
+            "This proof mutates %s. If the declaration was reworded, update the mutation rather"
+                + " than deleting the test.",
+            testDeclaration)
+        .contains(testDeclaration);
+
+    String mutated =
+        buildFile.replace(testDeclaration, "implementation(project(\":agent-framework-engine\"))");
+
+    assertThat(ProjectLayout.testProjectDependenciesIn(mutated)).isEmpty();
+    assertThat(ProjectLayout.projectDependenciesIn(mutated)).contains(":agent-framework-engine");
+    assertThatThrownBy(
+            () ->
+                assertProductionDependenciesAllowed(
+                    ":providers:agent-framework-openai",
+                    ProjectLayout.projectDependenciesIn(mutated)))
+        .isInstanceOf(AssertionError.class);
+  }
+
+  @Test
+  void noProviderSdkReachesACoreClasspath() throws IOException {
+    // PRV-001 is a resolution fact, not a build file fact: a provider SDK could arrive
+    // transitively without any core build file naming it. The lockfiles are the only place that
+    // shows what actually resolves.
+    for (String lockfile : CORE_LOCKFILES) {
+      String resolved =
+          Files.readString(RepositoryPaths.root().resolve(lockfile), StandardCharsets.UTF_8);
+      assertThat(resolved)
+          .withFailMessage(
+              "%s resolves a provider SDK. The core modules must know only the neutral ports.",
+              lockfile)
+          .doesNotContain("com.openai:");
+    }
   }
 
   @Test
   void noProductProjectDependsOnAHarnessProject() {
     for (String gradlePath : LIBRARY_PROJECTS) {
       assertThat(ProjectLayout.projectDependenciesOf(gradlePath))
+          .noneMatch(dependency -> dependency.startsWith(HARNESS_PREFIX));
+      assertThat(ProjectLayout.testProjectDependenciesOf(gradlePath))
           .noneMatch(dependency -> dependency.startsWith(HARNESS_PREFIX));
     }
   }

@@ -38,7 +38,8 @@ class PublishedBomContractTest {
           "agent-framework-api",
           "agent-framework-engine",
           "agent-framework-testkit",
-          "agent-framework-mcp");
+          "agent-framework-mcp",
+          "agent-framework-openai");
 
   private static final String PUBLISH_COMMAND =
       "./gradlew publishAllPublicationsToBuildDirectoryRepository";
