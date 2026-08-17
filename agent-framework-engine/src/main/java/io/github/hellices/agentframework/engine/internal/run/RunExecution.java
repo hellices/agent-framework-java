@@ -67,12 +67,58 @@ public final class RunExecution {
     stateMachine.transitionTo(next);
   }
 
-  void fail(Throwable failure) {
+  /**
+   * Advances a finalised run into context completion. Called by the engine once the pipeline has
+   * reached {@link RunPhase#FINALIZE_RESPONSE}, just before the run's {@code SessionContext}
+   * response slot is filled. A transition a concurrent cancellation already made terminal is
+   * swallowed, mirroring the pipeline's own {@code advance} guard.
+   */
+  public void enterContextCompletion() {
+    advance(RunPhase.COMPLETE_CONTEXT);
+  }
+
+  /**
+   * Advances a run into session persistence, after every context provider's {@code afterRun} hook
+   * completed. A transition a concurrent cancellation already made terminal is swallowed.
+   */
+  public void enterSessionPersistence() {
+    advance(RunPhase.PERSIST_SESSION);
+  }
+
+  /**
+   * Terminalises the run successfully, which notifies terminal listeners so the run's cancellation
+   * listener detaches. A run a concurrent cancellation already terminalised stays cancelled.
+   */
+  public void terminateSuccessfully() {
+    advance(RunPhase.TERMINATED);
+  }
+
+  /**
+   * Terminalises the run with the failure that ended its post-run lifecycle, detaching the
+   * cancellation listener. A run already terminal keeps its first outcome.
+   */
+  public void terminateExceptionally(Throwable failure) {
     stateMachine.fail(failure);
   }
 
-  void cancel() {
+  public void cancel() {
     stateMachine.cancel();
+  }
+
+  private void advance(RunPhase next) {
+    try {
+      if (!stateMachine.state().isTerminal()) {
+        stateMachine.transitionTo(next);
+      }
+    } catch (IllegalStateException raced) {
+      if (!stateMachine.state().isTerminal()) {
+        throw raced;
+      }
+    }
+  }
+
+  void fail(Throwable failure) {
+    stateMachine.fail(failure);
   }
 
   public RunState state() {

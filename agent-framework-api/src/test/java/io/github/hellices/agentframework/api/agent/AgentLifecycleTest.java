@@ -467,6 +467,33 @@ class AgentLifecycleTest {
   }
 
   @Test
+  void customAgentRunsAreNotEngineManagedAndKeepTheFacadeLifecycleExactlyOnce() {
+    AfterRunSeamAgent agent = new AfterRunSeamAgent("custom-agent");
+
+    AgentRun run = agent.run("hello");
+
+    // A custom subclass that does not opt into engine-managed completion keeps the facade
+    // lifecycle: the framework fills the response slot and runs the afterRun seam exactly once.
+    assertThat(run.isEngineManaged()).isFalse();
+    AgentResponse response = run.response().toCompletableFuture().join();
+    assertThat(agent.afterRunInvocations).isEqualTo(1);
+    assertThat(agent.contexts.get(0).response()).contains(response);
+  }
+
+  @Test
+  void customStreamingRunsAreNotEngineManagedAndKeepTheFacadeLifecycleExactlyOnce() {
+    AfterRunSeamAgent agent = new AfterRunSeamAgent("custom-agent");
+
+    AgentStreamingRun<AgentResponseUpdate> run = agent.runStreaming("hello");
+
+    assertThat(run.isEngineManaged()).isFalse();
+    consume(run.updates());
+    AgentResponse response = run.response().toCompletableFuture().join();
+    assertThat(agent.afterRunInvocations).isEqualTo(1);
+    assertThat(agent.contexts.get(0).response()).contains(response);
+  }
+
+  @Test
   void afterRunSeamIsNotInvokedWhenTheRunFails() {
     FailingAfterRunSeamAgent agent = new FailingAfterRunSeamAgent("seam-agent", false);
 

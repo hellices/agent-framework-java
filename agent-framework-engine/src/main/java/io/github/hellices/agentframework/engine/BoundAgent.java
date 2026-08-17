@@ -8,9 +8,7 @@ import io.github.hellices.agentframework.api.agent.AgentRunContext;
 import io.github.hellices.agentframework.api.agent.AgentRunRequest;
 import io.github.hellices.agentframework.api.agent.AgentRuntime;
 import io.github.hellices.agentframework.api.agent.AgentStreamingRun;
-import io.github.hellices.agentframework.api.session.SessionContext;
 import java.util.Objects;
-import java.util.concurrent.CompletionStage;
 
 /**
  * The {@link Agent} facade over an {@link AgentEngine}: it carries the per-agent {@link
@@ -42,10 +40,5 @@ final class BoundAgent extends Agent {
   protected AgentStreamingRun<AgentResponseUpdate> runStreamingInternal(
       AgentRunContext context, AgentRunRequest request) {
     return engine.runStreamingInternal(binding, context, request);
-  }
-
-  @Override
-  protected CompletionStage<Void> afterRun(SessionContext sessionContext) {
-    return engine.afterRun(binding, sessionContext);
   }
 }

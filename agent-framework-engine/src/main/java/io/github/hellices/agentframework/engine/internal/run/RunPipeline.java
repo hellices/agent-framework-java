@@ -143,6 +143,11 @@ public final class RunPipeline implements Flow.Publisher<AgentResponseUpdate> {
     return ordinaryTerminal.minimalCompletionStage();
   }
 
+  /** The run's explicit state machine, so the engine can drive the post-finalise lifecycle. */
+  public RunExecution execution() {
+    return execution;
+  }
+
   @Override
   public void subscribe(Flow.Subscriber<? super AgentResponseUpdate> subscriber) {
     Objects.requireNonNull(subscriber, "subscriber must not be null");
@@ -233,6 +238,12 @@ public final class RunPipeline implements Flow.Publisher<AgentResponseUpdate> {
       removeCancellationListener.run();
       queue.clear();
       pending.set(null);
+      // A pure downstream cancel (the subscriber dropping the stream without the run's cancellation
+      // signal firing) must still terminalise the run's explicit state machine so its terminal
+      // listeners run and the cancellation listener detaches, while staying silent downstream per
+      // the Reactive Streams contract. A signal-driven cancel already terminalised the machine, so
+      // this is a no-op then.
+      execution.cancel();
       ordinaryTerminal.completeExceptionally(new CancellationException("run was cancelled"));
       if (active != null) {
         active.cancel();
@@ -286,11 +297,10 @@ public final class RunPipeline implements Flow.Publisher<AgentResponseUpdate> {
         return;
       }
       if (accumulator.isEmpty()) {
-        if (policy.hasTools()) {
-          fail(new IllegalStateException("model stream completed without any update"));
-        } else {
-          completeWithoutUpdates();
-        }
+        // An empty model stream is a failure for every run, ordinary or streaming: there is no
+        // update to reassemble a response from, so both views report the same error rather than one
+        // completing empty.
+        fail(new IllegalStateException("model stream completed without any update"));
         return;
       }
       advance(RunPhase.ACCUMULATE_MODEL_UPDATES);
@@ -347,24 +357,11 @@ public final class RunPipeline implements Flow.Publisher<AgentResponseUpdate> {
       if (!decision.metadata().isEmpty()) {
         queue.add(identity.metadataUpdate(decision.metadata()));
       }
+      // Reach FINALIZE_RESPONSE before completing the ordinary terminal: the engine's post-run
+      // lifecycle is composed onto that stage and runs inline from COMPLETE_CONTEXT onward, so the
+      // state machine must already be at FINALIZE_RESPONSE when it does.
+      advance(RunPhase.FINALIZE_RESPONSE);
       completeOrdinaryTerminal(ordinaryResponse);
-      advance(RunPhase.FINALIZE_RESPONSE);
-      finished = true;
-      drain();
-    }
-
-    /**
-     * Ends a run whose model stream completed without a single update. The streamed view completes
-     * empty; the ordinary view fails with the error the ordinary path always reported, because an
-     * invented empty response would silently turn a broken client into a run that ends with no
-     * answer and no error.
-     */
-    private void completeWithoutUpdates() {
-      advance(RunPhase.ACCUMULATE_MODEL_UPDATES);
-      advance(RunPhase.PLAN_TOOL_ACTION);
-      advance(RunPhase.FINALIZE_RESPONSE);
-      ordinaryTerminal.completeExceptionally(
-          new IllegalStateException("model stream completed without any update"));
       finished = true;
       drain();
     }

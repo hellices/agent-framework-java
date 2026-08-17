@@ -58,6 +58,9 @@ public abstract class Agent {
                 .sessionContext(sessionContext)
                 .build(),
             normalizedRequest);
+    if (run.isEngineManaged()) {
+      return run;
+    }
     AgentRun completed = run.withCompletion(completionAction(sessionContext));
     return completed.withResponse(
         afterRunStage(sessionContext, completed.response()), sessionContext::updatedSession);
@@ -85,6 +88,9 @@ public abstract class Agent {
                 .sessionContext(sessionContext)
                 .build(),
             normalizedRequest);
+    if (run.isEngineManaged()) {
+      return run;
+    }
     AgentStreamingRun<AgentResponseUpdate> completed =
         run.withCompletion(completionAction(sessionContext));
     return completed.withResponse(
@@ -112,6 +118,11 @@ public abstract class Agent {
    * being changed. A failed or cancelled run never reaches this seam, so no success-only work is
    * performed for it. A stage returned here that fails, or a {@code null} stage, fails the run
    * rather than being swallowed.
+   *
+   * <p>This facade seam drives the lifecycle for custom {@code Agent} subclasses only. A run an
+   * engine already finalised (see {@link AgentRun#engineManaged}) owns its own completion, {@code
+   * afterRun}, and session save, so the facade returns it untouched and never invokes this seam for
+   * it — the engine would otherwise complete the response slot twice.
    *
    * <p>Because this seam is the last lifecycle step, it is also the fence for {@link
    * AgentRun#session()}: the session that stage publishes is read only after this seam succeeded,

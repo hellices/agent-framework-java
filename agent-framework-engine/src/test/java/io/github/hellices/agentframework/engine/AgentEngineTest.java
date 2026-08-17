@@ -316,7 +316,7 @@ class AgentEngineTest {
   }
 
   @Test
-  void emptyModelStreamCompletesWithAnEmptyResponse() {
+  void emptyModelStreamFailsBothTheStreamAndTheResponse() {
     Agent engine =
         boundBuilder(
                 (ModelClient)
@@ -335,8 +335,14 @@ class AgentEngineTest {
             .build();
     AgentStreamingRun<AgentResponseUpdate> run = engine.runStreaming("hi");
 
-    assertThat(consume(run.updates())).isEmpty();
-    assertThat(run.response().toCompletableFuture().join().messages()).isEmpty();
+    // An empty model stream is a failure for every run: the streamed view errors instead of
+    // completing empty, exactly as the ordinary view fails.
+    assertThatThrownBy(() -> consume(run.updates()))
+        .hasRootCauseInstanceOf(IllegalStateException.class)
+        .hasRootCauseMessage("model stream completed without any update");
+    assertThatThrownBy(() -> run.response().toCompletableFuture().join())
+        .hasRootCauseInstanceOf(IllegalStateException.class)
+        .hasRootCauseMessage("model stream completed without any update");
   }
 
   @Test

@@ -47,14 +47,13 @@ public interface ContextProvider {
    * successfully, after {@code context.response()} is filled, and before the caller-visible run
    * response stage completes.
    *
-   * <p>On a streaming run this hook runs after the update stream already reached its terminal
-   * signal, because the run's response is only known once the model finished streaming. A hook
-   * failure therefore fails the run's response stage while the update subscriber has already seen
-   * {@code onComplete}: the update stream reports model transport completion, and the authoritative
-   * run outcome is {@code AgentStreamingRun.response()}. This split is deliberate — turning a
-   * post-stream failure into a stream {@code onError} would emit a terminal signal after a terminal
-   * signal, which Reactive Streams forbids. A caller that must not act on a run whose providers
-   * failed waits for the response stage, not for {@code onComplete}.
+   * <p>On a streaming run this hook runs after every model update was already delivered, because
+   * the run's response is only known once the model finished streaming. The engine owns the
+   * streaming run's terminal lifecycle, so a hook failure fails the run's response stage
+   * <em>and</em> the update stream: the subscriber sees {@code onError} rather than {@code
+   * onComplete}, and never a terminal signal for a run whose providers failed. A successful run
+   * emits {@code onComplete} only after every {@code afterRun} hook and the session save succeeded.
+   * The authoritative run outcome is still {@code AgentStreamingRun.response()}.
    *
    * @param context the same per-run session context {@link #beforeRun} received
    * @param state this provider's source-bound session state view

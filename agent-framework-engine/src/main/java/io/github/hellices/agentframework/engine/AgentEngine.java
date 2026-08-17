@@ -154,21 +154,27 @@ public final class AgentEngine {
     ResponseIdentity identity =
         new ResponseIdentity(
             binding.id(), UUID.randomUUID().toString(), binding.name(), Instant.now());
+    SessionContext sessionContext = context.sessionContext();
     RunPipeline pipeline = buildPipeline(binding, context, request, identity);
+    RunExecution execution = pipeline.execution();
     // The ordinary run observes the loop's single assembled response, so an internal subscriber
     // drives every model and tool iteration to completion while the caller reads terminalResponse.
     CompletionStage<ModelResponse> terminal = pipeline.terminalResponse();
     pipeline.subscribe(new DrainingSubscriber());
     CompletionStage<AgentResponse> response =
-        terminal.thenApply(
-            model ->
-                ModelResponseMapper.toAgentResponse(
-                    identity.agentId(),
-                    identity.responseId(),
-                    identity.authorName(),
-                    identity.createdAt(),
-                    model));
-    return new AgentRun(response, request.cancellationSignal());
+        terminal
+            .thenApply(
+                model ->
+                    ModelResponseMapper.toAgentResponse(
+                        identity.agentId(),
+                        identity.responseId(),
+                        identity.authorName(),
+                        identity.createdAt(),
+                        model))
+            .thenCompose(
+                agentResponse -> completeRun(binding, sessionContext, execution, agentResponse));
+    return AgentRun.engineManaged(
+        response, request.cancellationSignal(), sessionContext::updatedSession);
   }
 
   /**
@@ -277,19 +283,14 @@ public final class AgentEngine {
     ResponseIdentity identity =
         new ResponseIdentity(
             binding.id(), UUID.randomUUID().toString(), binding.name(), Instant.now());
+    SessionContext sessionContext = context.sessionContext();
     RunPipeline pipeline = buildPipeline(binding, context, request, identity);
-    return AgentStreamingRun.fromUpdates(
+    RunExecution execution = pipeline.execution();
+    return AgentStreamingRun.engineManaged(
         pipeline,
         request.cancellationSignal(),
-        () ->
-            AgentResponse.builder()
-                .agentId(identity.agentId())
-                .responseId(identity.responseId())
-                .authorName(identity.authorName())
-                .createdAt(identity.createdAt())
-                .messages(List.of())
-                .additionalProperties(JsonObject.empty())
-                .build());
+        response -> completeRun(binding, sessionContext, execution, response),
+        sessionContext::updatedSession);
   }
 
   /**
@@ -319,28 +320,71 @@ public final class AgentEngine {
   }
 
   /**
-   * Composes every resolved provider's {@code afterRun} hook in reverse declaration order, then
-   * saves the session this run produced. The framework calls this only after the run's terminal
-   * response completed successfully and the {@link SessionContext} response slot was filled, so a
-   * hook observes the same context its {@code beforeRun} opened, plus the final response. A hook
-   * failure fails the run and stops the remaining (earlier-declared) hooks, and the save is reached
-   * only once every hook succeeded, so a run that fails anywhere leaves the stored session
-   * untouched.
+   * Owns the entire post-run lifecycle of an engine (bound-agent) run, in the one order every run
+   * observes:
    *
-   * <p>The provider list is recomputed rather than carried from the start of the run, because
-   * {@code Agent} hands this seam nothing but the context. That is safe precisely because
-   * resolution is a pure function of the agent's bind-time configuration and the run's set-once
-   * effective session: this recomputation yields the same bindings, in the same order, that {@code
-   * beforeRun} used.
+   * <ol>
+   *   <li>the run's state machine enters context completion, then the run's {@link SessionContext}
+   *       response slot is filled exactly once with the reconstructed response;
+   *   <li>every resolved context provider's {@code afterRun} hook runs in reverse declaration
+   *       order, each observing the same context its {@code beforeRun} opened plus the final
+   *       response;
+   *   <li>the state machine enters session persistence and the session this run produced is saved;
+   *   <li>on success the run terminalises successfully — detaching its cancellation listener — and
+   *       the returned stage completes with the response, which is what lets the ordinary response
+   *       stage complete and the streaming update publisher emit {@code onComplete}.
+   * </ol>
    *
-   * <p>A run with a session and a configured store saves even when it owns no session state
-   * namespace at all — a service-managed conversation with no configured provider, for example. The
-   * snapshot is the durable record of the session itself: skipping it would leave a session the
-   * caller created with a service handle unrecorded, so a later run could not tell "never stored"
-   * from "stored with no local state" and would accept any service handle for it. The cost is one
-   * revision and one write per run of such a session.
+   * <p>Any provider-completion or save failure terminalises the run exceptionally with the raw
+   * unwrapped cause and completes the returned stage exceptionally with that identical cause, so
+   * the ordinary and streaming response and session stages all fail with the exact same root cause,
+   * and a streaming subscriber sees {@code onError} — never {@code onComplete} — for such a run.
+   * Because this method owns the lifecycle, the {@link Agent} facade must not re-run its completion
+   * action or {@code afterRun} seam for the engine-managed run it returns.
    */
-  CompletionStage<Void> afterRun(AgentBinding binding, SessionContext sessionContext) {
+  private CompletionStage<AgentResponse> completeRun(
+      AgentBinding binding,
+      SessionContext sessionContext,
+      RunExecution execution,
+      AgentResponse response) {
+    CompletableFuture<AgentResponse> outcome = new CompletableFuture<>();
+    try {
+      execution.enterContextCompletion();
+      sessionContext.complete(response);
+    } catch (RuntimeException immediate) {
+      execution.terminateExceptionally(immediate);
+      outcome.completeExceptionally(immediate);
+      return outcome.minimalCompletionStage();
+    }
+    runProviderAfterRun(binding, sessionContext)
+        .thenCompose(
+            ignored -> {
+              execution.enterSessionPersistence();
+              return saveSession(sessionContext);
+            })
+        .whenComplete(
+            (ignored, failure) -> {
+              if (failure == null) {
+                execution.terminateSuccessfully();
+                outcome.complete(response);
+              } else {
+                Throwable cause = unwrap(failure);
+                execution.terminateExceptionally(cause);
+                outcome.completeExceptionally(cause);
+              }
+            });
+    return outcome.minimalCompletionStage();
+  }
+
+  /**
+   * Composes every resolved provider's {@code afterRun} hook in reverse declaration order. The
+   * providers are the same ones {@code beforeRun} used, because resolution is a pure function of
+   * the agent's bind-time configuration and the run's set-once effective session. A hook failure
+   * fails the composed stage and stops the remaining (earlier-declared) hooks, so a run that fails
+   * anywhere never reaches the save and leaves the stored session untouched.
+   */
+  private CompletionStage<Void> runProviderAfterRun(
+      AgentBinding binding, SessionContext sessionContext) {
     List<ProviderBinding> providers = binding.resolveProviders(sessionContext);
     CompletionStage<Void> stage = CompletableFuture.completedFuture(null);
     for (int index = providers.size() - 1; index >= 0; index--) {
@@ -354,10 +398,25 @@ public final class AgentEngine {
                           .afterRun(sessionContext, providerBinding.state(sessionContext)),
                       "context provider after-run stage must not be null"));
     }
+    return stage;
+  }
+
+  /**
+   * Saves the session this run produced, or completes without a write when the run carries no
+   * session or the engine has no store.
+   *
+   * <p>A run with a session and a configured store saves even when it owns no session state
+   * namespace at all — a service-managed conversation with no configured provider, for example. The
+   * snapshot is the durable record of the session itself: skipping it would leave a session the
+   * caller created with a service handle unrecorded, so a later run could not tell "never stored"
+   * from "stored with no local state" and would accept any service handle for it. The cost is one
+   * revision and one write per run of such a session.
+   */
+  private CompletionStage<Void> saveSession(SessionContext sessionContext) {
     if (sessionCoordinator == null || sessionContext.session() == null) {
-      return stage;
+      return CompletableFuture.completedFuture(null);
     }
-    return stage.thenCompose(ignored -> sessionCoordinator.save(sessionContext));
+    return sessionCoordinator.save(sessionContext);
   }
 
   /**

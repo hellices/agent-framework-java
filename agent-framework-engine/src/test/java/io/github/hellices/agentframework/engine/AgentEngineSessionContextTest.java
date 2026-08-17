@@ -571,7 +571,7 @@ class AgentEngineSessionContextTest {
   }
 
   @Test
-  void aStreamingAfterRunFailureFailsTheRunAfterTheUpdateStreamAlreadyCompleted() {
+  void aStreamingAfterRunFailureFailsTheUpdateStreamAndTheResponse() {
     List<String> log = new ArrayList<>();
     Agent engine =
         boundBuilder(new StreamingFakeClient(log))
@@ -581,12 +581,16 @@ class AgentEngineSessionContextTest {
     AgentStreamingRun<AgentResponseUpdate> run = engine.runStreaming("hi");
     RecordingSubscriber<AgentResponseUpdate> subscriber = subscribe(run.updates());
 
-    // The update stream reports model transport completion only, so it completes normally even
-    // though the run itself did not succeed.
-    assertThat(subscriber.completion).isCompleted();
-    assertThat(subscriber.terminalFailure.get()).isNull();
+    // The engine now owns the post-run lifecycle, so a provider-completion failure fails the update
+    // stream with onError before any onComplete, after every model update was already delivered.
     assertThat(subscriber.values).extracting(AgentResponseUpdate::text).containsExactly("hello");
-    // The authoritative outcome is the response stage, which carries the after-run failure.
+    assertThatThrownBy(subscriber.completion::join)
+        .hasRootCauseInstanceOf(IllegalStateException.class)
+        .hasRootCauseMessage("after-run failure");
+    assertThat(subscriber.terminalFailure.get())
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessage("after-run failure");
+    // The response stage carries the same after-run failure.
     assertThatThrownBy(() -> run.response().toCompletableFuture().join())
         .hasRootCauseInstanceOf(IllegalStateException.class)
         .hasRootCauseMessage("after-run failure");
