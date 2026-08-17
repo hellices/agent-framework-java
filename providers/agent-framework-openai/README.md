@@ -158,8 +158,14 @@ document is a redacted placeholder.
 - Running the sample sends your prompt to whatever `OPENAI_BASE_URL` points at, and that endpoint's
   own retention and training policy applies. Nothing in this repository changes it.
 - The adapter logs nothing. Its exception messages deliberately carry no prompt text, no model
-  output, and no tool arguments — see the argument-parsing limitation below, which exists so that a
-  logger printing a stack trace cannot leak model output.
+  output, and no tool arguments, and neither does anything attached to them: neither the parser
+  exception behind arguments it cannot read nor the serialiser exception behind arguments it cannot
+  write is attached as a cause or as a suppressed throwable, because both quote part of the
+  arguments — see the two argument limitations below, which exist so that a logger printing a stack
+  trace cannot leak model output.
+- That rule covers the failures this adapter raises. A failure raised by the provider is passed
+  through as the SDK threw it, so its message is the server's own and is outside this adapter's
+  control.
 - The sample's footer carries counts only: never the prompt, the reply, or the tool's output.
 
 ## Ownership
@@ -216,6 +222,14 @@ Each of these is a fact about the shipped code, not a roadmap promise.
   names the token it rejected in its own message text, so attaching it would put model output into
   every log that prints a stack trace. What that costs is stated plainly: the parser's own wording
   and the failing column are not reported.
+- **Arguments this adapter cannot write back fail the same way, and just as quietly.** Sending an
+  assistant turn re-serialises its tool-call arguments whenever the turn arrives without the SDK
+  message it came from — a history a caller built or restored, since arguments this adapter parsed
+  are JSON values that always re-serialise. An argument value Jackson has no serialiser for fails
+  with an `IllegalArgumentException` naming the tool and the call id, again with **no serialiser
+  exception attached as a cause or as a suppressed throwable**, because Jackson appends the failing
+  key to its own message (`through reference chain: ...["<key>"]`) and an argument key is part of
+  the arguments. The cost, stated plainly: the Java type Jackson could not write is not reported.
 - **A `tool_calls` or deprecated `function_call` finish reason with no tool call fails.**
   `AgentEngine` ends its loop on an empty tool-call list, so such a turn would otherwise be reported
   as a successful final answer the model never gave. The asymmetry is deliberate: a tool call that
@@ -254,7 +268,7 @@ that claim by running it with nothing exported:
 | --- | --- |
 | `OpenAiChatSettingsTest` | the adapter-owned defaults validate model, temperature, output token limit, and request timeout at construction, not on the wire |
 | `ChatCompletionRequestMapperTest` | roles, text placement, options, and the refusals for an empty history, an unmappable role, and a provider option |
-| `ChatCompletionRequestMapperToolsTest` | tool definitions and schemas on the request, one tool message per `tool_call_id`, the byte-exact echo of the SDK message, and every unsendable-message refusal |
+| `ChatCompletionRequestMapperToolsTest` | tool definitions and schemas on the request, one tool message per `tool_call_id`, the byte-exact echo of the SDK message, every unsendable-message refusal, and that arguments it cannot serialise fail with no part of them anywhere in the failure chain |
 | `ChatCompletionResponseMapperTest` | choices, text, finish reasons including the deprecated wire value and unknown values, usage, metadata, and the raw handles |
 | `ChatCompletionResponseMapperToolCallTest` | tool-call mapping and every strict-argument failure, the finish-reason-without-a-call rule and its deliberate asymmetry, the rejection of the deprecated `function_call` payload, and that no failure carries model output as a message, a cause, or a suppressed throwable |
 | `OpenAiCallBridgeTest` | the cancellation seam: no dispatch when already cancelled, prompt failure after dispatch, listener removal on every completion path, no completion authority handed to the caller, the original failure instance preserved, and one dispatch with no retry |

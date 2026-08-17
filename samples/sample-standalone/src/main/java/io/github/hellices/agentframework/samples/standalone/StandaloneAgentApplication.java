@@ -60,6 +60,10 @@ public final class StandaloneAgentApplication {
    *
    * <p>Both are parameters so the sample's own test can run the same assembly, including the tool
    * loop, deterministically and without a credential or a socket.
+   *
+   * @param modelClient the model client the agent calls, never {@code null}
+   * @param clock the clock {@value #TOOL_NAME} reads, never {@code null}
+   * @return the assembled agent, never {@code null}
    */
   public static Agent createAgent(ModelClient modelClient, Clock clock) {
     ModelCatalog catalog =
@@ -74,6 +78,14 @@ public final class StandaloneAgentApplication {
         .build();
   }
 
+  /**
+   * Runs one turn and prints the answer and a footer of counts.
+   *
+   * <p>Fails before a client is built when {@code OPENAI_API_KEY} is missing or blank, so a run
+   * without a credential costs no request and reports why.
+   *
+   * @param args the prompt; the default prompt asks for {@value #TOOL_NAME} when none is given
+   */
   public static void main(String[] args) {
     Map<String, String> environment = System.getenv();
     String model = model(environment);

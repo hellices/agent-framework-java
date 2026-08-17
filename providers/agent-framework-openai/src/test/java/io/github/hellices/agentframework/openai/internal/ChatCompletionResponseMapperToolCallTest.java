@@ -21,14 +21,9 @@ import io.github.hellices.agentframework.spi.model.ModelRequest;
 import io.github.hellices.agentframework.spi.model.ModelRequestOptions;
 import io.github.hellices.agentframework.spi.model.ModelResponse;
 import java.time.Duration;
-import java.util.ArrayDeque;
 import java.util.ArrayList;
-import java.util.Collections;
-import java.util.Deque;
-import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -312,33 +307,13 @@ class ChatCompletionResponseMapperToolCallTest {
           .hasMessageContaining("lookup")
           .hasMessageContaining("call_1")
           .hasMessageContaining("exactly one JSON object with unique keys");
-      for (Throwable link : chainOf(failure)) {
+      for (Throwable link : FailureChain.of(failure)) {
         assertThat(link).isNotInstanceOf(JsonProcessingException.class);
         assertThat(String.valueOf(link.getMessage()))
             .doesNotContain(secret)
             .doesNotContain(arguments);
       }
     }
-  }
-
-  /** Every throwable reachable from {@code root} through causes and suppressed throwables. */
-  private static List<Throwable> chainOf(Throwable root) {
-    Set<Throwable> seen = Collections.newSetFromMap(new IdentityHashMap<>());
-    List<Throwable> chain = new ArrayList<>();
-    Deque<Throwable> pending = new ArrayDeque<>();
-    pending.add(root);
-    while (!pending.isEmpty()) {
-      Throwable next = pending.poll();
-      if (!seen.add(next)) {
-        continue;
-      }
-      chain.add(next);
-      if (next.getCause() != null) {
-        pending.add(next.getCause());
-      }
-      pending.addAll(List.of(next.getSuppressed()));
-    }
-    return chain;
   }
 
   @Test

@@ -67,6 +67,14 @@ public final class ChatCompletionRequestMapper {
    * the flag is dropped rather than disguised as an invented prefix the model would have to guess
    * at.
    *
+   * <p>Rebuilding an assistant turn re-serialises its tool-call arguments, and an argument value
+   * Jackson has no serialiser for fails naming the tool and the call id, with the serialiser
+   * exception attached nowhere - not as a cause and not as a suppressed throwable - because Jackson
+   * appends the failing key to its own message and an argument key is part of the arguments. {@link
+   * ChatCompletionResponseMapper} drops the parser exception on the way in for the same reason.
+   * What that costs is the Java type Jackson could not write. Only a history a caller built or
+   * restored reaches it: arguments this adapter parsed are JSON values, which always re-serialise.
+   *
    * @param request the neutral request, never {@code null}
    * @param settings the adapter defaults, never {@code null}
    * @return parameters ready to send
@@ -254,13 +262,20 @@ public final class ChatCompletionRequestMapper {
     try {
       return json.writeValueAsString(call.arguments());
     } catch (JsonProcessingException failure) {
+      // The serialiser exception is deliberately not attached, as a cause or as a suppressed
+      // throwable, for the reason the response mapper drops the parser exception: Jackson appends
+      // the reference chain to its own message, so the failure above reads "... (through reference
+      // chain: java.util.Collections$UnmodifiableMap[\"<key>\"])" and that key is part of the tool
+      // arguments. A cause is printed by every logger that prints a stack trace, so attaching it
+      // would put arguments in a log while this message carefully kept them out. What is lost is
+      // the Java type Jackson has no serialiser for; what is kept is the tool and the call id,
+      // which is what identifies the call a caller has to correct.
       throw new IllegalArgumentException(
           "openai chat completions cannot serialise the arguments of tool '"
               + call.name()
               + "' call '"
               + call.callId()
-              + "'",
-          failure);
+              + "'");
     }
   }
 

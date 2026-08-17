@@ -2,6 +2,7 @@ package io.github.hellices.agentframework.openai.internal;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowable;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.openai.core.JsonValue;
@@ -356,18 +357,28 @@ class ChatCompletionRequestMapperToolsTest {
     // The reconstruction path is the only place this adapter writes JSON, and an argument value
     // Jackson has no serialiser for must fail loudly rather than echo an empty object. AGENTS.md
     // keeps tool arguments out of failure reports, so the message names the tool and the call and
-    // stops there.
+    // stops there - and so does the chain behind it. Jackson appends the reference chain to its own
+    // message ("through reference chain: java.util.LinkedHashMap[\"<key>\"]"), and an argument key
+    // is part of the arguments, so attaching the serialiser exception as a cause would put the key
+    // in every log that prints a stack trace while this adapter's own message carefully kept it
+    // out. Same rule as the parse failure on the response side, for the same reason.
+    String secretKey = "patient_record_id";
     Map<String, Object> arguments = new LinkedHashMap<>();
-    arguments.put("handle", new Unserialisable());
+    arguments.put(secretKey, new Unserialisable());
     Message assistant =
         new Message(Role.ASSISTANT, List.of(new ToolCallContent("call_1", "lookup", arguments)));
 
-    assertThatThrownBy(() -> mapper.map(request(List.of(assistant)), DEFAULTS))
-        .isInstanceOf(IllegalArgumentException.class)
+    Throwable failure = catchThrowable(() -> mapper.map(request(List.of(assistant)), DEFAULTS));
+
+    assertThat(failure).isInstanceOf(IllegalArgumentException.class).hasNoCause();
+    assertThat(failure)
         .hasMessageContaining("lookup")
         .hasMessageContaining("call_1")
-        .hasMessageNotContaining("handle")
-        .hasCauseInstanceOf(JsonProcessingException.class);
+        .hasMessageNotContaining(secretKey);
+    for (Throwable link : FailureChain.of(failure)) {
+      assertThat(link).isNotInstanceOf(JsonProcessingException.class);
+      assertThat(String.valueOf(link.getMessage())).doesNotContain(secretKey);
+    }
   }
 
   @Test
