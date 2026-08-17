@@ -189,6 +189,8 @@ git commit -m "api: add typed execution extensions"
 - Modify: `agent-framework-api/src/main/java/io/github/hellices/agentframework/api/tool/ToolDefinition.java`
 - Modify: `agent-framework-api/src/main/java/io/github/hellices/agentframework/api/tool/ToolContext.java`
 - Modify: `agent-framework-api/src/main/java/io/github/hellices/agentframework/api/agent/AgentSession.java`
+- Create: `agent-framework-api/src/main/java/io/github/hellices/agentframework/api/session/SessionState.java`
+- Create: `agent-framework-api/src/main/java/io/github/hellices/agentframework/api/session/SessionStateKey.java`
 - Modify: `agent-framework-api/src/main/java/io/github/hellices/agentframework/api/session/SessionStateValues.java`
 - Modify: `agent-framework-api/src/main/java/io/github/hellices/agentframework/api/session/SessionContext.java`
 - Test: `agent-framework-api/src/test/java/io/github/hellices/agentframework/api/tool/ToolContractTest.java`
@@ -208,7 +210,7 @@ assertThat(arguments.string("city")).contains("Seoul");
 
 AgentSession session = AgentSession.builder()
     .sessionId("session-1")
-    .state(JsonObject.builder().put("turn", JsonNumber.of(1)).build())
+    .state(SessionState.empty().with(SessionStateKey.of("turn", JsonValue.class), JsonNumber.of(1)))
     .build();
 assertThat(session.toBuilder().build()).isEqualTo(session);
 ```
@@ -236,14 +238,22 @@ public final class AgentSession {
   public static Builder builder();
   public String sessionId();
   public Optional<String> serviceSessionId();
-  public JsonObject state();
+  public SessionState state();
   public Builder toBuilder();
+}
+
+public final class SessionState {
+  public static SessionState empty();
+  public <T> Optional<T> get(SessionStateKey<T> key);
+  public <T> SessionState with(SessionStateKey<T> key, T value);
+  public SessionState without(SessionStateKey<?> key);
 }
 ```
 
-Use `JsonObject` for persisted session values and `ContextAttributes` for `ToolContext`. Update
-`SessionContext` to convert provider state only through `JsonValue` or a registered `StateCodec`;
-do not expose a new `Object` entry point.
+Use `ContextAttributes` for `ToolContext`. `SessionState` hides its heterogeneous storage behind
+`SessionStateKey<T>`; JSON-shaped values use `JsonValue`, while other immutable values require a
+registered `StateCodec<T>` before persistence. Update `SessionContext` and
+`ProviderSessionState<T>` without exposing a new raw `Object` entry point.
 
 - [ ] **Step 4: Verify GREEN**
 

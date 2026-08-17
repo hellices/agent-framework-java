@@ -82,12 +82,12 @@ public interface ContextProvider {
   CompletionStage<Void> complete(SessionContext context);
 }
 
-public interface StatefulContextProvider extends ContextProvider {
-  String stateKey();
+public interface StatefulContextProvider<S> extends ContextProvider {
+  SessionStateKey<S> stateKey();
   CompletionStage<RunContribution> prepare(
-      SessionContext context, ProviderSessionState state);
+      SessionContext context, ProviderSessionState<S> state);
   CompletionStage<Void> complete(
-      SessionContext context, ProviderSessionState state);
+      SessionContext context, ProviderSessionState<S> state);
 }
 ```
 
@@ -107,8 +107,8 @@ cannot be null, and completion sees the final response.
 
 - [ ] **Step 3: Implement open interfaces**
 
-Remove `sourceId()` from stateless `ContextProvider`. Keep namespace validation on the engine binding
-for `StatefulContextProvider`.
+Remove `sourceId()` from stateless `ContextProvider`. Keep stable-id and duplicate validation on the
+engine binding for `StatefulContextProvider<?>`.
 
 - [ ] **Step 4: Verify GREEN and commit**
 
@@ -171,15 +171,15 @@ git commit -m "engine: apply context contributions"
 - Produces:
 
 ```java
-public interface HistoryProvider extends StatefulContextProvider {
+public interface HistoryProvider<S> extends StatefulContextProvider<S> {
   HistoryPolicy policy();
   CompletionStage<List<Message>> load(
-      SessionContext context, ProviderSessionState state);
+      SessionContext context, ProviderSessionState<S> state);
   CompletionStage<Void> append(
-      SessionContext context, ProviderSessionState state, List<Message> messages);
+      SessionContext context, ProviderSessionState<S> state, List<Message> messages);
 }
 
-public abstract class PolicyDrivenHistoryProvider implements HistoryProvider {
+public abstract class PolicyDrivenHistoryProvider<S> implements HistoryProvider<S> {
   // final prepare/complete implement existing HistoryPolicy semantics
 }
 ```
@@ -252,4 +252,3 @@ may skip a resolved local history provider when its effective session is service
 git add .
 git commit -m "session: converge context and history lifecycle"
 ```
-

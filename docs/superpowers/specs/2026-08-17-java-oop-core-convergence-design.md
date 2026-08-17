@@ -368,8 +368,9 @@ Introduce a closed, immutable `JsonValue` hierarchy:
 - object.
 
 It is framework-owned and may be sealed because JSON value kinds are closed. It replaces raw
-`Object` payloads in persisted session values, tool arguments, JSON schemas, and serializable
-extension envelopes.
+`Object` payloads in JSON-shaped session values, tool arguments, JSON schemas, and serializable
+extension envelopes. A typed session value may instead remain an immutable Java object behind
+`SessionStateKey<T>` when an explicit `StateCodec<T>` owns its persisted representation.
 
 Adapters convert between `JsonValue` and Jackson, provider SDK, or protocol representations outside
 the core API.
@@ -390,8 +391,9 @@ and version metadata.
 
 ### 8.3 Typed attributes
 
-Execution-only extensions use `ContextKey<T>` or an equivalent typed key. Persistable values use
-`JsonValue` or an explicitly registered state codec.
+Execution-only extensions use `ContextKey<T>` or an equivalent typed key. Session state uses
+`SessionStateKey<T>` and exposes no raw parent map; its values are either `JsonValue` or immutable
+types with an explicitly registered state codec.
 
 Raw provider SDK objects may be exposed only as transient diagnostic handles with explicit lifetime
 and non-serialization guarantees.
@@ -426,9 +428,9 @@ collections.
 
 A stateless context provider does not receive or reserve a session namespace.
 
-A provider that persists state implements a separate stateful capability exposing a stable state
-key. The engine binds that provider to a restricted state view and rejects duplicate keys at
-assembly.
+A provider that persists state implements `StatefulContextProvider<S>` and exposes a stable
+`SessionStateKey<S>`. The engine binds it to `ProviderSessionState<S>`, a restricted typed state view,
+and rejects duplicate stable ids at assembly.
 
 ### 9.3 History
 
