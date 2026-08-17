@@ -2,6 +2,9 @@ package io.github.hellices.agentframework.mcp.internal;
 
 import io.github.hellices.agentframework.api.tool.ToolArguments;
 import io.github.hellices.agentframework.api.tool.ToolContext;
+import io.github.hellices.agentframework.api.value.JsonObject;
+import io.github.hellices.agentframework.api.value.JsonValue;
+import io.github.hellices.agentframework.api.value.JsonValues;
 import io.github.hellices.agentframework.mcp.McpToolAdapterOptions;
 import io.modelcontextprotocol.spec.McpSchema;
 import java.util.LinkedHashMap;
@@ -46,14 +49,11 @@ public final class McpArgumentMapper {
    * @param inputSchema the input schema the server published, never {@code null}
    * @return the accepted names, never {@code null}
    */
-  public Set<String> acceptedArgumentNames(Map<String, Object> inputSchema) {
+  public Set<String> acceptedArgumentNames(JsonObject inputSchema) {
     Set<String> accepted = new LinkedHashSet<>();
-    if (inputSchema.get(PROPERTIES) instanceof Map<?, ?> properties) {
-      for (Object key : properties.keySet()) {
-        if (key instanceof String name) {
-          accepted.add(name);
-        }
-      }
+    JsonValue properties = inputSchema.get(PROPERTIES).orElse(null);
+    if (properties instanceof JsonObject propertyMap) {
+      accepted.addAll(propertyMap.values().keySet());
     }
     accepted.addAll(options.additionalArgumentNames());
     return accepted;
@@ -77,9 +77,9 @@ public final class McpArgumentMapper {
       ToolArguments arguments,
       ToolContext context) {
     Map<String, Object> selected = new LinkedHashMap<>();
-    for (Map.Entry<String, Object> argument : arguments.values().entrySet()) {
+    for (Map.Entry<String, JsonValue> argument : arguments.values().values().entrySet()) {
       if (acceptedArgumentNames.contains(argument.getKey())) {
-        selected.put(argument.getKey(), argument.getValue());
+        selected.put(argument.getKey(), JsonValues.toJava(argument.getValue()));
       }
     }
     return new McpSchema.CallToolRequest(remoteName, selected, requestMetadata(context));

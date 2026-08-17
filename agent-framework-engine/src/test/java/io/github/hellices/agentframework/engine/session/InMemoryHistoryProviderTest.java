@@ -17,6 +17,11 @@ import io.github.hellices.agentframework.api.message.Role;
 import io.github.hellices.agentframework.api.message.TextContent;
 import io.github.hellices.agentframework.api.session.MessageHistory;
 import io.github.hellices.agentframework.api.session.SessionContext;
+import io.github.hellices.agentframework.api.session.SessionState;
+import io.github.hellices.agentframework.api.session.SessionStateKey;
+import io.github.hellices.agentframework.api.session.SessionStateValues;
+import io.github.hellices.agentframework.api.value.JsonValue;
+import io.github.hellices.agentframework.api.value.JsonValues;
 import io.github.hellices.agentframework.engine.AgentEngine;
 import io.github.hellices.agentframework.spi.model.ModelClient;
 import io.github.hellices.agentframework.spi.model.ModelRequest;
@@ -106,8 +111,7 @@ class InMemoryHistoryProviderTest {
 
   @Test
   void loadOnAnEmptyNamespaceInjectsNothing() {
-    SessionContext context =
-        contextWith(new AgentSession("session-1", null, Map.of()), List.of(user("hi")));
+    SessionContext context = contextWith(session("session-1", null, Map.of()), List.of(user("hi")));
 
     beforeRun(new InMemoryHistoryProvider(), context);
 
@@ -116,8 +120,7 @@ class InMemoryHistoryProviderTest {
 
   @Test
   void defaultPolicyStoresInputsAndOutputsButNotContext() {
-    SessionContext context =
-        contextWith(new AgentSession("session-1", null, Map.of()), List.of(user("hi")));
+    SessionContext context = contextWith(session("session-1", null, Map.of()), List.of(user("hi")));
     context.addContextMessages("rag", List.of(user("retrieved")));
     context.complete(response("hello"));
     InMemoryHistoryProvider provider = new InMemoryHistoryProvider();
@@ -132,8 +135,7 @@ class InMemoryHistoryProviderTest {
 
   @Test
   void inputOnlyPolicyStoresOnlyTheCallerInput() {
-    SessionContext context =
-        contextWith(new AgentSession("session-1", null, Map.of()), List.of(user("hi")));
+    SessionContext context = contextWith(session("session-1", null, Map.of()), List.of(user("hi")));
     context.complete(response("hello"));
     InMemoryHistoryProvider provider =
         new InMemoryHistoryProvider(
@@ -146,8 +148,7 @@ class InMemoryHistoryProviderTest {
 
   @Test
   void outputOnlyPolicyStoresOnlyTheResponseMessages() {
-    SessionContext context =
-        contextWith(new AgentSession("session-1", null, Map.of()), List.of(user("hi")));
+    SessionContext context = contextWith(session("session-1", null, Map.of()), List.of(user("hi")));
     context.complete(response("hello"));
     InMemoryHistoryProvider provider =
         new InMemoryHistoryProvider(
@@ -182,8 +183,7 @@ class InMemoryHistoryProviderTest {
 
   @Test
   void storeContextFromKeepsOnlyTheNamedSource() {
-    SessionContext context =
-        contextWith(new AgentSession("session-1", null, Map.of()), List.of(user("hi")));
+    SessionContext context = contextWith(session("session-1", null, Map.of()), List.of(user("hi")));
     context.addContextMessages("rag", List.of(user("retrieved")));
     context.addContextMessages("notes", List.of(user("noted")));
     context.complete(response("hello"));
@@ -205,8 +205,7 @@ class InMemoryHistoryProviderTest {
 
   @Test
   void storeContextFromKeepsAMessageItsContributorPreAttributedElsewhere() {
-    SessionContext context =
-        contextWith(new AgentSession("session-1", null, Map.of()), List.of(user("hi")));
+    SessionContext context = contextWith(session("session-1", null, Map.of()), List.of(user("hi")));
     Message fromVectorStore =
         new Message(
             Role.USER,
@@ -235,8 +234,7 @@ class InMemoryHistoryProviderTest {
 
   @Test
   void aContextMessageAttributedToThisProviderButContributedByAnotherSourceIsStillStored() {
-    SessionContext context =
-        contextWith(new AgentSession("session-1", null, Map.of()), List.of(user("hi")));
+    SessionContext context = contextWith(session("session-1", null, Map.of()), List.of(user("hi")));
     Message spoofed =
         new Message(
             Role.USER,
@@ -307,8 +305,7 @@ class InMemoryHistoryProviderTest {
 
   @Test
   void interleavedContextSourcesKeepTheirGlobalOrderInTheStoredBatch() {
-    SessionContext context =
-        contextWith(new AgentSession("session-1", null, Map.of()), List.of(user("hi")));
+    SessionContext context = contextWith(session("session-1", null, Map.of()), List.of(user("hi")));
     context.addContextMessages("rag", List.of(user("rag-one")));
     context.addContextMessages("notes", List.of(user("notes-one")));
     context.addContextMessages("rag", List.of(user("rag-two")));
@@ -331,7 +328,7 @@ class InMemoryHistoryProviderTest {
   @Test
   void contextAddedWithoutAContributingProviderIsStoredOnlyWithoutASourceFilter() {
     SessionContext unfiltered =
-        contextWith(new AgentSession("session-1", null, Map.of()), List.of(user("hi")));
+        contextWith(session("session-1", null, Map.of()), List.of(user("hi")));
     unfiltered.addContextMessages(List.of(user("external")));
     afterRun(
         new InMemoryHistoryProvider(
@@ -343,7 +340,7 @@ class InMemoryHistoryProviderTest {
         unfiltered);
 
     SessionContext filtered =
-        contextWith(new AgentSession("session-2", null, Map.of()), List.of(user("hi")));
+        contextWith(session("session-2", null, Map.of()), List.of(user("hi")));
     filtered.addContextMessages(List.of(user("external")));
     afterRun(
         new InMemoryHistoryProvider(
@@ -358,7 +355,7 @@ class InMemoryHistoryProviderTest {
     assertThat(storedHistory(unfiltered, "in_memory"))
         .extracting(Message::text)
         .containsExactly("external");
-    assertThat(filtered.updatedSession().orElseThrow().state()).doesNotContainKey("in_memory");
+    assertThat(filtered.updatedSession().orElseThrow().state()).isEqualTo(SessionState.empty());
   }
 
   @Test
@@ -379,8 +376,7 @@ class InMemoryHistoryProviderTest {
 
   @Test
   void aHistoryNamespaceRoundTripsThroughTheDefaultStateCodecRegistry() {
-    SessionContext context =
-        contextWith(new AgentSession("session-1", null, Map.of()), List.of(user("hi")));
+    SessionContext context = contextWith(session("session-1", null, Map.of()), List.of(user("hi")));
     context.complete(response("hello"));
     afterRun(new InMemoryHistoryProvider(), context);
     AgentSession stored = context.updatedSession().orElseThrow();
@@ -400,8 +396,7 @@ class InMemoryHistoryProviderTest {
 
   @Test
   void storeContextFromIsIgnoredWhenContextStorageIsDisabled() {
-    SessionContext context =
-        contextWith(new AgentSession("session-1", null, Map.of()), List.of(user("hi")));
+    SessionContext context = contextWith(session("session-1", null, Map.of()), List.of(user("hi")));
     context.addContextMessages("rag", List.of(user("retrieved")));
     context.complete(response("hello"));
     InMemoryHistoryProvider provider =
@@ -421,8 +416,7 @@ class InMemoryHistoryProviderTest {
   void theStoredBatchKeepsContextThenInputThenOutputOrder() {
     SessionContext context =
         contextWith(
-            new AgentSession("session-1", null, Map.of()),
-            List.of(user("input-one"), user("input-two")));
+            session("session-1", null, Map.of()), List.of(user("input-one"), user("input-two")));
     context.addContextMessages("rag", List.of(user("context-one"), user("context-two")));
     context.complete(
         new AgentResponse(
@@ -467,14 +461,23 @@ class InMemoryHistoryProviderTest {
     assertThat(storedHistory(context, "in_memory"))
         .extracting(Message::text)
         .containsExactly("one");
-    assertThat(context.updatedSession().orElseThrow().state().get("in_memory"))
-        .isSameAs(session.state().get("in_memory"));
+    assertThat(
+            context
+                .updatedSession()
+                .orElseThrow()
+                .state()
+                .get(SessionStateKey.of("in_memory", MessageHistory.class))
+                .orElseThrow())
+        .isSameAs(
+            session
+                .state()
+                .get(SessionStateKey.of("in_memory", MessageHistory.class))
+                .orElseThrow());
   }
 
   @Test
   void storeOutputsWithoutACompletedResponseStoresTheRestOfTheBatch() {
-    SessionContext context =
-        contextWith(new AgentSession("session-1", null, Map.of()), List.of(user("hi")));
+    SessionContext context = contextWith(session("session-1", null, Map.of()), List.of(user("hi")));
     InMemoryHistoryProvider provider = new InMemoryHistoryProvider();
 
     afterRun(provider, context);
@@ -507,7 +510,8 @@ class InMemoryHistoryProviderTest {
 
     afterRun(new InMemoryHistoryProvider(), context);
 
-    MessageHistory storedBefore = (MessageHistory) session.state().get("in_memory");
+    MessageHistory storedBefore =
+        session.state().get(SessionStateKey.of("in_memory", MessageHistory.class)).orElseThrow();
     assertThat(storedBefore.messages()).hasSize(1);
     List<Message> storedAfter = storedHistory(context, "in_memory");
     assertThat(storedAfter).hasSize(3);
@@ -553,9 +557,9 @@ class InMemoryHistoryProviderTest {
             .contextProviders(provider, new ContextCapturingProvider(capturedContext))
             .build();
 
-    run(engine, new AgentSession("session-1", null, Map.of()), "first");
+    run(engine, session("session-1", null, Map.of()), "first");
     SessionContext firstContext = capturedContext.get();
-    run(engine, new AgentSession("session-2", null, Map.of()), "second");
+    run(engine, session("session-2", null, Map.of()), "second");
     SessionContext secondContext = capturedContext.get();
 
     assertThat(storedHistory(firstContext, "in_memory"))
@@ -582,7 +586,7 @@ class InMemoryHistoryProviderTest {
             .contextProviders(provider, new ContextCapturingProvider(capturedContext))
             .build();
 
-    run(engine, new AgentSession("session-1", null, Map.of()), "first");
+    run(engine, session("session-1", null, Map.of()), "first");
     AgentSession afterFirstTurn = capturedContext.get().updatedSession().orElseThrow();
     run(engine, afterFirstTurn, "second");
 
@@ -619,15 +623,27 @@ class InMemoryHistoryProviderTest {
 
   @Test
   void aCustomSourceIdBindsHistoryToItsOwnNamespace() {
-    SessionContext context =
-        contextWith(new AgentSession("session-1", null, Map.of()), List.of(user("hi")));
+    SessionContext context = contextWith(session("session-1", null, Map.of()), List.of(user("hi")));
     context.complete(response("hello"));
     InMemoryHistoryProvider provider =
         new InMemoryHistoryProvider("audit", HistoryPolicy.builder().loadMessages(false).build());
 
     afterRun(provider, context);
 
-    assertThat(context.updatedSession().orElseThrow().state()).containsOnlyKeys("audit");
+    assertThat(
+            context
+                .updatedSession()
+                .orElseThrow()
+                .state()
+                .get(SessionStateKey.of("audit", MessageHistory.class)))
+        .isPresent();
+    assertThat(
+            context
+                .updatedSession()
+                .orElseThrow()
+                .state()
+                .get(SessionStateKey.of("in_memory", MessageHistory.class)))
+        .isEmpty();
     assertThat(storedHistory(context, "audit"))
         .extracting(Message::text)
         .containsExactly("hi", "hello");
@@ -637,8 +653,7 @@ class InMemoryHistoryProviderTest {
   void aHistoryNamespaceHoldingSomethingOtherThanAMessageHistoryFails() {
     SessionContext context =
         contextWith(
-            new AgentSession("session-1", null, Map.of("in_memory", "corrupted")),
-            List.of(user("hi")));
+            session("session-1", null, Map.of("in_memory", "corrupted")), List.of(user("hi")));
 
     assertThatThrownBy(() -> beforeRun(new InMemoryHistoryProvider(), context))
         .isInstanceOf(IllegalStateException.class)
@@ -651,7 +666,7 @@ class InMemoryHistoryProviderTest {
   void aPlainMessageListLeftInTheHistoryNamespaceFails() {
     SessionContext context =
         contextWith(
-            new AgentSession("session-1", null, Map.of("in_memory", List.of(user("one")))),
+            session("session-1", null, Map.of("in_memory", List.of(user("one")))),
             List.of(user("hi")));
 
     assertThatThrownBy(() -> beforeRun(new InMemoryHistoryProvider(), context))
@@ -664,8 +679,7 @@ class InMemoryHistoryProviderTest {
   @Test
   void hooksRejectANullSessionContext() {
     InMemoryHistoryProvider provider = new InMemoryHistoryProvider();
-    SessionContext context =
-        contextWith(new AgentSession("session-1", null, Map.of()), List.of(user("hi")));
+    SessionContext context = contextWith(session("session-1", null, Map.of()), List.of(user("hi")));
     ProviderSessionState state = context.providerState("in_memory");
 
     assertThatThrownBy(() -> provider.beforeRun(null, state))
@@ -679,8 +693,7 @@ class InMemoryHistoryProviderTest {
   @Test
   void hooksRejectANullProviderState() {
     InMemoryHistoryProvider provider = new InMemoryHistoryProvider();
-    SessionContext context =
-        contextWith(new AgentSession("session-1", null, Map.of()), List.of(user("hi")));
+    SessionContext context = contextWith(session("session-1", null, Map.of()), List.of(user("hi")));
 
     assertThatThrownBy(() -> provider.beforeRun(context, null))
         .isInstanceOf(NullPointerException.class)
@@ -692,8 +705,7 @@ class InMemoryHistoryProviderTest {
 
   @Test
   void aProviderReturningANullLoadStageFails() {
-    SessionContext context =
-        contextWith(new AgentSession("session-1", null, Map.of()), List.of(user("hi")));
+    SessionContext context = contextWith(session("session-1", null, Map.of()), List.of(user("hi")));
     HistoryProvider provider = new NullStageHistoryProvider();
 
     assertThatThrownBy(() -> beforeRun(provider, context))
@@ -703,8 +715,7 @@ class InMemoryHistoryProviderTest {
 
   @Test
   void aProviderReturningANullSaveStageFails() {
-    SessionContext context =
-        contextWith(new AgentSession("session-1", null, Map.of()), List.of(user("hi")));
+    SessionContext context = contextWith(session("session-1", null, Map.of()), List.of(user("hi")));
     context.complete(response("hello"));
     HistoryProvider provider = new NullStageHistoryProvider();
 
@@ -715,8 +726,7 @@ class InMemoryHistoryProviderTest {
 
   @Test
   void aProviderLoadingANullMessageListFails() {
-    SessionContext context =
-        contextWith(new AgentSession("session-1", null, Map.of()), List.of(user("hi")));
+    SessionContext context = contextWith(session("session-1", null, Map.of()), List.of(user("hi")));
     HistoryProvider provider = new NullMessagesHistoryProvider(null);
 
     assertThatThrownBy(() -> beforeRun(provider, context))
@@ -726,8 +736,7 @@ class InMemoryHistoryProviderTest {
 
   @Test
   void aProviderLoadingAListWithANullMessageFails() {
-    SessionContext context =
-        contextWith(new AgentSession("session-1", null, Map.of()), List.of(user("hi")));
+    SessionContext context = contextWith(session("session-1", null, Map.of()), List.of(user("hi")));
     List<Message> messages = new ArrayList<>();
     messages.add(null);
     HistoryProvider provider = new NullMessagesHistoryProvider(messages);
@@ -740,13 +749,12 @@ class InMemoryHistoryProviderTest {
   @Test
   void theProviderKeepsNoHistoryInItsOwnFields() {
     InMemoryHistoryProvider provider = new InMemoryHistoryProvider();
-    SessionContext first =
-        contextWith(new AgentSession("session-1", null, Map.of()), List.of(user("one")));
+    SessionContext first = contextWith(session("session-1", null, Map.of()), List.of(user("one")));
     first.complete(response("two"));
     afterRun(provider, first);
 
     SessionContext second =
-        contextWith(new AgentSession("session-2", null, Map.of()), List.of(user("three")));
+        contextWith(session("session-2", null, Map.of()), List.of(user("three")));
 
     beforeRun(provider, second);
 
@@ -786,14 +794,45 @@ class InMemoryHistoryProviderTest {
         session, inputMessages, ContextAttributes.empty(), new CancellationSignal());
   }
 
+  private static AgentSession session(
+      String sessionId, String serviceSessionId, Map<String, ?> state) {
+    AgentSession.Builder builder =
+        AgentSession.builder().sessionId(sessionId).state(sessionState(state));
+    if (serviceSessionId != null) {
+      builder.serviceSessionId(serviceSessionId);
+    }
+    return builder.build();
+  }
+
+  private static SessionState sessionState(Map<String, ?> state) {
+    SessionState sessionState = SessionState.empty();
+    for (Map.Entry<String, ?> entry : state.entrySet()) {
+      sessionState = put(sessionState, entry.getKey(), entry.getValue());
+    }
+    return sessionState;
+  }
+
+  @SuppressWarnings("unchecked")
+  private static SessionState put(SessionState state, String key, Object value) {
+    if (SessionStateValues.isJsonValueShape(value)) {
+      return state.with(SessionStateKey.of(key, JsonValue.class), JsonValues.fromJava(value));
+    }
+    return state.with((SessionStateKey<Object>) SessionStateKey.of(key, value.getClass()), value);
+  }
+
   private static AgentSession sessionWithHistory(String sessionId, List<Message> history) {
-    return new AgentSession(sessionId, null, Map.of("in_memory", MessageHistory.of(history)));
+    return session(sessionId, null, Map.of("in_memory", MessageHistory.of(history)));
   }
 
   private static List<Message> storedHistory(SessionContext context, String sourceId) {
-    Object value = context.updatedSession().orElseThrow().state().get(sourceId);
-    assertThat(value).isInstanceOf(MessageHistory.class);
-    return ((MessageHistory) value).messages();
+    MessageHistory value =
+        context
+            .updatedSession()
+            .orElseThrow()
+            .state()
+            .get(SessionStateKey.of(sourceId, MessageHistory.class))
+            .orElseThrow();
+    return value.messages();
   }
 
   private static Message user(String text) {

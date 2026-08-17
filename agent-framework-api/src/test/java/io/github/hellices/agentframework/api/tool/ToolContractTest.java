@@ -11,6 +11,8 @@ import io.github.hellices.agentframework.api.message.Content;
 import io.github.hellices.agentframework.api.message.TextContent;
 import io.github.hellices.agentframework.api.message.ToolCallContent;
 import io.github.hellices.agentframework.api.message.ToolResultContent;
+import io.github.hellices.agentframework.api.value.JsonObject;
+import io.github.hellices.agentframework.api.value.JsonString;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
@@ -23,14 +25,15 @@ class ToolContractTest {
         FunctionTool.create(
             "weather",
             "Gets weather",
-            Map.of("type", "object"),
+            JsonObject.builder().put("type", JsonString.of("object")).build(),
             (arguments, context) ->
                 completedFuture(
-                    ToolResult.success(new TextContent("sunny:" + arguments.get("city")))));
+                    ToolResult.success(
+                        new TextContent("sunny:" + arguments.string("city").orElseThrow()))));
 
     ToolResult result =
         tool.execute(
-                new ToolArguments(Map.of("city", "Seoul")),
+                ToolArguments.of(JsonObject.builder().put("city", JsonString.of("Seoul")).build()),
                 new ToolContext(
                     new CancellationSignal(),
                     ContextAttributes.builder()
@@ -40,7 +43,8 @@ class ToolContractTest {
             .join();
 
     assertThat(tool.definition().name()).isEqualTo("weather");
-    assertThat(tool.definition().inputSchema()).containsEntry("type", "object");
+    assertThat(tool.definition().inputSchema().get("type")).contains(JsonString.of("object"));
+    assertThat(tool.definition().toBuilder().build()).isEqualTo(tool.definition());
     assertThat(result.content())
         .extracting(content -> content.text())
         .containsExactly("sunny:Seoul");
@@ -53,7 +57,7 @@ class ToolContractTest {
                 FunctionTool.create(
                     " ",
                     "bad",
-                    Map.of(),
+                    JsonObject.builder().build(),
                     (arguments, context) ->
                         completedFuture(ToolResult.success(new TextContent("unused")))))
         .isInstanceOf(IllegalArgumentException.class)

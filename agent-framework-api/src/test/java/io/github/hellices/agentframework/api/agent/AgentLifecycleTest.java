@@ -10,6 +10,11 @@ import io.github.hellices.agentframework.api.message.Message;
 import io.github.hellices.agentframework.api.message.Role;
 import io.github.hellices.agentframework.api.message.TextContent;
 import io.github.hellices.agentframework.api.session.SessionContext;
+import io.github.hellices.agentframework.api.session.SessionState;
+import io.github.hellices.agentframework.api.session.SessionStateKey;
+import io.github.hellices.agentframework.api.session.SessionStateValues;
+import io.github.hellices.agentframework.api.value.JsonValue;
+import io.github.hellices.agentframework.api.value.JsonValues;
 import java.lang.reflect.Modifier;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -65,7 +70,7 @@ class AgentLifecycleTest {
     AgentRunRequest request =
         new AgentRunRequest(
             Message.normalize("hi"),
-            new AgentSession("session-1", "service-1", Map.of()),
+            session("session-1", "service-1", Map.of()),
             new AgentRunOptions(),
             new CancellationSignal(),
             ContextAttributes.empty());
@@ -84,7 +89,7 @@ class AgentLifecycleTest {
     AgentRunRequest request =
         new AgentRunRequest(
             Message.normalize("hi"),
-            new AgentSession("session-1", "service-1", Map.of()),
+            session("session-1", "service-1", Map.of()),
             new AgentRunOptions(),
             new CancellationSignal(),
             ContextAttributes.empty());
@@ -124,7 +129,7 @@ class AgentLifecycleTest {
   @Test
   void runBuildsExplicitRunContextWithoutGlobalState() {
     ContextCapturingAgent agent = new ContextCapturingAgent("ctx-agent");
-    AgentSession session = new AgentSession("session-42", "service-42", Map.of());
+    AgentSession session = session("session-42", "service-42", Map.of());
     AgentRunRequest request =
         new AgentRunRequest(
             Message.normalize("hello"),
@@ -144,7 +149,7 @@ class AgentLifecycleTest {
   @Test
   void runMergesOptionAttributesIntoAgentAndSessionContextsWithRequestOverrides() {
     ContextCapturingAgent agent = new ContextCapturingAgent("ctx-agent");
-    AgentSession session = new AgentSession("session-42", "service-42", Map.of());
+    AgentSession session = session("session-42", "service-42", Map.of());
     ContextKey<String> tenant = ContextKey.of("agent", "tenant", String.class);
     ContextKey<String> region = ContextKey.of("agent", "region", String.class);
     ContextAttributes optionAttributes =
@@ -179,7 +184,7 @@ class AgentLifecycleTest {
   @Test
   void runContextIsPreservedWhenRunExecutesOnAnotherThread() {
     ContextCapturingAgent agent = new ContextCapturingAgent("ctx-agent");
-    AgentSession session = new AgentSession("session-42", "service-42", Map.of());
+    AgentSession session = session("session-42", "service-42", Map.of());
     AgentRunRequest request =
         new AgentRunRequest(
             Message.normalize("hello"),
@@ -248,7 +253,7 @@ class AgentLifecycleTest {
   @Test
   void sessionContextCopiesInputMessagesSessionAndMetadata() {
     SessionContextCapturingAgent agent = new SessionContextCapturingAgent("ctx-agent");
-    AgentSession session = new AgentSession("session-42", "service-42", Map.of());
+    AgentSession session = session("session-42", "service-42", Map.of());
     AgentRunRequest request =
         new AgentRunRequest(
             Message.normalize("hello"),
@@ -656,7 +661,7 @@ class AgentLifecycleTest {
         agent.run(
             new AgentRunRequest(
                 Message.normalize("hello"),
-                new AgentSession("session-1", null, Map.of()),
+                session("session-1", null, Map.of()),
                 new AgentRunOptions(),
                 new CancellationSignal(),
                 ContextAttributes.empty()));
@@ -664,7 +669,7 @@ class AgentLifecycleTest {
 
     assertThat(agent.afterRunInvocations).isEqualTo(1);
     assertThat(updated.sessionId()).isEqualTo("session-1");
-    assertThat(updated.state()).containsEntry("seam", "written");
+    assertThat(updated.state()).isEqualTo(sessionState(Map.of("seam", "written")));
   }
 
   @Test
@@ -675,7 +680,7 @@ class AgentLifecycleTest {
         agent.runStreaming(
             new AgentRunRequest(
                 Message.normalize("hello"),
-                new AgentSession("session-1", null, Map.of()),
+                session("session-1", null, Map.of()),
                 new AgentRunOptions(),
                 new CancellationSignal(),
                 ContextAttributes.empty()));
@@ -684,7 +689,7 @@ class AgentLifecycleTest {
     AgentSession updated = run.session().toCompletableFuture().join().orElseThrow();
 
     assertThat(agent.afterRunInvocations).isEqualTo(1);
-    assertThat(updated.state()).containsEntry("seam", "written");
+    assertThat(updated.state()).isEqualTo(sessionState(Map.of("seam", "written")));
   }
 
   @Test
@@ -695,7 +700,7 @@ class AgentLifecycleTest {
         agent.run(
             new AgentRunRequest(
                 Message.normalize("hello"),
-                new AgentSession("session-1", null, Map.of()),
+                session("session-1", null, Map.of()),
                 new AgentRunOptions(),
                 new CancellationSignal(),
                 ContextAttributes.empty()));
@@ -715,7 +720,7 @@ class AgentLifecycleTest {
         agent.run(
             new AgentRunRequest(
                 Message.normalize("hello"),
-                new AgentSession("session-1", null, Map.of()),
+                session("session-1", null, Map.of()),
                 new AgentRunOptions(),
                 new CancellationSignal(),
                 ContextAttributes.empty()));
@@ -733,7 +738,7 @@ class AgentLifecycleTest {
         agent.runStreaming(
             new AgentRunRequest(
                 Message.normalize("hello"),
-                new AgentSession("session-1", null, Map.of()),
+                session("session-1", null, Map.of()),
                 new AgentRunOptions(),
                 new CancellationSignal(),
                 ContextAttributes.empty()));
@@ -741,7 +746,7 @@ class AgentLifecycleTest {
     consume(mapped.updates());
 
     assertThat(mapped.session().toCompletableFuture().join().orElseThrow().state())
-        .containsEntry("seam", "written");
+        .isEqualTo(sessionState(Map.of("seam", "written")));
   }
 
   private static void awaitLatch(CountDownLatch latch) {
@@ -765,6 +770,32 @@ class AgentLifecycleTest {
         null,
         Map.of(),
         null);
+  }
+
+  private static AgentSession session(
+      String sessionId, String serviceSessionId, Map<String, ?> state) {
+    AgentSession.Builder builder =
+        AgentSession.builder().sessionId(sessionId).state(sessionState(state));
+    if (serviceSessionId != null) {
+      builder.serviceSessionId(serviceSessionId);
+    }
+    return builder.build();
+  }
+
+  private static SessionState sessionState(Map<String, ?> state) {
+    SessionState sessionState = SessionState.empty();
+    for (Map.Entry<String, ?> entry : state.entrySet()) {
+      sessionState = put(sessionState, entry.getKey(), entry.getValue());
+    }
+    return sessionState;
+  }
+
+  @SuppressWarnings("unchecked")
+  private static SessionState put(SessionState state, String key, Object value) {
+    if (SessionStateValues.isJsonValueShape(value)) {
+      return state.with(SessionStateKey.of(key, JsonValue.class), JsonValues.fromJava(value));
+    }
+    return state.with((SessionStateKey<Object>) SessionStateKey.of(key, value.getClass()), value);
   }
 
   @Test

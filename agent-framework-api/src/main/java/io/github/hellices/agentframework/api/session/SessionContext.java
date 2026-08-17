@@ -6,6 +6,8 @@ import io.github.hellices.agentframework.api.agent.CancellationSignal;
 import io.github.hellices.agentframework.api.context.ContextAttributes;
 import io.github.hellices.agentframework.api.message.Message;
 import io.github.hellices.agentframework.api.message.MessageAttribution;
+import io.github.hellices.agentframework.api.value.JsonValue;
+import io.github.hellices.agentframework.api.value.JsonValues;
 import io.github.hellices.agentframework.spi.session.ProviderSessionState;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -133,11 +135,11 @@ public final class SessionContext {
     if (!session.sessionId().equals(restored.sessionId())) {
       throw new IllegalArgumentException("hydrated session id must be " + session.sessionId());
     }
-    String requestedServiceSessionId = session.serviceSessionId();
-    if (requestedServiceSessionId != null
+    Optional<String> requestedServiceSessionId = session.serviceSessionId();
+    if (requestedServiceSessionId.isPresent()
         && !requestedServiceSessionId.equals(restored.serviceSessionId())) {
       throw new IllegalArgumentException(
-          "hydrated service session id must be " + requestedServiceSessionId);
+          "hydrated service session id must be " + requestedServiceSessionId.orElseThrow());
     }
     session = restored;
     snapshotMetadata = metadata;
@@ -327,7 +329,7 @@ public final class SessionContext {
     AgentSession current = session;
     return providerStates.computeIfAbsent(
         normalizedSourceId,
-        key -> new ProviderState(key, current == null ? null : current.state().get(key)));
+        key -> new ProviderState(key, current == null ? null : current.state().entry(key)));
   }
 
   /**
@@ -357,20 +359,19 @@ public final class SessionContext {
             && Collections.disjoint(providerStates.keySet(), allowedSourceIds))) {
       return Optional.of(session);
     }
-    Map<String, Object> updatedState = new LinkedHashMap<>(session.state());
-    providerStates.forEach(
-        (sourceId, state) -> {
-          if (allowedSourceIds != null && !allowedSourceIds.contains(sourceId)) {
-            return;
-          }
-          Optional<Object> value = state.value();
-          if (value.isPresent()) {
-            updatedState.put(sourceId, value.get());
-          } else {
-            updatedState.remove(sourceId);
-          }
-        });
-    return Optional.of(session.withState(Map.copyOf(updatedState)));
+    SessionState updatedState = session.state();
+    for (Map.Entry<String, ProviderState> providerState : providerStates.entrySet()) {
+      String sourceId = providerState.getKey();
+      if (allowedSourceIds != null && !allowedSourceIds.contains(sourceId)) {
+        continue;
+      }
+      updatedState = updatedState.withoutId(sourceId);
+      Optional<SessionState.Entry<?>> entry = providerState.getValue().entry();
+      if (entry.isPresent()) {
+        updatedState = updatedState.withEntry(entry.get());
+      }
+    }
+    return Optional.of(session.toBuilder().state(updatedState).build());
   }
 
   private Message attribute(Message message, String sourceId) {
@@ -453,11 +454,11 @@ public final class SessionContext {
   private static final class ProviderState implements ProviderSessionState {
 
     private final String sourceId;
-    private Object value;
+    private SessionState.Entry<?> entry;
 
-    private ProviderState(String sourceId, Object value) {
+    private ProviderState(String sourceId, SessionState.Entry<?> entry) {
       this.sourceId = sourceId;
-      this.value = value;
+      this.entry = entry;
     }
 
     @Override
@@ -467,15 +468,16 @@ public final class SessionContext {
 
     @Override
     public synchronized Optional<Object> value() {
-      return Optional.ofNullable(value);
+      return entry == null ? Optional.empty() : Optional.of(entry.value());
     }
 
     @Override
     public synchronized <T> Optional<T> value(Class<T> type) {
       Objects.requireNonNull(type, "type must not be null");
-      if (value == null) {
+      if (entry == null) {
         return Optional.empty();
       }
+      Object value = entry.value();
       if (!type.isInstance(value)) {
         throw new IllegalStateException(
             "provider state for source '" + sourceId + "' is not a " + type.getName());
@@ -485,12 +487,52 @@ public final class SessionContext {
 
     @Override
     public synchronized void set(Object newValue) {
-      value = Objects.requireNonNull(newValue, "value must not be null");
+      entry = normalizeEntry(sourceId, newValue, entry);
     }
 
     @Override
     public synchronized void clear() {
-      value = null;
+      entry = null;
     }
+
+    private synchronized Optional<SessionState.Entry<?>> entry() {
+      return Optional.ofNullable(entry);
+    }
+  }
+
+  @SuppressWarnings("unchecked")
+  private static SessionState.Entry<?> normalizeEntry(
+      String sourceId, Object value, SessionState.Entry<?> existing) {
+    Object normalized = Objects.requireNonNull(value, "value must not be null");
+    if (existing != null) {
+      if (JsonValue.class.isAssignableFrom(existing.key().type())) {
+        return jsonEntry(sourceId, normalized, (SessionStateKey<JsonValue>) existing.key());
+      }
+      return typedEntry(sourceId, normalized, (SessionStateKey<Object>) existing.key());
+    }
+    if (SessionStateValues.isJsonValueShape(normalized)) {
+      return jsonEntry(sourceId, normalized, SessionStateKey.of(sourceId, JsonValue.class));
+    }
+    return SessionState.entry(SessionState.dynamicKey(sourceId, normalized), normalized);
+  }
+
+  private static <T> SessionState.Entry<T> typedEntry(
+      String sourceId, Object value, SessionStateKey<T> key) {
+    if (!key.type().isInstance(value)) {
+      throw new IllegalArgumentException(
+          "provider state for source '" + sourceId + "' must be a " + key.type().getName());
+    }
+    return SessionState.entry(key, key.type().cast(value));
+  }
+
+  private static <T extends JsonValue> SessionState.Entry<T> jsonEntry(
+      String sourceId, Object value, SessionStateKey<T> key) {
+    JsonValue normalized =
+        value instanceof JsonValue jsonValue ? jsonValue : JsonValues.fromJava(value);
+    if (!key.type().isInstance(normalized)) {
+      throw new IllegalArgumentException(
+          "provider state for source '" + sourceId + "' must be a " + key.type().getName());
+    }
+    return SessionState.entry(key, key.type().cast(normalized));
   }
 }

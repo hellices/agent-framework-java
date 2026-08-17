@@ -1,9 +1,12 @@
 package io.github.hellices.agentframework.api.value;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 public final class JsonValues {
 
@@ -15,7 +18,36 @@ public final class JsonValues {
     return fromJava(value, 0);
   }
 
-  static void requireDepthLimit(JsonValue value) {
+  public static Object toJava(JsonValue value) {
+    Objects.requireNonNull(value, "value must not be null");
+    if (value instanceof JsonNull) {
+      return null;
+    }
+    if (value instanceof JsonBoolean jsonBoolean) {
+      return jsonBoolean.value();
+    }
+    if (value instanceof JsonString jsonString) {
+      return jsonString.value();
+    }
+    if (value instanceof JsonNumber jsonNumber) {
+      return jsonNumber.value();
+    }
+    if (value instanceof JsonArray jsonArray) {
+      List<Object> converted = new ArrayList<>(jsonArray.values().size());
+      for (JsonValue item : jsonArray.values()) {
+        converted.add(toJava(item));
+      }
+      return Collections.unmodifiableList(converted);
+    }
+    if (value instanceof JsonObject jsonObject) {
+      Map<String, Object> converted = new LinkedHashMap<>();
+      jsonObject.values().forEach((key, item) -> converted.put(key, toJava(item)));
+      return Collections.unmodifiableMap(converted);
+    }
+    throw new IllegalArgumentException("unsupported json value: " + value.getClass().getName());
+  }
+
+  public static void requireDepthLimit(JsonValue value) {
     validateDepth(value, 0);
   }
 

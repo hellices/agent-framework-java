@@ -41,7 +41,7 @@ class ChatCompletionRequestMapperToolsTest {
     schema.put("type", "object");
     schema.put("properties", Map.of("city", Map.of("type", "string")));
     schema.put("required", List.of("city"));
-    ToolDefinition tool = new ToolDefinition("lookup", "Looks a city up", schema);
+    ToolDefinition tool = toolDefinition("lookup", "Looks a city up", schema);
 
     ChatCompletionCreateParams params = mapper.map(requestWithTools(List.of(tool)), DEFAULTS);
 
@@ -62,8 +62,8 @@ class ChatCompletionRequestMapperToolsTest {
         mapper.map(
             requestWithTools(
                 List.of(
-                    new ToolDefinition("first", null, Map.of()),
-                    new ToolDefinition("second", null, Map.of()))),
+                    toolDefinition("first", null, Map.of()),
+                    toolDefinition("second", null, Map.of()))),
             DEFAULTS);
 
     assertThat(params.tools().orElseThrow())
@@ -75,7 +75,7 @@ class ChatCompletionRequestMapperToolsTest {
   void omitsABlankDescriptionAndAnEmptySchema() {
     // ToolDefinition normalises a null description to "". Sending an empty description or an empty
     // parameters object says something different from saying nothing, so neither is sent.
-    ToolDefinition tool = new ToolDefinition("ping", null, Map.of());
+    ToolDefinition tool = toolDefinition("ping", null, Map.of());
 
     ChatCompletionCreateParams params = mapper.map(requestWithTools(List.of(tool)), DEFAULTS);
 
@@ -474,6 +474,17 @@ class ChatCompletionRequestMapperToolsTest {
         new CancellationSignal(),
         tools,
         Map.of());
+  }
+
+  private static ToolDefinition toolDefinition(
+      String name, String description, Map<String, Object> schema) {
+    return ToolDefinition.builder()
+        .name(name)
+        .description(description)
+        .inputSchema(
+            (io.github.hellices.agentframework.api.value.JsonObject)
+                io.github.hellices.agentframework.api.value.JsonValues.fromJava(schema))
+        .build();
   }
 
   /**

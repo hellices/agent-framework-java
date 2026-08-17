@@ -1,9 +1,9 @@
 package io.github.hellices.agentframework.mcp.internal;
 
 import io.github.hellices.agentframework.api.tool.ToolHandler;
+import io.github.hellices.agentframework.api.value.JsonObject;
 import io.github.hellices.agentframework.mcp.McpToolAdapterOptions;
 import io.modelcontextprotocol.spec.McpSchema;
-import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 
@@ -44,8 +44,7 @@ public final class McpToolInvoker {
    * @param inputSchema the input schema the server published, never {@code null}
    * @return the handler, never {@code null}
    */
-  public ToolHandler handlerFor(
-      String localName, String remoteName, Map<String, Object> inputSchema) {
+  public ToolHandler handlerFor(String localName, String remoteName, JsonObject inputSchema) {
     Set<String> acceptedArgumentNames = argumentMapper.acceptedArgumentNames(inputSchema);
     return (arguments, context) ->
         AsyncStages.callSafely(

@@ -8,6 +8,8 @@ import io.github.hellices.agentframework.api.tool.FunctionTool;
 import io.github.hellices.agentframework.api.tool.ToolArguments;
 import io.github.hellices.agentframework.api.tool.ToolContext;
 import io.github.hellices.agentframework.api.tool.ToolResult;
+import io.github.hellices.agentframework.api.value.JsonObject;
+import io.github.hellices.agentframework.api.value.JsonValues;
 import io.github.hellices.agentframework.mcp.internal.McpOwnedClientSettings;
 import io.github.hellices.agentframework.mcp.internal.McpToolDiscovery;
 import io.github.hellices.agentframework.mcp.internal.OwnedMcpAsyncOperations;
@@ -356,7 +358,7 @@ class OwnedMcpClientRetryTest {
         tools
             .get(0)
             .execute(
-                new ToolArguments(Map.of("query", "open")),
+                toolArguments(Map.of("query", "open")),
                 new ToolContext(null, ContextAttributes.empty()))
             .toCompletableFuture()
             .join();
@@ -544,5 +546,11 @@ class OwnedMcpClientRetryTest {
   private static McpOwnedClientSettings settings() {
     return new McpOwnedClientSettings(
         new PermissiveJsonSchemaValidator(), Duration.ofSeconds(5), Duration.ofSeconds(5));
+  }
+
+  private static ToolArguments toolArguments(Map<String, ?> values) {
+    JsonObject.Builder builder = JsonObject.builder();
+    values.forEach((key, value) -> builder.put(key, JsonValues.fromJava(value)));
+    return ToolArguments.of(builder.build());
   }
 }

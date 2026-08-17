@@ -12,6 +12,8 @@ import io.github.hellices.agentframework.api.tool.ToolArguments;
 import io.github.hellices.agentframework.api.tool.ToolContext;
 import io.github.hellices.agentframework.api.tool.ToolDefinition;
 import io.github.hellices.agentframework.api.tool.ToolResult;
+import io.github.hellices.agentframework.api.value.JsonObject;
+import io.github.hellices.agentframework.api.value.JsonValues;
 import io.github.hellices.agentframework.spi.model.ModelRequest;
 import io.github.hellices.agentframework.spi.model.ModelResponse;
 import java.util.ArrayList;
@@ -189,7 +191,7 @@ public final class ToolLoopPolicy {
     CompletionStage<ToolResult> resultStage =
         Objects.requireNonNull(
             tool.execute(
-                new ToolArguments(call.arguments()),
+                ToolArguments.of(jsonObject(call.arguments())),
                 new ToolContext(request.cancellationSignal(), effectiveAttributes(request))),
             "tool handler response stage must not be null");
     return resultStage.thenCompose(
@@ -208,6 +210,12 @@ public final class ToolLoopPolicy {
 
   private static ContextAttributes effectiveAttributes(AgentRunRequest request) {
     return request.options().attributes().merge(request.attributes());
+  }
+
+  private static JsonObject jsonObject(Map<String, Object> values) {
+    JsonObject.Builder builder = JsonObject.builder();
+    values.forEach((key, value) -> builder.put(key, JsonValues.fromJava(value)));
+    return builder.build();
   }
 
   /**

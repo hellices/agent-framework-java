@@ -1,6 +1,6 @@
 package io.github.hellices.agentframework.api.tool;
 
-import java.util.Map;
+import io.github.hellices.agentframework.api.value.JsonObject;
 import java.util.Objects;
 import java.util.concurrent.CompletionStage;
 
@@ -15,9 +15,13 @@ public final class FunctionTool {
   }
 
   public static FunctionTool create(
-      String name, String description, Map<String, Object> inputSchema, ToolHandler handler) {
+      String name, String description, JsonObject inputSchema, ToolHandler handler) {
     return new FunctionTool(
-        new ToolDefinition(name, description, inputSchema),
+        ToolDefinition.builder()
+            .name(name)
+            .description(description)
+            .inputSchema(inputSchema)
+            .build(),
         Objects.requireNonNull(handler, "handler must not be null"));
   }
 

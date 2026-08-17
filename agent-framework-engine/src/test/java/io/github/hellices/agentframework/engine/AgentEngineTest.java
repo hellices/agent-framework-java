@@ -22,7 +22,10 @@ import io.github.hellices.agentframework.api.message.ToolResultContent;
 import io.github.hellices.agentframework.api.message.Usage;
 import io.github.hellices.agentframework.api.tool.FunctionTool;
 import io.github.hellices.agentframework.api.tool.ToolContext;
+import io.github.hellices.agentframework.api.tool.ToolHandler;
 import io.github.hellices.agentframework.api.tool.ToolResult;
+import io.github.hellices.agentframework.api.value.JsonObject;
+import io.github.hellices.agentframework.api.value.JsonValues;
 import io.github.hellices.agentframework.spi.model.ContinuationModelClient;
 import io.github.hellices.agentframework.spi.model.ModelClient;
 import io.github.hellices.agentframework.spi.model.ModelRequest;
@@ -116,7 +119,7 @@ class AgentEngineTest {
           return completedFuture(response("done"));
         };
     FunctionTool weather =
-        FunctionTool.create(
+        tool(
             "weather",
             "Gets weather",
             Map.of("type", "object"),
@@ -400,7 +403,7 @@ class AgentEngineTest {
           return completedFuture(response("It is sunny"));
         };
     FunctionTool weather =
-        FunctionTool.create(
+        tool(
             "weather",
             "Gets weather",
             Map.of("type", "object"),
@@ -432,13 +435,13 @@ class AgentEngineTest {
   @Test
   void builderRejectsDuplicateToolNames() {
     FunctionTool first =
-        FunctionTool.create(
+        tool(
             "weather",
             "first",
             Map.of(),
             (arguments, context) -> completedFuture(ToolResult.success(new TextContent("one"))));
     FunctionTool second =
-        FunctionTool.create(
+        tool(
             "weather",
             "second",
             Map.of(),
@@ -481,7 +484,7 @@ class AgentEngineTest {
   void iterationLimitRunsOneFinalModelCallWithoutTools() {
     List<ModelRequest> requests = new ArrayList<>();
     FunctionTool tool =
-        FunctionTool.create(
+        tool(
             "again",
             "again",
             Map.of(),
@@ -517,7 +520,7 @@ class AgentEngineTest {
   @Test
   void streamingRunsExecuteToolsAndAssembleTheSameResponseAsAnOrdinaryRun() {
     FunctionTool tool =
-        FunctionTool.create(
+        tool(
             "tool",
             "tool",
             Map.of(),
@@ -590,7 +593,7 @@ class AgentEngineTest {
   @Test
   void continuationWithToolsFailsUntilContinuationLoopSemanticsAreImplemented() {
     FunctionTool tool =
-        FunctionTool.create(
+        tool(
             "tool",
             "tool",
             Map.of(),
@@ -616,7 +619,7 @@ class AgentEngineTest {
   @Test
   void toolsEnabledRunRejectsAContinuationTokenReturnedByTheModel() {
     FunctionTool tool =
-        FunctionTool.create(
+        tool(
             "tool",
             "tool",
             Map.of(),
@@ -642,7 +645,7 @@ class AgentEngineTest {
   void toolLoopAccumulatesUsageAcrossModelCalls() {
     int[] calls = {0};
     FunctionTool tool =
-        FunctionTool.create(
+        tool(
             "tool",
             "tool",
             Map.of(),
@@ -680,6 +683,12 @@ class AgentEngineTest {
   private static ModelResponse response(String text) {
     return new ModelResponse(
         List.of(message(text)), null, FinishReason.STOP, Map.of("provider", "fake"), null);
+  }
+
+  private static FunctionTool tool(
+      String name, String description, Map<String, Object> inputSchema, ToolHandler handler) {
+    return FunctionTool.create(
+        name, description, (JsonObject) JsonValues.fromJava(inputSchema), handler);
   }
 
   private static Message message(String text) {

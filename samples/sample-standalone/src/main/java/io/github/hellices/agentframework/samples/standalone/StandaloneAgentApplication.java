@@ -13,6 +13,8 @@ import io.github.hellices.agentframework.api.message.ToolCallContent;
 import io.github.hellices.agentframework.api.message.Usage;
 import io.github.hellices.agentframework.api.tool.FunctionTool;
 import io.github.hellices.agentframework.api.tool.ToolResult;
+import io.github.hellices.agentframework.api.value.JsonObject;
+import io.github.hellices.agentframework.api.value.JsonValues;
 import io.github.hellices.agentframework.engine.AgentEngine;
 import io.github.hellices.agentframework.openai.OpenAiChatModelClient;
 import io.github.hellices.agentframework.spi.model.ModelCatalog;
@@ -137,7 +139,10 @@ public final class StandaloneAgentApplication {
     return FunctionTool.create(
         TOOL_NAME,
         "Returns the current UTC time as an ISO-8601 instant.",
-        Map.of("type", "object", "properties", Map.of()),
+        JsonObject.builder()
+            .put("type", JsonValues.fromJava("object"))
+            .put("properties", JsonValues.fromJava(Map.of()))
+            .build(),
         (arguments, context) ->
             CompletableFuture.completedFuture(
                 ToolResult.success(

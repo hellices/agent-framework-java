@@ -10,6 +10,8 @@ import io.github.hellices.agentframework.api.tool.FunctionTool;
 import io.github.hellices.agentframework.api.tool.ToolArguments;
 import io.github.hellices.agentframework.api.tool.ToolContext;
 import io.github.hellices.agentframework.api.tool.ToolResult;
+import io.github.hellices.agentframework.api.value.JsonObject;
+import io.github.hellices.agentframework.api.value.JsonValues;
 import io.modelcontextprotocol.client.McpAsyncClient;
 import io.modelcontextprotocol.client.McpClient;
 import io.modelcontextprotocol.spec.McpSchema;
@@ -50,7 +52,7 @@ class BorrowedMcpClientIntegrationTest {
         tools
             .get(0)
             .execute(
-                new ToolArguments(Map.of("query", "open", "smuggled", "value")),
+                toolArguments(Map.of("query", "open", "smuggled", "value")),
                 new ToolContext(
                     null, ContextAttributes.builder().put(CONVERSATION_ID, "c-1").build()))
             .toCompletableFuture()
@@ -101,8 +103,7 @@ class BorrowedMcpClientIntegrationTest {
     assertThatThrownBy(
             () ->
                 tool.execute(
-                        new ToolArguments(Map.of()),
-                        new ToolContext(null, ContextAttributes.empty()))
+                        toolArguments(Map.of()), new ToolContext(null, ContextAttributes.empty()))
                     .toCompletableFuture()
                     .join())
         .isNotNull();
@@ -141,8 +142,7 @@ class BorrowedMcpClientIntegrationTest {
     assertThatThrownBy(
             () ->
                 tool.execute(
-                        new ToolArguments(Map.of()),
-                        new ToolContext(null, ContextAttributes.empty()))
+                        toolArguments(Map.of()), new ToolContext(null, ContextAttributes.empty()))
                     .toCompletableFuture()
                     .join())
         .rootCause()
@@ -214,8 +214,7 @@ class BorrowedMcpClientIntegrationTest {
     transport.withholding(McpSchema.METHOD_TOOLS_CALL);
 
     CompletableFuture<ToolResult> call =
-        tool.execute(
-                new ToolArguments(Map.of()), new ToolContext(signal, ContextAttributes.empty()))
+        tool.execute(toolArguments(Map.of()), new ToolContext(signal, ContextAttributes.empty()))
             .toCompletableFuture();
     signal.cancel();
 
@@ -283,5 +282,11 @@ class BorrowedMcpClientIntegrationTest {
         .initializationTimeout(Duration.ofSeconds(5))
         .jsonSchemaValidator(new PermissiveJsonSchemaValidator())
         .build();
+  }
+
+  private static ToolArguments toolArguments(Map<String, ?> values) {
+    JsonObject.Builder builder = JsonObject.builder();
+    values.forEach((key, value) -> builder.put(key, JsonValues.fromJava(value)));
+    return ToolArguments.of(builder.build());
   }
 }

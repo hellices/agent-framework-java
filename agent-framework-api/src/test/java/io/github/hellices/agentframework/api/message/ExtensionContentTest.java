@@ -4,6 +4,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.github.hellices.agentframework.api.agent.AgentSession;
+import io.github.hellices.agentframework.api.session.SessionState;
+import io.github.hellices.agentframework.api.session.SessionStateKey;
+import io.github.hellices.agentframework.api.session.SessionStateValues;
+import io.github.hellices.agentframework.api.value.JsonValue;
+import io.github.hellices.agentframework.api.value.JsonValues;
 import io.github.hellices.agentframework.spi.session.StateCodecRegistry;
 import java.lang.reflect.Modifier;
 import java.time.Instant;
@@ -81,7 +86,7 @@ class ExtensionContentTest {
   void isRejectedBySessionPersistenceWithAnActionableMessage() {
     StateCodecRegistry registry = StateCodecRegistry.builder().build();
     AgentSession session =
-        new AgentSession(
+        session(
             "session-1",
             null,
             Map.of(
@@ -92,6 +97,32 @@ class ExtensionContentTest {
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessageContaining(ProbeContent.class.getName())
         .hasMessageContaining("registered content codec");
+  }
+
+  private static AgentSession session(
+      String sessionId, String serviceSessionId, Map<String, ?> state) {
+    AgentSession.Builder builder =
+        AgentSession.builder().sessionId(sessionId).state(sessionState(state));
+    if (serviceSessionId != null) {
+      builder.serviceSessionId(serviceSessionId);
+    }
+    return builder.build();
+  }
+
+  private static SessionState sessionState(Map<String, ?> state) {
+    SessionState sessionState = SessionState.empty();
+    for (Map.Entry<String, ?> entry : state.entrySet()) {
+      sessionState = put(sessionState, entry.getKey(), entry.getValue());
+    }
+    return sessionState;
+  }
+
+  @SuppressWarnings("unchecked")
+  private static SessionState put(SessionState state, String key, Object value) {
+    if (SessionStateValues.isJsonValueShape(value)) {
+      return state.with(SessionStateKey.of(key, JsonValue.class), JsonValues.fromJava(value));
+    }
+    return state.with((SessionStateKey<Object>) SessionStateKey.of(key, value.getClass()), value);
   }
 
   /** Stand-in for an adapter owned content kind, so no adapter module is needed to pin this. */

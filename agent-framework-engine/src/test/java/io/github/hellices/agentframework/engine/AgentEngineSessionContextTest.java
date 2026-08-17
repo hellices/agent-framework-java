@@ -19,6 +19,12 @@ import io.github.hellices.agentframework.api.message.MessageAttribution;
 import io.github.hellices.agentframework.api.message.Role;
 import io.github.hellices.agentframework.api.message.TextContent;
 import io.github.hellices.agentframework.api.session.SessionContext;
+import io.github.hellices.agentframework.api.session.SessionState;
+import io.github.hellices.agentframework.api.session.SessionStateKey;
+import io.github.hellices.agentframework.api.session.SessionStateValues;
+import io.github.hellices.agentframework.api.value.JsonNumber;
+import io.github.hellices.agentframework.api.value.JsonValue;
+import io.github.hellices.agentframework.api.value.JsonValues;
 import io.github.hellices.agentframework.spi.model.ModelClient;
 import io.github.hellices.agentframework.spi.model.ModelRequest;
 import io.github.hellices.agentframework.spi.model.ModelResponse;
@@ -159,13 +165,15 @@ class AgentEngineSessionContextTest {
     AgentEngine engine =
         AgentEngine.builder().modelClient(fixedClient("hello")).contextProviders(provider).build();
 
-    runWithSession(engine, new AgentSession("session-1", null, Map.of()));
-    runWithSession(engine, new AgentSession("session-2", null, Map.of("memory", 7)));
+    runWithSession(engine, session("session-1", null, Map.of()));
+    runWithSession(engine, session("session-2", null, Map.of("memory", 7)));
 
     assertThat(provider.observedStateValues).containsExactly(0, 7);
     assertThat(provider.updatedSessions)
-        .extracting(session -> session.state().get("memory"))
-        .containsExactly(1, 8);
+        .extracting(
+            session ->
+                session.state().get(SessionStateKey.of("memory", JsonValue.class)).orElse(null))
+        .containsExactly(JsonNumber.of(1), JsonNumber.of(8));
   }
 
   @Test
@@ -179,13 +187,16 @@ class AgentEngineSessionContextTest {
             .contextProviders(first, second)
             .build();
 
-    runWithSession(engine, new AgentSession("session-1", null, Map.of("first", 3)));
+    runWithSession(engine, session("session-1", null, Map.of("first", 3)));
 
     assertThat(first.observedStateValues).containsExactly(3);
     assertThat(second.observedStateValues).containsExactly(0);
-    assertThat(first.updatedSessions.get(0).state())
-        .containsEntry("first", 4)
-        .containsEntry("second", 1);
+    assertThat(
+            first.updatedSessions.get(0).state().get(SessionStateKey.of("first", JsonValue.class)))
+        .contains(JsonNumber.of(4));
+    assertThat(
+            first.updatedSessions.get(0).state().get(SessionStateKey.of("second", JsonValue.class)))
+        .contains(JsonNumber.of(1));
   }
 
   @Test
@@ -413,7 +424,7 @@ class AgentEngineSessionContextTest {
             .contextProviders(first, second)
             .build();
 
-    runWithSession(engine, new AgentSession("session-1", null, Map.of("first", 3, "second", 5)));
+    runWithSession(engine, session("session-1", null, Map.of("first", 3, "second", 5)));
 
     assertThat(first.observedStateSourceIds).containsExactly("first", "first");
     assertThat(second.observedStateSourceIds).containsExactly("second", "second");
@@ -428,13 +439,15 @@ class AgentEngineSessionContextTest {
     AgentEngine engine =
         AgentEngine.builder().modelClient(fixedClient("hello")).contextProviders(provider).build();
 
-    runWithSession(engine, new AgentSession("session-1", null, Map.of()));
+    runWithSession(engine, session("session-1", null, Map.of()));
     runWithSession(engine, provider.updatedSessions.get(0));
 
     assertThat(provider.observedStateValues).containsExactly(0, 1);
     assertThat(provider.updatedSessions)
-        .extracting(session -> session.state().get("memory"))
-        .containsExactly(1, 2);
+        .extracting(
+            session ->
+                session.state().get(SessionStateKey.of("memory", JsonValue.class)).orElse(null))
+        .containsExactly(JsonNumber.of(1), JsonNumber.of(2));
   }
 
   @Test
@@ -490,13 +503,15 @@ class AgentEngineSessionContextTest {
             .contextProviders(provider)
             .build();
 
-    runStreamingWithSession(engine, new AgentSession("session-1", null, Map.of()));
-    runStreamingWithSession(engine, new AgentSession("session-2", null, Map.of("memory", 7)));
+    runStreamingWithSession(engine, session("session-1", null, Map.of()));
+    runStreamingWithSession(engine, session("session-2", null, Map.of("memory", 7)));
 
     assertThat(provider.observedStateValues).containsExactly(0, 7);
     assertThat(provider.updatedSessions)
-        .extracting(session -> session.state().get("memory"))
-        .containsExactly(1, 8);
+        .extracting(
+            session ->
+                session.state().get(SessionStateKey.of("memory", JsonValue.class)).orElse(null))
+        .containsExactly(JsonNumber.of(1), JsonNumber.of(8));
   }
 
   @Test
@@ -687,6 +702,36 @@ class AgentEngineSessionContextTest {
     return subscriber;
   }
 
+  private static AgentSession session(
+      String sessionId, String serviceSessionId, Map<String, ?> state) {
+    AgentSession.Builder builder =
+        AgentSession.builder().sessionId(sessionId).state(sessionState(state));
+    if (serviceSessionId != null) {
+      builder.serviceSessionId(serviceSessionId);
+    }
+    return builder.build();
+  }
+
+  private static SessionState sessionState(Map<String, ?> state) {
+    SessionState sessionState = SessionState.empty();
+    for (Map.Entry<String, ?> entry : state.entrySet()) {
+      sessionState = put(sessionState, entry.getKey(), entry.getValue());
+    }
+    return sessionState;
+  }
+
+  @SuppressWarnings("unchecked")
+  private static SessionState put(SessionState state, String key, Object value) {
+    if (SessionStateValues.isJsonValueShape(value)) {
+      return state.with(SessionStateKey.of(key, JsonValue.class), JsonValues.fromJava(value));
+    }
+    return state.with((SessionStateKey<Object>) SessionStateKey.of(key, value.getClass()), value);
+  }
+
+  private static int asInt(JsonValue value) {
+    return ((JsonNumber) value).value().intValueExact();
+  }
+
   private static final class RecordingSubscriber<T> implements Flow.Subscriber<T> {
     private final List<T> values = new ArrayList<>();
     private final CompletableFuture<Void> completion = new CompletableFuture<>();
@@ -741,7 +786,7 @@ class AgentEngineSessionContextTest {
       beforeRunContexts.add(context);
       responseDuringBeforeRun = context.response();
       observedStateSourceIds.add(state.sourceId());
-      int seen = state.value(Integer.class).orElse(0);
+      int seen = state.value(JsonValue.class).map(AgentEngineSessionContextTest::asInt).orElse(0);
       observedStateValues.add(seen);
       state.set(seen + 1);
       context.addContextMessages(

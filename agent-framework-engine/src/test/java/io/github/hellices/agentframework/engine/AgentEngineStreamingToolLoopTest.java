@@ -21,8 +21,15 @@ import io.github.hellices.agentframework.api.message.ToolCallContent;
 import io.github.hellices.agentframework.api.message.ToolResultContent;
 import io.github.hellices.agentframework.api.message.Usage;
 import io.github.hellices.agentframework.api.session.SessionContext;
+import io.github.hellices.agentframework.api.session.SessionState;
+import io.github.hellices.agentframework.api.session.SessionStateKey;
+import io.github.hellices.agentframework.api.session.SessionStateValues;
 import io.github.hellices.agentframework.api.tool.FunctionTool;
+import io.github.hellices.agentframework.api.tool.ToolHandler;
 import io.github.hellices.agentframework.api.tool.ToolResult;
+import io.github.hellices.agentframework.api.value.JsonObject;
+import io.github.hellices.agentframework.api.value.JsonValue;
+import io.github.hellices.agentframework.api.value.JsonValues;
 import io.github.hellices.agentframework.engine.session.InMemorySessionStore;
 import io.github.hellices.agentframework.engine.session.JacksonSessionSnapshotCodec;
 import io.github.hellices.agentframework.spi.model.ModelClient;
@@ -348,7 +355,7 @@ class AgentEngineStreamingToolLoopTest {
     List<String> invocations = new ArrayList<>();
     CompletableFuture<ToolResult> firstResult = new CompletableFuture<>();
     FunctionTool first =
-        FunctionTool.create(
+        tool(
             "first",
             "first",
             Map.of(),
@@ -357,7 +364,7 @@ class AgentEngineStreamingToolLoopTest {
               return firstResult;
             });
     FunctionTool second =
-        FunctionTool.create(
+        tool(
             "second",
             "second",
             Map.of(),
@@ -402,7 +409,7 @@ class AgentEngineStreamingToolLoopTest {
   @Test
   void aFailedToolResultIsStreamedAsAnErrorResultAndTheLoopContinues() {
     FunctionTool broken =
-        FunctionTool.create(
+        tool(
             "broken",
             "broken",
             Map.of(),
@@ -431,7 +438,7 @@ class AgentEngineStreamingToolLoopTest {
   @Test
   void aFailingToolStageFailsTheStreamExactlyOnce() {
     FunctionTool exploding =
-        FunctionTool.create(
+        tool(
             "exploding",
             "exploding",
             Map.of(),
@@ -461,8 +468,7 @@ class AgentEngineStreamingToolLoopTest {
   @Test
   void aToolHandlerReturningNoStageFailsTheStream() {
     List<CompletionStage<ToolResult>> stages = Collections.singletonList(null);
-    FunctionTool silent =
-        FunctionTool.create("silent", "silent", Map.of(), (arguments, context) -> stages.get(0));
+    FunctionTool silent = tool("silent", "silent", Map.of(), (arguments, context) -> stages.get(0));
     StreamingModelClient client =
         scripted(
             new ArrayList<>(),
@@ -689,7 +695,7 @@ class AgentEngineStreamingToolLoopTest {
   @Test
   void theIterationBudgetDisablesToolsOnTheLastPermittedRequestExactlyAsOrdinaryRunsDo() {
     FunctionTool again =
-        FunctionTool.create(
+        tool(
             "again",
             "again",
             Map.of(),
@@ -755,7 +761,7 @@ class AgentEngineStreamingToolLoopTest {
   @Test
   void toolCallsReturnedAfterToolsWereDisabledFailBothPaths() {
     FunctionTool tool =
-        FunctionTool.create(
+        tool(
             "tool",
             "tool",
             Map.of(),
@@ -834,7 +840,7 @@ class AgentEngineStreamingToolLoopTest {
     AgentRunRequest request =
         new AgentRunRequest(
             Message.normalize("weather?"),
-            new AgentSession("session-1", null, Map.of()),
+            session("session-1", null, Map.of()),
             new AgentRunOptions(),
             new CancellationSignal(),
             ContextAttributes.empty());
@@ -962,8 +968,7 @@ class AgentEngineStreamingToolLoopTest {
   @Test
   void cancellingWhileAToolStageIsPendingFailsPromptlyAndNeverStartsTheNextModelCall() {
     CompletableFuture<ToolResult> pending = new CompletableFuture<>();
-    FunctionTool slow =
-        FunctionTool.create("slow", "slow", Map.of(), (arguments, context) -> pending);
+    FunctionTool slow = tool("slow", "slow", Map.of(), (arguments, context) -> pending);
     ManualStreams streams = new ManualStreams();
     AgentStreamingRun<AgentResponseUpdate> run = engine(streams.client(), slow).runStreaming("hi");
     RecordingSubscriber subscriber = subscribe(run.updates(), Long.MAX_VALUE);
@@ -1149,8 +1154,46 @@ class AgentEngineStreamingToolLoopTest {
         .build();
   }
 
-  private static FunctionTool weatherTool() {
+  private static FunctionTool tool(
+      String name, String description, Map<String, Object> inputSchema, ToolHandler handler) {
     return FunctionTool.create(
+        name, description, (JsonObject) JsonValues.fromJava(inputSchema), handler);
+  }
+
+  private static AgentSession session(
+      String sessionId, String serviceSessionId, Map<String, ?> state) {
+    AgentSession.Builder builder =
+        AgentSession.builder().sessionId(sessionId).state(sessionState(state));
+    if (serviceSessionId != null) {
+      builder.serviceSessionId(serviceSessionId);
+    }
+    return builder.build();
+  }
+
+  private static SessionState sessionState(Map<String, ?> state) {
+    SessionState sessionState = SessionState.empty();
+    for (Map.Entry<String, ?> entry : state.entrySet()) {
+      sessionState = put(sessionState, entry.getKey(), entry.getValue());
+    }
+    return sessionState;
+  }
+
+  @SuppressWarnings("unchecked")
+  private static SessionState put(SessionState state, String key, Object value) {
+    if (SessionStateValues.isJsonValueShape(value)) {
+      return state.with(SessionStateKey.of(key, JsonValue.class), JsonValues.fromJava(value));
+    }
+    return state.with((SessionStateKey<Object>) SessionStateKey.of(key, value.getClass()), value);
+  }
+
+  private static Map<String, Object> javaMap(JsonObject object) {
+    java.util.LinkedHashMap<String, Object> values = new java.util.LinkedHashMap<>();
+    object.values().forEach((key, value) -> values.put(key, JsonValues.toJava(value)));
+    return Collections.unmodifiableMap(values);
+  }
+
+  private static FunctionTool weatherTool() {
+    return tool(
         "weather",
         "Gets weather",
         Map.of("type", "object"),
@@ -1160,24 +1203,24 @@ class AgentEngineStreamingToolLoopTest {
 
   /** A weather tool that records the arguments each invocation was given. */
   private static FunctionTool recordingWeatherTool(List<Map<String, Object>> observedArguments) {
-    return FunctionTool.create(
+    return tool(
         "weather",
         "Gets weather",
         Map.of(),
         (arguments, context) -> {
-          observedArguments.add(arguments.values());
+          observedArguments.add(javaMap(arguments.values()));
           return completedFuture(ToolResult.success(new TextContent("sunny")));
         });
   }
 
   /** A tool that records {@code name:arguments} per invocation, so call order is observable. */
   private static FunctionTool recordingTool(String name, List<String> invocations) {
-    return FunctionTool.create(
+    return tool(
         name,
         name,
         Map.of(),
         (arguments, context) -> {
-          invocations.add(name + ":" + arguments.values());
+          invocations.add(name + ":" + javaMap(arguments.values()));
           return completedFuture(ToolResult.success(new TextContent(name)));
         });
   }

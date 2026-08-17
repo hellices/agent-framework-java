@@ -5,9 +5,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.github.hellices.agentframework.api.context.ContextAttributes;
 import io.github.hellices.agentframework.api.session.SessionContext;
+import io.github.hellices.agentframework.api.session.SessionState;
 import java.lang.reflect.Constructor;
 import java.util.List;
-import java.util.Map;
 import org.junit.jupiter.api.Test;
 
 class AgentRunContextTest {
@@ -16,7 +16,7 @@ class AgentRunContextTest {
 
   @Test
   void acceptsMatchingSession() {
-    AgentSession session = new AgentSession("session-1", "service-1", Map.of());
+    AgentSession session = session("session-1", "service-1");
     SessionContext sessionContext =
         new SessionContext(session, List.of(), ContextAttributes.empty(), new CancellationSignal());
 
@@ -41,8 +41,8 @@ class AgentRunContextTest {
 
   @Test
   void rejectsMismatchedSession() {
-    AgentSession session = new AgentSession("session-1", "service-1", Map.of());
-    AgentSession otherSession = new AgentSession("session-2", "service-1", Map.of());
+    AgentSession session = session("session-1", "service-1");
+    AgentSession otherSession = session("session-2", "service-1");
     SessionContext sessionContext =
         new SessionContext(
             otherSession, List.of(), ContextAttributes.empty(), new CancellationSignal());
@@ -55,7 +55,7 @@ class AgentRunContextTest {
 
   @Test
   void rejectsSessionWhenSessionContextIsSessionless() {
-    AgentSession session = new AgentSession("session-1", "service-1", Map.of());
+    AgentSession session = session("session-1", "service-1");
     SessionContext sessionContext =
         new SessionContext(null, List.of(), ContextAttributes.empty(), new CancellationSignal());
 
@@ -67,7 +67,7 @@ class AgentRunContextTest {
 
   @Test
   void rejectsSessionContextWhenSessionIsSessionless() {
-    AgentSession sessionContextSession = new AgentSession("session-1", "service-1", Map.of());
+    AgentSession sessionContextSession = session("session-1", "service-1");
     SessionContext sessionContext =
         new SessionContext(
             sessionContextSession, List.of(), ContextAttributes.empty(), new CancellationSignal());
@@ -110,5 +110,13 @@ class AgentRunContextTest {
     } catch (NoSuchMethodException missing) {
       return java.util.Optional.empty();
     }
+  }
+
+  private static AgentSession session(String sessionId, String serviceSessionId) {
+    return AgentSession.builder()
+        .sessionId(sessionId)
+        .serviceSessionId(serviceSessionId)
+        .state(SessionState.empty())
+        .build();
   }
 }

@@ -21,6 +21,7 @@ import io.github.hellices.agentframework.api.message.TextContent;
 import io.github.hellices.agentframework.api.message.ToolCallContent;
 import io.github.hellices.agentframework.api.message.ToolResultContent;
 import io.github.hellices.agentframework.api.tool.ToolDefinition;
+import io.github.hellices.agentframework.api.value.JsonValues;
 import io.github.hellices.agentframework.spi.model.ModelRequest;
 import java.util.ArrayList;
 import java.util.List;
@@ -140,11 +141,14 @@ public final class ChatCompletionRequestMapper {
       if (!tool.description().isBlank()) {
         function.description(tool.description());
       }
-      Map<String, Object> schema = tool.inputSchema();
-      if (!schema.isEmpty()) {
+      if (!tool.inputSchema().values().isEmpty()) {
         FunctionParameters.Builder parameters = FunctionParameters.builder();
-        schema.forEach(
-            (key, value) -> parameters.putAdditionalProperty(key, JsonValue.from(value)));
+        tool.inputSchema()
+            .values()
+            .forEach(
+                (key, value) ->
+                    parameters.putAdditionalProperty(
+                        key, JsonValue.from(JsonValues.toJava(value))));
         function.parameters(parameters.build());
       }
       params.addTool(ChatCompletionFunctionTool.builder().function(function.build()).build());

@@ -21,6 +21,8 @@ import io.github.hellices.agentframework.api.message.ToolCallContent;
 import io.github.hellices.agentframework.api.message.Usage;
 import io.github.hellices.agentframework.api.tool.FunctionTool;
 import io.github.hellices.agentframework.api.tool.ToolResult;
+import io.github.hellices.agentframework.api.value.JsonObject;
+import io.github.hellices.agentframework.api.value.JsonValues;
 import io.github.hellices.agentframework.engine.AgentEngine;
 import io.github.hellices.agentframework.spi.model.ModelClient;
 import java.util.ArrayList;
@@ -215,18 +217,24 @@ class OpenAiChatModelClientToolLoopTest {
             TOOL_DESCRIPTION,
             weatherSchema(),
             (arguments, context) -> {
-              executedArguments.add(arguments.values());
+              executedArguments.add(argumentsAsMap(arguments.values()));
+              String city = arguments.string("city").orElseThrow();
               return CompletableFuture.completedFuture(
-                  ToolResult.success(new TextContent("sunny:" + arguments.get("city"))));
+                  ToolResult.success(new TextContent("sunny:" + city)));
             });
     return AgentEngine.builder().modelClient(client).tools(weather).build();
   }
 
-  private static Map<String, Object> weatherSchema() {
+  private static JsonObject weatherSchema() {
     Map<String, Object> schema = new LinkedHashMap<>();
     schema.put("type", "object");
     schema.put("properties", Map.of("city", Map.of("type", "string")));
-    return schema;
+    return (JsonObject) JsonValues.fromJava(schema);
+  }
+
+  @SuppressWarnings("unchecked")
+  private static Map<String, Object> argumentsAsMap(JsonObject arguments) {
+    return (Map<String, Object>) JsonValues.toJava(arguments);
   }
 
   private static List<ToolCallContent> toolCallsOf(AgentResponse response) {

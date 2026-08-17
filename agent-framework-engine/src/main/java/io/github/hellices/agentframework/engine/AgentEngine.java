@@ -172,7 +172,7 @@ public final class AgentEngine extends Agent {
    */
   private List<ProviderBinding> resolveProviders(SessionContext sessionContext) {
     AgentSession session = sessionContext.session();
-    if (session == null || session.serviceSessionId() != null) {
+    if (session == null || session.serviceSessionId().isPresent()) {
       return configuredProviders;
     }
     if (defaultHistory.namespaceConflict()) {
