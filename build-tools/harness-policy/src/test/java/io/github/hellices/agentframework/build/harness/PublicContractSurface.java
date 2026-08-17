@@ -1,11 +1,17 @@
 package io.github.hellices.agentframework.build.harness;
 
+import com.sun.source.tree.AnnotatedTypeTree;
+import com.sun.source.tree.ArrayTypeTree;
 import com.sun.source.tree.ClassTree;
 import com.sun.source.tree.CompilationUnitTree;
+import com.sun.source.tree.IntersectionTypeTree;
 import com.sun.source.tree.MethodTree;
 import com.sun.source.tree.ParameterizedTypeTree;
 import com.sun.source.tree.Tree;
+import com.sun.source.tree.TypeParameterTree;
+import com.sun.source.tree.UnionTypeTree;
 import com.sun.source.tree.VariableTree;
+import com.sun.source.tree.WildcardTree;
 import com.sun.source.util.JavacTask;
 import java.io.IOException;
 import java.nio.file.Path;
@@ -62,7 +68,7 @@ final class PublicContractSurface {
         Path source = Path.of(unit.getSourceFile().toUri());
         for (Tree declaration : unit.getTypeDecls()) {
           if (declaration instanceof ClassTree type) {
-            inspectType(source, type, packageName, true, records, rawMapSignatures);
+            inspectType(source, type, packageName, false, records, rawMapSignatures);
           }
         }
       }
@@ -129,13 +135,63 @@ final class PublicContractSurface {
         return true;
       }
     }
+    for (TypeParameterTree typeParameter : method.getTypeParameters()) {
+      if (containsRawObjectMap(typeParameter)) {
+        return true;
+      }
+    }
     return false;
   }
 
   private static boolean containsRawObjectMap(Tree type) {
-    if (!(type instanceof ParameterizedTypeTree parameterized)) {
+    if (type == null) {
       return false;
     }
+    if (type instanceof ParameterizedTypeTree parameterized) {
+      if (isRawObjectMap(parameterized)) {
+        return true;
+      }
+      if (containsRawObjectMap(parameterized.getType())) {
+        return true;
+      }
+      for (Tree argument : parameterized.getTypeArguments()) {
+        if (containsRawObjectMap(argument)) {
+          return true;
+        }
+      }
+      return false;
+    }
+    if (type instanceof ArrayTypeTree array) {
+      return containsRawObjectMap(array.getType());
+    }
+    if (type instanceof AnnotatedTypeTree annotated) {
+      return containsRawObjectMap(annotated.getUnderlyingType());
+    }
+    if (type instanceof WildcardTree wildcard) {
+      return containsRawObjectMap(wildcard.getBound());
+    }
+    if (type instanceof IntersectionTypeTree intersection) {
+      return anyContainsRawObjectMap(intersection.getBounds());
+    }
+    if (type instanceof UnionTypeTree union) {
+      return anyContainsRawObjectMap(union.getTypeAlternatives());
+    }
+    if (type instanceof TypeParameterTree typeParameter) {
+      return anyContainsRawObjectMap(typeParameter.getBounds());
+    }
+    return false;
+  }
+
+  private static boolean anyContainsRawObjectMap(List<? extends Tree> types) {
+    for (Tree candidate : types) {
+      if (containsRawObjectMap(candidate)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private static boolean isRawObjectMap(ParameterizedTypeTree parameterized) {
     if (!isMapType(parameterized.getType().toString())) {
       return false;
     }
