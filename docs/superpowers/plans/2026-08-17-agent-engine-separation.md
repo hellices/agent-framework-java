@@ -101,8 +101,8 @@ public final class AgentRuntime {
 
 - [ ] **Step 1: Write failing binding-validation tests**
 
-Cover missing handler, extra handler, duplicate binding, ordered providers, immutable collections,
-and successful declaration-to-handler matching.
+Cover declaration-only tools with no handler, extra handler, duplicate binding, ordered providers,
+immutable collections, and successful declaration-to-handler matching.
 
 - [ ] **Step 2: Verify RED**
 
@@ -112,8 +112,10 @@ and successful declaration-to-handler matching.
 
 - [ ] **Step 3: Implement immutable runtime assembly**
 
-Validation compares exact declared and bound tool-name sets. Do not place `SessionStore` in
-`AgentRuntime`; persistence infrastructure belongs to the shared engine.
+Validation requires every bound handler name to have a declaration but permits declarations with no
+binding for provider-executed or declaration-only tools. The later convenience builder must bind
+every executable `FunctionTool` it accepts. Do not place `SessionStore` in `AgentRuntime`;
+persistence infrastructure belongs to the shared engine.
 
 - [ ] **Step 4: Verify GREEN and commit**
 
