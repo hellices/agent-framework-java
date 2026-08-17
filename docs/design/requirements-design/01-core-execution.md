@@ -137,13 +137,19 @@ and `bind` preserves that distinction.
 ### 3.2 AgentEngine
 
 `AgentEngine` is an application service that implements `Agent` or creates an `Agent`
-implementation. The host injects the following ports through the builder.
+implementation. The host injects the following engine-wide ports through the builder.
 
 - session services
 - ordered interceptor lists
 - `ExecutionStrategy`
 - schema/result mapper
 - telemetry sink
+
+These engine-wide services are the target ownership for `AgentEngineBuilder`. In this Task 4 slice
+the builder currently exposes only the shared `SessionStore` and `StateCodecRegistry`; the ordered
+interceptor lists, `ExecutionStrategy`, schema/result mapper, and telemetry sink are added by later
+approved convergence tasks. Whether present now or added later, these engine-wide services belong to
+the engine and never to an individual `AgentDefinition` or `AgentRuntime`.
 
 At build time, the builder rejects unsupported interceptor seams, missing mandatory ports, and
 conflicting tool options.
