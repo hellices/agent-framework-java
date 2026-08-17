@@ -358,10 +358,11 @@ class ChatCompletionRequestMapperToolsTest {
     // Jackson has no serialiser for must fail loudly rather than echo an empty object. AGENTS.md
     // keeps tool arguments out of failure reports, so the message names the tool and the call and
     // stops there - and so does the chain behind it. Jackson appends the reference chain to its own
-    // message ("through reference chain: java.util.LinkedHashMap[\"<key>\"]"), and an argument key
-    // is part of the arguments, so attaching the serialiser exception as a cause would put the key
-    // in every log that prints a stack trace while this adapter's own message carefully kept it
-    // out. Same rule as the parse failure on the response side, for the same reason.
+    // message (e.g. "through reference chain: java.util.Collections$UnmodifiableMap[\"<key>\"]",
+    // the runtime type of the arguments map here), and an argument key is part of the arguments, so
+    // attaching the serialiser exception as a cause would put the key in every log that prints a
+    // stack trace while this adapter's own message carefully kept it out. Same rule as the parse
+    // failure on the response side, for the same reason.
     String secretKey = "patient_record_id";
     Map<String, Object> arguments = new LinkedHashMap<>();
     arguments.put(secretKey, new Unserialisable());

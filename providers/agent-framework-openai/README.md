@@ -163,9 +163,12 @@ document is a redacted placeholder.
   write is attached as a cause or as a suppressed throwable, because both quote part of the
   arguments — see the two argument limitations below, which exist so that a logger printing a stack
   trace cannot leak model output.
-- That rule covers the failures this adapter raises. A failure raised by the provider is passed
-  through as the SDK threw it, so its message is the server's own and is outside this adapter's
-  control.
+- That rule covers the failures this adapter raises. A failure raised by the SDK itself — a
+  connection error, a deserialisation error, an HTTP error response, or anything else the client
+  throws — is passed through as the SDK threw it. Its message can be server-supplied text (for
+  example an API error body) or SDK/client-side text (for example a network or parsing failure);
+  either way the adapter does not inspect, sanitise, or rewrite it, so treat it as untrusted and do
+  not assume it is safe to expose to end users.
 - The sample's footer carries counts only: never the prompt, the reply, or the tool's output.
 
 ## Ownership
