@@ -8,6 +8,8 @@ import io.github.hellices.agentframework.api.message.FinishReason;
 import io.github.hellices.agentframework.api.message.Message;
 import io.github.hellices.agentframework.api.message.Role;
 import io.github.hellices.agentframework.api.message.TextContent;
+import io.github.hellices.agentframework.api.value.JsonObject;
+import io.github.hellices.agentframework.api.value.JsonString;
 import java.lang.reflect.Method;
 import java.util.List;
 import java.util.Map;
@@ -100,13 +102,14 @@ class ModelOptionsTest {
   @Test
   void requestCarriesTypedOptions() {
     ModelRequest request =
-        new ModelRequest(
-            List.of(new Message(Role.USER, List.of(new TextContent("hello")))),
-            ModelRequestOptions.builder().maxOutputTokens(400).build(),
-            Map.of("traceId", "trace-1"));
+        ModelRequest.builder()
+            .messages(List.of(new Message(Role.USER, List.of(new TextContent("hello")))))
+            .options(ModelRequestOptions.builder().maxOutputTokens(400).build())
+            .metadata(JsonObject.builder().put("traceId", JsonString.of("trace-1")).build())
+            .build();
 
     assertThat(request.options().maxOutputTokens()).hasValue(400);
-    assertThat(request.metadata()).containsEntry("traceId", "trace-1");
+    assertThat(request.metadata().values()).containsEntry("traceId", JsonString.of("trace-1"));
   }
 
   @Test
@@ -114,7 +117,10 @@ class ModelOptionsTest {
     CancellationSignal signal = new CancellationSignal();
 
     ModelRequest request =
-        new ModelRequest(List.of(), ModelRequestOptions.empty(), signal, Map.of());
+        ModelRequest.builder()
+            .options(ModelRequestOptions.empty())
+            .cancellationSignal(signal)
+            .build();
 
     assertThat(request.cancellationSignal()).isSameAs(signal);
   }
@@ -122,8 +128,16 @@ class ModelOptionsTest {
   @Test
   void cancellationSignalDoesNotChangeModelRequestValueEquality() {
     ModelRequestOptions options = ModelRequestOptions.empty();
-    ModelRequest first = new ModelRequest(List.of(), options, new CancellationSignal(), Map.of());
-    ModelRequest second = new ModelRequest(List.of(), options, new CancellationSignal(), Map.of());
+    ModelRequest first =
+        ModelRequest.builder()
+            .options(options)
+            .cancellationSignal(new CancellationSignal())
+            .build();
+    ModelRequest second =
+        ModelRequest.builder()
+            .options(options)
+            .cancellationSignal(new CancellationSignal())
+            .build();
 
     assertThat(first).isEqualTo(second).hasSameHashCodeAs(second);
   }
@@ -133,19 +147,19 @@ class ModelOptionsTest {
     ModelClient basicClient =
         request ->
             CompletableFuture.completedFuture(
-                new ModelResponse(List.of(), null, FinishReason.STOP, Map.of(), null));
+                ModelResponse.builder().finishReason(FinishReason.STOP).build());
     StreamingModelClient streamingClient =
         new StreamingModelClient() {
           @Override
           public java.util.concurrent.CompletionStage<ModelResponse> run(ModelRequest request) {
             return CompletableFuture.completedFuture(
-                new ModelResponse(List.of(), null, FinishReason.STOP, Map.of(), null));
+                ModelResponse.builder().finishReason(FinishReason.STOP).build());
           }
 
           @Override
           public Flow.Publisher<ModelResponseUpdate> runStreaming(ModelRequest request) {
             return new SingleChunkPublisher(
-                new ModelResponseUpdate(List.of(), null, FinishReason.STOP, Map.of(), null));
+                ModelResponseUpdate.builder().finishReason(FinishReason.STOP).build());
           }
         };
 

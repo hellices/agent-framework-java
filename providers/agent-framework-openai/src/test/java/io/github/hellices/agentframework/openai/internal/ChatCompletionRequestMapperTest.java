@@ -139,12 +139,11 @@ class ChatCompletionRequestMapperTest {
 
     ChatCompletionCreateParams params =
         mapper.map(
-            new ModelRequest(
-                List.of(message(Role.USER, "hello")),
-                options,
-                new CancellationSignal(),
-                List.of(),
-                Map.of()),
+            ModelRequest.builder()
+                .messages(List.of(message(Role.USER, "hello")))
+                .options(options)
+                .cancellationSignal(new CancellationSignal())
+                .build(),
             settings);
 
     assertThat(params.temperature()).hasValue(1.5);
@@ -161,12 +160,11 @@ class ChatCompletionRequestMapperTest {
     assertThatThrownBy(
             () ->
                 mapper.map(
-                    new ModelRequest(
-                        List.of(message(Role.USER, "hello")),
-                        options,
-                        new CancellationSignal(),
-                        List.of(),
-                        Map.of()),
+                    ModelRequest.builder()
+                        .messages(List.of(message(Role.USER, "hello")))
+                        .options(options)
+                        .cancellationSignal(new CancellationSignal())
+                        .build(),
                     DEFAULTS))
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessageContaining("openai");
@@ -194,8 +192,11 @@ class ChatCompletionRequestMapperTest {
   }
 
   private static ModelRequest request(List<Message> messages) {
-    return new ModelRequest(
-        messages, ModelRequestOptions.empty(), new CancellationSignal(), List.of(), Map.of());
+    return ModelRequest.builder()
+        .messages(messages)
+        .options(ModelRequestOptions.empty())
+        .cancellationSignal(new CancellationSignal())
+        .build();
   }
 
   /**

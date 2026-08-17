@@ -8,6 +8,8 @@ import java.util.Optional;
 
 public final class JsonObject implements JsonValue {
 
+  private static final JsonObject EMPTY = new JsonObject(Map.of());
+
   private final Map<String, JsonValue> values;
 
   private JsonObject(Map<String, JsonValue> values) {
@@ -19,8 +21,16 @@ public final class JsonObject implements JsonValue {
     return new Builder();
   }
 
+  public static JsonObject empty() {
+    return EMPTY;
+  }
+
   public Map<String, JsonValue> values() {
     return values;
+  }
+
+  public boolean isEmpty() {
+    return values.isEmpty();
   }
 
   public Optional<JsonValue> get(String name) {

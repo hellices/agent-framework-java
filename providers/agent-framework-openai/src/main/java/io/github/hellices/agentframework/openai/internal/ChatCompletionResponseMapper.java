@@ -12,9 +12,11 @@ import io.github.hellices.agentframework.api.message.Role;
 import io.github.hellices.agentframework.api.message.TextContent;
 import io.github.hellices.agentframework.api.message.ToolCallContent;
 import io.github.hellices.agentframework.api.message.Usage;
+import io.github.hellices.agentframework.api.value.JsonNumber;
+import io.github.hellices.agentframework.api.value.JsonObject;
+import io.github.hellices.agentframework.api.value.JsonString;
 import io.github.hellices.agentframework.spi.model.ModelResponse;
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -85,8 +87,13 @@ public final class ChatCompletionResponseMapper {
         content.isEmpty()
             ? List.of()
             : List.of(new Message(Role.ASSISTANT, content, null, Map.of(), message));
-    return new ModelResponse(
-        messages, usageOf(completion), finishReason, null, metadataOf(completion), completion);
+    return ModelResponse.builder()
+        .messages(messages)
+        .usage(usageOf(completion))
+        .finishReason(finishReason)
+        .metadata(metadataOf(completion))
+        .rawRepresentation(completion)
+        .build();
   }
 
   /**
@@ -206,11 +213,11 @@ public final class ChatCompletionResponseMapper {
         .orElse(null);
   }
 
-  private static Map<String, Object> metadataOf(ChatCompletion completion) {
-    Map<String, Object> metadata = new LinkedHashMap<>();
-    metadata.put("openai.response.id", completion.id());
-    metadata.put("openai.response.model", completion.model());
-    metadata.put("openai.response.created", completion.created());
-    return Map.copyOf(metadata);
+  private static JsonObject metadataOf(ChatCompletion completion) {
+    return JsonObject.builder()
+        .put("openai.response.id", JsonString.of(completion.id()))
+        .put("openai.response.model", JsonString.of(completion.model()))
+        .put("openai.response.created", JsonNumber.of(completion.created()))
+        .build();
   }
 }

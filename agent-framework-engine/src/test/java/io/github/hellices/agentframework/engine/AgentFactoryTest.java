@@ -13,7 +13,6 @@ import io.github.hellices.agentframework.spi.model.ModelCatalog;
 import io.github.hellices.agentframework.spi.model.ModelClient;
 import io.github.hellices.agentframework.spi.model.ModelResponse;
 import java.util.List;
-import java.util.Map;
 import org.junit.jupiter.api.Test;
 
 class AgentFactoryTest {
@@ -64,11 +63,9 @@ class AgentFactoryTest {
   }
 
   private static ModelResponse response(String text) {
-    return new ModelResponse(
-        List.of(new Message(Role.ASSISTANT, List.of(new TextContent(text)))),
-        null,
-        FinishReason.STOP,
-        Map.of(),
-        null);
+    return ModelResponse.builder()
+        .messages(List.of(new Message(Role.ASSISTANT, List.of(new TextContent(text)))))
+        .finishReason(FinishReason.STOP)
+        .build();
   }
 }

@@ -2,6 +2,8 @@ package io.github.hellices.agentframework.engine.internal.model;
 
 import io.github.hellices.agentframework.api.agent.AgentResponseUpdate;
 import io.github.hellices.agentframework.api.message.Message;
+import io.github.hellices.agentframework.api.value.JsonObject;
+import io.github.hellices.agentframework.api.value.JsonValues;
 import io.github.hellices.agentframework.spi.model.ModelResponseUpdate;
 import java.time.Instant;
 import java.util.List;
@@ -67,7 +69,7 @@ public record ResponseIdentity(
    * the terminal call's metadata alone. Reporting metadata once, in this update, is what lets the
    * assembled map be exactly that terminal metadata.
    */
-  public AgentResponseUpdate metadataUpdate(Map<String, Object> metadata) {
+  public AgentResponseUpdate metadataUpdate(JsonObject metadata) {
     return new AgentResponseUpdate(
         agentId,
         responseId,
@@ -78,7 +80,16 @@ public record ResponseIdentity(
         null,
         List.of(),
         null,
-        metadata,
+        metadata(metadata),
         null);
+  }
+
+  private static Map<String, Object> metadata(JsonObject metadata) {
+    if (metadata == null || metadata.isEmpty()) {
+      return Map.of();
+    }
+    @SuppressWarnings("unchecked")
+    Map<String, Object> converted = (Map<String, Object>) JsonValues.toJava(metadata);
+    return converted;
   }
 }

@@ -28,7 +28,6 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
@@ -127,12 +126,11 @@ class OpenAiChatModelClientTest {
     FakeChatCompletionsOperations operations = new FakeChatCompletionsOperations();
     ModelClient client = clientOver(operations, builder -> builder.model("gpt-4.1-mini"));
     ModelRequest unmappable =
-        new ModelRequest(
-            List.of(new Message(Role.of("auditor"), List.of(new TextContent("hi")))),
-            ModelRequestOptions.empty(),
-            new CancellationSignal(),
-            List.of(),
-            Map.of());
+        ModelRequest.builder()
+            .messages(List.of(new Message(Role.of("auditor"), List.of(new TextContent("hi")))))
+            .options(ModelRequestOptions.empty())
+            .cancellationSignal(new CancellationSignal())
+            .build();
 
     var stage = client.run(unmappable).toCompletableFuture();
 
@@ -208,12 +206,11 @@ class OpenAiChatModelClientTest {
 
     CompletionStage<ModelResponse> run =
         client.run(
-            new ModelRequest(
-                List.of(new Message(Role.USER, List.of(new TextContent("hi")))),
-                ModelRequestOptions.empty(),
-                signal,
-                List.of(),
-                Map.of()));
+            ModelRequest.builder()
+                .messages(List.of(new Message(Role.USER, List.of(new TextContent("hi")))))
+                .options(ModelRequestOptions.empty())
+                .cancellationSignal(signal)
+                .build());
 
     assertThat(operations.invocations()).isZero();
     assertThat(OpenAiCallBridge.unwrap(failureOf(run)))
@@ -402,12 +399,11 @@ class OpenAiChatModelClientTest {
   }
 
   private static ModelRequest historyOf(Message... messages) {
-    return new ModelRequest(
-        List.of(messages),
-        ModelRequestOptions.empty(),
-        new CancellationSignal(),
-        List.of(),
-        Map.of());
+    return ModelRequest.builder()
+        .messages(List.of(messages))
+        .options(ModelRequestOptions.empty())
+        .cancellationSignal(new CancellationSignal())
+        .build();
   }
 
   private static ModelClient clientOver(

@@ -165,12 +165,9 @@ class ToolLoopPolicyTest {
   }
 
   private static ModelRequest request() {
-    return new ModelRequest(
-        List.of(new Message(Role.USER, List.of(new TextContent("weather?")))),
-        null,
-        null,
-        List.of(),
-        Map.of());
+    return ModelRequest.builder()
+        .messages(List.of(new Message(Role.USER, List.of(new TextContent("weather?")))))
+        .build();
   }
 
   private static ToolResultContent result(String callId, String name) {
@@ -198,15 +195,13 @@ class ToolLoopPolicyTest {
   }
 
   private static ModelResponse response(List<Message> messages) {
-    return new ModelResponse(messages, null, FinishReason.TOOL_CALLS, Map.of(), null);
+    return ModelResponse.builder().messages(messages).finishReason(FinishReason.TOOL_CALLS).build();
   }
 
   private static ModelResponse response(Content... content) {
-    return new ModelResponse(
-        List.of(new Message(Role.ASSISTANT, List.of(content))),
-        null,
-        FinishReason.TOOL_CALLS,
-        Map.of(),
-        null);
+    return ModelResponse.builder()
+        .messages(List.of(new Message(Role.ASSISTANT, List.of(content))))
+        .finishReason(FinishReason.TOOL_CALLS)
+        .build();
   }
 }

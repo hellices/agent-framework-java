@@ -14,7 +14,6 @@ import io.github.hellices.agentframework.spi.model.ModelRequest;
 import io.github.hellices.agentframework.spi.model.ModelRequestOptions;
 import io.github.hellices.agentframework.spi.model.ModelResponse;
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
@@ -178,12 +177,11 @@ class OpenAiChatModelClientCancellationTest {
   }
 
   private static ModelRequest request(CancellationSignal signal) {
-    return new ModelRequest(
-        List.of(new Message(Role.USER, List.of(new TextContent("hi")))),
-        ModelRequestOptions.empty(),
-        signal,
-        List.of(),
-        Map.of());
+    return ModelRequest.builder()
+        .messages(List.of(new Message(Role.USER, List.of(new TextContent("hi")))))
+        .options(ModelRequestOptions.empty())
+        .cancellationSignal(signal)
+        .build();
   }
 
   private static ChatCompletion completion(String text) {

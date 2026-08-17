@@ -2,6 +2,8 @@ package io.github.hellices.agentframework.engine.internal.model;
 
 import io.github.hellices.agentframework.api.agent.AgentResponse;
 import io.github.hellices.agentframework.api.agent.AgentResponseUpdate;
+import io.github.hellices.agentframework.api.value.JsonObject;
+import io.github.hellices.agentframework.api.value.JsonValues;
 import io.github.hellices.agentframework.spi.model.ModelResponse;
 import io.github.hellices.agentframework.spi.model.ModelResponseUpdate;
 import java.util.ArrayList;
@@ -107,12 +109,17 @@ public final class StreamingModelResponseAccumulator {
       throw new IllegalStateException("model stream completed without any update");
     }
     AgentResponse response = AgentResponse.fromUpdates(updates);
-    return new ModelResponse(
-        response.messages(),
-        response.usage(),
-        response.finishReason(),
-        response.continuationToken(),
-        response.additionalProperties(),
-        response.rawRepresentation());
+    return ModelResponse.builder()
+        .messages(response.messages())
+        .usage(response.usage())
+        .finishReason(response.finishReason())
+        .continuationToken(response.continuationToken())
+        .metadata(jsonObject(response.additionalProperties()))
+        .rawRepresentation(response.rawRepresentation())
+        .build();
+  }
+
+  private static JsonObject jsonObject(Map<String, Object> values) {
+    return values.isEmpty() ? JsonObject.empty() : (JsonObject) JsonValues.fromJava(values);
   }
 }

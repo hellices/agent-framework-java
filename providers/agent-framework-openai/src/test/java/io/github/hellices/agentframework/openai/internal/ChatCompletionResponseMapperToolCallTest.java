@@ -485,7 +485,10 @@ class ChatCompletionResponseMapperToolCallTest {
   }
 
   private static ModelRequest request(List<Message> messages) {
-    return new ModelRequest(
-        messages, ModelRequestOptions.empty(), new CancellationSignal(), List.of(), Map.of());
+    return ModelRequest.builder()
+        .messages(messages)
+        .options(ModelRequestOptions.empty())
+        .cancellationSignal(new CancellationSignal())
+        .build();
   }
 }

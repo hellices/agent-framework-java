@@ -76,20 +76,18 @@ class AgentEngineStreamingToolLoopTest {
           ordinaryRequests.add(request);
           if (ordinaryRequests.size() == 1) {
             return completedFuture(
-                new ModelResponse(
+                modelResponse(
                     List.of(toolCall("call-1", "weather", SEOUL)),
                     new Usage(1, 2, 3, Map.of("cachedTokens", 1L)),
                     FinishReason.TOOL_CALLS,
-                    Map.of(),
-                    null));
+                    Map.of()));
           }
           return completedFuture(
-              new ModelResponse(
+              modelResponse(
                   List.of(assistant("It is sunny")),
                   new Usage(4, 5, 9, Map.of("cachedTokens", 2L)),
                   FinishReason.STOP,
-                  Map.of(),
-                  null));
+                  Map.of()));
         };
     List<ModelRequest> streamingRequests = new ArrayList<>();
     StreamingModelClient streamingClient =
@@ -656,13 +654,12 @@ class AgentEngineStreamingToolLoopTest {
             request ->
                 publisher(
                     List.of(
-                        new ModelResponseUpdate(
-                            List.of(assistant("pending")),
-                            null,
-                            FinishReason.STOP,
-                            "continuation-1",
-                            Map.of(),
-                            null))));
+                        ModelResponseUpdate.builder()
+                            .messages(List.of(assistant("pending")))
+                            .finishReason(FinishReason.STOP)
+                            .continuationToken("continuation-1")
+                            .metadata(JsonObject.empty())
+                            .build())));
 
     AgentStreamingRun<AgentResponseUpdate> run = engine(client, weatherTool()).runStreaming("hi");
     RecordingSubscriber subscriber = subscribe(run.updates(), Long.MAX_VALUE);
@@ -706,16 +703,14 @@ class AgentEngineStreamingToolLoopTest {
           ordinaryRequests.add(request);
           if (request.tools().isEmpty()) {
             return completedFuture(
-                new ModelResponse(
-                    List.of(assistant("finished")), null, FinishReason.STOP, Map.of(), null));
+                modelResponse(List.of(assistant("finished")), null, FinishReason.STOP, Map.of()));
           }
           return completedFuture(
-              new ModelResponse(
+              modelResponse(
                   List.of(toolCall("call-1", "again", Map.of())),
                   null,
                   FinishReason.TOOL_CALLS,
-                  Map.of(),
-                  null));
+                  Map.of()));
         };
     List<ModelRequest> streamingRequests = new ArrayList<>();
     StreamingModelClient streamingClient =
@@ -769,12 +764,11 @@ class AgentEngineStreamingToolLoopTest {
     ModelClient ordinaryClient =
         request ->
             completedFuture(
-                new ModelResponse(
+                modelResponse(
                     List.of(toolCall("call-1", "tool", Map.of())),
                     null,
                     FinishReason.TOOL_CALLS,
-                    Map.of(),
-                    null));
+                    Map.of()));
     StreamingModelClient streamingClient =
         streaming(
             request ->
@@ -1094,19 +1088,17 @@ class AgentEngineStreamingToolLoopTest {
         request ->
             ordinaryCalls.getAndIncrement() == 0
                 ? completedFuture(
-                    new ModelResponse(
+                    modelResponse(
                         List.of(toolCall("call-1", "weather", SEOUL)),
                         null,
                         FinishReason.TOOL_CALLS,
-                        Map.of(),
-                        null))
+                        Map.of()))
                 : completedFuture(
-                    new ModelResponse(
+                    modelResponse(
                         List.of(assistant("It is "), assistant("sunny")),
                         null,
                         FinishReason.STOP,
-                        Map.of(),
-                        null));
+                        Map.of()));
     StreamingModelClient streamingClient =
         scripted(
             new ArrayList<>(),
@@ -1232,19 +1224,14 @@ class AgentEngineStreamingToolLoopTest {
     return request ->
         calls.getAndIncrement() == 0
             ? completedFuture(
-                new ModelResponse(
+                modelResponse(
                     List.of(toolCall("call-1", "weather", SEOUL)),
                     null,
                     FinishReason.TOOL_CALLS,
-                    firstMetadata,
-                    null))
+                    firstMetadata))
             : completedFuture(
-                new ModelResponse(
-                    List.of(assistant("It is sunny")),
-                    null,
-                    FinishReason.STOP,
-                    terminalMetadata,
-                    null));
+                modelResponse(
+                    List.of(assistant("It is sunny")), null, FinishReason.STOP, terminalMetadata));
   }
 
   /** The streaming counterpart of {@link #twoIterations}, one update per iteration. */
@@ -1319,7 +1306,29 @@ class AgentEngineStreamingToolLoopTest {
 
   private static ModelResponseUpdate update(
       Message message, Usage usage, FinishReason reason, Map<String, Object> metadata) {
-    return new ModelResponseUpdate(List.of(message), usage, reason, metadata, null);
+    return ModelResponseUpdate.builder()
+        .messages(List.of(message))
+        .usage(usage)
+        .finishReason(reason)
+        .metadata(jsonObject(metadata))
+        .build();
+  }
+
+  private static ModelResponse modelResponse(
+      List<Message> messages,
+      Usage usage,
+      FinishReason finishReason,
+      Map<String, Object> metadata) {
+    return ModelResponse.builder()
+        .messages(messages)
+        .usage(usage)
+        .finishReason(finishReason)
+        .metadata(jsonObject(metadata))
+        .build();
+  }
+
+  private static JsonObject jsonObject(Map<String, Object> values) {
+    return values.isEmpty() ? JsonObject.empty() : (JsonObject) JsonValues.fromJava(values);
   }
 
   /**

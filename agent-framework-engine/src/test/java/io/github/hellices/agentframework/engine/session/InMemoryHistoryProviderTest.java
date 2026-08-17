@@ -858,7 +858,10 @@ class InMemoryHistoryProviderTest {
   }
 
   private static ModelResponse modelResponse(String text) {
-    return new ModelResponse(List.of(assistant(text)), null, FinishReason.STOP, Map.of(), null);
+    return ModelResponse.builder()
+        .messages(List.of(assistant(text)))
+        .finishReason(FinishReason.STOP)
+        .build();
   }
 
   /** Captures the run's session context so a test can read the state the run produced. */

@@ -241,12 +241,7 @@ public final class ToolLoopPolicy {
     List<Message> messages = new ArrayList<>(current.messages());
     messages.addAll(echoedMessages(responseMessages, executedCalls));
     messages.add(toolResultMessage);
-    return new ModelRequest(
-        messages,
-        current.options(),
-        current.cancellationSignal(),
-        toolsForIteration(iteration + 1),
-        current.metadata());
+    return current.toBuilder().messages(messages).tools(toolsForIteration(iteration + 1)).build();
   }
 
   /**

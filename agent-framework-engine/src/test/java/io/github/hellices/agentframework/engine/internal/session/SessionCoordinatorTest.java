@@ -1092,12 +1092,10 @@ class SessionCoordinatorTest {
   }
 
   private static ModelResponse modelResponse(String text) {
-    return new ModelResponse(
-        List.of(new Message(Role.ASSISTANT, List.of(new TextContent(text)))),
-        null,
-        FinishReason.STOP,
-        Map.of(),
-        null);
+    return ModelResponse.builder()
+        .messages(List.of(new Message(Role.ASSISTANT, List.of(new TextContent(text)))))
+        .finishReason(FinishReason.STOP)
+        .build();
   }
 
   private static Map<String, Object> stateAsMap(SessionState state) {
@@ -1461,12 +1459,11 @@ class SessionCoordinatorTest {
                   }
                   completed = true;
                   subscriber.onNext(
-                      new ModelResponseUpdate(
-                          List.of(new Message(Role.ASSISTANT, List.of(new TextContent(text)))),
-                          null,
-                          FinishReason.STOP,
-                          Map.of(),
-                          null));
+                      ModelResponseUpdate.builder()
+                          .messages(
+                              List.of(new Message(Role.ASSISTANT, List.of(new TextContent(text)))))
+                          .finishReason(FinishReason.STOP)
+                          .build());
                   subscriber.onComplete();
                 }
 

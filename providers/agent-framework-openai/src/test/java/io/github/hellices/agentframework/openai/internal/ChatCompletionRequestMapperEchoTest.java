@@ -387,11 +387,10 @@ class ChatCompletionRequestMapperEchoTest {
   }
 
   private static ModelRequest request(Message message) {
-    return new ModelRequest(
-        List.of(message),
-        ModelRequestOptions.empty(),
-        new CancellationSignal(),
-        List.of(),
-        Map.of());
+    return ModelRequest.builder()
+        .messages(List.of(message))
+        .options(ModelRequestOptions.empty())
+        .cancellationSignal(new CancellationSignal())
+        .build();
   }
 }

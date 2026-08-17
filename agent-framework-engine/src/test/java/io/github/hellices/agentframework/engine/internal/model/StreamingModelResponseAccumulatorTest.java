@@ -10,6 +10,8 @@ import io.github.hellices.agentframework.api.message.Role;
 import io.github.hellices.agentframework.api.message.TextContent;
 import io.github.hellices.agentframework.api.message.ToolCallContent;
 import io.github.hellices.agentframework.api.message.Usage;
+import io.github.hellices.agentframework.api.value.JsonObject;
+import io.github.hellices.agentframework.api.value.JsonValues;
 import io.github.hellices.agentframework.spi.model.ModelResponse;
 import io.github.hellices.agentframework.spi.model.ModelResponseUpdate;
 import java.time.Instant;
@@ -27,14 +29,14 @@ class StreamingModelResponseAccumulatorTest {
     StreamingModelResponseAccumulator accumulator = new StreamingModelResponseAccumulator(IDENTITY);
 
     accumulator.record(
-        new ModelResponseUpdate(
+        modelUpdate(
             List.of(message(new TextContent("looking it up"))),
             new Usage(3, 0, 3, Map.of()),
             FinishReason.TOOL_CALLS,
             Map.of(),
             null));
     accumulator.record(
-        new ModelResponseUpdate(
+        modelUpdate(
             List.of(message(new ToolCallContent("call-1", "weather", Map.of("city", "Seoul")))),
             new Usage(0, 4, 4, Map.of()),
             FinishReason.TOOL_CALLS,
@@ -98,7 +100,7 @@ class StreamingModelResponseAccumulatorTest {
 
     AgentResponseUpdate mapped =
         accumulator.record(
-            new ModelResponseUpdate(
+            modelUpdate(
                 List.of(message(new TextContent("hi"))),
                 null,
                 FinishReason.STOP,
@@ -113,7 +115,7 @@ class StreamingModelResponseAccumulatorTest {
     assertThat(mapped.rawRepresentation()).isEqualTo("raw");
     assertThat(mapped.additionalProperties()).isEmpty();
     assertThat(accumulator.toModelResponse().metadata())
-        .containsExactly(Map.entry("provider", "fake"));
+        .isEqualTo(jsonObject(Map.of("provider", "fake")));
   }
 
   @Test
@@ -121,14 +123,14 @@ class StreamingModelResponseAccumulatorTest {
     StreamingModelResponseAccumulator accumulator = new StreamingModelResponseAccumulator(IDENTITY);
 
     accumulator.record(
-        new ModelResponseUpdate(
+        modelUpdate(
             List.of(message(new TextContent("hi"))),
             null,
             FinishReason.STOP,
             Map.of("shared", "first", "only-first", 1),
             null));
     accumulator.record(
-        new ModelResponseUpdate(
+        modelUpdate(
             List.of(message(new TextContent(" there"))),
             null,
             FinishReason.STOP,
@@ -136,12 +138,12 @@ class StreamingModelResponseAccumulatorTest {
             null));
 
     assertThat(accumulator.toModelResponse().metadata())
-        .isEqualTo(Map.of("shared", "second", "only-first", 1));
+        .isEqualTo(jsonObject(Map.of("shared", "second", "only-first", 1)));
   }
 
   @Test
   void aSynthesisedMetadataUpdateReportsMetadataAndNothingElse() {
-    AgentResponseUpdate update = IDENTITY.metadataUpdate(Map.of("provider", "fake"));
+    AgentResponseUpdate update = IDENTITY.metadataUpdate(jsonObject(Map.of("provider", "fake")));
 
     assertThat(update.agentId()).isEqualTo("agent-1");
     assertThat(update.responseId()).isEqualTo("response-1");
@@ -171,5 +173,24 @@ class StreamingModelResponseAccumulatorTest {
 
   private static Message message(io.github.hellices.agentframework.api.message.Content content) {
     return new Message(Role.ASSISTANT, List.of(content));
+  }
+
+  private static ModelResponseUpdate modelUpdate(
+      List<Message> messages,
+      Usage usage,
+      FinishReason finishReason,
+      Map<String, Object> metadata,
+      Object rawRepresentation) {
+    return ModelResponseUpdate.builder()
+        .messages(messages)
+        .usage(usage)
+        .finishReason(finishReason)
+        .metadata(jsonObject(metadata))
+        .rawRepresentation(rawRepresentation)
+        .build();
+  }
+
+  private static JsonObject jsonObject(Map<String, Object> values) {
+    return values.isEmpty() ? JsonObject.empty() : (JsonObject) JsonValues.fromJava(values);
   }
 }

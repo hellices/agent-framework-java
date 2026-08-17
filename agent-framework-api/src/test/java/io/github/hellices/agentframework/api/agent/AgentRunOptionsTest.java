@@ -79,7 +79,7 @@ class AgentRunOptionsTest {
     AgentRunOptions options =
         AgentRunOptions.builder().modelClientFactory(ignored -> replacement).build();
 
-    options.resolveModelClient(original).run(new ModelRequest(List.of(), null, Map.of()));
+    options.resolveModelClient(original).run(ModelRequest.builder().build());
 
     assertThat(originalCalled).isFalse();
     assertThat(replacementCalled).isTrue();
@@ -132,7 +132,7 @@ class AgentRunOptionsTest {
   }
 
   private static ModelResponse response() {
-    return new ModelResponse(List.of(), null, FinishReason.STOP, Map.of(), null);
+    return ModelResponse.builder().finishReason(FinishReason.STOP).build();
   }
 
   private static java.util.Optional<Method> findMethod(

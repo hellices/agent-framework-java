@@ -5,8 +5,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.github.hellices.agentframework.api.message.FinishReason;
-import java.util.List;
-import java.util.Map;
 import org.junit.jupiter.api.Test;
 
 class ModelCatalogTest {
@@ -50,6 +48,6 @@ class ModelCatalogTest {
   }
 
   private static ModelResponse response() {
-    return new ModelResponse(List.of(), null, FinishReason.STOP, Map.of(), null);
+    return ModelResponse.builder().finishReason(FinishReason.STOP).build();
   }
 }

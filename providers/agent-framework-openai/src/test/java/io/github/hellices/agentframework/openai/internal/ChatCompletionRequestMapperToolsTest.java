@@ -463,17 +463,20 @@ class ChatCompletionRequestMapperToolsTest {
   }
 
   private static ModelRequest request(List<Message> messages) {
-    return new ModelRequest(
-        messages, ModelRequestOptions.empty(), new CancellationSignal(), List.of(), Map.of());
+    return ModelRequest.builder()
+        .messages(messages)
+        .options(ModelRequestOptions.empty())
+        .cancellationSignal(new CancellationSignal())
+        .build();
   }
 
   private static ModelRequest requestWithTools(List<ToolDefinition> tools) {
-    return new ModelRequest(
-        List.of(new Message(Role.USER, List.of(new TextContent("hello")))),
-        ModelRequestOptions.empty(),
-        new CancellationSignal(),
-        tools,
-        Map.of());
+    return ModelRequest.builder()
+        .messages(List.of(new Message(Role.USER, List.of(new TextContent("hello")))))
+        .options(ModelRequestOptions.empty())
+        .cancellationSignal(new CancellationSignal())
+        .tools(tools)
+        .build();
   }
 
   private static ToolDefinition toolDefinition(

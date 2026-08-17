@@ -15,6 +15,7 @@ import io.github.hellices.agentframework.api.message.ToolCallContent;
 import io.github.hellices.agentframework.api.message.Usage;
 import io.github.hellices.agentframework.api.session.SessionContext;
 import io.github.hellices.agentframework.api.tool.FunctionTool;
+import io.github.hellices.agentframework.api.value.JsonObject;
 import io.github.hellices.agentframework.engine.internal.model.ModelResponseMapper;
 import io.github.hellices.agentframework.engine.internal.model.ResponseIdentity;
 import io.github.hellices.agentframework.engine.internal.session.SessionCoordinator;
@@ -287,13 +288,14 @@ public final class AgentEngine extends Agent {
                   responseId,
                   name(),
                   createdAt,
-                  new ModelResponse(
-                      result.messages(),
-                      result.usage(),
-                      terminal.finishReason(),
-                      terminal.continuationToken(),
-                      terminal.metadata(),
-                      terminal.rawRepresentation()));
+                  ModelResponse.builder()
+                      .messages(result.messages())
+                      .usage(result.usage())
+                      .finishReason(terminal.finishReason())
+                      .continuationToken(terminal.continuationToken())
+                      .metadata(terminal.metadata())
+                      .rawRepresentation(terminal.rawRepresentation())
+                      .build());
             });
     return new AgentRun(response, request.cancellationSignal());
   }
@@ -492,12 +494,14 @@ public final class AgentEngine extends Agent {
   private ModelRequest toModelRequest(AgentRunRequest request, SessionContext sessionContext) {
     List<Message> messages = new ArrayList<>(sessionContext.contextMessages());
     messages.addAll(request.messages());
-    return new ModelRequest(
-        messages,
-        ModelRequestOptions.empty(),
-        request.cancellationSignal(),
-        toolLoop.toolsForIteration(0),
-        Map.of());
+    return ModelRequest.builder()
+        .messages(messages)
+        .options(ModelRequestOptions.empty())
+        .continuationToken(request.options().continuationToken().orElse(null))
+        .cancellationSignal(request.cancellationSignal())
+        .tools(toolLoop.toolsForIteration(0))
+        .metadata(JsonObject.empty())
+        .build();
   }
 
   private CompletionStage<ToolLoopResult> runToolLoop(
@@ -617,8 +621,8 @@ public final class AgentEngine extends Agent {
     if (!(client instanceof ContinuationModelClient continuationClient)) {
       throw new UnsupportedOperationException("model client does not support continuation");
     }
-    String token = continuationToken.get();
-    return modelRequest -> continuationClient.resume(modelRequest, token);
+    return modelRequest ->
+        continuationClient.resume(modelRequest, modelRequest.continuationToken());
   }
 
   /** The streaming counterpart of {@link #resolveModelInvoker}. */
@@ -635,8 +639,8 @@ public final class AgentEngine extends Agent {
       throw new UnsupportedOperationException(
           "model client does not support streaming continuation");
     }
-    String token = continuationToken.get();
-    return modelRequest -> continuationClient.resumeStreaming(modelRequest, token);
+    return modelRequest ->
+        continuationClient.resumeStreaming(modelRequest, modelRequest.continuationToken());
   }
 
   /**

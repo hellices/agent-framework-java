@@ -294,31 +294,34 @@ class StandaloneAgentApplicationTest {
   }
 
   private static ModelResponse text(String value, Usage usage) {
-    return new ModelResponse(
-        List.of(new Message(Role.ASSISTANT, List.of(new TextContent(value)))),
-        usage,
-        FinishReason.STOP,
-        Map.of(),
-        null);
+    return ModelResponse.builder()
+        .messages(List.of(new Message(Role.ASSISTANT, List.of(new TextContent(value)))))
+        .usage(usage)
+        .finishReason(FinishReason.STOP)
+        .build();
   }
 
   private static ModelResponse toolCall(String callId, Usage usage) {
-    return new ModelResponse(
-        List.of(
-            new Message(
-                Role.ASSISTANT,
-                List.of(
-                    new ToolCallContent(callId, StandaloneAgentApplication.TOOL_NAME, Map.of())))),
-        usage,
-        FinishReason.TOOL_CALLS,
-        Map.of(),
-        null);
+    return ModelResponse.builder()
+        .messages(
+            List.of(
+                new Message(
+                    Role.ASSISTANT,
+                    List.of(
+                        new ToolCallContent(
+                            callId, StandaloneAgentApplication.TOOL_NAME, Map.of())))))
+        .usage(usage)
+        .finishReason(FinishReason.TOOL_CALLS)
+        .build();
   }
 
   /** A terminal completion whose assistant message carries no content at all. */
   private static ModelResponse blank(Usage usage) {
-    return new ModelResponse(
-        List.of(new Message(Role.ASSISTANT, List.of())), usage, FinishReason.STOP, Map.of(), null);
+    return ModelResponse.builder()
+        .messages(List.of(new Message(Role.ASSISTANT, List.of())))
+        .usage(usage)
+        .finishReason(FinishReason.STOP)
+        .build();
   }
 
   private static ModelResponse round(Usage usage, String... values) {
@@ -326,21 +329,26 @@ class StandaloneAgentApplicationTest {
     for (String value : values) {
       messages.add(new Message(Role.ASSISTANT, List.of(new TextContent(value))));
     }
-    return new ModelResponse(List.copyOf(messages), usage, FinishReason.STOP, Map.of(), null);
+    return ModelResponse.builder()
+        .messages(List.copyOf(messages))
+        .usage(usage)
+        .finishReason(FinishReason.STOP)
+        .build();
   }
 
   private static ModelResponse toolCallAfterSaying(String preamble, String callId, Usage usage) {
-    return new ModelResponse(
-        List.of(
-            new Message(
-                Role.ASSISTANT,
-                List.of(
-                    new TextContent(preamble),
-                    new ToolCallContent(callId, StandaloneAgentApplication.TOOL_NAME, Map.of())))),
-        usage,
-        FinishReason.TOOL_CALLS,
-        Map.of(),
-        null);
+    return ModelResponse.builder()
+        .messages(
+            List.of(
+                new Message(
+                    Role.ASSISTANT,
+                    List.of(
+                        new TextContent(preamble),
+                        new ToolCallContent(
+                            callId, StandaloneAgentApplication.TOOL_NAME, Map.of())))))
+        .usage(usage)
+        .finishReason(FinishReason.TOOL_CALLS)
+        .build();
   }
 
   /** Answers from a script and records what the sample asked for. */

@@ -82,7 +82,7 @@ class AgentEngineTest {
 
     assertThat(capturedRequest.get().messages()).extracting(Message::text).containsExactly("hi");
     assertThat(capturedRequest.get().cancellationSignal()).isSameAs(signal);
-    assertThat(capturedRequest.get().metadata()).isEmpty();
+    assertThat(capturedRequest.get().metadata().isEmpty()).isTrue();
     assertThat(response.agentId()).isEqualTo("agent-1");
     assertThat(response.authorName()).isEqualTo("assistant");
     assertThat(response.responseId()).isNotBlank();
@@ -104,7 +104,7 @@ class AgentEngineTest {
         request -> {
           if (firstRequest.getAndSet(false)) {
             return completedFuture(
-                new ModelResponse(
+                modelResponse(
                     List.of(
                         new Message(
                             Role.ASSISTANT,
@@ -113,8 +113,8 @@ class AgentEngineTest {
                                     "call-1", "weather", Map.of("city", "Seoul"))))),
                     null,
                     FinishReason.TOOL_CALLS,
-                    Map.of(),
-                    null));
+                    null,
+                    Map.of()));
           }
           return completedFuture(response("done"));
         };
@@ -195,6 +195,7 @@ class AgentEngineTest {
   void continuationUsesTheTypedContinuationCapability() {
     AtomicBoolean ordinaryRunCalled = new AtomicBoolean();
     AtomicReference<String> capturedToken = new AtomicReference<>();
+    AtomicReference<ModelRequest> capturedRequest = new AtomicReference<>();
     ContinuationModelClient client =
         new ContinuationModelClient() {
           @Override
@@ -206,6 +207,7 @@ class AgentEngineTest {
           @Override
           public java.util.concurrent.CompletionStage<ModelResponse> resume(
               ModelRequest request, String continuationToken) {
+            capturedRequest.set(request);
             capturedToken.set(continuationToken);
             return completedFuture(response("resumed"));
           }
@@ -222,6 +224,7 @@ class AgentEngineTest {
     var response = engine.run(request).response().toCompletableFuture().join();
 
     assertThat(ordinaryRunCalled).isFalse();
+    assertThat(capturedRequest.get().continuationToken()).isEqualTo("continuation-1");
     assertThat(capturedToken).hasValue("continuation-1");
     assertThat(response.text()).isEqualTo("resumed");
   }
@@ -298,13 +301,8 @@ class AgentEngineTest {
     ModelClient client =
         request ->
             completedFuture(
-                new ModelResponse(
-                    List.of(message("done")),
-                    null,
-                    FinishReason.STOP,
-                    "continuation-2",
-                    Map.of(),
-                    null));
+                modelResponse(
+                    List.of(message("done")), null, FinishReason.STOP, "continuation-2", Map.of()));
     AgentEngine engine = AgentEngine.builder().modelClient(client).build();
 
     var response = engine.run("hi").response().toCompletableFuture().join();
@@ -388,7 +386,7 @@ class AgentEngineTest {
           requests.add(request);
           if (requests.size() == 1) {
             return completedFuture(
-                new ModelResponse(
+                modelResponse(
                     List.of(
                         new Message(
                             Role.ASSISTANT,
@@ -397,8 +395,8 @@ class AgentEngineTest {
                                     "call-1", "weather", Map.of("city", "Seoul"))))),
                     null,
                     FinishReason.TOOL_CALLS,
-                    Map.of(),
-                    null));
+                    null,
+                    Map.of()));
           }
           return completedFuture(response("It is sunny"));
         };
@@ -464,15 +462,15 @@ class AgentEngineTest {
             .modelClient(
                 request ->
                     completedFuture(
-                        new ModelResponse(
+                        modelResponse(
                             List.of(
                                 new Message(
                                     Role.ASSISTANT,
                                     List.of(new ToolCallContent("call-1", "missing", Map.of())))),
                             null,
                             FinishReason.TOOL_CALLS,
-                            Map.of(),
-                            null)))
+                            null,
+                            Map.of())))
             .build();
 
     assertThatThrownBy(() -> engine.run("call").response().toCompletableFuture().join())
@@ -496,15 +494,15 @@ class AgentEngineTest {
             return completedFuture(response("finished"));
           }
           return completedFuture(
-              new ModelResponse(
+              modelResponse(
                   List.of(
                       new Message(
                           Role.ASSISTANT,
                           List.of(new ToolCallContent("call-1", "again", Map.of())))),
                   null,
                   FinishReason.TOOL_CALLS,
-                  Map.of(),
-                  null));
+                  null,
+                  Map.of()));
         };
     AgentEngine engine =
         AgentEngine.builder().modelClient(client).tools(tool).maxIterations(2).build();
@@ -534,15 +532,15 @@ class AgentEngineTest {
             requests.add(request);
             if (requests.size() == 1) {
               return completedFuture(
-                  new ModelResponse(
+                  modelResponse(
                       List.of(
                           new Message(
                               Role.ASSISTANT,
                               List.of(new ToolCallContent("call-1", "tool", Map.of())))),
                       null,
                       FinishReason.TOOL_CALLS,
-                      Map.of(),
-                      null));
+                      null,
+                      Map.of()));
             }
             return completedFuture(response("finished"));
           }
@@ -562,12 +560,12 @@ class AgentEngineTest {
                         }
                         completed = true;
                         subscriber.onNext(
-                            new ModelResponseUpdate(
+                            modelResponseUpdate(
                                 response.messages(),
                                 response.usage(),
                                 response.finishReason(),
-                                Map.of(),
-                                null));
+                                null,
+                                Map.of()));
                         subscriber.onComplete();
                       }
 
@@ -627,13 +625,12 @@ class AgentEngineTest {
     ModelClient client =
         request ->
             completedFuture(
-                new ModelResponse(
+                modelResponse(
                     List.of(message("pending")),
                     null,
                     FinishReason.STOP,
                     "continuation-1",
-                    Map.of(),
-                    null));
+                    Map.of()));
     AgentEngine engine = AgentEngine.builder().modelClient(client).tools(tool).build();
 
     assertThatThrownBy(() -> engine.run("hi").response().toCompletableFuture().join())
@@ -655,23 +652,23 @@ class AgentEngineTest {
           calls[0]++;
           if (calls[0] == 1) {
             return completedFuture(
-                new ModelResponse(
+                modelResponse(
                     List.of(
                         new Message(
                             Role.ASSISTANT,
                             List.of(new ToolCallContent("call-1", "tool", Map.of())))),
                     new Usage(1, 2, 3, Map.of("cachedTokens", 1L)),
                     FinishReason.TOOL_CALLS,
-                    Map.of(),
-                    null));
+                    null,
+                    Map.of()));
           }
           return completedFuture(
-              new ModelResponse(
+              modelResponse(
                   List.of(message("done")),
                   new Usage(4, 5, 9, Map.of("cachedTokens", 2L)),
                   FinishReason.STOP,
-                  Map.of(),
-                  null));
+                  null,
+                  Map.of()));
         };
     AgentEngine engine = AgentEngine.builder().modelClient(client).tools(tool).build();
 
@@ -681,8 +678,8 @@ class AgentEngineTest {
   }
 
   private static ModelResponse response(String text) {
-    return new ModelResponse(
-        List.of(message(text)), null, FinishReason.STOP, Map.of("provider", "fake"), null);
+    return modelResponse(
+        List.of(message(text)), null, FinishReason.STOP, null, Map.of("provider", "fake"));
   }
 
   private static FunctionTool tool(
@@ -744,11 +741,11 @@ class AgentEngineTest {
                   }
                   completed = true;
                   subscriber.onNext(
-                      new ModelResponseUpdate(
-                          List.of(message("hel")), null, FinishReason.STOP, Map.of(), null));
+                      modelResponseUpdate(
+                          List.of(message("hel")), null, FinishReason.STOP, null, Map.of()));
                   subscriber.onNext(
-                      new ModelResponseUpdate(
-                          List.of(message("lo")), null, FinishReason.STOP, Map.of(), null));
+                      modelResponseUpdate(
+                          List.of(message("lo")), null, FinishReason.STOP, null, Map.of()));
                   subscriber.onComplete();
                 }
 
@@ -805,8 +802,8 @@ class AgentEngineTest {
               }
               completed = true;
               subscriber.onNext(
-                  new ModelResponseUpdate(
-                      List.of(message(text)), null, FinishReason.STOP, Map.of(), null));
+                  modelResponseUpdate(
+                      List.of(message(text)), null, FinishReason.STOP, null, Map.of()));
               subscriber.onComplete();
             }
 
@@ -832,5 +829,39 @@ class AgentEngineTest {
 
     @Override
     public void onComplete() {}
+  }
+
+  private static ModelResponse modelResponse(
+      List<Message> messages,
+      Usage usage,
+      FinishReason finishReason,
+      String continuationToken,
+      Map<String, Object> metadata) {
+    return ModelResponse.builder()
+        .messages(messages)
+        .usage(usage)
+        .finishReason(finishReason)
+        .continuationToken(continuationToken)
+        .metadata(jsonObject(metadata))
+        .build();
+  }
+
+  private static ModelResponseUpdate modelResponseUpdate(
+      List<Message> messages,
+      Usage usage,
+      FinishReason finishReason,
+      String continuationToken,
+      Map<String, Object> metadata) {
+    return ModelResponseUpdate.builder()
+        .messages(messages)
+        .usage(usage)
+        .finishReason(finishReason)
+        .continuationToken(continuationToken)
+        .metadata(jsonObject(metadata))
+        .build();
+  }
+
+  private static JsonObject jsonObject(Map<String, Object> values) {
+    return values.isEmpty() ? JsonObject.empty() : (JsonObject) JsonValues.fromJava(values);
   }
 }

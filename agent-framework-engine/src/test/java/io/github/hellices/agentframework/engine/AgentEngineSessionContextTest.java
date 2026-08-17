@@ -678,12 +678,10 @@ class AgentEngineSessionContextTest {
   }
 
   private static ModelResponse response(String text) {
-    return new ModelResponse(
-        List.of(new Message(Role.ASSISTANT, List.of(new TextContent(text)))),
-        null,
-        FinishReason.STOP,
-        Map.of(),
-        null);
+    return ModelResponse.builder()
+        .messages(List.of(new Message(Role.ASSISTANT, List.of(new TextContent(text)))))
+        .finishReason(FinishReason.STOP)
+        .build();
   }
 
   private static <T> List<T> consume(Flow.Publisher<T> publisher) {
@@ -974,12 +972,12 @@ class AgentEngineSessionContextTest {
                   }
                   completed = true;
                   subscriber.onNext(
-                      new ModelResponseUpdate(
-                          List.of(new Message(Role.ASSISTANT, List.of(new TextContent("hello")))),
-                          null,
-                          FinishReason.STOP,
-                          Map.of(),
-                          null));
+                      ModelResponseUpdate.builder()
+                          .messages(
+                              List.of(
+                                  new Message(Role.ASSISTANT, List.of(new TextContent("hello")))))
+                          .finishReason(FinishReason.STOP)
+                          .build());
                   subscriber.onComplete();
                 }
 

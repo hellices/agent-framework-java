@@ -2,9 +2,12 @@ package io.github.hellices.agentframework.engine.internal.model;
 
 import io.github.hellices.agentframework.api.agent.AgentResponse;
 import io.github.hellices.agentframework.api.agent.AgentResponseUpdate;
+import io.github.hellices.agentframework.api.value.JsonObject;
+import io.github.hellices.agentframework.api.value.JsonValues;
 import io.github.hellices.agentframework.spi.model.ModelResponse;
 import io.github.hellices.agentframework.spi.model.ModelResponseUpdate;
 import java.time.Instant;
+import java.util.Map;
 import java.util.Objects;
 
 public final class ModelResponseMapper {
@@ -28,7 +31,7 @@ public final class ModelResponseMapper {
         value.continuationToken(),
         value.messages(),
         value.usage(),
-        value.metadata(),
+        metadata(value.metadata()),
         value.rawRepresentation());
   }
 
@@ -50,7 +53,16 @@ public final class ModelResponseMapper {
         value.continuationToken(),
         value.messages(),
         value.usage(),
-        value.metadata(),
+        metadata(value.metadata()),
         value.rawRepresentation());
+  }
+
+  private static Map<String, Object> metadata(JsonObject metadata) {
+    if (metadata == null || metadata.isEmpty()) {
+      return Map.of();
+    }
+    @SuppressWarnings("unchecked")
+    Map<String, Object> converted = (Map<String, Object>) JsonValues.toJava(metadata);
+    return converted;
   }
 }
