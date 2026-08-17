@@ -143,6 +143,37 @@ class StandaloneAgentApplicationTest {
   }
 
   @Test
+  void printsBlankFinalTextWhenTheTerminalRoundHasNoContent() {
+    // A provider can end the loop (no tool call, so the round is terminal) with an assistant
+    // message that carries no content at all -- an empty completion, not merely an empty string.
+    // finalText must report that emptiness rather than reach back into the preamble or any earlier
+    // round: response.text() still concatenates the whole transcript and keeps the preamble, so a
+    // fallback to it would silently print words the terminal round never said. The footer's
+    // toolCalls count, not the printed text, is what still tells a reader the loop actually ran.
+    ScriptedModelClient modelClient =
+        new ScriptedModelClient(
+            toolCallAfterSaying("Let me check the clock.", "call_1", new Usage(3L, 1L, 4L)),
+            blank(new Usage(5L, 2L, 7L)));
+
+    AgentResponse response =
+        StandaloneAgentApplication.createAgent(modelClient, FIXED_CLOCK)
+            .run(StandaloneAgentApplication.defaultPrompt())
+            .response()
+            .toCompletableFuture()
+            .join();
+
+    assertThat(response.text()).isEqualTo("Let me check the clock.");
+    assertThat(StandaloneAgentApplication.finalText(response)).isEmpty();
+    assertThat(response.messages())
+        .extracting(message -> message.role().value())
+        .containsExactly("assistant", "tool", "assistant");
+    // The blank final text still leaves an observable outcome: the footer's tool-call count.
+    assertThat(StandaloneAgentApplication.footer(response, "gpt-4.1-mini"))
+        .isEqualTo(
+            "[model=gpt-4.1-mini finishReason=STOP toolCalls=1 inputTokens=8 outputTokens=3]");
+  }
+
+  @Test
   void printsTheWholeAnswerWhenTheRunNeverCallsATool() {
     // Without a tool round the terminal round is the only round, so the sample prints everything
     // the model said rather than silently dropping earlier text.
@@ -277,6 +308,12 @@ class StandaloneAgentApplicationTest {
         FinishReason.TOOL_CALLS,
         Map.of(),
         null);
+  }
+
+  /** A terminal completion whose assistant message carries no content at all. */
+  private static ModelResponse blank(Usage usage) {
+    return new ModelResponse(
+        List.of(new Message(Role.ASSISTANT, List.of())), usage, FinishReason.STOP, Map.of(), null);
   }
 
   private static ModelResponse round(Usage usage, String... values) {
