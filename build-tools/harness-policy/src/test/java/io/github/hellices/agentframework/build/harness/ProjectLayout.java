@@ -232,17 +232,40 @@ final class ProjectLayout {
     List<ProjectCall> calls = new ArrayList<>();
     Matcher call = PROJECT_CALL.matcher(line.code());
     while (call.find()) {
-      char before = call.start() == 0 ? ' ' : line.code().charAt(call.start() - 1);
-      if (isIdentifierPart(before)) {
+      if (call.start() > 0 && isIdentifierPart(line.code().charAt(call.start() - 1))) {
         // A longer identifier that merely ends in "project", such as `subproject(`.
         continue;
       }
       int open = call.end() - 1;
       calls.add(
           new ProjectCall(
-              call.start(), open, closingParenthesis(line.code(), open), before == '.'));
+              call.start(),
+              open,
+              closingParenthesis(line.code(), open),
+              hasReceiver(line.code(), call.start())));
     }
     return calls;
+  }
+
+  /**
+   * Reports whether a project call selects the name off a receiver.
+   *
+   * <p>Kotlin allows whitespace, and therefore also a blanked comment, between a receiver and the
+   * dot that selects a call, so {@code rootProject . project(":x")} names the same thing as {@code
+   * rootProject.project(":x")}. Reading only the character next to the name would call the spaced
+   * form unqualified, and the policy would then refuse it for the wrong reason, naming the
+   * configuration it could not read instead of the receiver the author has to remove.
+   *
+   * <p>The scan runs over the blanked code rather than the source text, so a dot inside a string
+   * literal or a comment cannot make an ordinary call look qualified.
+   *
+   * @param code the line with comments and literal contents blanked
+   * @param nameStart index of the {@code project} identifier
+   * @return whether a receiver precedes the call
+   */
+  private static boolean hasReceiver(String code, int nameStart) {
+    int index = skipWhitespaceBackwards(code, nameStart - 1);
+    return index >= 0 && code.charAt(index) == '.';
   }
 
   /**

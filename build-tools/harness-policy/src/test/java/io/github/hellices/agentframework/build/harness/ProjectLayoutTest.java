@@ -274,6 +274,97 @@ class ProjectLayoutTest {
   }
 
   @Test
+  void refusesAQualifiedProjectCallWrittenWithSpacesAroundTheDot() {
+    // Kotlin allows whitespace around the dot that selects a call, so this names the same
+    // receiver-qualified dependency as `rootProject.project(":x")`. Reading only the character next
+    // to the name would classify it as an ordinary call and refuse it for the wrong reason, which
+    // hides the one thing a reader has to change.
+    String buildFile =
+        """
+        dependencies {
+            api(rootProject . project(":agent-framework-api"))
+        }
+        """;
+
+    assertThatThrownBy(() -> ProjectLayout.projectDependenciesIn(buildFile))
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("rootProject . project(\":agent-framework-api\")")
+        .hasMessageContaining("unqualified call")
+        .hasMessageContaining("configuration(project(\":path\"))");
+  }
+
+  @Test
+  void refusesAQualifiedProjectCallWrittenWithTabsAroundTheDot() {
+    String buildFile =
+        """
+        dependencies {
+            api(rootProject\t.\tproject(":agent-framework-api"))
+        }
+        """;
+
+    assertThatThrownBy(() -> ProjectLayout.projectDependenciesIn(buildFile))
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("rootProject\t.\tproject(\":agent-framework-api\")")
+        .hasMessageContaining("unqualified call")
+        .hasMessageContaining("configuration(project(\":path\"))");
+  }
+
+  @Test
+  void refusesAQualifiedProjectCallSeparatedFromItsReceiverByAComment() {
+    // Comment text is blanked rather than deleted, so the receiver and the dot stay separated by
+    // whitespace on the scanned line. The call is still qualified.
+    String buildFile =
+        """
+        dependencies {
+            api(rootProject /* the root build */ . project(":agent-framework-api"))
+        }
+        """;
+
+    assertThatThrownBy(() -> ProjectLayout.projectDependenciesIn(buildFile))
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("rootProject")
+        .hasMessageContaining("unqualified call")
+        .hasMessageContaining("configuration(project(\":path\"))");
+  }
+
+  @Test
+  void readsAnUnqualifiedProjectCallWrittenWithExtraSpacing() {
+    // Whitespace before the call name says nothing about a receiver, so indentation, spacing inside
+    // the argument list, and a space before the parenthesis must all still read as declarations. A
+    // parse that refused them would fail a build file that is entirely legal.
+    String buildFile =
+        """
+        dependencies {
+                api( project(":agent-framework-api") )
+            implementation(\tproject(":agent-framework-engine")\t)
+            testImplementation(project (":agent-framework-testkit"))
+        }
+        """;
+
+    assertThat(ProjectLayout.projectDependenciesIn(buildFile))
+        .containsExactly(":agent-framework-api", ":agent-framework-engine");
+    assertThat(ProjectLayout.testProjectDependenciesIn(buildFile))
+        .containsExactly(":agent-framework-testkit");
+  }
+
+  @Test
+  void ignoresACallWhoseNameMerelyEndsInProject() {
+    // `findSubproject(` is one identifier, not a receiver and a call, so the parse must skip it
+    // rather than read a project path out of it.
+    String buildFile =
+        """
+        val nested = findSubproject(":agent-framework-engine")
+        dependencies {
+            api(project(":agent-framework-api"))
+        }
+        """;
+
+    assertThat(ProjectLayout.projectDependenciesIn(buildFile))
+        .containsExactly(":agent-framework-api");
+    assertThat(ProjectLayout.testProjectDependenciesIn(buildFile)).isEmpty();
+  }
+
+  @Test
   void ignoresAProjectReferenceInsideAMultiLineRawString() {
     String buildFile =
         """
