@@ -7,6 +7,7 @@ import io.github.hellices.agentframework.api.agent.AgentFactory;
 import io.github.hellices.agentframework.api.agent.AgentResponse;
 import io.github.hellices.agentframework.api.message.Content;
 import io.github.hellices.agentframework.api.message.Message;
+import io.github.hellices.agentframework.api.message.Role;
 import io.github.hellices.agentframework.api.message.TextContent;
 import io.github.hellices.agentframework.api.message.ToolCallContent;
 import io.github.hellices.agentframework.api.message.Usage;
@@ -19,6 +20,7 @@ import io.github.hellices.agentframework.spi.model.ModelClient;
 import java.time.Clock;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 
@@ -86,7 +88,7 @@ public final class StandaloneAgentApplication {
               OpenAiChatModelClient.builder().client(client).model(model).build(),
               Clock.systemUTC());
       AgentResponse response = agent.run(prompt(args)).response().toCompletableFuture().join();
-      System.out.println(response.text());
+      System.out.println(finalText(response));
       System.out.println(footer(response, model));
     } finally {
       // The sample created the client, so the sample closes it. A long-lived host would not.
@@ -138,6 +140,35 @@ public final class StandaloneAgentApplication {
 
   static String model(Map<String, String> environment) {
     return valueOrDefault(environment, MODEL_VARIABLE, DEFAULT_MODEL);
+  }
+
+  /**
+   * The answer the run ended on: the text of the terminal assistant round, not of the whole
+   * transcript.
+   *
+   * <p>{@link AgentResponse#text()} concatenates every message the run produced. A model that
+   * narrates before it asks for a tool ("Let me check the clock.") therefore has that preamble
+   * glued straight onto the final answer, and the sample would print one sentence the model never
+   * said as one utterance. The engine appends messages in the order they were produced — each
+   * round's assistant messages, then that round's tool results — so the terminal round is exactly
+   * the trailing run of assistant messages, and everything before the last non-assistant message
+   * belongs to an earlier round. A run that never calls a tool has only that trailing run, so this
+   * prints the whole answer.
+   *
+   * <p>Nothing is discarded: {@code response.messages()} still carries the preamble for a caller
+   * that wants the transcript. This is a presentation choice for a one-shot console sample.
+   */
+  static String finalText(AgentResponse response) {
+    List<Message> messages = response.messages();
+    int start = messages.size();
+    while (start > 0 && Role.ASSISTANT.equals(messages.get(start - 1).role())) {
+      start--;
+    }
+    StringBuilder text = new StringBuilder();
+    for (Message message : messages.subList(start, messages.size())) {
+      text.append(message.text());
+    }
+    return text.toString();
   }
 
   /**

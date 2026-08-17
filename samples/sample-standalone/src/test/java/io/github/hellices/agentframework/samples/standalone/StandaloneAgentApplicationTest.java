@@ -94,6 +94,89 @@ class StandaloneAgentApplicationTest {
   }
 
   @Test
+  void printsOnlyTheTerminalAssistantTextWhenAToolRoundNarratesFirst() {
+    // A model is free to say something in the same round it asks for a tool. The engine keeps that
+    // preamble in the transcript, in order, so AgentResponse#text() would glue "Let me check the
+    // clock." onto the final answer and the sample would print a sentence the model never said as
+    // one utterance. The sample prints the terminal round only.
+    ScriptedModelClient modelClient =
+        new ScriptedModelClient(
+            toolCallAfterSaying("Let me check the clock.", "call_1", new Usage(3L, 1L, 4L)),
+            text("It is " + FIXED_TIME, new Usage(5L, 2L, 7L)));
+
+    AgentResponse response =
+        StandaloneAgentApplication.createAgent(modelClient, FIXED_CLOCK)
+            .run(StandaloneAgentApplication.defaultPrompt())
+            .response()
+            .toCompletableFuture()
+            .join();
+
+    assertThat(response.text()).isEqualTo("Let me check the clock.It is " + FIXED_TIME);
+    assertThat(StandaloneAgentApplication.finalText(response)).isEqualTo("It is " + FIXED_TIME);
+    // The preamble is not lost, only unprinted: the transcript still carries it before the tool
+    // result, which is the order the engine appends messages in.
+    assertThat(response.messages())
+        .extracting(message -> message.role().value())
+        .containsExactly("assistant", "tool", "assistant");
+  }
+
+  @Test
+  void joinsEveryMessageOfTheTerminalRound() {
+    // A round is not always one message. The contract is "the terminal round", not "the last
+    // message", so a split answer is printed whole rather than truncated to its tail.
+    ScriptedModelClient modelClient =
+        new ScriptedModelClient(
+            toolCallAfterSaying("Let me check the clock.", "call_1", null),
+            round(null, "It is ", FIXED_TIME));
+
+    AgentResponse response =
+        StandaloneAgentApplication.createAgent(modelClient, FIXED_CLOCK)
+            .run(StandaloneAgentApplication.defaultPrompt())
+            .response()
+            .toCompletableFuture()
+            .join();
+
+    assertThat(response.messages())
+        .extracting(message -> message.role().value())
+        .containsExactly("assistant", "tool", "assistant", "assistant");
+    assertThat(StandaloneAgentApplication.finalText(response)).isEqualTo("It is " + FIXED_TIME);
+  }
+
+  @Test
+  void printsTheWholeAnswerWhenTheRunNeverCallsATool() {
+    // Without a tool round the terminal round is the only round, so the sample prints everything
+    // the model said rather than silently dropping earlier text.
+    ScriptedModelClient modelClient = new ScriptedModelClient(text("pong", null));
+
+    AgentResponse response =
+        StandaloneAgentApplication.createAgent(modelClient, FIXED_CLOCK)
+            .run("ping")
+            .response()
+            .toCompletableFuture()
+            .join();
+
+    assertThat(StandaloneAgentApplication.finalText(response)).isEqualTo(response.text());
+  }
+
+  @Test
+  void rendersUnknownUsageAsNotAvailableInTheFooter() {
+    // Usage is nullable on the API, and an OpenAI-compatible endpoint may omit it entirely. The
+    // footer says so rather than printing a guessed zero that reads like a measurement.
+    ScriptedModelClient modelClient = new ScriptedModelClient(text("pong", null));
+    AgentResponse response =
+        StandaloneAgentApplication.createAgent(modelClient, FIXED_CLOCK)
+            .run("ping")
+            .response()
+            .toCompletableFuture()
+            .join();
+
+    assertThat(response.usage()).isNull();
+    assertThat(StandaloneAgentApplication.footer(response, "llama3.1"))
+        .isEqualTo(
+            "[model=llama3.1 finishReason=STOP toolCalls=0 inputTokens=n/a outputTokens=n/a]");
+  }
+
+  @Test
   void namesTheSameToolInTheDefaultPromptAndTheToolDefinition() {
     // If these two drift apart, the default run silently stops exercising the loop while every test
     // still passes, which is exactly the gap this sample exists to close.
@@ -189,6 +272,28 @@ class StandaloneAgentApplicationTest {
             new Message(
                 Role.ASSISTANT,
                 List.of(
+                    new ToolCallContent(callId, StandaloneAgentApplication.TOOL_NAME, Map.of())))),
+        usage,
+        FinishReason.TOOL_CALLS,
+        Map.of(),
+        null);
+  }
+
+  private static ModelResponse round(Usage usage, String... values) {
+    List<Message> messages = new ArrayList<>();
+    for (String value : values) {
+      messages.add(new Message(Role.ASSISTANT, List.of(new TextContent(value))));
+    }
+    return new ModelResponse(List.copyOf(messages), usage, FinishReason.STOP, Map.of(), null);
+  }
+
+  private static ModelResponse toolCallAfterSaying(String preamble, String callId, Usage usage) {
+    return new ModelResponse(
+        List.of(
+            new Message(
+                Role.ASSISTANT,
+                List.of(
+                    new TextContent(preamble),
                     new ToolCallContent(callId, StandaloneAgentApplication.TOOL_NAME, Map.of())))),
         usage,
         FinishReason.TOOL_CALLS,
