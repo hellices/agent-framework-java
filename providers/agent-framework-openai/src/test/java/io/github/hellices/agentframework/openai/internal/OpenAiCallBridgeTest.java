@@ -67,6 +67,52 @@ class OpenAiCallBridgeTest {
   }
 
   @Test
+  void rejectsARegistrationThatReturnsNoDeregistrationHandleBeforeDispatching() {
+    // A signal that hands back no handle breaks the contract this bridge relies on to remove its
+    // listener. Checked where the registration happens, so it fails the caller's own call: deferred
+    // to the whenComplete action instead, the null pointer would be delivered to a derived stage
+    // this method drops, so nothing would report it, the listener would stay registered, and the
+    // request would already have been dispatched by then.
+    NoHandleRegistration cancellation = new NoHandleRegistration();
+    AtomicInteger dispatches = new AtomicInteger();
+
+    assertThatThrownBy(
+            () ->
+                OpenAiCallBridge.<String>guard(
+                    cancellation,
+                    () -> {
+                      dispatches.incrementAndGet();
+                      return CompletableFuture.completedFuture("never");
+                    }))
+        .isInstanceOf(NullPointerException.class)
+        .hasMessage("onCancel must return a deregistration handle");
+
+    assertThat(dispatches).hasValue(0);
+    assertThat(cancellation.registered()).isTrue();
+  }
+
+  @Test
+  void rejectsARegistrationThatReturnsNoDeregistrationHandleOnTheExposedStage() {
+    // The same failure on the entry point the adapter actually calls: it arrives as a throw out of
+    // the guard rather than as a stage that never completes.
+    NoHandleRegistration cancellation = new NoHandleRegistration();
+    AtomicInteger dispatches = new AtomicInteger();
+
+    assertThatThrownBy(
+            () ->
+                OpenAiCallBridge.<String>guardStage(
+                    cancellation,
+                    () -> {
+                      dispatches.incrementAndGet();
+                      return CompletableFuture.completedFuture("never");
+                    }))
+        .isInstanceOf(NullPointerException.class)
+        .hasMessage("onCancel must return a deregistration handle");
+
+    assertThat(dispatches).hasValue(0);
+  }
+
+  @Test
   void failsPromptlyWhenCancellationArrivesAfterDispatch() {
     CancellationSignal signal = new CancellationSignal();
     CompletableFuture<String> inFlight = new CompletableFuture<>();
@@ -423,6 +469,27 @@ class OpenAiCallBridgeTest {
 
     boolean deregistered() {
       return deregistered.get();
+    }
+  }
+
+  /** Registers the listener and breaks the contract by returning no deregistration handle. */
+  private static final class NoHandleRegistration implements OpenAiCallBridge.Cancellation {
+
+    private final AtomicBoolean registered = new AtomicBoolean();
+
+    @Override
+    public boolean isCancelled() {
+      return false;
+    }
+
+    @Override
+    public Runnable onCancel(Runnable listener) {
+      registered.set(true);
+      return null;
+    }
+
+    boolean registered() {
+      return registered.get();
     }
   }
 

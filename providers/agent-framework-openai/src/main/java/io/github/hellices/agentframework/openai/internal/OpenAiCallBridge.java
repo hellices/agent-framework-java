@@ -27,7 +27,11 @@ import java.util.function.Supplier;
  * times the number of attempts, plus the backoff the SDK waits between them. The adapter's
  * per-request timeout bounds one attempt, not the whole call.
  *
- * <p>Null arguments are a call-site programming error and are rejected where the call was made.
+ * <p>Null arguments are a call-site programming error and are rejected where the call was made. A
+ * signal that registers a listener and hands back no removal handle is the same kind of error: it
+ * is rejected at the registration, before anything is dispatched, rather than left to fail inside a
+ * completion action whose derived stage this bridge drops - there the failure would be reported
+ * nowhere, the listener would stay registered, and the request would already be in flight.
  * Everything the dispatch itself does - a mapping failure, no stage at all, a provider failure -
  * arrives through the returned stage instead, so a caller handles one failure path rather than two.
  * A {@link Error} is the exception to that rule: it is rethrown as thrown, after this bridge has
@@ -52,6 +56,13 @@ public final class OpenAiCallBridge {
 
     boolean isCancelled();
 
+    /**
+     * Registers a cancellation listener.
+     *
+     * @param listener the listener to run on cancellation
+     * @return the handle that removes {@code listener}, never {@code null}: without it the bridge
+     *     cannot remove the listener it registered
+     */
     Runnable onCancel(Runnable listener);
   }
 
@@ -64,7 +75,8 @@ public final class OpenAiCallBridge {
    * @return a stage that fails with {@link CancellationException} on cancellation and otherwise
    *     mirrors the provider call, with the original failure preserved and never thrown from this
    *     method; completing or cancelling the future taken from it settles that future alone
-   * @throws NullPointerException if {@code signal} or {@code dispatch} is {@code null}
+   * @throws NullPointerException if {@code signal} or {@code dispatch} is {@code null}, or if the
+   *     signal registers the cancellation listener without returning a removal handle
    */
   public static <T> CompletionStage<T> guard(
       CancellationSignal signal, Supplier<CompletableFuture<T>> dispatch) {
@@ -103,10 +115,12 @@ public final class OpenAiCallBridge {
     }
     CompletableFuture<T> result = new CompletableFuture<>();
     Runnable deregistration =
-        cancellation.onCancel(
-            () ->
-                result.completeExceptionally(
-                    new CancellationException("model call was cancelled")));
+        Objects.requireNonNull(
+            cancellation.onCancel(
+                () ->
+                    result.completeExceptionally(
+                        new CancellationException("model call was cancelled"))),
+            "onCancel must return a deregistration handle");
     result.whenComplete((value, failure) -> deregistration.run());
     if (result.isDone()) {
       // Cancelled between the check and the registration. The listener already ran, so the request
