@@ -125,6 +125,26 @@ class AgentRunOptionsTest {
         .hasMessage("continuationToken must not be blank");
   }
 
+  @Test
+  void maxToolIterationsDefaultsToFive() {
+    assertThat(new AgentRunOptions().maxToolIterations())
+        .isEqualTo(AgentRunOptions.DEFAULT_MAX_TOOL_ITERATIONS);
+    assertThat(AgentRunOptions.DEFAULT_MAX_TOOL_ITERATIONS).isEqualTo(5);
+  }
+
+  @Test
+  void maxToolIterationsIsCarriedThroughTheBuilder() {
+    assertThat(AgentRunOptions.builder().maxToolIterations(3).build().maxToolIterations())
+        .isEqualTo(3);
+  }
+
+  @Test
+  void maxToolIterationsMustBePositive() {
+    assertThatThrownBy(() -> AgentRunOptions.builder().maxToolIterations(0))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessage("maxToolIterations must be greater than 0");
+  }
+
   private static AgentRunRequest request(
       List<? extends Message> messages, AgentRunOptions options) {
     return AgentRunRequest.builder()

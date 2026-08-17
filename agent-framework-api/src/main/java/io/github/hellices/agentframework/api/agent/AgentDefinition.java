@@ -123,6 +123,7 @@ public final class AgentDefinition {
         defaultRunOptions.attributes(),
         defaultRunOptions.modelClientFactory().orElse(null),
         defaultRunOptions.continuationToken().orElse(null),
+        defaultRunOptions.maxToolIterations(),
         attributes);
   }
 
@@ -148,7 +149,8 @@ public final class AgentDefinition {
   private static boolean equalRunOptions(AgentRunOptions left, AgentRunOptions right) {
     return left.attributes().equals(right.attributes())
         && left.modelClientFactory().equals(right.modelClientFactory())
-        && left.continuationToken().equals(right.continuationToken());
+        && left.continuationToken().equals(right.continuationToken())
+        && left.maxToolIterations() == right.maxToolIterations();
   }
 
   private static void validateUniqueToolNames(List<ToolDefinition> tools) {

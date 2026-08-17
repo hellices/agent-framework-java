@@ -25,6 +25,17 @@ public final class FunctionTool {
         Objects.requireNonNull(handler, "handler must not be null"));
   }
 
+  /**
+   * Reconstructs an executable tool from a declaration and a handler, so an engine binding an
+   * {@code AgentDefinition}'s declared tools to an {@code AgentRuntime}'s bound handlers can
+   * recover the callable pair the loop needs.
+   */
+  public static FunctionTool bind(ToolDefinition definition, ToolHandler handler) {
+    return new FunctionTool(
+        Objects.requireNonNull(definition, "definition must not be null"),
+        Objects.requireNonNull(handler, "handler must not be null"));
+  }
+
   public ToolDefinition definition() {
     return definition;
   }
