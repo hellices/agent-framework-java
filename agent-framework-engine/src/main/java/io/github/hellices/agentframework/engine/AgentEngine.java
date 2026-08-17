@@ -498,6 +498,7 @@ public final class AgentEngine extends Agent {
         .messages(messages)
         .options(ModelRequestOptions.empty())
         .continuationToken(request.options().continuationToken().orElse(null))
+        .attributes(sessionContext.attributes())
         .cancellationSignal(request.cancellationSignal())
         .tools(toolLoop.toolsForIteration(0))
         .metadata(JsonObject.empty())

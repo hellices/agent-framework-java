@@ -4,6 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.github.hellices.agentframework.api.agent.CancellationSignal;
+import io.github.hellices.agentframework.api.context.ContextAttributes;
+import io.github.hellices.agentframework.api.context.ContextKey;
 import io.github.hellices.agentframework.api.message.FinishReason;
 import io.github.hellices.agentframework.api.message.Message;
 import io.github.hellices.agentframework.api.message.Role;
@@ -18,6 +20,8 @@ import org.junit.jupiter.api.Test;
 
 class ModelValuesTest {
 
+  private static final ContextKey<String> TENANT = ContextKey.of("agent", "tenant", String.class);
+
   @Test
   void requestBuilderRoundTripsAndDefensivelyCopiesLists() {
     List<Message> messages = new ArrayList<>(List.of(user("hello")));
@@ -29,6 +33,7 @@ class ModelValuesTest {
             .messages(messages)
             .options(ModelRequestOptions.builder().maxOutputTokens(32).build())
             .continuationToken("service-turn-1")
+            .attributes(ContextAttributes.builder().put(TENANT, "acme").build())
             .cancellationSignal(signal)
             .tools(tools)
             .metadata(metadata)
@@ -40,6 +45,7 @@ class ModelValuesTest {
     assertThat(request.toBuilder().build()).isEqualTo(request).hasSameHashCodeAs(request);
     assertThat(request.cancellationSignal()).isSameAs(signal);
     assertThat(request.continuationToken()).isEqualTo("service-turn-1");
+    assertThat(request.attributes().get(TENANT)).contains("acme");
     assertThat(request.metadata()).isEqualTo(metadata);
     assertThat(request.messages()).extracting(Message::text).containsExactly("hello");
     assertThat(request.tools()).extracting(ToolDefinition::name).containsExactly("lookup");
@@ -52,23 +58,37 @@ class ModelValuesTest {
   @Test
   void requestEqualityIncludesContinuationTokenButExcludesCancellationSignal() {
     ModelRequestOptions options = ModelRequestOptions.empty();
+    ContextAttributes attributes = ContextAttributes.builder().put(TENANT, "acme").build();
     ModelRequest first =
         ModelRequest.builder()
             .options(options)
             .continuationToken("continuation-1")
+            .attributes(attributes)
             .cancellationSignal(new CancellationSignal())
             .build();
     ModelRequest same =
         ModelRequest.builder()
             .options(options)
             .continuationToken("continuation-1")
+            .attributes(attributes)
             .cancellationSignal(new CancellationSignal())
             .build();
     ModelRequest differentContinuation =
-        ModelRequest.builder().options(options).continuationToken("continuation-2").build();
+        ModelRequest.builder()
+            .options(options)
+            .continuationToken("continuation-2")
+            .attributes(attributes)
+            .build();
+    ModelRequest differentAttributes =
+        ModelRequest.builder()
+            .options(options)
+            .continuationToken("continuation-1")
+            .attributes(ContextAttributes.empty())
+            .build();
 
     assertThat(first).isEqualTo(same).hasSameHashCodeAs(same);
     assertThat(first).isNotEqualTo(differentContinuation);
+    assertThat(first).isNotEqualTo(differentAttributes);
   }
 
   @Test

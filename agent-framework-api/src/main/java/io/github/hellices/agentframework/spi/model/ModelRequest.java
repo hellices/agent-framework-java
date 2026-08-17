@@ -1,6 +1,7 @@
 package io.github.hellices.agentframework.spi.model;
 
 import io.github.hellices.agentframework.api.agent.CancellationSignal;
+import io.github.hellices.agentframework.api.context.ContextAttributes;
 import io.github.hellices.agentframework.api.message.Message;
 import io.github.hellices.agentframework.api.tool.ToolDefinition;
 import io.github.hellices.agentframework.api.value.JsonObject;
@@ -13,6 +14,7 @@ public final class ModelRequest {
   private final List<Message> messages;
   private final ModelRequestOptions options;
   private final String continuationToken;
+  private final ContextAttributes attributes;
   private final CancellationSignal cancellationSignal;
   private final List<ToolDefinition> tools;
   private final JsonObject metadata;
@@ -21,6 +23,7 @@ public final class ModelRequest {
     this.messages = immutableMessages(builder.messages);
     this.options = builder.options == null ? ModelRequestOptions.empty() : builder.options;
     this.continuationToken = builder.continuationToken;
+    this.attributes = builder.attributes == null ? ContextAttributes.empty() : builder.attributes;
     this.cancellationSignal =
         builder.cancellationSignal == null ? new CancellationSignal() : builder.cancellationSignal;
     this.tools = immutableTools(builder.tools);
@@ -43,6 +46,10 @@ public final class ModelRequest {
     return continuationToken;
   }
 
+  public ContextAttributes attributes() {
+    return attributes;
+  }
+
   public CancellationSignal cancellationSignal() {
     return cancellationSignal;
   }
@@ -60,6 +67,7 @@ public final class ModelRequest {
         .messages(messages)
         .options(options)
         .continuationToken(continuationToken)
+        .attributes(attributes)
         .cancellationSignal(cancellationSignal)
         .tools(tools)
         .metadata(metadata);
@@ -76,19 +84,21 @@ public final class ModelRequest {
     return messages.equals(that.messages)
         && options.equals(that.options)
         && Objects.equals(continuationToken, that.continuationToken)
+        && attributes.equals(that.attributes)
         && tools.equals(that.tools)
         && metadata.equals(that.metadata);
   }
 
   @Override
   public int hashCode() {
-    return Objects.hash(messages, options, continuationToken, tools, metadata);
+    return Objects.hash(messages, options, continuationToken, attributes, tools, metadata);
   }
 
   public static final class Builder {
     private List<? extends Message> messages = List.of();
     private ModelRequestOptions options = ModelRequestOptions.empty();
     private String continuationToken;
+    private ContextAttributes attributes = ContextAttributes.empty();
     private CancellationSignal cancellationSignal = new CancellationSignal();
     private List<? extends ToolDefinition> tools = List.of();
     private JsonObject metadata = JsonObject.empty();
@@ -107,6 +117,11 @@ public final class ModelRequest {
 
     public Builder continuationToken(String continuationToken) {
       this.continuationToken = continuationToken;
+      return this;
+    }
+
+    public Builder attributes(ContextAttributes attributes) {
+      this.attributes = attributes == null ? ContextAttributes.empty() : attributes;
       return this;
     }
 

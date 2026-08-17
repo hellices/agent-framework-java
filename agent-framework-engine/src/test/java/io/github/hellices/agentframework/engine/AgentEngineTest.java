@@ -170,6 +170,36 @@ class AgentEngineTest {
   }
 
   @Test
+  void modelRequestReceivesMergedRunAttributesWithRequestOverrides() {
+    ContextKey<String> tenant = ContextKey.of("agent", "tenant", String.class);
+    ContextKey<String> region = ContextKey.of("agent", "region", String.class);
+    ContextAttributes optionAttributes =
+        ContextAttributes.builder().put(tenant, "from-options").put(region, "westus").build();
+    ContextAttributes requestAttributes =
+        ContextAttributes.builder().put(tenant, "from-request").build();
+    AtomicReference<ModelRequest> capturedRequest = new AtomicReference<>();
+    ModelClient client =
+        request -> {
+          capturedRequest.set(request);
+          return completedFuture(response("done"));
+        };
+    AgentEngine engine = AgentEngine.builder().modelClient(client).build();
+    AgentRunRequest request =
+        new AgentRunRequest(
+            Message.normalize("hi"),
+            null,
+            AgentRunOptions.builder().attributes(optionAttributes).build(),
+            new CancellationSignal(),
+            requestAttributes);
+
+    engine.run(request).response().toCompletableFuture().join();
+
+    assertThat(capturedRequest.get()).isNotNull();
+    assertThat(capturedRequest.get().attributes().get(tenant)).contains("from-request");
+    assertThat(capturedRequest.get().attributes().get(region)).contains("westus");
+  }
+
+  @Test
   void streamingRunUsesStreamingCapabilityAndReconstructsFinalResponse() {
     AgentEngine engine = AgentEngine.builder().modelClient(new StreamingFakeClient()).build();
 
