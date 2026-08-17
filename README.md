@@ -102,10 +102,12 @@ Module rules are defined in [module composition](docs/design/module-composition.
 
 ## Run a standalone agent
 
-The standalone sample assembles an `Agent` over the OpenAI Chat Completions adapter and calls
+The standalone sample assembles an application-scoped `AgentFactory` over the reusable
+`AgentEngine`, then binds an `Agent` over the OpenAI Chat Completions adapter and calls
 `agent.run(...)` against a real endpoint, with no server, dependency-injection container, or global
-registry. It needs a credential, because a sample that answered without one would teach that a call
-succeeded when it never happened.
+registry. The same factory can bind multiple agents with different ids, model clients, and local
+tools while sharing the engine's session services. It needs a credential, because a sample that
+answered without one would teach that a call succeeded when it never happened.
 
 | Variable | Required | Default |
 | --- | --- | --- |

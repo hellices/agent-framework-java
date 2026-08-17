@@ -3,7 +3,10 @@ package io.github.hellices.agentframework.samples.standalone;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import io.github.hellices.agentframework.api.agent.Agent;
+import io.github.hellices.agentframework.api.agent.AgentFactory;
 import io.github.hellices.agentframework.api.agent.AgentResponse;
+import io.github.hellices.agentframework.api.agent.AgentRunRequest;
+import io.github.hellices.agentframework.api.agent.AgentSession;
 import io.github.hellices.agentframework.api.message.FinishReason;
 import io.github.hellices.agentframework.api.message.Message;
 import io.github.hellices.agentframework.api.message.Role;
@@ -11,7 +14,14 @@ import io.github.hellices.agentframework.api.message.TextContent;
 import io.github.hellices.agentframework.api.message.ToolCallContent;
 import io.github.hellices.agentframework.api.message.ToolResultContent;
 import io.github.hellices.agentframework.api.message.Usage;
+import io.github.hellices.agentframework.api.tool.FunctionTool;
+import io.github.hellices.agentframework.api.tool.ToolDefinition;
+import io.github.hellices.agentframework.api.tool.ToolResult;
 import io.github.hellices.agentframework.api.value.JsonObject;
+import io.github.hellices.agentframework.api.value.JsonValues;
+import io.github.hellices.agentframework.engine.AgentEngine;
+import io.github.hellices.agentframework.engine.session.InMemorySessionStore;
+import io.github.hellices.agentframework.engine.session.JacksonSessionSnapshotCodec;
 import io.github.hellices.agentframework.spi.model.ModelClient;
 import io.github.hellices.agentframework.spi.model.ModelRequest;
 import io.github.hellices.agentframework.spi.model.ModelResponse;
@@ -44,6 +54,9 @@ class StandaloneAgentApplicationTest {
   private static final Clock FIXED_CLOCK =
       Clock.fixed(Instant.parse("2026-08-16T00:00:00Z"), ZoneOffset.UTC);
   private static final String FIXED_TIME = "2026-08-16T00:00:00Z";
+  private static final Clock OTHER_CLOCK =
+      Clock.fixed(Instant.parse("2026-08-17T00:00:00Z"), ZoneOffset.UTC);
+  private static final String OTHER_TIME = "2026-08-17T00:00:00Z";
 
   @Test
   void runsWithAnInjectedModelClientAndOffersTheLocalTool() {
@@ -57,6 +70,51 @@ class StandaloneAgentApplicationTest {
     assertThat(modelClient.requests().get(0).tools())
         .singleElement()
         .satisfies(tool -> assertThat(tool.name()).isEqualTo(StandaloneAgentApplication.TOOL_NAME));
+  }
+
+  @Test
+  void oneSharedFactoryBindsTwoDistinctAgentsWhileKeepingSharedSessionServicesUsable() {
+    AgentFactory factory =
+        AgentEngine.builder()
+            .sessionStore(new InMemorySessionStore(new JacksonSessionSnapshotCodec()))
+            .build()
+            .factory();
+    ScriptedModelClient firstModel =
+        new ScriptedModelClient(text("first-one", null), text("first-two", null));
+    ScriptedModelClient secondModel =
+        new ScriptedModelClient(text("second-one", null), text("second-two", null));
+
+    Agent firstAgent = StandaloneAgentApplication.createAgent(factory, firstModel, FIXED_CLOCK);
+    Agent secondAgent =
+        factory
+            .builderWithClient(secondModel)
+            .id("second-agent")
+            .name("Second Agent")
+            .description("Runs through the shared factory with a different tool.")
+            .tools(fixedTextTool("other_clock", OTHER_TIME))
+            .build();
+
+    assertThat(run(firstAgent, "shared-first", "first prompt")).isEqualTo("first-one");
+    assertThat(run(secondAgent, "shared-second", "other prompt")).isEqualTo("second-one");
+    assertThat(run(firstAgent, "shared-first", "follow-up for first")).isEqualTo("first-two");
+    assertThat(run(secondAgent, "shared-second", "follow-up for second")).isEqualTo("second-two");
+
+    assertThat(firstAgent.id()).isEqualTo("standalone-agent");
+    assertThat(secondAgent.id()).isEqualTo("second-agent");
+    assertThat(firstModel.requests().get(0).tools())
+        .extracting(ToolDefinition::name)
+        .containsExactly(StandaloneAgentApplication.TOOL_NAME);
+    assertThat(secondModel.requests().get(0).tools())
+        .extracting(ToolDefinition::name)
+        .containsExactly("other_clock");
+    assertThat(firstModel.requests().get(1).messages())
+        .extracting(Message::text)
+        .containsExactly("first prompt", "first-one", "follow-up for first")
+        .doesNotContain("other prompt", "second-one");
+    assertThat(secondModel.requests().get(1).messages())
+        .extracting(Message::text)
+        .containsExactly("other prompt", "second-one", "follow-up for second")
+        .doesNotContain("first prompt", "first-one");
   }
 
   @Test
@@ -375,5 +433,30 @@ class StandaloneAgentApplicationTest {
     List<ModelRequest> requests() {
       return List.copyOf(requests);
     }
+  }
+
+  private static String run(Agent agent, String sessionId, String input) {
+    return agent
+        .run(
+            AgentRunRequest.builder()
+                .session(AgentSession.builder().sessionId(sessionId).build())
+                .messages(Message.normalize(input))
+                .build())
+        .response()
+        .toCompletableFuture()
+        .join()
+        .text();
+  }
+
+  private static FunctionTool fixedTextTool(String name, String value) {
+    return FunctionTool.create(
+        name,
+        "Returns fixed text.",
+        JsonObject.builder()
+            .put("type", JsonValues.fromJava("object"))
+            .put("properties", JsonValues.fromJava(Map.of()))
+            .build(),
+        (arguments, context) ->
+            CompletableFuture.completedFuture(ToolResult.success(new TextContent(value))));
   }
 }

@@ -23,6 +23,7 @@ import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 
 /**
@@ -68,6 +69,16 @@ public final class StandaloneAgentApplication {
   private StandaloneAgentApplication() {}
 
   /**
+   * Builds the sample's default standalone {@link AgentFactory}: one shared, model-independent
+   * engine with no configured model catalog, ready for explicit-client agent assembly.
+   *
+   * @return the sample's default shared factory, never {@code null}
+   */
+  public static AgentFactory createFactory() {
+    return AgentEngine.builder().build().factory();
+  }
+
+  /**
    * Builds the agent over a supplied model client and clock.
    *
    * <p>Both are parameters so the sample's own test can run the same assembly, including the tool
@@ -78,7 +89,23 @@ public final class StandaloneAgentApplication {
    * @return the assembled agent, never {@code null}
    */
   public static Agent createAgent(ModelClient modelClient, Clock clock) {
-    AgentFactory factory = AgentEngine.builder().build().factory();
+    return createAgent(createFactory(), modelClient, clock);
+  }
+
+  /**
+   * Builds the sample agent over a caller-supplied factory, so a host can share one configured
+   * engine across multiple agents while keeping assembly on the `AgentFactory -> AgentBuilder ->
+   * Agent` path.
+   *
+   * @param factory the shared factory the agent is bound through, never {@code null}
+   * @param modelClient the model client the agent calls, never {@code null}
+   * @param clock the clock {@value #TOOL_NAME} reads, never {@code null}
+   * @return the assembled agent, never {@code null}
+   */
+  public static Agent createAgent(AgentFactory factory, ModelClient modelClient, Clock clock) {
+    Objects.requireNonNull(factory, "factory must not be null");
+    Objects.requireNonNull(modelClient, "modelClient must not be null");
+    Objects.requireNonNull(clock, "clock must not be null");
     return factory
         .builderWithClient(modelClient)
         .id("standalone-agent")

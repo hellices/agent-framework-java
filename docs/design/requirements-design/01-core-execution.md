@@ -136,8 +136,9 @@ and `bind` preserves that distinction.
 
 ### 3.2 AgentEngine
 
-`AgentEngine` is an application service that implements `Agent` or creates an `Agent`
-implementation. The host injects the following engine-wide ports through the builder.
+`AgentEngine` is an application service that binds immutable `AgentDefinition` and `AgentRuntime`
+pairs into `BoundAgent` instances. The engine itself is application-scoped and model-independent;
+the host injects the following engine-wide ports through the builder.
 
 - session services
 - ordered interceptor lists

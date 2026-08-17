@@ -61,6 +61,9 @@ integration can be maintained together.
 
 The core of the project is not built as an application runtime. `AgentEngine` is an embeddable state
 machine that advances model invocation, tool execution, and session changes in a consistent order.
+It does not implement `Agent`: an application-scoped engine binds immutable `AgentDefinition` and
+`AgentRuntime` pairs into ordinary `BoundAgent` instances, so one engine can serve many agents with
+different identities, models, and tools.
 
 ```text
 Application
