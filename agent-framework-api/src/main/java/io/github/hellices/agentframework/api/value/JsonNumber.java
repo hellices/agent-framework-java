@@ -21,11 +21,11 @@ public final class JsonNumber implements JsonValue {
         || value instanceof Short
         || value instanceof Integer
         || value instanceof Long) {
-      return new JsonNumber(BigDecimal.valueOf(value.longValue()));
+      return new JsonNumber(normalizeDecimal(BigDecimal.valueOf(value.longValue())));
     }
     if (value instanceof BigInteger integer) {
       try {
-        return new JsonNumber(BigDecimal.valueOf(integer.longValueExact()));
+        return new JsonNumber(normalizeDecimal(BigDecimal.valueOf(integer.longValueExact())));
       } catch (ArithmeticException failure) {
         throw new IllegalArgumentException(
             "state integer is outside the supported long range", failure);

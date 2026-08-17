@@ -94,6 +94,15 @@ class JsonValueTest {
   }
 
   @Test
+  void canonicalizesPowerOfTenNumbersAcrossSourceTypesForEqualityAndHashing() {
+    JsonNumber integer = JsonNumber.of(1000L);
+    JsonNumber decimal = JsonNumber.of(new BigDecimal("1000.0"));
+
+    assertThat(integer).isEqualTo(decimal);
+    assertThat(integer.hashCode()).isEqualTo(decimal.hashCode());
+  }
+
+  @Test
   void rejectsIntegersOutsideTheSupportedLongRange() {
     assertThatThrownBy(
             () -> JsonValues.fromJava(BigInteger.valueOf(Long.MAX_VALUE).add(BigInteger.ONE)))
