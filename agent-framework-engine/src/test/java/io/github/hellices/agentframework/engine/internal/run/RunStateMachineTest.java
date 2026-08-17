@@ -12,12 +12,14 @@ import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Queue;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
 import org.junit.jupiter.api.Test;
 
@@ -239,6 +241,69 @@ class RunStateMachineTest {
   }
 
   @Test
+  void terminalListenersRunOnSuccessAndRemovedListenersStayDetached() {
+    RunStateMachine machine = machineAt(RunPhase.PERSIST_SESSION);
+    AtomicInteger invoked = new AtomicInteger();
+    AtomicInteger removedBeforeTerminal = new AtomicInteger();
+
+    Runnable remover = machine.onTerminal(removedBeforeTerminal::incrementAndGet);
+    machine.onTerminal(invoked::incrementAndGet);
+
+    remover.run();
+    machine.transitionTo(RunPhase.TERMINATED);
+
+    assertThat(invoked).hasValue(1);
+    assertThat(removedBeforeTerminal).hasValue(0);
+  }
+
+  @Test
+  void terminalListenersRunOnceOnFailureAndLateRegistrationsRunImmediately() {
+    RunStateMachine machine = machineAt(RunPhase.CALL_MODEL);
+    AtomicInteger invoked = new AtomicInteger();
+    AtomicInteger lateInvoked = new AtomicInteger();
+
+    machine.onTerminal(invoked::incrementAndGet);
+
+    machine.fail(new IllegalStateException("boom"));
+    machine.fail(new IllegalStateException("replacement"));
+    machine.cancel();
+
+    assertThat(invoked).hasValue(1);
+
+    machine.onTerminal(lateInvoked::incrementAndGet);
+
+    assertThat(lateInvoked).hasValue(1);
+  }
+
+  @Test
+  void terminalListenersRunOnCancellation() {
+    RunStateMachine machine = machineAt(RunPhase.CALL_MODEL);
+    AtomicInteger invoked = new AtomicInteger();
+
+    machine.onTerminal(invoked::incrementAndGet);
+    machine.cancel();
+
+    assertThat(invoked).hasValue(1);
+  }
+
+  @Test
+  void lateRegistrationsRunImmediatelyOnceTheStateIsAlreadyTerminal() {
+    RunStateMachine machine = machineAt(RunPhase.CALL_MODEL);
+    AtomicInteger invoked = new AtomicInteger();
+
+    assertThat(
+            machine
+                .state()
+                .terminalize(RunState.Outcome.FAILURE, new IllegalStateException("boom")))
+        .isTrue();
+
+    Runnable remover = machine.onTerminal(invoked::incrementAndGet);
+    remover.run();
+
+    assertThat(invoked).hasValue(1);
+  }
+
+  @Test
   void runExecutionOwnsRunIdentityInputsAndCancellationDrivenState() {
     CancellationSignal cancellation = new CancellationSignal();
     AgentRunRequest request = AgentRunRequest.builder().cancellationSignal(cancellation).build();
@@ -252,8 +317,7 @@ class RunStateMachineTest {
     assertThat(execution.definition()).isSameAs(definition);
     assertThat(execution.runtime()).isSameAs(runtime);
     assertThat(execution.cancellationSignal()).isSameAs(cancellation);
-    assertThat(execution.stateMachine().phase()).isEqualTo(RunPhase.VALIDATE);
-    assertThat(execution.state()).isSameAs(execution.stateMachine().state());
+    assertThat(execution.phase()).isEqualTo(RunPhase.VALIDATE);
 
     cancellation.cancel();
 
@@ -264,6 +328,64 @@ class RunStateMachineTest {
             });
     assertThat(execution.state().mapTerminalCause(Function.identity()))
         .hasValueSatisfying(cause -> assertThat(cause).isInstanceOf(CancellationException.class));
+  }
+
+  @Test
+  void runExecutionDetachesCancellationListenersAfterSuccessFailureAndCancellation() {
+    CancellationSignal sharedSignal = new CancellationSignal();
+    AgentRunRequest request = AgentRunRequest.builder().cancellationSignal(sharedSignal).build();
+    AgentDefinition definition = AgentDefinition.builder().name("assistant").build();
+    AgentRuntime runtime = AgentRuntime.builder().modelClient(ignored -> subscriber -> {}).build();
+
+    RunExecution successful = new RunExecution("run-success", request, definition, runtime);
+
+    assertThat(listenerCount(sharedSignal)).isEqualTo(1);
+
+    successful.transitionTo(RunPhase.LOAD_SESSION);
+    successful.transitionTo(RunPhase.PREPARE_CONTEXT);
+    successful.transitionTo(RunPhase.PREPARE_MODEL_REQUEST);
+    successful.transitionTo(RunPhase.CALL_MODEL);
+    successful.transitionTo(RunPhase.ACCUMULATE_MODEL_UPDATES);
+    successful.transitionTo(RunPhase.PLAN_TOOL_ACTION);
+    successful.transitionTo(RunPhase.FINALIZE_RESPONSE);
+    successful.transitionTo(RunPhase.COMPLETE_CONTEXT);
+    successful.transitionTo(RunPhase.PERSIST_SESSION);
+    successful.transitionTo(RunPhase.TERMINATED);
+
+    assertThat(listenerCount(sharedSignal)).isZero();
+
+    RunExecution failed = new RunExecution("run-failure", request, definition, runtime);
+
+    assertThat(listenerCount(sharedSignal)).isEqualTo(1);
+
+    failed.fail(new IllegalStateException("boom"));
+
+    assertThat(listenerCount(sharedSignal)).isZero();
+
+    RunExecution cancelled = new RunExecution("run-cancel", request, definition, runtime);
+
+    assertThat(listenerCount(sharedSignal)).isEqualTo(1);
+
+    sharedSignal.cancel();
+
+    assertThat(listenerCount(sharedSignal)).isZero();
+    assertThat(cancelled.state().outcome()).contains(RunState.Outcome.CANCELLED);
+  }
+
+  @Test
+  void runExecutionDoesNotRetainCancellationListenerWhenSignalIsAlreadyCancelled() {
+    CancellationSignal alreadyCancelled = new CancellationSignal();
+    alreadyCancelled.cancel();
+
+    AgentRunRequest request =
+        AgentRunRequest.builder().cancellationSignal(alreadyCancelled).build();
+    AgentDefinition definition = AgentDefinition.builder().name("assistant").build();
+    AgentRuntime runtime = AgentRuntime.builder().modelClient(ignored -> subscriber -> {}).build();
+
+    RunExecution execution = new RunExecution("run-cancelled", request, definition, runtime);
+
+    assertThat(execution.state().outcome()).contains(RunState.Outcome.CANCELLED);
+    assertThat(listenerCount(alreadyCancelled)).isZero();
   }
 
   private static void await(CountDownLatch ready, CountDownLatch start) {
@@ -282,6 +404,17 @@ class RunStateMachineTest {
 
   private static boolean sameReference(Throwable left, Throwable right) {
     return Objects.equals(left, right);
+  }
+
+  @SuppressWarnings("unchecked")
+  private static int listenerCount(CancellationSignal signal) {
+    try {
+      var field = CancellationSignal.class.getDeclaredField("listeners");
+      field.setAccessible(true);
+      return ((Queue<Runnable>) field.get(signal)).size();
+    } catch (ReflectiveOperationException e) {
+      throw new AssertionError(e);
+    }
   }
 
   private static RunStateMachine machineAt(RunPhase target) {

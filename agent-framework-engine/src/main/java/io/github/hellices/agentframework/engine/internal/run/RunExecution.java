@@ -16,6 +16,7 @@ public final class RunExecution {
   private final AgentRuntime runtime;
   private final CancellationSignal cancellationSignal;
   private final RunStateMachine stateMachine;
+  private final Runnable detachCancellationListener;
 
   public static RunExecution create(
       AgentRunRequest input, AgentDefinition definition, AgentRuntime runtime) {
@@ -34,7 +35,8 @@ public final class RunExecution {
     this.cancellationSignal =
         Objects.requireNonNull(input.cancellationSignal(), "cancellationSignal must not be null");
     this.stateMachine = new RunStateMachine();
-    this.cancellationSignal.onCancel(stateMachine::cancel);
+    this.detachCancellationListener = this.cancellationSignal.onCancel(stateMachine::cancel);
+    this.stateMachine.onTerminal(detachCancellationListener);
   }
 
   public String id() {
@@ -57,8 +59,20 @@ public final class RunExecution {
     return cancellationSignal;
   }
 
-  public RunStateMachine stateMachine() {
-    return stateMachine;
+  RunPhase phase() {
+    return stateMachine.phase();
+  }
+
+  void transitionTo(RunPhase next) {
+    stateMachine.transitionTo(next);
+  }
+
+  void fail(Throwable failure) {
+    stateMachine.fail(failure);
+  }
+
+  void cancel() {
+    stateMachine.cancel();
   }
 
   public RunState state() {
