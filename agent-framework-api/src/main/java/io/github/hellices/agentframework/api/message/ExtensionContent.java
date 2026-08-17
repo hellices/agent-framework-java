@@ -1,6 +1,6 @@
 package io.github.hellices.agentframework.api.message;
 
-import java.util.Map;
+import io.github.hellices.agentframework.api.value.JsonObject;
 
 /**
  * Base for content kinds owned by an adapter rather than by the framework.
@@ -29,7 +29,7 @@ public abstract non-sealed class ExtensionContent extends Content {
    * @param additionalProperties JSON-safe properties describing the payload, or {@code null}
    * @param rawRepresentation the originating adapter object, or {@code null}
    */
-  protected ExtensionContent(Map<String, Object> additionalProperties, Object rawRepresentation) {
+  protected ExtensionContent(JsonObject additionalProperties, Object rawRepresentation) {
     super(additionalProperties, rawRepresentation);
   }
 }

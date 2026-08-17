@@ -8,6 +8,7 @@ import io.github.hellices.agentframework.api.agent.AgentResponse;
 import io.github.hellices.agentframework.api.agent.AgentResponseUpdate;
 import io.github.hellices.agentframework.api.agent.AgentRunOptions;
 import io.github.hellices.agentframework.api.agent.AgentRunRequest;
+import io.github.hellices.agentframework.api.agent.AgentSession;
 import io.github.hellices.agentframework.api.agent.AgentStreamingRun;
 import io.github.hellices.agentframework.api.agent.CancellationSignal;
 import io.github.hellices.agentframework.api.context.ContextAttributes;
@@ -71,7 +72,7 @@ class AgentEngineTest {
             .build();
     CancellationSignal signal = new CancellationSignal();
     AgentRunRequest request =
-        new AgentRunRequest(
+        request(
             Message.normalize("hi"),
             null,
             new AgentRunOptions(),
@@ -110,7 +111,7 @@ class AgentEngineTest {
                             Role.ASSISTANT,
                             List.of(
                                 new ToolCallContent(
-                                    "call-1", "weather", Map.of("city", "Seoul"))))),
+                                    "call-1", "weather", jsonObject(Map.of("city", "Seoul")))))),
                     null,
                     FinishReason.TOOL_CALLS,
                     null,
@@ -129,7 +130,7 @@ class AgentEngineTest {
             });
     AgentEngine engine = AgentEngine.builder().modelClient(client).tools(weather).build();
     AgentRunRequest request =
-        new AgentRunRequest(
+        request(
             Message.normalize("weather?"),
             null,
             AgentRunOptions.builder().attributes(optionAttributes).build(),
@@ -156,7 +157,7 @@ class AgentEngineTest {
     AgentRunOptions options =
         AgentRunOptions.builder().modelClientFactory(ignored -> replacement).build();
     AgentRunRequest request =
-        new AgentRunRequest(
+        request(
             Message.normalize("hi"),
             null,
             options,
@@ -185,7 +186,7 @@ class AgentEngineTest {
         };
     AgentEngine engine = AgentEngine.builder().modelClient(client).build();
     AgentRunRequest request =
-        new AgentRunRequest(
+        request(
             Message.normalize("hi"),
             null,
             AgentRunOptions.builder().attributes(optionAttributes).build(),
@@ -244,7 +245,7 @@ class AgentEngineTest {
         };
     AgentEngine engine = AgentEngine.builder().modelClient(client).build();
     AgentRunRequest request =
-        new AgentRunRequest(
+        request(
             List.of(),
             null,
             AgentRunOptions.builder().continuationToken("continuation-1").build(),
@@ -264,7 +265,7 @@ class AgentEngineTest {
     AgentEngine engine =
         AgentEngine.builder().modelClient(request -> completedFuture(response("unused"))).build();
     AgentRunRequest request =
-        new AgentRunRequest(
+        request(
             List.of(),
             null,
             AgentRunOptions.builder().continuationToken("continuation-1").build(),
@@ -281,7 +282,7 @@ class AgentEngineTest {
     AgentEngine engine =
         AgentEngine.builder().modelClient(new StreamingContinuationFakeClient()).build();
     AgentRunRequest request =
-        new AgentRunRequest(
+        request(
             List.of(),
             null,
             AgentRunOptions.builder().continuationToken("continuation-1").build(),
@@ -313,7 +314,7 @@ class AgentEngineTest {
     AgentEngine engine = AgentEngine.builder().modelClient(request -> pendingResponse).build();
     CancellationSignal signal = new CancellationSignal();
     AgentRunRequest request =
-        new AgentRunRequest(
+        request(
             Message.normalize("hi"),
             null,
             new AgentRunOptions(),
@@ -422,7 +423,7 @@ class AgentEngineTest {
                             Role.ASSISTANT,
                             List.of(
                                 new ToolCallContent(
-                                    "call-1", "weather", Map.of("city", "Seoul"))))),
+                                    "call-1", "weather", jsonObject(Map.of("city", "Seoul")))))),
                     null,
                     FinishReason.TOOL_CALLS,
                     null,
@@ -496,7 +497,9 @@ class AgentEngineTest {
                             List.of(
                                 new Message(
                                     Role.ASSISTANT,
-                                    List.of(new ToolCallContent("call-1", "missing", Map.of())))),
+                                    List.of(
+                                        new ToolCallContent(
+                                            "call-1", "missing", JsonObject.empty())))),
                             null,
                             FinishReason.TOOL_CALLS,
                             null,
@@ -528,7 +531,7 @@ class AgentEngineTest {
                   List.of(
                       new Message(
                           Role.ASSISTANT,
-                          List.of(new ToolCallContent("call-1", "again", Map.of())))),
+                          List.of(new ToolCallContent("call-1", "again", JsonObject.empty())))),
                   null,
                   FinishReason.TOOL_CALLS,
                   null,
@@ -566,7 +569,7 @@ class AgentEngineTest {
                       List.of(
                           new Message(
                               Role.ASSISTANT,
-                              List.of(new ToolCallContent("call-1", "tool", Map.of())))),
+                              List.of(new ToolCallContent("call-1", "tool", JsonObject.empty())))),
                       null,
                       FinishReason.TOOL_CALLS,
                       null,
@@ -632,7 +635,7 @@ class AgentEngineTest {
             .tools(tool)
             .build();
     AgentRunRequest request =
-        new AgentRunRequest(
+        request(
             List.of(),
             null,
             AgentRunOptions.builder().continuationToken("continuation-1").build(),
@@ -686,8 +689,8 @@ class AgentEngineTest {
                     List.of(
                         new Message(
                             Role.ASSISTANT,
-                            List.of(new ToolCallContent("call-1", "tool", Map.of())))),
-                    new Usage(1, 2, 3, Map.of("cachedTokens", 1L)),
+                            List.of(new ToolCallContent("call-1", "tool", JsonObject.empty())))),
+                    new Usage(1, 2, 3, jsonObject(Map.of("cachedTokens", 1L))),
                     FinishReason.TOOL_CALLS,
                     null,
                     Map.of()));
@@ -695,7 +698,7 @@ class AgentEngineTest {
           return completedFuture(
               modelResponse(
                   List.of(message("done")),
-                  new Usage(4, 5, 9, Map.of("cachedTokens", 2L)),
+                  new Usage(4, 5, 9, jsonObject(Map.of("cachedTokens", 2L))),
                   FinishReason.STOP,
                   null,
                   Map.of()));
@@ -704,7 +707,7 @@ class AgentEngineTest {
 
     var usage = engine.run("hi").response().toCompletableFuture().join().usage();
 
-    assertThat(usage).isEqualTo(new Usage(5, 7, 12, Map.of("cachedTokens", 3L)));
+    assertThat(usage).isEqualTo(new Usage(5, 7, 12, jsonObject(Map.of("cachedTokens", 3L))));
   }
 
   private static ModelResponse response(String text) {
@@ -720,6 +723,21 @@ class AgentEngineTest {
 
   private static Message message(String text) {
     return new Message(Role.ASSISTANT, List.of(new TextContent(text)));
+  }
+
+  private static AgentRunRequest request(
+      List<? extends Message> messages,
+      AgentSession session,
+      AgentRunOptions options,
+      CancellationSignal cancellationSignal,
+      ContextAttributes attributes) {
+    return AgentRunRequest.builder()
+        .messages(messages)
+        .session(session)
+        .options(options)
+        .cancellationSignal(cancellationSignal)
+        .attributes(attributes)
+        .build();
   }
 
   private static <T> List<T> consume(Flow.Publisher<T> publisher) {

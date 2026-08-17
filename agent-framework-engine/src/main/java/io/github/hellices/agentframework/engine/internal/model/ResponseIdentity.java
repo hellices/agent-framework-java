@@ -3,11 +3,9 @@ package io.github.hellices.agentframework.engine.internal.model;
 import io.github.hellices.agentframework.api.agent.AgentResponseUpdate;
 import io.github.hellices.agentframework.api.message.Message;
 import io.github.hellices.agentframework.api.value.JsonObject;
-import io.github.hellices.agentframework.api.value.JsonValues;
 import io.github.hellices.agentframework.spi.model.ModelResponseUpdate;
 import java.time.Instant;
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
 
 /**
@@ -46,18 +44,14 @@ public record ResponseIdentity(
    * assembled response's model-reported outcome.
    */
   public AgentResponseUpdate messageUpdate(List<Message> messages) {
-    return new AgentResponseUpdate(
-        agentId,
-        responseId,
-        null,
-        authorName,
-        createdAt,
-        null,
-        null,
-        messages,
-        null,
-        Map.of(),
-        null);
+    return AgentResponseUpdate.builder()
+        .agentId(agentId)
+        .responseId(responseId)
+        .authorName(authorName)
+        .createdAt(createdAt)
+        .messages(messages)
+        .additionalProperties(JsonObject.empty())
+        .build();
   }
 
   /**
@@ -70,26 +64,13 @@ public record ResponseIdentity(
    * assembled map be exactly that terminal metadata.
    */
   public AgentResponseUpdate metadataUpdate(JsonObject metadata) {
-    return new AgentResponseUpdate(
-        agentId,
-        responseId,
-        null,
-        authorName,
-        createdAt,
-        null,
-        null,
-        List.of(),
-        null,
-        metadata(metadata),
-        null);
-  }
-
-  private static Map<String, Object> metadata(JsonObject metadata) {
-    if (metadata == null || metadata.isEmpty()) {
-      return Map.of();
-    }
-    @SuppressWarnings("unchecked")
-    Map<String, Object> converted = (Map<String, Object>) JsonValues.toJava(metadata);
-    return converted;
+    return AgentResponseUpdate.builder()
+        .agentId(agentId)
+        .responseId(responseId)
+        .authorName(authorName)
+        .createdAt(createdAt)
+        .messages(List.of())
+        .additionalProperties(metadata == null ? JsonObject.empty() : metadata)
+        .build();
   }
 }

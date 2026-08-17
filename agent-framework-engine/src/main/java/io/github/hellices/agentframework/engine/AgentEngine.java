@@ -15,7 +15,9 @@ import io.github.hellices.agentframework.api.message.ToolCallContent;
 import io.github.hellices.agentframework.api.message.Usage;
 import io.github.hellices.agentframework.api.session.SessionContext;
 import io.github.hellices.agentframework.api.tool.FunctionTool;
+import io.github.hellices.agentframework.api.value.JsonNumber;
 import io.github.hellices.agentframework.api.value.JsonObject;
+import io.github.hellices.agentframework.api.value.JsonValue;
 import io.github.hellices.agentframework.engine.internal.model.ModelResponseMapper;
 import io.github.hellices.agentframework.engine.internal.model.ResponseIdentity;
 import io.github.hellices.agentframework.engine.internal.session.SessionCoordinator;
@@ -407,17 +409,14 @@ public final class AgentEngine extends Agent {
         agentUpdates,
         request.cancellationSignal(),
         () ->
-            new AgentResponse(
-                identity.agentId(),
-                identity.responseId(),
-                null,
-                identity.authorName(),
-                identity.createdAt(),
-                null,
-                List.of(),
-                null,
-                Map.of(),
-                null));
+            AgentResponse.builder()
+                .agentId(identity.agentId())
+                .responseId(identity.responseId())
+                .authorName(identity.authorName())
+                .createdAt(identity.createdAt())
+                .messages(List.of())
+                .additionalProperties(JsonObject.empty())
+                .build());
   }
 
   /**
@@ -563,35 +562,50 @@ public final class AgentEngine extends Agent {
     if (update == null) {
       return accumulated;
     }
-    Map<String, Object> additionalProperties =
-        new LinkedHashMap<>(accumulated.additionalProperties());
-    update
-        .additionalProperties()
-        .forEach(
-            (key, value) ->
-                additionalProperties.merge(key, value, AgentEngine::combineUsageProperty));
     return new Usage(
         Math.addExact(accumulated.inputTokens(), update.inputTokens()),
         Math.addExact(accumulated.outputTokens(), update.outputTokens()),
         Math.addExact(accumulated.totalTokens(), update.totalTokens()),
-        additionalProperties);
+        mergeAdditionalProperties(
+            accumulated.additionalProperties(),
+            update.additionalProperties(),
+            AgentEngine::combineUsageProperty));
   }
 
-  private static Object combineUsageProperty(Object accumulated, Object update) {
-    if (isIntegralNumber(accumulated) && isIntegralNumber(update)) {
-      return Math.addExact(((Number) accumulated).longValue(), ((Number) update).longValue());
-    }
-    if (accumulated instanceof Number left && update instanceof Number right) {
-      return left.doubleValue() + right.doubleValue();
+  private static JsonValue combineUsageProperty(JsonValue accumulated, JsonValue update) {
+    if (accumulated instanceof JsonNumber left && update instanceof JsonNumber right) {
+      return JsonNumber.of(left.value().add(right.value()));
     }
     return update;
   }
 
-  private static boolean isIntegralNumber(Object value) {
-    return value instanceof Byte
-        || value instanceof Short
-        || value instanceof Integer
-        || value instanceof Long;
+  private static JsonObject mergeAdditionalProperties(
+      JsonObject accumulated,
+      JsonObject update,
+      java.util.function.BiFunction<JsonValue, JsonValue, JsonValue> merger) {
+    if ((accumulated == null || accumulated.isEmpty()) && (update == null || update.isEmpty())) {
+      return JsonObject.empty();
+    }
+    if (accumulated == null || accumulated.isEmpty()) {
+      return update == null ? JsonObject.empty() : update;
+    }
+    if (update == null || update.isEmpty()) {
+      return accumulated;
+    }
+    Map<String, JsonValue> merged = new LinkedHashMap<>(accumulated.values());
+    update
+        .values()
+        .forEach(
+            (key, value) ->
+                merged.merge(
+                    key,
+                    value,
+                    (left, right) ->
+                        Objects.requireNonNull(
+                            merger.apply(left, right), "merged value must not be null")));
+    JsonObject.Builder builder = JsonObject.builder();
+    merged.forEach(builder::put);
+    return builder.build();
   }
 
   private record ToolLoopResult(

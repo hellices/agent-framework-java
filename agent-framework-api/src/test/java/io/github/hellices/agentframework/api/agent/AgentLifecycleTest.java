@@ -13,6 +13,7 @@ import io.github.hellices.agentframework.api.session.SessionContext;
 import io.github.hellices.agentframework.api.session.SessionState;
 import io.github.hellices.agentframework.api.session.SessionStateKey;
 import io.github.hellices.agentframework.api.session.SessionStateValues;
+import io.github.hellices.agentframework.api.value.JsonObject;
 import io.github.hellices.agentframework.api.value.JsonValue;
 import io.github.hellices.agentframework.api.value.JsonValues;
 import java.lang.reflect.Modifier;
@@ -68,7 +69,7 @@ class AgentLifecycleTest {
     CompatibilityCheckingAgent agent = new CompatibilityCheckingAgent("test-agent");
 
     AgentRunRequest request =
-        new AgentRunRequest(
+        request(
             Message.normalize("hi"),
             session("session-1", "service-1", Map.of()),
             new AgentRunOptions(),
@@ -87,7 +88,7 @@ class AgentLifecycleTest {
     CompatibilityCheckingAgent agent = new CompatibilityCheckingAgent("test-agent");
 
     AgentRunRequest request =
-        new AgentRunRequest(
+        request(
             Message.normalize("hi"),
             session("session-1", "service-1", Map.of()),
             new AgentRunOptions(),
@@ -131,7 +132,7 @@ class AgentLifecycleTest {
     ContextCapturingAgent agent = new ContextCapturingAgent("ctx-agent");
     AgentSession session = session("session-42", "service-42", Map.of());
     AgentRunRequest request =
-        new AgentRunRequest(
+        request(
             Message.normalize("hello"),
             session,
             new AgentRunOptions(),
@@ -157,7 +158,7 @@ class AgentLifecycleTest {
     ContextAttributes requestAttributes =
         ContextAttributes.builder().put(tenant, "from-request").build();
     AgentRunRequest request =
-        new AgentRunRequest(
+        request(
             Message.normalize("hello"),
             session,
             AgentRunOptions.builder().attributes(optionAttributes).build(),
@@ -186,7 +187,7 @@ class AgentLifecycleTest {
     ContextCapturingAgent agent = new ContextCapturingAgent("ctx-agent");
     AgentSession session = session("session-42", "service-42", Map.of());
     AgentRunRequest request =
-        new AgentRunRequest(
+        request(
             Message.normalize("hello"),
             session,
             new AgentRunOptions(),
@@ -206,7 +207,7 @@ class AgentLifecycleTest {
     TestAgent agent = new TestAgent("test-agent");
     CancellationSignal signal = new CancellationSignal();
     AgentRunRequest request =
-        new AgentRunRequest(
+        request(
             Message.normalize("hello"),
             null,
             new AgentRunOptions(),
@@ -223,7 +224,7 @@ class AgentLifecycleTest {
     TestAgent agent = new TestAgent("test-agent");
     CancellationSignal signal = new CancellationSignal();
     AgentRunRequest request =
-        new AgentRunRequest(
+        request(
             Message.normalize("hello"),
             null,
             new AgentRunOptions(),
@@ -255,7 +256,7 @@ class AgentLifecycleTest {
     SessionContextCapturingAgent agent = new SessionContextCapturingAgent("ctx-agent");
     AgentSession session = session("session-42", "service-42", Map.of());
     AgentRunRequest request =
-        new AgentRunRequest(
+        request(
             Message.normalize("hello"),
             session,
             new AgentRunOptions(),
@@ -408,17 +409,13 @@ class AgentLifecycleTest {
   void streamingWithCompletionResponseCannotCompleteBeforeCompletionActionFinishes()
       throws Exception {
     AgentResponseUpdate update =
-        new AgentResponseUpdate(
+        responseUpdate(
             "manual-agent",
             "response-1",
             "message-1",
             "manual-agent",
-            null,
             FinishReason.STOP,
-            List.of(new Message(Role.ASSISTANT, List.of(new TextContent("ok")))),
-            null,
-            Map.of(),
-            null);
+            List.of(new Message(Role.ASSISTANT, List.of(new TextContent("ok")))));
     AgentStreamingRun<AgentResponseUpdate> run = AgentStreamingRun.fromUpdate(update);
     CountDownLatch actionStarted = new CountDownLatch(1);
     CountDownLatch releaseAction = new CountDownLatch(1);
@@ -627,17 +624,13 @@ class AgentLifecycleTest {
     AgentRun run = new AgentRun(sampleResponse("agent-1"));
     AgentStreamingRun<AgentResponseUpdate> streamingRun =
         AgentStreamingRun.fromUpdate(
-            new AgentResponseUpdate(
+            responseUpdate(
                 "agent-1",
                 "response-1",
                 "message-1",
                 "agent-1",
-                null,
                 FinishReason.STOP,
-                List.of(new Message(Role.ASSISTANT, List.of(new TextContent("ok")))),
-                null,
-                Map.of(),
-                null));
+                List.of(new Message(Role.ASSISTANT, List.of(new TextContent("ok"))))));
 
     assertThat(run.session().toCompletableFuture().join()).isEmpty();
     assertThat(streamingRun.session().toCompletableFuture().join()).isEmpty();
@@ -659,7 +652,7 @@ class AgentLifecycleTest {
 
     AgentRun run =
         agent.run(
-            new AgentRunRequest(
+            request(
                 Message.normalize("hello"),
                 session("session-1", null, Map.of()),
                 new AgentRunOptions(),
@@ -678,7 +671,7 @@ class AgentLifecycleTest {
 
     AgentStreamingRun<AgentResponseUpdate> run =
         agent.runStreaming(
-            new AgentRunRequest(
+            request(
                 Message.normalize("hello"),
                 session("session-1", null, Map.of()),
                 new AgentRunOptions(),
@@ -698,7 +691,7 @@ class AgentLifecycleTest {
 
     AgentRun run =
         agent.run(
-            new AgentRunRequest(
+            request(
                 Message.normalize("hello"),
                 session("session-1", null, Map.of()),
                 new AgentRunOptions(),
@@ -718,7 +711,7 @@ class AgentLifecycleTest {
 
     AgentRun run =
         agent.run(
-            new AgentRunRequest(
+            request(
                 Message.normalize("hello"),
                 session("session-1", null, Map.of()),
                 new AgentRunOptions(),
@@ -736,7 +729,7 @@ class AgentLifecycleTest {
 
     AgentStreamingRun<AgentResponseUpdate> run =
         agent.runStreaming(
-            new AgentRunRequest(
+            request(
                 Message.normalize("hello"),
                 session("session-1", null, Map.of()),
                 new AgentRunOptions(),
@@ -758,18 +751,65 @@ class AgentLifecycleTest {
     }
   }
 
+  private static AgentRunRequest request(
+      List<? extends Message> messages,
+      AgentSession session,
+      AgentRunOptions options,
+      CancellationSignal cancellationSignal,
+      ContextAttributes attributes) {
+    return AgentRunRequest.builder()
+        .messages(messages)
+        .session(session)
+        .options(options)
+        .cancellationSignal(cancellationSignal)
+        .attributes(attributes)
+        .build();
+  }
+
+  private static AgentResponse response(
+      String agentId,
+      String responseId,
+      String messageId,
+      String authorName,
+      FinishReason finishReason,
+      List<? extends Message> messages) {
+    return AgentResponse.builder()
+        .agentId(agentId)
+        .responseId(responseId)
+        .messageId(messageId)
+        .authorName(authorName)
+        .finishReason(finishReason)
+        .messages(messages)
+        .additionalProperties(JsonObject.empty())
+        .build();
+  }
+
+  private static AgentResponseUpdate responseUpdate(
+      String agentId,
+      String responseId,
+      String messageId,
+      String authorName,
+      FinishReason finishReason,
+      List<? extends Message> messages) {
+    return AgentResponseUpdate.builder()
+        .agentId(agentId)
+        .responseId(responseId)
+        .messageId(messageId)
+        .authorName(authorName)
+        .finishReason(finishReason)
+        .messages(messages)
+        .additionalProperties(JsonObject.empty())
+        .build();
+  }
+
   private static AgentResponse sampleResponse(String agentId) {
-    return new AgentResponse(
+    return response(
         agentId,
         "response-1",
         "message-1",
         agentId,
-        null,
         FinishReason.STOP,
-        List.of(new Message(Role.ASSISTANT, List.of(new TextContent("ok")))),
-        null,
-        Map.of(),
-        null);
+        List.of(new Message(Role.ASSISTANT, List.of(new TextContent("ok")))));
   }
 
   private static AgentSession session(
@@ -835,17 +875,13 @@ class AgentLifecycleTest {
     protected AgentRun runInternal(AgentRunContext context, AgentRunRequest request) {
       return new AgentRun(
           CompletableFuture.completedFuture(
-              new AgentResponse(
+              response(
                   id(),
                   "response-1",
                   "message-1",
                   name(),
-                  null,
                   io.github.hellices.agentframework.api.message.FinishReason.STOP,
-                  List.of(new Message(Role.ASSISTANT, List.of(new TextContent("ok")))),
-                  null,
-                  Map.of(),
-                  null)),
+                  List.of(new Message(Role.ASSISTANT, List.of(new TextContent("ok")))))),
           request.cancellationSignal());
     }
 
@@ -853,17 +889,13 @@ class AgentLifecycleTest {
     protected AgentStreamingRun<AgentResponseUpdate> runStreamingInternal(
         AgentRunContext context, AgentRunRequest request) {
       return AgentStreamingRun.fromUpdate(
-          new AgentResponseUpdate(
+          responseUpdate(
               id(),
               "response-1",
               "message-1",
               name(),
-              null,
               io.github.hellices.agentframework.api.message.FinishReason.STOP,
-              List.of(new Message(Role.ASSISTANT, List.of(new TextContent("ok")))),
-              null,
-              Map.of(),
-              null),
+              List.of(new Message(Role.ASSISTANT, List.of(new TextContent("ok"))))),
           request.cancellationSignal());
     }
   }

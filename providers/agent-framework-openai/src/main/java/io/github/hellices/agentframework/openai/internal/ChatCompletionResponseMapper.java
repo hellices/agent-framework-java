@@ -18,7 +18,6 @@ import io.github.hellices.agentframework.api.value.JsonString;
 import io.github.hellices.agentframework.spi.model.ModelResponse;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
 
 /** Translates a Chat Completions response into a neutral {@code ModelResponse}. */
@@ -86,7 +85,7 @@ public final class ChatCompletionResponseMapper {
     List<Message> messages =
         content.isEmpty()
             ? List.of()
-            : List.of(new Message(Role.ASSISTANT, content, null, Map.of(), message));
+            : List.of(new Message(Role.ASSISTANT, content, null, JsonObject.empty(), message));
     return ModelResponse.builder()
         .messages(messages)
         .usage(usageOf(completion))
@@ -124,7 +123,8 @@ public final class ChatCompletionResponseMapper {
                 + "'");
       }
       content.add(
-          new ToolCallContent(callId, name, argumentsOf(call, callId, name), Map.of(), call));
+          new ToolCallContent(
+              callId, name, argumentsOf(call, callId, name), JsonObject.empty(), call));
     }
   }
 
@@ -163,7 +163,7 @@ public final class ChatCompletionResponseMapper {
             + " response rather than a final answer");
   }
 
-  private Map<String, Object> argumentsOf(
+  private JsonObject argumentsOf(
       ChatCompletionMessageFunctionToolCall call, String callId, String name) {
     // The parser exception behind an absent result is deliberately not attached, as a cause or as
     // a suppressed throwable. Jackson names the token it choked on, so its message carries the

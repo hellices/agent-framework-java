@@ -6,10 +6,10 @@ import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.TreeMap;
 
 public final class SessionStateValues {
 
@@ -107,7 +107,7 @@ public final class SessionStateValues {
           "state payload contains unsupported number type: " + number.getClass().getName());
     }
     if (value instanceof Map<?, ?> map) {
-      Map<String, Object> copy = new TreeMap<>();
+      Map<String, Object> copy = new LinkedHashMap<>();
       for (Map.Entry<?, ?> entry : map.entrySet()) {
         if (!(entry.getKey() instanceof String key)) {
           throw new IllegalArgumentException("state payload map keys must be strings");

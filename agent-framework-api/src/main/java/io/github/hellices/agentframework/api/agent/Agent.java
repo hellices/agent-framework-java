@@ -51,7 +51,12 @@ public abstract class Agent {
     SessionContext sessionContext = newSessionContext(normalizedRequest, effectiveAttributes);
     AgentRun run =
         runInternal(
-            new AgentRunContext(this, session, effectiveAttributes, sessionContext),
+            AgentRunContext.builder()
+                .agent(this)
+                .session(session)
+                .attributes(effectiveAttributes)
+                .sessionContext(sessionContext)
+                .build(),
             normalizedRequest);
     AgentRun completed = run.withCompletion(completionAction(sessionContext));
     return completed.withResponse(
@@ -73,7 +78,12 @@ public abstract class Agent {
     SessionContext sessionContext = newSessionContext(normalizedRequest, effectiveAttributes);
     AgentStreamingRun<AgentResponseUpdate> run =
         runStreamingInternal(
-            new AgentRunContext(this, session, effectiveAttributes, sessionContext),
+            AgentRunContext.builder()
+                .agent(this)
+                .session(session)
+                .attributes(effectiveAttributes)
+                .sessionContext(sessionContext)
+                .build(),
             normalizedRequest);
     AgentStreamingRun<AgentResponseUpdate> completed =
         run.withCompletion(completionAction(sessionContext));

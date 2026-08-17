@@ -13,7 +13,6 @@ import io.github.hellices.agentframework.api.tool.ToolContext;
 import io.github.hellices.agentframework.api.tool.ToolDefinition;
 import io.github.hellices.agentframework.api.tool.ToolResult;
 import io.github.hellices.agentframework.api.value.JsonObject;
-import io.github.hellices.agentframework.api.value.JsonValues;
 import io.github.hellices.agentframework.spi.model.ModelRequest;
 import io.github.hellices.agentframework.spi.model.ModelResponse;
 import java.util.ArrayList;
@@ -145,16 +144,11 @@ public final class ToolLoopPolicy {
               + fragment.name()
               + "'");
     }
-    Map<String, Object> arguments = new LinkedHashMap<>(accumulated.arguments());
-    arguments.putAll(fragment.arguments());
-    Map<String, Object> additionalProperties =
-        new LinkedHashMap<>(accumulated.additionalProperties());
-    additionalProperties.putAll(fragment.additionalProperties());
     return new ToolCallContent(
         accumulated.callId(),
         accumulated.name(),
-        arguments,
-        additionalProperties,
+        mergeObjects(accumulated.arguments(), fragment.arguments()),
+        mergeObjects(accumulated.additionalProperties(), fragment.additionalProperties()),
         fragment.rawRepresentation() == null
             ? accumulated.rawRepresentation()
             : fragment.rawRepresentation());
@@ -191,7 +185,7 @@ public final class ToolLoopPolicy {
     CompletionStage<ToolResult> resultStage =
         Objects.requireNonNull(
             tool.execute(
-                ToolArguments.of(jsonObject(call.arguments())),
+                ToolArguments.of(call.arguments()),
                 new ToolContext(request.cancellationSignal(), effectiveAttributes(request))),
             "tool handler response stage must not be null");
     return resultStage.thenCompose(
@@ -212,9 +206,18 @@ public final class ToolLoopPolicy {
     return request.options().attributes().merge(request.attributes());
   }
 
-  private static JsonObject jsonObject(Map<String, Object> values) {
+  private static JsonObject mergeObjects(JsonObject accumulated, JsonObject fragment) {
+    if (accumulated.isEmpty()) {
+      return fragment;
+    }
+    if (fragment.isEmpty()) {
+      return accumulated;
+    }
+    Map<String, io.github.hellices.agentframework.api.value.JsonValue> merged =
+        new LinkedHashMap<>(accumulated.values());
+    fragment.values().forEach(merged::put);
     JsonObject.Builder builder = JsonObject.builder();
-    values.forEach((key, value) -> builder.put(key, JsonValues.fromJava(value)));
+    merged.forEach(builder::put);
     return builder.build();
   }
 

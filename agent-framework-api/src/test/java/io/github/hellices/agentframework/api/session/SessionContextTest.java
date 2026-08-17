@@ -13,6 +13,7 @@ import io.github.hellices.agentframework.api.message.Message;
 import io.github.hellices.agentframework.api.message.MessageAttribution;
 import io.github.hellices.agentframework.api.message.Role;
 import io.github.hellices.agentframework.api.message.TextContent;
+import io.github.hellices.agentframework.api.value.JsonObject;
 import io.github.hellices.agentframework.api.value.JsonValue;
 import io.github.hellices.agentframework.api.value.JsonValues;
 import io.github.hellices.agentframework.spi.session.ProviderSessionState;
@@ -347,7 +348,7 @@ class SessionContextTest {
             Role.USER,
             List.of(new TextContent("remembered")),
             new MessageAttribution("Memory", "   ", "origin-9"),
-            Map.of(),
+            JsonObject.empty(),
             null);
 
     sessionContext.addContextMessages("memory", List.of(blankSource));
@@ -366,7 +367,7 @@ class SessionContextTest {
             Role.USER,
             List.of(new TextContent("remembered")),
             new MessageAttribution("Memory", "other-session-source", "origin-9"),
-            Map.of(),
+            JsonObject.empty(),
             null);
 
     sessionContext.addContextMessages("memory", List.of(attributed));
@@ -384,7 +385,7 @@ class SessionContextTest {
             Role.USER,
             List.of(new TextContent("remembered")),
             new MessageAttribution("Memory", null, "origin-9"),
-            Map.of(),
+            JsonObject.empty(),
             null);
 
     sessionContext.addContextMessages("memory", List.of(retrievedElsewhere));
@@ -404,7 +405,7 @@ class SessionContextTest {
             Role.USER,
             List.of(new TextContent("remembered")),
             new MessageAttribution("Memory", null, null),
-            Map.of(),
+            JsonObject.empty(),
             null);
 
     sessionContext.addContextMessages("memory", List.of(withoutOrigin));
@@ -423,7 +424,7 @@ class SessionContextTest {
             Role.USER,
             List.of(new TextContent("remembered")),
             new MessageAttribution("Memory", null, "origin-9"),
-            Map.of(),
+            JsonObject.empty(),
             null);
 
     sessionContext.addContextMessages("memory", List.of(retrievedElsewhere));
@@ -475,7 +476,7 @@ class SessionContextTest {
             Role.USER,
             List.of(new TextContent("remembered")),
             new MessageAttribution("AIContextProvider", "vector-store", "other-session"),
-            Map.of(),
+            JsonObject.empty(),
             null);
 
     sessionContext.addContextMessages("rag", List.of(preAttributed));
@@ -866,16 +867,14 @@ class SessionContextTest {
   }
 
   private static AgentResponse sampleResponse() {
-    return new AgentResponse(
-        "agent-1",
-        "response-1",
-        "message-1",
-        "agent",
-        null,
-        FinishReason.STOP,
-        List.of(new Message(Role.ASSISTANT, List.of(new TextContent("ok")))),
-        null,
-        Map.of(),
-        null);
+    return AgentResponse.builder()
+        .agentId("agent-1")
+        .responseId("response-1")
+        .messageId("message-1")
+        .authorName("agent")
+        .finishReason(FinishReason.STOP)
+        .messages(List.of(new Message(Role.ASSISTANT, List.of(new TextContent("ok")))))
+        .additionalProperties(JsonObject.empty())
+        .build();
   }
 }

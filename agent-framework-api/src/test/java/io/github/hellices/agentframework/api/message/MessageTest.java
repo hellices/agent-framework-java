@@ -5,9 +5,11 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.github.hellices.agentframework.api.agent.AgentResponse;
 import io.github.hellices.agentframework.api.agent.AgentResponseUpdate;
+import io.github.hellices.agentframework.api.value.JsonNumber;
+import io.github.hellices.agentframework.api.value.JsonObject;
+import io.github.hellices.agentframework.api.value.JsonString;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 import org.junit.jupiter.api.Test;
 
 class MessageTest {
@@ -41,12 +43,13 @@ class MessageTest {
   @Test
   void withAttributionCopiesEveryOtherPartOfTheMessage() {
     Object rawRepresentation = new Object();
+    JsonObject metadata = JsonObject.builder().put("key", JsonString.of("value")).build();
     Message message =
         new Message(
             Role.ASSISTANT,
             List.of(new TextContent("hello")),
             new MessageAttribution("External", "caller", "origin-session"),
-            Map.of("key", "value"),
+            metadata,
             rawRepresentation);
     MessageAttribution attribution =
         new MessageAttribution("ChatHistory", "in_memory", "origin-session");
@@ -57,7 +60,7 @@ class MessageTest {
     assertThat(stamped.attribution()).isEqualTo(attribution);
     assertThat(stamped.role()).isEqualTo(Role.ASSISTANT);
     assertThat(stamped.content()).isEqualTo(message.content());
-    assertThat(stamped.additionalProperties()).isEqualTo(Map.of("key", "value"));
+    assertThat(stamped.additionalProperties()).isEqualTo(metadata);
     assertThat(stamped.rawRepresentation()).isSameAs(rawRepresentation);
     assertThat(message.attribution())
         .isEqualTo(new MessageAttribution("External", "caller", "origin-session"));
@@ -75,37 +78,61 @@ class MessageTest {
   }
 
   @Test
+  void messageAndContentUseStructuralEqualityWithTypedMetadata() {
+    Object rawRepresentation = new Object();
+    JsonObject messageMetadata =
+        JsonObject.builder().put("source", JsonString.of("history")).build();
+    JsonObject contentMetadata = JsonObject.builder().put("offset", JsonNumber.of(1)).build();
+    Message first =
+        new Message(
+            Role.ASSISTANT,
+            List.of(new TextContent("hello", contentMetadata, rawRepresentation)),
+            new MessageAttribution("External", "caller", "origin-session"),
+            messageMetadata,
+            rawRepresentation);
+    Message second =
+        new Message(
+            Role.ASSISTANT,
+            List.of(new TextContent("hello", contentMetadata, rawRepresentation)),
+            new MessageAttribution("External", "caller", "origin-session"),
+            messageMetadata,
+            rawRepresentation);
+
+    assertThat(first).isEqualTo(second).hasSameHashCodeAs(second);
+  }
+
+  @Test
   void usageAndResponseMetadataArePreserved() {
-    Usage usage = new Usage(10L, 20L, 30L);
+    JsonObject usageMetadata = JsonObject.builder().put("cachedTokens", JsonNumber.of(5L)).build();
+    Usage usage = new Usage(10L, 20L, 30L, usageMetadata);
     AgentResponse response =
-        new AgentResponse(
-            "agent-1",
-            "response-1",
-            "message-1",
-            "assistant",
-            null,
-            FinishReason.STOP,
-            List.of(new Message(Role.ASSISTANT, List.of(new TextContent("hello")))),
-            usage,
-            null,
-            null);
+        AgentResponse.builder()
+            .agentId("agent-1")
+            .responseId("response-1")
+            .messageId("message-1")
+            .authorName("assistant")
+            .finishReason(FinishReason.STOP)
+            .messages(List.of(new Message(Role.ASSISTANT, List.of(new TextContent("hello")))))
+            .usage(usage)
+            .additionalProperties(JsonObject.empty())
+            .build();
 
     assertThat(response.usage()).isEqualTo(usage);
     assertThat(response.text()).isEqualTo("hello");
 
     AgentResponseUpdate update =
-        new AgentResponseUpdate(
-            "agent-1",
-            "response-1",
-            "message-1",
-            "assistant",
-            null,
-            FinishReason.STOP,
-            List.of(new Message(Role.ASSISTANT, List.of(new TextContent("hello")))),
-            usage,
-            null,
-            null);
+        AgentResponseUpdate.builder()
+            .agentId("agent-1")
+            .responseId("response-1")
+            .messageId("message-1")
+            .authorName("assistant")
+            .finishReason(FinishReason.STOP)
+            .messages(List.of(new Message(Role.ASSISTANT, List.of(new TextContent("hello")))))
+            .usage(usage)
+            .additionalProperties(JsonObject.empty())
+            .build();
 
     assertThat(update.text()).isEqualTo("hello");
+    assertThat(update.usage()).isEqualTo(new Usage(10L, 20L, 30L, usageMetadata));
   }
 }

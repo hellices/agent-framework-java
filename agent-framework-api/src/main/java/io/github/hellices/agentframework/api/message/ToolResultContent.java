@@ -1,8 +1,9 @@
 package io.github.hellices.agentframework.api.message;
 
+import io.github.hellices.agentframework.api.value.JsonObject;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
+import java.util.Objects;
 
 public final class ToolResultContent extends Content {
 
@@ -13,7 +14,7 @@ public final class ToolResultContent extends Content {
 
   public ToolResultContent(
       String callId, String name, List<? extends Content> content, boolean error) {
-    this(callId, name, content, error, Map.of(), null);
+    this(callId, name, content, error, JsonObject.empty(), null);
   }
 
   public ToolResultContent(
@@ -21,7 +22,7 @@ public final class ToolResultContent extends Content {
       String name,
       List<? extends Content> content,
       boolean error,
-      Map<String, Object> additionalProperties,
+      JsonObject additionalProperties,
       Object rawRepresentation) {
     super(additionalProperties, rawRepresentation);
     if (callId == null || callId.isBlank()) {
@@ -62,5 +63,25 @@ public final class ToolResultContent extends Content {
   @Override
   public String type() {
     return "tool_result";
+  }
+
+  @Override
+  public boolean equals(Object other) {
+    if (this == other) {
+      return true;
+    }
+    if (!(other instanceof ToolResultContent that)) {
+      return false;
+    }
+    return error == that.error
+        && callId.equals(that.callId)
+        && name.equals(that.name)
+        && content.equals(that.content)
+        && baseEquals(that);
+  }
+
+  @Override
+  public int hashCode() {
+    return Objects.hash(callId, name, content, error, baseHashCode());
   }
 }

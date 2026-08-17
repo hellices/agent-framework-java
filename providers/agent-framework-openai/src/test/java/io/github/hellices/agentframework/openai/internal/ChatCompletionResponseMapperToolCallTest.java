@@ -17,6 +17,10 @@ import io.github.hellices.agentframework.api.message.Message;
 import io.github.hellices.agentframework.api.message.Role;
 import io.github.hellices.agentframework.api.message.TextContent;
 import io.github.hellices.agentframework.api.message.ToolCallContent;
+import io.github.hellices.agentframework.api.value.JsonNull;
+import io.github.hellices.agentframework.api.value.JsonObject;
+import io.github.hellices.agentframework.api.value.JsonString;
+import io.github.hellices.agentframework.api.value.JsonValues;
 import io.github.hellices.agentframework.spi.model.ModelRequest;
 import io.github.hellices.agentframework.spi.model.ModelRequestOptions;
 import io.github.hellices.agentframework.spi.model.ModelResponse;
@@ -55,7 +59,7 @@ class ChatCompletionResponseMapperToolCallTest {
     ToolCallContent first = (ToolCallContent) content.get(1);
     assertThat(first.callId()).isEqualTo("call_1");
     assertThat(first.name()).isEqualTo("lookup");
-    assertThat(first.arguments()).isEqualTo(Map.of("city", "Seoul"));
+    assertThat(first.arguments()).isEqualTo(jsonObject(Map.of("city", "Seoul")));
     assertThat(((ToolCallContent) content.get(2)).callId()).isEqualTo("call_2");
     assertThat(response.finishReason()).isEqualTo(FinishReason.TOOL_CALLS);
   }
@@ -75,8 +79,8 @@ class ChatCompletionResponseMapperToolCallTest {
                 null, ChatCompletionsFixture.functionCall("call_1", "ping", "{}")),
             ChatCompletion.Choice.FinishReason.TOOL_CALLS);
 
-    assertThat(toolCall(mapper.map(empty)).arguments()).isEmpty();
-    assertThat(toolCall(mapper.map(object)).arguments()).isEmpty();
+    assertThat(toolCall(mapper.map(empty)).arguments()).isEqualTo(JsonObject.empty());
+    assertThat(toolCall(mapper.map(object)).arguments()).isEqualTo(JsonObject.empty());
   }
 
   @Test
@@ -93,10 +97,14 @@ class ChatCompletionResponseMapperToolCallTest {
                     "call_1", "lookup", "{\"unit\":null,\"city\":\"Seoul\"}")),
             ChatCompletion.Choice.FinishReason.TOOL_CALLS);
 
-    Map<String, Object> arguments = toolCall(mapper.map(completion)).arguments();
+    JsonObject arguments = toolCall(mapper.map(completion)).arguments();
 
-    assertThat(arguments).hasSize(2).containsKey("unit").containsEntry("city", "Seoul");
-    assertThat(arguments.get("unit")).isNull();
+    assertThat(arguments)
+        .isEqualTo(
+            JsonObject.builder()
+                .put("unit", JsonNull.instance())
+                .put("city", JsonString.of("Seoul"))
+                .build());
   }
 
   @Test
@@ -113,10 +121,24 @@ class ChatCompletionResponseMapperToolCallTest {
                     "call_1", "search", "{\"filter\":{\"tags\":[\"a\",\"b\"]},\"limit\":3}")),
             ChatCompletion.Choice.FinishReason.TOOL_CALLS);
 
-    Map<String, Object> arguments = toolCall(mapper.map(completion)).arguments();
+    JsonObject arguments = toolCall(mapper.map(completion)).arguments();
 
-    assertThat(arguments).containsEntry("filter", Map.of("tags", List.of("a", "b")));
-    assertThat(arguments).containsEntry("limit", 3);
+    assertThat(arguments)
+        .isEqualTo(jsonObject(Map.of("filter", Map.of("tags", List.of("a", "b")), "limit", 3)));
+  }
+
+  @Test
+  void preservesArgumentWireOrderWhenParsing() {
+    ChatCompletion completion =
+        ChatCompletionsFixture.completion(
+            ChatCompletionsFixture.withToolCalls(
+                null,
+                ChatCompletionsFixture.functionCall(
+                    "call_1", "forecast", "{\"days\":3,\"city\":\"Seoul\"}")),
+            ChatCompletion.Choice.FinishReason.TOOL_CALLS);
+
+    assertThat(toolCall(mapper.map(completion)).arguments().values().keySet())
+        .containsExactly("days", "city");
   }
 
   @Test
@@ -432,7 +454,7 @@ class ChatCompletionResponseMapperToolCallTest {
     ToolCallContent call = (ToolCallContent) content.get(1);
     assertThat(call.callId()).isEqualTo("call_1");
     assertThat(call.name()).isEqualTo("lookup");
-    assertThat(call.arguments()).isEqualTo(Map.of("city", "Seoul"));
+    assertThat(call.arguments()).isEqualTo(jsonObject(Map.of("city", "Seoul")));
     assertThat(response.finishReason()).isEqualTo(expected);
   }
 
@@ -490,5 +512,9 @@ class ChatCompletionResponseMapperToolCallTest {
         .options(ModelRequestOptions.empty())
         .cancellationSignal(new CancellationSignal())
         .build();
+  }
+
+  private static JsonObject jsonObject(Map<String, Object> values) {
+    return values.isEmpty() ? JsonObject.empty() : (JsonObject) JsonValues.fromJava(values);
   }
 }

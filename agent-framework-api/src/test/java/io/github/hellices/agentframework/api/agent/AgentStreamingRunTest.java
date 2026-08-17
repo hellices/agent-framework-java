@@ -8,9 +8,9 @@ import io.github.hellices.agentframework.api.message.FinishReason;
 import io.github.hellices.agentframework.api.message.Message;
 import io.github.hellices.agentframework.api.message.Role;
 import io.github.hellices.agentframework.api.message.TextContent;
+import io.github.hellices.agentframework.api.value.JsonObject;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
@@ -670,17 +670,15 @@ class AgentStreamingRunTest {
   }
 
   private static AgentResponseUpdate update(String messageId, String text) {
-    return new AgentResponseUpdate(
-        "agent-1",
-        "response-1",
-        messageId,
-        "assistant",
-        null,
-        FinishReason.STOP,
-        List.of(new Message(Role.ASSISTANT, List.of(new TextContent(text)))),
-        null,
-        Map.of(),
-        null);
+    return AgentResponseUpdate.builder()
+        .agentId("agent-1")
+        .responseId("response-1")
+        .messageId(messageId)
+        .authorName("assistant")
+        .finishReason(FinishReason.STOP)
+        .messages(List.of(new Message(Role.ASSISTANT, List.of(new TextContent(text)))))
+        .additionalProperties(JsonObject.empty())
+        .build();
   }
 
   private static <T> List<T> consume(Flow.Publisher<T> publisher) {

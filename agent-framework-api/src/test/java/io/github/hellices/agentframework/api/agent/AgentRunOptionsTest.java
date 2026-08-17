@@ -127,8 +127,12 @@ class AgentRunOptionsTest {
 
   private static AgentRunRequest request(
       List<? extends Message> messages, AgentRunOptions options) {
-    return new AgentRunRequest(
-        messages, null, options, new CancellationSignal(), ContextAttributes.empty());
+    return AgentRunRequest.builder()
+        .messages(messages)
+        .options(options)
+        .cancellationSignal(new CancellationSignal())
+        .attributes(ContextAttributes.empty())
+        .build();
   }
 
   private static ModelResponse response() {

@@ -159,7 +159,7 @@ class OpenAiChatModelClientToolLoopTest {
             call -> {
               assertThat(call.callId()).isEqualTo(CALL_ID);
               assertThat(call.name()).isEqualTo(TOOL_NAME);
-              assertThat(call.arguments()).isEqualTo(Map.of("city", "Seoul"));
+              assertThat(argumentsAsMap(call.arguments())).isEqualTo(Map.of("city", "Seoul"));
             });
   }
 

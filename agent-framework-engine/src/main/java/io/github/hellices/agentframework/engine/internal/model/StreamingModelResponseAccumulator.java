@@ -3,12 +3,10 @@ package io.github.hellices.agentframework.engine.internal.model;
 import io.github.hellices.agentframework.api.agent.AgentResponse;
 import io.github.hellices.agentframework.api.agent.AgentResponseUpdate;
 import io.github.hellices.agentframework.api.value.JsonObject;
-import io.github.hellices.agentframework.api.value.JsonValues;
 import io.github.hellices.agentframework.spi.model.ModelResponse;
 import io.github.hellices.agentframework.spi.model.ModelResponseUpdate;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
 
 /**
@@ -78,18 +76,7 @@ public final class StreamingModelResponseAccumulator {
     if (update.additionalProperties().isEmpty()) {
       return update;
     }
-    return new AgentResponseUpdate(
-        update.agentId(),
-        update.responseId(),
-        update.messageId(),
-        update.authorName(),
-        update.createdAt(),
-        update.finishReason(),
-        update.continuationToken(),
-        update.messages(),
-        update.usage(),
-        Map.of(),
-        update.rawRepresentation());
+    return update.toBuilder().additionalProperties(JsonObject.empty()).build();
   }
 
   /** Whether this model call has emitted no update yet. */
@@ -114,12 +101,8 @@ public final class StreamingModelResponseAccumulator {
         .usage(response.usage())
         .finishReason(response.finishReason())
         .continuationToken(response.continuationToken())
-        .metadata(jsonObject(response.additionalProperties()))
+        .metadata(response.additionalProperties())
         .rawRepresentation(response.rawRepresentation())
         .build();
-  }
-
-  private static JsonObject jsonObject(Map<String, Object> values) {
-    return values.isEmpty() ? JsonObject.empty() : (JsonObject) JsonValues.fromJava(values);
   }
 }

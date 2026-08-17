@@ -11,6 +11,7 @@ import io.github.hellices.agentframework.api.message.TextContent;
 import io.github.hellices.agentframework.api.message.ToolCallContent;
 import io.github.hellices.agentframework.api.message.ToolResultContent;
 import io.github.hellices.agentframework.api.message.Usage;
+import io.github.hellices.agentframework.api.value.JsonObject;
 import io.github.hellices.agentframework.spi.model.ModelClient;
 import io.github.hellices.agentframework.spi.model.ModelRequest;
 import io.github.hellices.agentframework.spi.model.ModelResponse;
@@ -309,7 +310,7 @@ class StandaloneAgentApplicationTest {
                     Role.ASSISTANT,
                     List.of(
                         new ToolCallContent(
-                            callId, StandaloneAgentApplication.TOOL_NAME, Map.of())))))
+                            callId, StandaloneAgentApplication.TOOL_NAME, JsonObject.empty())))))
         .usage(usage)
         .finishReason(FinishReason.TOOL_CALLS)
         .build();
@@ -345,7 +346,7 @@ class StandaloneAgentApplicationTest {
                     List.of(
                         new TextContent(preamble),
                         new ToolCallContent(
-                            callId, StandaloneAgentApplication.TOOL_NAME, Map.of())))))
+                            callId, StandaloneAgentApplication.TOOL_NAME, JsonObject.empty())))))
         .usage(usage)
         .finishReason(FinishReason.TOOL_CALLS)
         .build();

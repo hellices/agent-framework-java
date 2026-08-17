@@ -2,11 +2,10 @@ package io.github.hellices.agentframework.openai.internal;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.assertj.core.api.Assertions.catchThrowable;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
 import com.openai.core.JsonValue;
 import com.openai.models.FunctionDefinition;
+import com.openai.models.chat.completions.ChatCompletion;
 import com.openai.models.chat.completions.ChatCompletionCreateParams;
 import com.openai.models.chat.completions.ChatCompletionMessage;
 import com.openai.models.chat.completions.ChatCompletionMessageFunctionToolCall;
@@ -20,6 +19,10 @@ import io.github.hellices.agentframework.api.message.TextContent;
 import io.github.hellices.agentframework.api.message.ToolCallContent;
 import io.github.hellices.agentframework.api.message.ToolResultContent;
 import io.github.hellices.agentframework.api.tool.ToolDefinition;
+import io.github.hellices.agentframework.api.value.JsonNumber;
+import io.github.hellices.agentframework.api.value.JsonObject;
+import io.github.hellices.agentframework.api.value.JsonString;
+import io.github.hellices.agentframework.api.value.JsonValues;
 import io.github.hellices.agentframework.spi.model.ModelRequest;
 import io.github.hellices.agentframework.spi.model.ModelRequestOptions;
 import java.time.Duration;
@@ -186,7 +189,7 @@ class ChatCompletionRequestMapperToolsTest {
                 new ToolResultContent(
                     "call_1",
                     "lookup",
-                    List.of(new ToolCallContent("call_2", "nested", Map.of())),
+                    List.of(new ToolCallContent("call_2", "nested", JsonObject.empty())),
                     false)));
 
     assertThatThrownBy(() -> mapper.map(request(List.of(toolMessage)), DEFAULTS))
@@ -216,9 +219,9 @@ class ChatCompletionRequestMapperToolsTest {
     Message assistant =
         new Message(
             Role.ASSISTANT,
-            List.of(new ToolCallContent("call_1", "lookup", Map.of("city", "Seoul"))),
+            List.of(new ToolCallContent("call_1", "lookup", jsonObject(Map.of("city", "Seoul")))),
             null,
-            Map.of(),
+            JsonObject.empty(),
             sdkMessage);
 
     ChatCompletionCreateParams params = mapper.map(request(List.of(assistant)), DEFAULTS);
@@ -237,7 +240,7 @@ class ChatCompletionRequestMapperToolsTest {
             Role.ASSISTANT,
             List.of(
                 new TextContent("looking it up"),
-                new ToolCallContent("call_1", "lookup", Map.of("city", "Seoul"))));
+                new ToolCallContent("call_1", "lookup", jsonObject(Map.of("city", "Seoul")))));
 
     ChatCompletionCreateParams params = mapper.map(request(List.of(assistant)), DEFAULTS);
 
@@ -257,9 +260,9 @@ class ChatCompletionRequestMapperToolsTest {
     Message assistant =
         new Message(
             Role.ASSISTANT,
-            List.of(new ToolCallContent("call_1", "lookup", Map.of("city", "Seoul"))),
+            List.of(new ToolCallContent("call_1", "lookup", jsonObject(Map.of("city", "Seoul")))),
             null,
-            Map.of(),
+            JsonObject.empty(),
             "a raw handle from another protocol");
 
     ChatCompletionCreateParams params = mapper.map(request(List.of(assistant)), DEFAULTS);
@@ -276,8 +279,8 @@ class ChatCompletionRequestMapperToolsTest {
         new Message(
             Role.ASSISTANT,
             List.of(
-                new ToolCallContent("call_1", "lookup", Map.of("city", "Seoul")),
-                new ToolCallContent("call_2", "lookup", Map.of("city", "Busan"))));
+                new ToolCallContent("call_1", "lookup", jsonObject(Map.of("city", "Seoul"))),
+                new ToolCallContent("call_2", "lookup", jsonObject(Map.of("city", "Busan")))));
 
     ChatCompletionCreateParams params = mapper.map(request(List.of(assistant)), DEFAULTS);
 
@@ -290,9 +293,11 @@ class ChatCompletionRequestMapperToolsTest {
   void serialisesReconstructedArgumentsInDeclarationOrder() {
     // ToolCallContent keeps its arguments in insertion order, and the reconstruction must not
     // reorder them: an argument string that differs from the model's own changes the tool call.
-    Map<String, Object> arguments = new LinkedHashMap<>();
-    arguments.put("city", "Seoul");
-    arguments.put("days", 3);
+    JsonObject arguments =
+        JsonObject.builder()
+            .put("days", JsonNumber.of(3))
+            .put("city", JsonString.of("Seoul"))
+            .build();
     Message assistant =
         new Message(Role.ASSISTANT, List.of(new ToolCallContent("call_1", "forecast", arguments)));
 
@@ -309,13 +314,47 @@ class ChatCompletionRequestMapperToolsTest {
                 .asFunction()
                 .function()
                 .arguments())
-        .isEqualTo("{\"city\":\"Seoul\",\"days\":3}");
+        .isEqualTo("{\"days\":3,\"city\":\"Seoul\"}");
+  }
+
+  @Test
+  void reconstructsMappedArgumentsInWireOrderAfterTheSdkHandleIsGone() {
+    ChatCompletion completion =
+        ChatCompletionsFixture.completion(
+            ChatCompletionsFixture.withToolCalls(
+                null,
+                ChatCompletionsFixture.functionCall(
+                    "call_1", "forecast", "{\"days\":3,\"city\":\"Seoul\"}")),
+            ChatCompletion.Choice.FinishReason.TOOL_CALLS);
+    ToolCallContent mapped =
+        (ToolCallContent)
+            new ChatCompletionResponseMapper().map(completion).messages().get(0).content().get(0);
+    Message reconstructed =
+        new Message(
+            Role.ASSISTANT,
+            List.of(new ToolCallContent(mapped.callId(), mapped.name(), mapped.arguments())));
+
+    ChatCompletionCreateParams params = mapper.map(request(List.of(reconstructed)), DEFAULTS);
+
+    assertThat(
+            params
+                .messages()
+                .get(0)
+                .asAssistant()
+                .toolCalls()
+                .orElseThrow()
+                .get(0)
+                .asFunction()
+                .function()
+                .arguments())
+        .isEqualTo("{\"days\":3,\"city\":\"Seoul\"}");
   }
 
   @Test
   void omitsAssistantContentWhenTheTurnIsOnlyToolCalls() {
     Message assistant =
-        new Message(Role.ASSISTANT, List.of(new ToolCallContent("call_1", "lookup", Map.of())));
+        new Message(
+            Role.ASSISTANT, List.of(new ToolCallContent("call_1", "lookup", JsonObject.empty())));
 
     ChatCompletionCreateParams params = mapper.map(request(List.of(assistant)), DEFAULTS);
 
@@ -329,7 +368,8 @@ class ChatCompletionRequestMapperToolsTest {
     Message assistant =
         new Message(
             Role.ASSISTANT,
-            List.of(new ToolCallContent("call_1", "lookup", Map.of()), new SecretContent()));
+            List.of(
+                new ToolCallContent("call_1", "lookup", JsonObject.empty()), new SecretContent()));
 
     assertThatThrownBy(() -> mapper.map(request(List.of(assistant)), DEFAULTS))
         .isInstanceOf(UnsupportedOperationException.class)
@@ -344,42 +384,13 @@ class ChatCompletionRequestMapperToolsTest {
     ChatCompletionMessage sdkMessage =
         ChatCompletionMessage.builder().content("hi").refusal((String) null).build();
     Message assistant =
-        new Message(Role.ASSISTANT, List.of(new SecretContent()), null, Map.of(), sdkMessage);
+        new Message(
+            Role.ASSISTANT, List.of(new SecretContent()), null, JsonObject.empty(), sdkMessage);
 
     assertThatThrownBy(() -> mapper.map(request(List.of(assistant)), DEFAULTS))
         .isInstanceOf(UnsupportedOperationException.class)
         .hasMessageContaining("test.secret")
         .hasMessageNotContaining("sensitive payload");
-  }
-
-  @Test
-  void refusesArgumentsItCannotSerialiseWithoutRevealingThem() {
-    // The reconstruction path is the only place this adapter writes JSON, and an argument value
-    // Jackson has no serialiser for must fail loudly rather than echo an empty object. AGENTS.md
-    // keeps tool arguments out of failure reports, so the message names the tool and the call and
-    // stops there - and so does the chain behind it. Jackson appends the reference chain to its own
-    // message (e.g. "through reference chain: java.util.Collections$UnmodifiableMap[\"<key>\"]",
-    // the runtime type of the arguments map here), and an argument key is part of the arguments, so
-    // attaching the serialiser exception as a cause would put the key in every log that prints a
-    // stack trace while this adapter's own message carefully kept it out. Same rule as the parse
-    // failure on the response side, for the same reason.
-    String secretKey = "patient_record_id";
-    Map<String, Object> arguments = new LinkedHashMap<>();
-    arguments.put(secretKey, new Unserialisable());
-    Message assistant =
-        new Message(Role.ASSISTANT, List.of(new ToolCallContent("call_1", "lookup", arguments)));
-
-    Throwable failure = catchThrowable(() -> mapper.map(request(List.of(assistant)), DEFAULTS));
-
-    assertThat(failure).isInstanceOf(IllegalArgumentException.class).hasNoCause();
-    assertThat(failure)
-        .hasMessageContaining("lookup")
-        .hasMessageContaining("call_1")
-        .hasMessageNotContaining(secretKey);
-    for (Throwable link : FailureChain.of(failure)) {
-      assertThat(link).isNotInstanceOf(JsonProcessingException.class);
-      assertThat(String.valueOf(link.getMessage())).doesNotContain(secretKey);
-    }
   }
 
   @Test
@@ -420,7 +431,7 @@ class ChatCompletionRequestMapperToolsTest {
             Role.ASSISTANT,
             List.of(),
             null,
-            Map.of(),
+            JsonObject.empty(),
             ChatCompletionMessage.builder().content((String) null).refusal((String) null).build());
 
     assertThatThrownBy(() -> mapper.map(request(List.of(echoed)), DEFAULTS))
@@ -439,7 +450,7 @@ class ChatCompletionRequestMapperToolsTest {
             Role.ASSISTANT,
             List.of(),
             null,
-            Map.of(),
+            JsonObject.empty(),
             ChatCompletionMessage.builder()
                 .content((String) null)
                 .refusal("I cannot help with that")
@@ -484,9 +495,7 @@ class ChatCompletionRequestMapperToolsTest {
     return ToolDefinition.builder()
         .name(name)
         .description(description)
-        .inputSchema(
-            (io.github.hellices.agentframework.api.value.JsonObject)
-                io.github.hellices.agentframework.api.value.JsonValues.fromJava(schema))
+        .inputSchema((JsonObject) JsonValues.fromJava(schema))
         .build();
   }
 
@@ -496,7 +505,7 @@ class ChatCompletionRequestMapperToolsTest {
   private static final class SecretContent extends ExtensionContent {
 
     private SecretContent() {
-      super(Map.of(), null);
+      super(JsonObject.empty(), null);
     }
 
     @Override
@@ -510,6 +519,7 @@ class ChatCompletionRequestMapperToolsTest {
     }
   }
 
-  /** An argument value Jackson has no serialiser for: no properties and no annotations. */
-  private static final class Unserialisable {}
+  private static JsonObject jsonObject(Map<String, Object> values) {
+    return values.isEmpty() ? JsonObject.empty() : (JsonObject) JsonValues.fromJava(values);
+  }
 }

@@ -9,6 +9,7 @@ import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 
@@ -153,6 +154,35 @@ class SessionSnapshotStoreTest {
 
     assertThat(store.load("session-1").toCompletableFuture().join()).isEmpty();
     assertThat(store.delete(" ").toCompletableFuture()).isCompletedExceptionally();
+  }
+
+  @Test
+  void jsonCodecPreservesPayloadObjectOrder() {
+    JacksonSessionSnapshotCodec codec = new JacksonSessionSnapshotCodec();
+    Map<String, Object> arguments = new LinkedHashMap<>();
+    arguments.put("days", 3L);
+    arguments.put("city", "Seoul");
+    SessionSnapshot snapshot =
+        new SessionSnapshot(
+            "session",
+            "1.0",
+            "session-1",
+            null,
+            0,
+            Instant.EPOCH,
+            Map.of(
+                "toolCall",
+                new SessionStateEntry(
+                    "test.tool", 1, Map.of("name", "forecast", "arguments", arguments))));
+
+    SessionSnapshot decoded = codec.decode(codec.encode(snapshot));
+
+    assertThat(
+            List.copyOf(
+                ((Map<?, ?>)
+                        ((Map<?, ?>) decoded.state().get("toolCall").payload()).get("arguments"))
+                    .keySet()))
+        .isEqualTo(List.of("days", "city"));
   }
 
   private static String snapshotJson(String payload) {

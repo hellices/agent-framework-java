@@ -20,6 +20,7 @@ import io.github.hellices.agentframework.api.session.SessionContext;
 import io.github.hellices.agentframework.api.session.SessionState;
 import io.github.hellices.agentframework.api.session.SessionStateKey;
 import io.github.hellices.agentframework.api.session.SessionStateValues;
+import io.github.hellices.agentframework.api.value.JsonObject;
 import io.github.hellices.agentframework.api.value.JsonValue;
 import io.github.hellices.agentframework.api.value.JsonValues;
 import io.github.hellices.agentframework.engine.AgentEngine;
@@ -66,7 +67,7 @@ class InMemoryHistoryProviderTest {
             Role.USER,
             List.of(new TextContent("remembered")),
             new MessageAttribution("AIContextProvider", "rag", "other-session"),
-            Map.of(),
+            JsonObject.empty(),
             null);
     SessionContext context =
         contextWith(sessionWithHistory("session-1", List.of(crossSession)), List.of(user("hi")));
@@ -211,7 +212,7 @@ class InMemoryHistoryProviderTest {
             Role.USER,
             List.of(new TextContent("remembered")),
             new MessageAttribution("AIContextProvider", "vector-store", "other-session"),
-            Map.of(),
+            JsonObject.empty(),
             null);
     context.addContextMessages("rag", List.of(fromVectorStore));
     InMemoryHistoryProvider provider =
@@ -240,7 +241,7 @@ class InMemoryHistoryProviderTest {
             Role.USER,
             List.of(new TextContent("spoofed")),
             new MessageAttribution("ChatHistory", "in_memory", "other-session"),
-            Map.of(),
+            JsonObject.empty(),
             null);
     context.addContextMessages("rag", List.of(spoofed));
     InMemoryHistoryProvider provider =
@@ -418,18 +419,7 @@ class InMemoryHistoryProviderTest {
         contextWith(
             session("session-1", null, Map.of()), List.of(user("input-one"), user("input-two")));
     context.addContextMessages("rag", List.of(user("context-one"), user("context-two")));
-    context.complete(
-        new AgentResponse(
-            "agent-1",
-            "response-1",
-            null,
-            null,
-            Instant.EPOCH,
-            FinishReason.STOP,
-            List.of(assistant("output-one"), assistant("output-two")),
-            null,
-            Map.of(),
-            null));
+    context.complete(response(List.of(assistant("output-one"), assistant("output-two"))));
     InMemoryHistoryProvider provider =
         new InMemoryHistoryProvider(HistoryPolicy.builder().storeContextMessages(true).build());
 
@@ -778,7 +768,7 @@ class InMemoryHistoryProviderTest {
   private static void run(AgentEngine engine, AgentSession session, String input) {
     engine
         .run(
-            new AgentRunRequest(
+            request(
                 Message.normalize(input),
                 session,
                 new AgentRunOptions(),
@@ -844,17 +834,33 @@ class InMemoryHistoryProviderTest {
   }
 
   private static AgentResponse response(String text) {
-    return new AgentResponse(
-        "agent-1",
-        "response-1",
-        null,
-        null,
-        Instant.EPOCH,
-        FinishReason.STOP,
-        List.of(assistant(text)),
-        null,
-        Map.of(),
-        null);
+    return response(List.of(assistant(text)));
+  }
+
+  private static AgentResponse response(List<? extends Message> messages) {
+    return AgentResponse.builder()
+        .agentId("agent-1")
+        .responseId("response-1")
+        .createdAt(Instant.EPOCH)
+        .finishReason(FinishReason.STOP)
+        .messages(messages)
+        .additionalProperties(JsonObject.empty())
+        .build();
+  }
+
+  private static AgentRunRequest request(
+      List<? extends Message> messages,
+      AgentSession session,
+      AgentRunOptions options,
+      CancellationSignal cancellationSignal,
+      ContextAttributes attributes) {
+    return AgentRunRequest.builder()
+        .messages(messages)
+        .session(session)
+        .options(options)
+        .cancellationSignal(cancellationSignal)
+        .attributes(attributes)
+        .build();
   }
 
   private static ModelResponse modelResponse(String text) {

@@ -12,12 +12,12 @@ import io.github.hellices.agentframework.api.message.Role;
 import io.github.hellices.agentframework.api.message.TextContent;
 import io.github.hellices.agentframework.api.message.ToolCallContent;
 import io.github.hellices.agentframework.api.message.ToolResultContent;
+import io.github.hellices.agentframework.api.value.JsonObject;
 import io.github.hellices.agentframework.spi.model.ModelProviderOption;
 import io.github.hellices.agentframework.spi.model.ModelRequest;
 import io.github.hellices.agentframework.spi.model.ModelRequestOptions;
 import java.time.Duration;
 import java.util.List;
-import java.util.Map;
 import org.junit.jupiter.api.Test;
 
 class ChatCompletionRequestMapperTest {
@@ -97,7 +97,8 @@ class ChatCompletionRequestMapperTest {
   @Test
   void rejectsAToolCallOnANonAssistantMessage() {
     Message message =
-        new Message(Role.USER, List.of(new ToolCallContent("call_1", "lookup", Map.of())));
+        new Message(
+            Role.USER, List.of(new ToolCallContent("call_1", "lookup", JsonObject.empty())));
 
     assertThatThrownBy(() -> mapper.map(request(List.of(message)), DEFAULTS))
         .isInstanceOf(IllegalArgumentException.class)
@@ -205,7 +206,7 @@ class ChatCompletionRequestMapperTest {
   private static final class SecretContent extends ExtensionContent {
 
     private SecretContent() {
-      super(Map.of(), null);
+      super(JsonObject.empty(), null);
     }
 
     @Override

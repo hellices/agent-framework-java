@@ -376,7 +376,7 @@ class AgentEngineSessionContextTest {
     AgentEngine engine =
         AgentEngine.builder().modelClient(fixedClient("hello")).contextProviders(provider).build();
     AgentRunRequest request =
-        new AgentRunRequest(
+        request(
             Message.normalize("hi"),
             null,
             new AgentRunOptions(),
@@ -633,7 +633,7 @@ class AgentEngineSessionContextTest {
   private static void runStreamingWithSession(AgentEngine engine, AgentSession session) {
     AgentStreamingRun<AgentResponseUpdate> run =
         engine.runStreaming(
-            new AgentRunRequest(
+            request(
                 Message.normalize("hi"),
                 session,
                 new AgentRunOptions(),
@@ -646,7 +646,7 @@ class AgentEngineSessionContextTest {
   private static void runWithSession(AgentEngine engine, AgentSession session) {
     engine
         .run(
-            new AgentRunRequest(
+            request(
                 Message.normalize("hi"),
                 session,
                 new AgentRunOptions(),
@@ -655,6 +655,21 @@ class AgentEngineSessionContextTest {
         .response()
         .toCompletableFuture()
         .join();
+  }
+
+  private static AgentRunRequest request(
+      List<? extends Message> messages,
+      AgentSession session,
+      AgentRunOptions options,
+      CancellationSignal cancellationSignal,
+      ContextAttributes attributes) {
+    return AgentRunRequest.builder()
+        .messages(messages)
+        .session(session)
+        .options(options)
+        .cancellationSignal(cancellationSignal)
+        .attributes(attributes)
+        .build();
   }
 
   private static ModelClient fixedClient(String text) {

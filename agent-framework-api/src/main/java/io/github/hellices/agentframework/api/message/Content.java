@@ -1,20 +1,21 @@
 package io.github.hellices.agentframework.api.message;
 
-import java.util.Map;
+import io.github.hellices.agentframework.api.value.JsonObject;
+import java.util.Objects;
 
 public abstract sealed class Content
     permits TextContent, ToolCallContent, ToolResultContent, ExtensionContent {
 
-  private final Map<String, Object> additionalProperties;
-  private final Object rawRepresentation;
+  private final JsonObject additionalProperties;
+  private final transient Object rawRepresentation;
 
-  protected Content(Map<String, Object> additionalProperties, Object rawRepresentation) {
+  protected Content(JsonObject additionalProperties, Object rawRepresentation) {
     this.additionalProperties =
-        additionalProperties == null ? Map.of() : Map.copyOf(additionalProperties);
+        additionalProperties == null ? JsonObject.empty() : additionalProperties;
     this.rawRepresentation = rawRepresentation;
   }
 
-  public Map<String, Object> additionalProperties() {
+  public JsonObject additionalProperties() {
     return additionalProperties;
   }
 
@@ -26,5 +27,14 @@ public abstract sealed class Content
 
   public String text() {
     return "";
+  }
+
+  protected final boolean baseEquals(Content other) {
+    return additionalProperties.equals(other.additionalProperties)
+        && Objects.equals(rawRepresentation, other.rawRepresentation);
+  }
+
+  protected final int baseHashCode() {
+    return Objects.hash(additionalProperties, rawRepresentation);
   }
 }

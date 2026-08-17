@@ -21,6 +21,8 @@ import io.github.hellices.agentframework.api.message.TextContent;
 import io.github.hellices.agentframework.api.message.ToolCallContent;
 import io.github.hellices.agentframework.api.message.ToolResultContent;
 import io.github.hellices.agentframework.api.tool.ToolDefinition;
+import io.github.hellices.agentframework.api.value.JsonArray;
+import io.github.hellices.agentframework.api.value.JsonObject;
 import io.github.hellices.agentframework.api.value.JsonValues;
 import io.github.hellices.agentframework.spi.model.ModelRequest;
 import java.util.ArrayList;
@@ -285,7 +287,7 @@ public final class ChatCompletionRequestMapper {
     if (!function.id().equals(call.callId()) || !function.function().name().equals(call.name())) {
       throw new IllegalArgumentException(EDITED_ASSISTANT_ECHO);
     }
-    Map<String, Object> echoedArguments =
+    JsonObject echoedArguments =
         arguments
             .read(function.function().arguments())
             // Only a raw handle a caller built or restored can carry arguments this adapter cannot
@@ -302,9 +304,45 @@ public final class ChatCompletionRequestMapper {
                             + call.callId()
                             + "' against the message: they are not exactly one JSON object with"
                             + " unique keys"));
-    if (!echoedArguments.equals(call.arguments())) {
+    if (!jsonValueMatchesInWireOrder(echoedArguments, call.arguments())) {
       throw new IllegalArgumentException(EDITED_ASSISTANT_ECHO);
     }
+  }
+
+  private static boolean jsonValueMatchesInWireOrder(
+      io.github.hellices.agentframework.api.value.JsonValue left,
+      io.github.hellices.agentframework.api.value.JsonValue right) {
+    if (left instanceof JsonObject leftObject && right instanceof JsonObject rightObject) {
+      if (leftObject.values().size() != rightObject.values().size()) {
+        return false;
+      }
+      var leftEntries = leftObject.values().entrySet().iterator();
+      var rightEntries = rightObject.values().entrySet().iterator();
+      while (leftEntries.hasNext()) {
+        Map.Entry<String, io.github.hellices.agentframework.api.value.JsonValue> leftEntry =
+            leftEntries.next();
+        Map.Entry<String, io.github.hellices.agentframework.api.value.JsonValue> rightEntry =
+            rightEntries.next();
+        if (!leftEntry.getKey().equals(rightEntry.getKey())
+            || !jsonValueMatchesInWireOrder(leftEntry.getValue(), rightEntry.getValue())) {
+          return false;
+        }
+      }
+      return true;
+    }
+    if (left instanceof JsonArray leftArray && right instanceof JsonArray rightArray) {
+      if (leftArray.values().size() != rightArray.values().size()) {
+        return false;
+      }
+      for (int index = 0; index < leftArray.values().size(); index++) {
+        if (!jsonValueMatchesInWireOrder(
+            leftArray.values().get(index), rightArray.values().get(index))) {
+          return false;
+        }
+      }
+      return true;
+    }
+    return left.equals(right);
   }
 
   /**

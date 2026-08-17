@@ -78,14 +78,14 @@ class AgentEngineStreamingToolLoopTest {
             return completedFuture(
                 modelResponse(
                     List.of(toolCall("call-1", "weather", SEOUL)),
-                    new Usage(1, 2, 3, Map.of("cachedTokens", 1L)),
+                    new Usage(1, 2, 3, jsonObject(Map.of("cachedTokens", 1L))),
                     FinishReason.TOOL_CALLS,
                     Map.of()));
           }
           return completedFuture(
               modelResponse(
                   List.of(assistant("It is sunny")),
-                  new Usage(4, 5, 9, Map.of("cachedTokens", 2L)),
+                  new Usage(4, 5, 9, jsonObject(Map.of("cachedTokens", 2L))),
                   FinishReason.STOP,
                   Map.of()));
         };
@@ -97,12 +97,12 @@ class AgentEngineStreamingToolLoopTest {
                 List.of(
                     update(
                         toolCall("call-1", "weather", SEOUL),
-                        new Usage(1, 2, 3, Map.of("cachedTokens", 1L)),
+                        new Usage(1, 2, 3, jsonObject(Map.of("cachedTokens", 1L))),
                         FinishReason.TOOL_CALLS)),
                 List.of(
                     update(
                         assistant("It is sunny"),
-                        new Usage(4, 5, 9, Map.of("cachedTokens", 2L)),
+                        new Usage(4, 5, 9, jsonObject(Map.of("cachedTokens", 2L))),
                         FinishReason.STOP))));
 
     AgentResponse ordinary =
@@ -155,9 +155,9 @@ class AgentEngineStreamingToolLoopTest {
     AgentResponse streaming =
         streamedResponse(twoStreamedIterations(firstMetadata, terminalMetadata));
 
-    assertThat(ordinary.additionalProperties()).isEqualTo(terminalMetadata);
+    assertThat(ordinary.additionalProperties()).isEqualTo(jsonObject(terminalMetadata));
     assertThat(streaming.additionalProperties()).isEqualTo(ordinary.additionalProperties());
-    assertThat(streaming.additionalProperties()).doesNotContainKey("iteration0");
+    assertThat(streaming.additionalProperties().values()).doesNotContainKey("iteration0");
   }
 
   @Test
@@ -172,7 +172,7 @@ class AgentEngineStreamingToolLoopTest {
             .join();
     AgentResponse streaming = streamedResponse(twoStreamedIterations(firstMetadata, Map.of()));
 
-    assertThat(ordinary.additionalProperties()).isEmpty();
+    assertThat(ordinary.additionalProperties()).isEqualTo(JsonObject.empty());
     assertThat(streaming.additionalProperties()).isEqualTo(ordinary.additionalProperties());
   }
 
@@ -189,9 +189,10 @@ class AgentEngineStreamingToolLoopTest {
 
     assertThat(subscriber.values).hasSize(4);
     assertThat(subscriber.values.subList(0, 3))
-        .allSatisfy(update -> assertThat(update.additionalProperties()).isEmpty());
+        .allSatisfy(
+            update -> assertThat(update.additionalProperties()).isEqualTo(JsonObject.empty()));
     AgentResponseUpdate terminal = subscriber.values.get(3);
-    assertThat(terminal.additionalProperties()).isEqualTo(terminalMetadata);
+    assertThat(terminal.additionalProperties()).isEqualTo(jsonObject(terminalMetadata));
     assertThat(terminal.messages()).isEmpty();
     assertThat(terminal.finishReason()).isNull();
     assertThat(terminal.usage()).isNull();
@@ -280,7 +281,8 @@ class AgentEngineStreamingToolLoopTest {
             call -> {
               assertThat(call.callId()).isEqualTo("call-1");
               assertThat(call.name()).isEqualTo("weather");
-              assertThat(call.arguments()).isEqualTo(Map.of("city", "Seoul", "unit", "c"));
+              assertThat(call.arguments())
+                  .isEqualTo(jsonObject(Map.of("city", "Seoul", "unit", "c")));
             });
     assertThat(requestToolResults(requests.get(1)))
         .singleElement()
@@ -379,8 +381,8 @@ class AgentEngineStreamingToolLoopTest {
                         new Message(
                             Role.ASSISTANT,
                             List.of(
-                                new ToolCallContent("call-1", "first", Map.of()),
-                                new ToolCallContent("call-2", "second", Map.of()))),
+                                new ToolCallContent("call-1", "first", JsonObject.empty()),
+                                new ToolCallContent("call-2", "second", JsonObject.empty()))),
                         null,
                         FinishReason.TOOL_CALLS)),
                 List.of(update(assistant("done"), null, FinishReason.STOP))));
@@ -677,7 +679,7 @@ class AgentEngineStreamingToolLoopTest {
             request -> publisher(List.of(update(assistant("unused"), null, FinishReason.STOP))));
     AgentEngine engine = engine(client, weatherTool());
     AgentRunRequest request =
-        new AgentRunRequest(
+        request(
             List.of(),
             null,
             AgentRunOptions.builder().continuationToken("continuation-1").build(),
@@ -832,7 +834,7 @@ class AgentEngineStreamingToolLoopTest {
             .sessionStore(store)
             .build();
     AgentRunRequest request =
-        new AgentRunRequest(
+        request(
             Message.normalize("weather?"),
             session("session-1", null, Map.of()),
             new AgentRunOptions(),
@@ -1029,7 +1031,7 @@ class AgentEngineStreamingToolLoopTest {
     AgentStreamingRun<AgentResponseUpdate> run =
         engine(streams.client(), weatherTool())
             .runStreaming(
-                new AgentRunRequest(
+                request(
                     Message.normalize("hi"),
                     null,
                     new AgentRunOptions(),
@@ -1297,7 +1299,8 @@ class AgentEngineStreamingToolLoopTest {
   }
 
   private static Message toolCall(String callId, String name, Map<String, Object> arguments) {
-    return new Message(Role.ASSISTANT, List.of(new ToolCallContent(callId, name, arguments)));
+    return new Message(
+        Role.ASSISTANT, List.of(new ToolCallContent(callId, name, jsonObject(arguments))));
   }
 
   private static ModelResponseUpdate update(Message message, Usage usage, FinishReason reason) {
@@ -1324,6 +1327,21 @@ class AgentEngineStreamingToolLoopTest {
         .usage(usage)
         .finishReason(finishReason)
         .metadata(jsonObject(metadata))
+        .build();
+  }
+
+  private static AgentRunRequest request(
+      List<? extends Message> messages,
+      AgentSession session,
+      AgentRunOptions options,
+      CancellationSignal cancellationSignal,
+      ContextAttributes attributes) {
+    return AgentRunRequest.builder()
+        .messages(messages)
+        .session(session)
+        .options(options)
+        .cancellationSignal(cancellationSignal)
+        .attributes(attributes)
         .build();
   }
 

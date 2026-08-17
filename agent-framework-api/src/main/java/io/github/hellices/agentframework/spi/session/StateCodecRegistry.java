@@ -13,6 +13,9 @@ import io.github.hellices.agentframework.api.session.SessionSnapshot;
 import io.github.hellices.agentframework.api.session.SessionState;
 import io.github.hellices.agentframework.api.session.SessionStateEntry;
 import io.github.hellices.agentframework.api.session.SessionStateKey;
+import io.github.hellices.agentframework.api.value.JsonArray;
+import io.github.hellices.agentframework.api.value.JsonNull;
+import io.github.hellices.agentframework.api.value.JsonObject;
 import io.github.hellices.agentframework.api.value.JsonValue;
 import io.github.hellices.agentframework.api.value.JsonValues;
 import java.lang.reflect.Field;
@@ -275,7 +278,34 @@ public final class StateCodecRegistry {
 
     @Override
     public JsonValue decode(Object payload) {
-      return JsonValues.fromJava(payload);
+      return decodeJsonValue(payload);
+    }
+
+    private static JsonValue decodeJsonValue(Object value) {
+      if (value == null) {
+        return JsonNull.instance();
+      }
+      if (value instanceof JsonValue jsonValue) {
+        return jsonValue;
+      }
+      if (value instanceof Map<?, ?> map) {
+        JsonObject.Builder builder = JsonObject.builder();
+        for (Map.Entry<?, ?> entry : map.entrySet()) {
+          if (!(entry.getKey() instanceof String key)) {
+            throw new IllegalArgumentException("json value map keys must be strings");
+          }
+          builder.put(key, decodeJsonValue(entry.getValue()));
+        }
+        return builder.build();
+      }
+      if (value instanceof List<?> list) {
+        List<JsonValue> items = new ArrayList<>();
+        for (Object item : list) {
+          items.add(decodeJsonValue(item));
+        }
+        return JsonArray.of(items);
+      }
+      return JsonValues.fromJava(value);
     }
   }
 
@@ -312,7 +342,7 @@ public final class StateCodecRegistry {
                 "originSessionId",
                 value.attribution().originSessionId()));
       }
-      encoded.put("additionalProperties", value.additionalProperties());
+      encoded.put("additionalProperties", encodeJsonObject(value.additionalProperties()));
       return encoded;
     }
 
@@ -337,20 +367,20 @@ public final class StateCodecRegistry {
           Role.of(requireString(encoded, "role")),
           content,
           attribution,
-          castMap(encoded.get("additionalProperties")),
+          castObject(encoded.get("additionalProperties"), "additional properties"),
           null);
     }
 
     private Object encodeContent(Content content) {
       Map<String, Object> encoded = new LinkedHashMap<>();
       encoded.put("type", content.type());
-      encoded.put("additionalProperties", content.additionalProperties());
+      encoded.put("additionalProperties", encodeJsonObject(content.additionalProperties()));
       if (content instanceof TextContent text) {
         encoded.put("text", text.value());
       } else if (content instanceof ToolCallContent call) {
         encoded.put("callId", call.callId());
         encoded.put("name", call.name());
-        encoded.put("arguments", call.arguments());
+        encoded.put("arguments", encodeJsonObject(call.arguments()));
       } else if (content instanceof ToolResultContent result) {
         encoded.put("callId", result.callId());
         encoded.put("name", result.name());
@@ -366,16 +396,37 @@ public final class StateCodecRegistry {
       return encoded;
     }
 
+    private static Object encodeJsonObject(JsonObject value) {
+      Map<String, Object> encoded = new LinkedHashMap<>();
+      value.values().forEach((name, item) -> encoded.put(name, encodeJsonValue(item)));
+      return encoded;
+    }
+
+    private static Object encodeJsonValue(JsonValue value) {
+      if (value instanceof JsonObject jsonObject) {
+        return encodeJsonObject(jsonObject);
+      }
+      if (value instanceof JsonArray jsonArray) {
+        List<Object> encoded = new ArrayList<>();
+        for (JsonValue item : jsonArray.values()) {
+          encoded.add(encodeJsonValue(item));
+        }
+        return encoded;
+      }
+      return JsonValues.toJava(value);
+    }
+
     private Content decodeContent(Map<?, ?> encoded) {
       String type = requireString(encoded, "type");
-      Map<String, Object> additionalProperties = castMap(encoded.get("additionalProperties"));
+      JsonObject additionalProperties =
+          castObject(encoded.get("additionalProperties"), "additional properties");
       return switch (type) {
         case "text" -> new TextContent(requireText(encoded, "text"), additionalProperties, null);
         case "tool_call" ->
             new ToolCallContent(
                 requireString(encoded, "callId"),
                 requireString(encoded, "name"),
-                castNullableMap(encoded.get("arguments"), "tool arguments"),
+                castObject(encoded.get("arguments"), "tool arguments"),
                 additionalProperties,
                 null);
         case "tool_result" -> {
@@ -395,39 +446,45 @@ public final class StateCodecRegistry {
       };
     }
 
-    private static Map<String, Object> castMap(Object value) {
+    private static JsonObject castObject(Object value, String label) {
       if (value == null) {
-        return Map.of();
+        return JsonObject.empty();
       }
-      Map<?, ?> source = requireMap(value, "additional properties");
-      Map<String, Object> copy = new LinkedHashMap<>();
-      source.forEach(
-          (key, item) -> {
-            if (!(key instanceof String text)) {
-              throw new IllegalArgumentException("additional property keys must be strings");
-            }
-            if (item == null) {
-              throw new IllegalArgumentException("additional property values must not be null");
-            }
-            copy.put(text, item);
-          });
-      return Map.copyOf(copy);
+      if (value instanceof JsonObject jsonObject) {
+        return jsonObject;
+      }
+      JsonValue jsonValue = decodeJsonValue(value, label);
+      if (jsonValue instanceof JsonObject jsonObject) {
+        return jsonObject;
+      }
+      throw new IllegalArgumentException(label + " must be an object");
     }
 
-    private static Map<String, Object> castNullableMap(Object value, String label) {
+    private static JsonValue decodeJsonValue(Object value, String label) {
       if (value == null) {
-        return Map.of();
+        return JsonNull.instance();
       }
-      Map<?, ?> source = requireMap(value, label);
-      Map<String, Object> copy = new LinkedHashMap<>();
-      source.forEach(
-          (key, item) -> {
-            if (!(key instanceof String text)) {
-              throw new IllegalArgumentException(label + " keys must be strings");
-            }
-            copy.put(text, item);
-          });
-      return java.util.Collections.unmodifiableMap(copy);
+      if (value instanceof JsonValue jsonValue) {
+        return jsonValue;
+      }
+      if (value instanceof Map<?, ?> map) {
+        JsonObject.Builder builder = JsonObject.builder();
+        for (Map.Entry<?, ?> entry : map.entrySet()) {
+          if (!(entry.getKey() instanceof String key)) {
+            throw new IllegalArgumentException(label + " map keys must be strings");
+          }
+          builder.put(key, decodeJsonValue(entry.getValue(), label + " entry"));
+        }
+        return builder.build();
+      }
+      if (value instanceof List<?> list) {
+        List<JsonValue> items = new ArrayList<>();
+        for (Object item : list) {
+          items.add(decodeJsonValue(item, label + " item"));
+        }
+        return JsonArray.of(items);
+      }
+      return JsonValues.fromJava(value);
     }
 
     private static Map<?, ?> requireMap(Object value, String label) {

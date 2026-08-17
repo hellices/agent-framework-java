@@ -607,7 +607,7 @@ class SessionCoordinatorTest {
 
     AgentRun agentRun =
         engine.run(
-            new AgentRunRequest(
+            request(
                 Message.normalize("hi"),
                 session("session-1", null, Map.of()),
                 new AgentRunOptions(),
@@ -801,7 +801,7 @@ class SessionCoordinatorTest {
 
     AgentStreamingRun<AgentResponseUpdate> streamingRun =
         engine.runStreaming(
-            new AgentRunRequest(
+            request(
                 Message.normalize("hi"),
                 session("session-1", null, Map.of()),
                 new AgentRunOptions(),
@@ -889,7 +889,7 @@ class SessionCoordinatorTest {
 
     AgentRun agentRun =
         engine.run(
-            new AgentRunRequest(
+            request(
                 Message.normalize("hi"),
                 session("session-1", null, Map.of()),
                 new AgentRunOptions(),
@@ -983,7 +983,7 @@ class SessionCoordinatorTest {
 
   private static AgentRun start(AgentEngine engine, AgentSession session, String input) {
     return engine.run(
-        new AgentRunRequest(
+        request(
             Message.normalize(input),
             session,
             new AgentRunOptions(),
@@ -994,12 +994,27 @@ class SessionCoordinatorTest {
   private static void runStreaming(AgentEngine engine, AgentSession session, String input) {
     consume(
         engine.runStreaming(
-            new AgentRunRequest(
+            request(
                 Message.normalize(input),
                 session,
                 new AgentRunOptions(),
                 new CancellationSignal(),
                 ContextAttributes.empty())));
+  }
+
+  private static AgentRunRequest request(
+      List<? extends Message> messages,
+      AgentSession session,
+      AgentRunOptions options,
+      CancellationSignal cancellationSignal,
+      ContextAttributes attributes) {
+    return AgentRunRequest.builder()
+        .messages(messages)
+        .session(session)
+        .options(options)
+        .cancellationSignal(cancellationSignal)
+        .attributes(attributes)
+        .build();
   }
 
   private static void consume(AgentStreamingRun<AgentResponseUpdate> streamingRun) {

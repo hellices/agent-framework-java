@@ -505,7 +505,8 @@ class ConnectedMcpClientAdapterTest {
         .containsExactly("text", "mcp_image", "mcp_audio", "mcp_resource", "mcp_resource_link");
     McpPayloadContent image = (McpPayloadContent) result.content().get(1);
     assertThat(image.payloadType()).isEqualTo("image");
-    assertThat(image.additionalProperties()).containsEntry("mimeType", "image/png");
+    assertThat(image.additionalProperties())
+        .isEqualTo(jsonObject(Map.of("mimeType", "image/png", "data", "aGk=")));
     assertThat(image.rawRepresentation()).isSameAs(content.get(1));
   }
 
@@ -525,7 +526,7 @@ class ConnectedMcpClientAdapterTest {
 
     assertThat(result.content().stream().map(Content::type))
         .containsExactly("text", "mcp_resource_link");
-    assertThat(result.content().get(1).additionalProperties()).isEmpty();
+    assertThat(result.content().get(1).additionalProperties()).isEqualTo(JsonObject.empty());
     assertThat(result.content().get(1).rawRepresentation()).isSameAs(content.get(1));
   }
 
@@ -581,8 +582,9 @@ class ConnectedMcpClientAdapterTest {
     McpPayloadContent payload = (McpPayloadContent) mapped.content().get(1);
     assertThat(payload.payloadType()).isEqualTo("result");
     assertThat(payload.additionalProperties())
-        .containsEntry("structuredContent", Map.of("count", 2))
-        .containsEntry("_meta", Map.of("elapsedMs", 12));
+        .isEqualTo(
+            jsonObject(
+                Map.of("structuredContent", Map.of("count", 2), "_meta", Map.of("elapsedMs", 12))));
     assertThatThrownBy(() -> snapshotOf(mapped))
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessageContaining("registered content codec");
@@ -603,7 +605,7 @@ class ConnectedMcpClientAdapterTest {
     McpPayloadContent payload = (McpPayloadContent) mapped.content().get(0);
     assertThat(payload.payloadType()).isEqualTo("result");
     assertThat(payload.additionalProperties())
-        .containsEntry("structuredContent", Map.of("count", 2));
+        .isEqualTo(jsonObject(Map.of("structuredContent", Map.of("count", 2))));
   }
 
   @Test
@@ -828,6 +830,12 @@ class ConnectedMcpClientAdapterTest {
     JsonObject.Builder builder = JsonObject.builder();
     values.forEach((key, value) -> builder.put(key, JsonValues.fromJava(value)));
     return ToolArguments.of(builder.build());
+  }
+
+  private static JsonObject jsonObject(Map<String, ?> values) {
+    JsonObject.Builder builder = JsonObject.builder();
+    values.forEach((key, value) -> builder.put(key, JsonValues.fromJava(value)));
+    return builder.build();
   }
 
   private static AgentSession session(

@@ -15,6 +15,10 @@ import io.github.hellices.agentframework.api.session.SessionState;
 import io.github.hellices.agentframework.api.session.SessionStateEntry;
 import io.github.hellices.agentframework.api.session.SessionStateKey;
 import io.github.hellices.agentframework.api.session.SessionStateValues;
+import io.github.hellices.agentframework.api.value.JsonNull;
+import io.github.hellices.agentframework.api.value.JsonNumber;
+import io.github.hellices.agentframework.api.value.JsonObject;
+import io.github.hellices.agentframework.api.value.JsonString;
 import io.github.hellices.agentframework.api.value.JsonValue;
 import io.github.hellices.agentframework.api.value.JsonValues;
 import java.math.BigDecimal;
@@ -52,7 +56,7 @@ class StateCodecRegistryTest {
             Role.USER,
             List.of(new TextContent("hello")),
             new MessageAttribution("memory", "source-1", "origin-1"),
-            Map.of("retries", 1, "ratio", 0.5),
+            jsonObject(Map.of("retries", 1, "ratio", 0.5)),
             new Object());
     SessionSnapshot snapshot =
         registry.snapshot(session("session-1", null, Map.of("message", message)), 0, Instant.EPOCH);
@@ -67,8 +71,7 @@ class StateCodecRegistryTest {
               assertThat(value.attribution())
                   .isEqualTo(new MessageAttribution("memory", "source-1", "origin-1"));
               assertThat(value.additionalProperties())
-                  .containsEntry("retries", 1L)
-                  .containsEntry("ratio", new BigDecimal("0.5"));
+                  .isEqualTo(jsonObject(Map.of("retries", 1L, "ratio", new BigDecimal("0.5"))));
               assertThat(value.rawRepresentation()).isNull();
             });
   }
@@ -82,7 +85,9 @@ class StateCodecRegistryTest {
     Message message =
         new Message(
             Role.ASSISTANT,
-            List.of(new TextContent(""), new ToolCallContent("call-1", "search", arguments)));
+            List.of(
+                new TextContent(""),
+                new ToolCallContent("call-1", "search", jsonObject(arguments))));
 
     AgentSession restored =
         registry.restore(
@@ -94,8 +99,76 @@ class StateCodecRegistryTest {
             value -> {
               assertThat(((TextContent) value.content().get(0)).value()).isEmpty();
               assertThat(((ToolCallContent) value.content().get(1)).arguments())
-                  .containsEntry("filter", null);
+                  .isEqualTo(
+                      JsonObject.builder()
+                          .put("query", JsonString.of("x"))
+                          .put("filter", JsonNull.instance())
+                          .build());
             });
+  }
+
+  @Test
+  void frameworkMessageCodecPreservesContentAdditionalProperties() {
+    StateCodecRegistry registry = StateCodecRegistry.builder().build();
+    Message message =
+        new Message(
+            Role.ASSISTANT,
+            List.of(new TextContent("hi", jsonObject(Map.of("lang", "ko")), new Object())));
+
+    AgentSession restored =
+        registry.restore(
+            registry.snapshot(
+                session("session-1", null, Map.of("message", message)), 0, Instant.EPOCH));
+
+    assertThat(restored.state().get(SessionStateKey.of("message", Message.class)))
+        .hasValueSatisfying(
+            value ->
+                assertThat(((TextContent) value.content().get(0)).additionalProperties())
+                    .isEqualTo(jsonObject(Map.of("lang", "ko"))));
+  }
+
+  @Test
+  void frameworkMessageCodecPreservesToolArgumentOrder() {
+    StateCodecRegistry registry = StateCodecRegistry.builder().build();
+    JsonObject arguments =
+        JsonObject.builder()
+            .put("days", JsonNumber.of(3))
+            .put("city", JsonString.of("Seoul"))
+            .build();
+    Message message =
+        new Message(Role.ASSISTANT, List.of(new ToolCallContent("call-1", "forecast", arguments)));
+
+    AgentSession restored =
+        registry.restore(
+            registry.snapshot(
+                session("session-1", null, Map.of("message", message)), 0, Instant.EPOCH));
+
+    assertThat(restored.state().get(SessionStateKey.of("message", Message.class)))
+        .hasValueSatisfying(
+            value ->
+                assertThat(((ToolCallContent) value.content().get(0)).arguments().values().keySet())
+                    .containsExactly("days", "city"));
+  }
+
+  @Test
+  void jsonValueStateCodecPreservesObjectOrder() {
+    StateCodecRegistry registry = StateCodecRegistry.builder().build();
+    JsonObject value =
+        JsonObject.builder()
+            .put("days", JsonNumber.of(3))
+            .put("city", JsonString.of("Seoul"))
+            .build();
+
+    AgentSession restored =
+        registry.restore(
+            registry.snapshot(
+                session("session-1", null, Map.of("value", value)), 0, Instant.EPOCH));
+
+    assertThat(restored.state().get(SessionStateKey.of("value", JsonValue.class)))
+        .hasValueSatisfying(
+            restoredValue ->
+                assertThat(((JsonObject) restoredValue).values().keySet())
+                    .containsExactly("days", "city"));
   }
 
   @Test
@@ -108,7 +181,7 @@ class StateCodecRegistryTest {
                     Role.USER,
                     List.of(new TextContent("hello")),
                     new MessageAttribution("memory", "source-1", "origin-1"),
-                    Map.of("retries", 1),
+                    jsonObject(Map.of("retries", 1)),
                     new Object()),
                 new Message(Role.ASSISTANT, List.of(new TextContent("hi")))));
     SessionSnapshot snapshot =
@@ -126,7 +199,7 @@ class StateCodecRegistryTest {
               assertThat(value.messages().get(0).attribution())
                   .isEqualTo(new MessageAttribution("memory", "source-1", "origin-1"));
               assertThat(value.messages().get(0).additionalProperties())
-                  .containsEntry("retries", 1L);
+                  .isEqualTo(jsonObject(Map.of("retries", 1L)));
               assertThat(value.messages().get(0).rawRepresentation()).isNull();
             });
   }
@@ -309,6 +382,10 @@ class StateCodecRegistryTest {
       return state.with(SessionStateKey.of(key, JsonValue.class), JsonValues.fromJava(value));
     }
     return state.with((SessionStateKey<Object>) SessionStateKey.of(key, value.getClass()), value);
+  }
+
+  private static JsonObject jsonObject(Map<String, ?> values) {
+    return values.isEmpty() ? JsonObject.empty() : (JsonObject) JsonValues.fromJava(values);
   }
 
   private record Preference(String theme) {}

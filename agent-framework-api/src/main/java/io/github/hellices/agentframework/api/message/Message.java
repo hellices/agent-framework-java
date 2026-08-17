@@ -1,8 +1,8 @@
 package io.github.hellices.agentframework.api.message;
 
+import io.github.hellices.agentframework.api.value.JsonObject;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
 
 public final class Message {
@@ -10,18 +10,18 @@ public final class Message {
   private final Role role;
   private final List<Content> content;
   private final MessageAttribution attribution;
-  private final Map<String, Object> additionalProperties;
-  private final Object rawRepresentation;
+  private final JsonObject additionalProperties;
+  private final transient Object rawRepresentation;
 
   public Message(Role role, List<? extends Content> content) {
-    this(role, content, null, Map.of(), null);
+    this(role, content, null, JsonObject.empty(), null);
   }
 
   public Message(
       Role role,
       List<? extends Content> content,
       MessageAttribution attribution,
-      Map<String, Object> additionalProperties,
+      JsonObject additionalProperties,
       Object rawRepresentation) {
     this.role = Objects.requireNonNull(role, "role must not be null");
     List<Content> normalizedContent = new ArrayList<>();
@@ -33,7 +33,7 @@ public final class Message {
     this.content = List.copyOf(normalizedContent);
     this.attribution = attribution;
     this.additionalProperties =
-        additionalProperties == null ? Map.of() : Map.copyOf(additionalProperties);
+        additionalProperties == null ? JsonObject.empty() : additionalProperties;
     this.rawRepresentation = rawRepresentation;
   }
 
@@ -98,7 +98,7 @@ public final class Message {
     return new Message(role, content, attribution, additionalProperties, rawRepresentation);
   }
 
-  public Map<String, Object> additionalProperties() {
+  public JsonObject additionalProperties() {
     return additionalProperties;
   }
 
@@ -112,5 +112,40 @@ public final class Message {
       builder.append(item.text());
     }
     return builder.toString();
+  }
+
+  @Override
+  public boolean equals(Object other) {
+    if (this == other) {
+      return true;
+    }
+    if (!(other instanceof Message that)) {
+      return false;
+    }
+    return role.equals(that.role)
+        && content.equals(that.content)
+        && Objects.equals(attribution, that.attribution)
+        && additionalProperties.equals(that.additionalProperties)
+        && Objects.equals(rawRepresentation, that.rawRepresentation);
+  }
+
+  @Override
+  public int hashCode() {
+    return Objects.hash(role, content, attribution, additionalProperties, rawRepresentation);
+  }
+
+  @Override
+  public String toString() {
+    return "Message[role="
+        + role
+        + ", content="
+        + content
+        + ", attribution="
+        + attribution
+        + ", additionalProperties="
+        + additionalProperties
+        + ", rawRepresentation="
+        + rawRepresentation
+        + "]";
   }
 }
