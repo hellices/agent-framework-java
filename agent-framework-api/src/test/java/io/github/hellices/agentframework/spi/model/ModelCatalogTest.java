@@ -1,18 +1,16 @@
 package io.github.hellices.agentframework.spi.model;
 
-import static java.util.concurrent.CompletableFuture.completedFuture;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-import io.github.hellices.agentframework.api.message.FinishReason;
 import org.junit.jupiter.api.Test;
 
 class ModelCatalogTest {
 
   @Test
   void resolvesNamedAndDefaultModels() {
-    ModelClient first = request -> completedFuture(response());
-    ModelClient second = request -> completedFuture(response());
+    ModelClient first = StubModelClients.stub();
+    ModelClient second = StubModelClients.stub();
     ModelCatalog catalog =
         ModelCatalog.builder()
             .add("first", first)
@@ -26,7 +24,7 @@ class ModelCatalogTest {
 
   @Test
   void rejectsDuplicateNamesAndUnknownDefaults() {
-    ModelClient client = request -> completedFuture(response());
+    ModelClient client = StubModelClients.stub();
 
     assertThatThrownBy(() -> ModelCatalog.builder().add("model", client).add("model", client))
         .isInstanceOf(IllegalArgumentException.class)
@@ -45,9 +43,5 @@ class ModelCatalogTest {
         .isInstanceOf(IllegalStateException.class)
         .hasMessage(
             "no default model is configured; configure defaultModel(name) or resolve a named model");
-  }
-
-  private static ModelResponse response() {
-    return ModelResponse.builder().finishReason(FinishReason.STOP).build();
   }
 }

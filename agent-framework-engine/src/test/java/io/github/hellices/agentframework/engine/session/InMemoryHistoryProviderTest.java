@@ -26,6 +26,7 @@ import io.github.hellices.agentframework.api.value.JsonObject;
 import io.github.hellices.agentframework.api.value.JsonValue;
 import io.github.hellices.agentframework.api.value.JsonValues;
 import io.github.hellices.agentframework.engine.AgentEngine;
+import io.github.hellices.agentframework.engine.EngineModels;
 import io.github.hellices.agentframework.spi.model.ModelClient;
 import io.github.hellices.agentframework.spi.model.ModelRequest;
 import io.github.hellices.agentframework.spi.model.ModelResponse;
@@ -545,7 +546,7 @@ class InMemoryHistoryProviderTest {
     ModelClient client =
         request -> {
           capturedRequest.set(request);
-          return completedFuture(modelResponse("hello"));
+          return EngineModels.of(modelResponse("hello"));
         };
     Agent engine =
         boundBuilder(client)
@@ -573,7 +574,7 @@ class InMemoryHistoryProviderTest {
     ModelClient client =
         request -> {
           capturedRequest.set(request);
-          return completedFuture(modelResponse("hello"));
+          return EngineModels.of(modelResponse("hello"));
         };
     Agent engine =
         boundBuilder(client)

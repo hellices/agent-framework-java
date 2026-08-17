@@ -28,12 +28,12 @@ import io.github.hellices.agentframework.api.session.SessionStateValues;
 import io.github.hellices.agentframework.api.value.JsonValue;
 import io.github.hellices.agentframework.api.value.JsonValues;
 import io.github.hellices.agentframework.engine.AgentEngine;
+import io.github.hellices.agentframework.engine.EngineModels;
 import io.github.hellices.agentframework.engine.session.InMemoryHistoryProvider;
 import io.github.hellices.agentframework.spi.model.ModelClient;
 import io.github.hellices.agentframework.spi.model.ModelRequest;
 import io.github.hellices.agentframework.spi.model.ModelResponse;
 import io.github.hellices.agentframework.spi.model.ModelResponseUpdate;
-import io.github.hellices.agentframework.spi.model.StreamingModelClient;
 import io.github.hellices.agentframework.spi.session.ContextProvider;
 import io.github.hellices.agentframework.spi.session.HistoryPolicy;
 import io.github.hellices.agentframework.spi.session.ProviderSessionState;
@@ -567,8 +567,7 @@ class SessionCoordinatorTest {
     RecordingStore store = new RecordingStore();
     Agent engine =
         engineWithStore(
-            store,
-            request -> CompletableFuture.failedFuture(new IllegalStateException("model offline")));
+            store, request -> EngineModels.failed(new IllegalStateException("model offline")));
 
     assertThatThrownBy(() -> run(engine, session("session-1", null, Map.of()), "hi"))
         .hasRootCauseMessage("model offline");
@@ -602,7 +601,7 @@ class SessionCoordinatorTest {
     RecordingStore store = new RecordingStore();
     CompletableFuture<ModelResponse> pending = new CompletableFuture<>();
     CancellationSignal signal = new CancellationSignal();
-    Agent engine = engineWithStore(store, request -> pending);
+    Agent engine = engineWithStore(store, request -> EngineModels.fromStage(pending));
 
     AgentRun agentRun =
         engine.run(
@@ -700,7 +699,8 @@ class SessionCoordinatorTest {
     CompletableFuture<ModelResponse> firstModel = new CompletableFuture<>();
     CompletableFuture<ModelResponse> secondModel = new CompletableFuture<>();
     AtomicReference<CompletableFuture<ModelResponse>> next = new AtomicReference<>(firstModel);
-    Agent engine = engineWithStore(store, request -> next.getAndSet(secondModel));
+    Agent engine =
+        engineWithStore(store, request -> EngineModels.fromStage(next.getAndSet(secondModel)));
 
     AgentRun first = start(engine, session("session-1", null, Map.of()), "a");
     AgentRun second = start(engine, session("session-1", null, Map.of()), "b");
@@ -875,7 +875,7 @@ class SessionCoordinatorTest {
     RecordingStore store = new RecordingStore();
     CompletableFuture<ModelResponse> pending = new CompletableFuture<>();
     CancellationSignal signal = new CancellationSignal();
-    Agent engine = engineWithStore(store, request -> pending);
+    Agent engine = engineWithStore(store, request -> EngineModels.fromStage(pending));
 
     AgentRun agentRun =
         engine.run(
@@ -1078,20 +1078,20 @@ class SessionCoordinatorTest {
   }
 
   private static ModelClient fixedClient(String text) {
-    return request -> completedFuture(modelResponse(text));
+    return request -> EngineModels.of(modelResponse(text));
   }
 
   private static ModelClient capturingClient(AtomicReference<ModelRequest> captured, String text) {
     return request -> {
       captured.set(request);
-      return completedFuture(modelResponse(text));
+      return EngineModels.of(modelResponse(text));
     };
   }
 
   private static ModelClient loggingClient(List<String> log, String text) {
     return request -> {
       log.add("model");
-      return completedFuture(modelResponse(text));
+      return EngineModels.of(modelResponse(text));
     };
   }
 
@@ -1431,7 +1431,7 @@ class SessionCoordinatorTest {
   }
 
   /** A streaming client that records the request it was given and the order it was called in. */
-  private static final class LoggingStreamingClient implements StreamingModelClient {
+  private static final class LoggingStreamingClient implements ModelClient {
 
     private final List<String> log;
     private final String text;
@@ -1443,12 +1443,7 @@ class SessionCoordinatorTest {
     }
 
     @Override
-    public CompletionStage<ModelResponse> run(ModelRequest request) {
-      return completedFuture(modelResponse(text));
-    }
-
-    @Override
-    public Flow.Publisher<ModelResponseUpdate> runStreaming(ModelRequest request) {
+    public Flow.Publisher<ModelResponseUpdate> execute(ModelRequest request) {
       log.add("model");
       lastRequest.set(request);
       return subscriber ->

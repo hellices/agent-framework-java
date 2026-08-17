@@ -31,7 +31,6 @@ import io.github.hellices.agentframework.spi.model.ModelClient;
 import io.github.hellices.agentframework.spi.model.ModelRequest;
 import io.github.hellices.agentframework.spi.model.ModelResponse;
 import io.github.hellices.agentframework.spi.model.ModelResponseUpdate;
-import io.github.hellices.agentframework.spi.model.StreamingModelClient;
 import io.github.hellices.agentframework.spi.session.ContextProvider;
 import io.github.hellices.agentframework.spi.session.ProviderSessionState;
 import java.util.ArrayList;
@@ -94,7 +93,7 @@ class AgentEngineSessionContextTest {
     ModelClient client =
         request -> {
           log.add("model");
-          return completedFuture(response("hello"));
+          return EngineModels.of(response("hello"));
         };
     Agent engine =
         boundBuilder(client)
@@ -123,7 +122,7 @@ class AgentEngineSessionContextTest {
     ModelClient client =
         request -> {
           capturedRequest.set(request);
-          return completedFuture(response("hello"));
+          return EngineModels.of(response("hello"));
         };
     List<String> log = new ArrayList<>();
     Agent engine =
@@ -235,7 +234,7 @@ class AgentEngineSessionContextTest {
     ModelClient client =
         request -> {
           log.add("model");
-          return completedFuture(response("hello"));
+          return EngineModels.of(response("hello"));
         };
     RecordingProvider first = new RecordingProvider("first", log);
     Agent engine =
@@ -293,7 +292,7 @@ class AgentEngineSessionContextTest {
         request -> {
           CompletableFuture<ModelResponse> failed = new CompletableFuture<>();
           failed.completeExceptionally(new IllegalStateException("model failure"));
-          return failed;
+          return EngineModels.fromStage(failed);
         };
     Agent engine = boundBuilder(client).contextProviders(provider).build();
 
@@ -324,7 +323,7 @@ class AgentEngineSessionContextTest {
 
     assertThatThrownBy(() -> engine.run("hi"))
         .isInstanceOf(NullPointerException.class)
-        .hasMessage("model client response stage must not be null");
+        .hasMessage("model client update publisher must not be null");
   }
 
   @Test
@@ -378,7 +377,7 @@ class AgentEngineSessionContextTest {
     ModelClient client =
         request -> {
           log.add("model");
-          return completedFuture(response("hello"));
+          return EngineModels.of(response("hello"));
         };
     GatedBeforeRunProvider gated = new GatedBeforeRunProvider("slow", log);
     Agent engine = boundBuilder(client).contextProviders(gated).build();
@@ -637,7 +636,7 @@ class AgentEngineSessionContextTest {
   }
 
   private static ModelClient fixedClient(String text) {
-    return request -> completedFuture(response(text));
+    return request -> EngineModels.of(response(text));
   }
 
   /** Counts model invocations so a test can prove a run never reached the model client. */
@@ -650,9 +649,9 @@ class AgentEngineSessionContextTest {
     }
 
     @Override
-    public CompletionStage<ModelResponse> run(ModelRequest request) {
+    public Flow.Publisher<ModelResponseUpdate> execute(ModelRequest request) {
       invocations.incrementAndGet();
-      return completedFuture(response(text));
+      return EngineModels.of(response(text));
     }
   }
 
@@ -878,7 +877,7 @@ class AgentEngineSessionContextTest {
     }
 
     @Override
-    public CompletionStage<ModelResponse> run(ModelRequest request) {
+    public Flow.Publisher<ModelResponseUpdate> execute(ModelRequest request) {
       runCalled.set(true);
       if (returnNull) {
         return null;
@@ -891,7 +890,7 @@ class AgentEngineSessionContextTest {
    * A streaming client that never returns a usable update publisher, so a test can observe where
    * the failure of a run that cannot even start is reported.
    */
-  private static final class BrokenStreamingClient implements StreamingModelClient {
+  private static final class BrokenStreamingClient implements ModelClient {
     private final boolean returnNull;
     private final AtomicBoolean streamingCalled = new AtomicBoolean();
 
@@ -908,12 +907,7 @@ class AgentEngineSessionContextTest {
     }
 
     @Override
-    public CompletionStage<ModelResponse> run(ModelRequest request) {
-      return completedFuture(response("hello"));
-    }
-
-    @Override
-    public Flow.Publisher<ModelResponseUpdate> runStreaming(ModelRequest request) {
+    public Flow.Publisher<ModelResponseUpdate> execute(ModelRequest request) {
       streamingCalled.set(true);
       if (returnNull) {
         return null;
@@ -922,7 +916,7 @@ class AgentEngineSessionContextTest {
     }
   }
 
-  private static final class StreamingFakeClient implements StreamingModelClient {
+  private static final class StreamingFakeClient implements ModelClient {
     private final List<String> log;
     private final AtomicReference<ModelRequest> capturedRequest = new AtomicReference<>();
 
@@ -931,12 +925,7 @@ class AgentEngineSessionContextTest {
     }
 
     @Override
-    public CompletionStage<ModelResponse> run(ModelRequest request) {
-      return completedFuture(response("hello"));
-    }
-
-    @Override
-    public Flow.Publisher<ModelResponseUpdate> runStreaming(ModelRequest request) {
+    public Flow.Publisher<ModelResponseUpdate> execute(ModelRequest request) {
       log.add("model");
       capturedRequest.set(request);
       return subscriber ->

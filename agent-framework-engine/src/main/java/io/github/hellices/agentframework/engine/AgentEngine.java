@@ -21,25 +21,22 @@ import io.github.hellices.agentframework.api.value.JsonValue;
 import io.github.hellices.agentframework.engine.AgentBinding.ProviderBinding;
 import io.github.hellices.agentframework.engine.internal.model.ModelResponseMapper;
 import io.github.hellices.agentframework.engine.internal.model.ResponseIdentity;
+import io.github.hellices.agentframework.engine.internal.model.StreamingModelResponseAccumulator;
 import io.github.hellices.agentframework.engine.internal.session.SessionCoordinator;
 import io.github.hellices.agentframework.engine.internal.tool.StreamingToolLoopPublisher;
 import io.github.hellices.agentframework.engine.internal.tool.ToolLoopPolicy;
-import io.github.hellices.agentframework.spi.model.ContinuationModelClient;
 import io.github.hellices.agentframework.spi.model.ModelCatalog;
 import io.github.hellices.agentframework.spi.model.ModelClient;
 import io.github.hellices.agentframework.spi.model.ModelRequest;
 import io.github.hellices.agentframework.spi.model.ModelRequestOptions;
 import io.github.hellices.agentframework.spi.model.ModelResponse;
 import io.github.hellices.agentframework.spi.model.ModelResponseUpdate;
-import io.github.hellices.agentframework.spi.model.StreamingContinuationModelClient;
-import io.github.hellices.agentframework.spi.model.StreamingModelClient;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
@@ -166,7 +163,7 @@ public final class AgentEngine {
     }
     ModelClient selectedClient = request.options().resolveModelClient(binding.modelClient());
     Function<ModelRequest, CompletionStage<ModelResponse>> modelInvoker =
-        resolveModelInvoker(selectedClient, request);
+        resolveModelInvoker(selectedClient);
     SessionContext sessionContext = context.sessionContext();
     String responseId = UUID.randomUUID().toString();
     Instant createdAt = Instant.now();
@@ -174,7 +171,6 @@ public final class AgentEngine {
         () ->
             runToolLoop(
                 toolLoop,
-                selectedClient,
                 modelInvoker,
                 toModelRequest(binding, request, sessionContext),
                 request,
@@ -258,10 +254,10 @@ public final class AgentEngine {
    * as it did before the context provider pipeline existed. With a gate the first model call must
    * happen after the session was loaded and every {@code beforeRun} hook completed, so publisher
    * creation is deferred and the same failures are instead delivered to the update subscriber as a
-   * terminal {@code onError}, which the run's response stage reports. Failures that do not depend
-   * on the gate (a continuation token combined with tools, a client lacking the streaming or
-   * streaming-continuation capability) stay synchronous in both shapes. Which shape applies follows
-   * the same rule {@link #runInternal} documents: a run that carries a session always has a gate.
+   * terminal {@code onError}, which the run's response stage reports. The only failure that does
+   * not depend on the gate — a continuation token combined with tools — stays synchronous in both
+   * shapes. Which shape applies follows the same rule {@link #runInternal} documents: a run that
+   * carries a session always has a gate.
    *
    * <p>A run with tools streams through {@link StreamingToolLoopPublisher}, which turns the same
    * tool loop the ordinary run executes into one update stream: every model call's updates are
@@ -281,7 +277,7 @@ public final class AgentEngine {
     }
     ModelClient selectedClient = request.options().resolveModelClient(binding.modelClient());
     Function<ModelRequest, Flow.Publisher<ModelResponseUpdate>> streamingInvoker =
-        resolveStreamingInvoker(selectedClient, request);
+        resolveStreamingInvoker(selectedClient);
     SessionContext sessionContext = context.sessionContext();
     ResponseIdentity identity =
         new ResponseIdentity(
@@ -428,15 +424,13 @@ public final class AgentEngine {
 
   private CompletionStage<ToolLoopResult> runToolLoop(
       ToolLoopPolicy toolLoop,
-      ModelClient client,
       Function<ModelRequest, CompletionStage<ModelResponse>> modelInvoker,
       ModelRequest modelRequest,
       AgentRunRequest request,
       int iteration,
       List<Message> accumulatedMessages,
       Usage accumulatedUsage) {
-    CompletionStage<ModelResponse> responseStage =
-        iteration == 0 ? modelInvoker.apply(modelRequest) : client.run(modelRequest);
+    CompletionStage<ModelResponse> responseStage = modelInvoker.apply(modelRequest);
     return Objects.requireNonNull(responseStage, "model client response stage must not be null")
         .thenCompose(
             response -> {
@@ -478,7 +472,6 @@ public final class AgentEngine {
                         outputMessages.add(toolResultMessage);
                         return runToolLoop(
                             toolLoop,
-                            client,
                             modelInvoker,
                             nextRequest,
                             request,
@@ -546,39 +539,100 @@ public final class AgentEngine {
       ModelResponse terminalResponse, List<Message> messages, Usage usage) {}
 
   /**
-   * Resolves how the first model call of this run is made, without making it. Capability mismatches
-   * (a continuation token for a client that cannot resume) still fail synchronously from {@code
-   * run}, while the call itself happens only after every {@code beforeRun} hook completed.
+   * Resolves how the first model call of this run is made, without making it. Every provider is
+   * invoked the same way now — through {@link ModelClient#execute(ModelRequest)} — so the run no
+   * longer probes a client's type for a streaming or continuation capability; a continuation token,
+   * when present, travels on the {@link ModelRequest} itself and it is the provider that decides
+   * whether it honours it.
+   *
+   * <p>An ordinary run needs a single {@link ModelResponse}, so the update publisher the provider
+   * returns is collected by a non-blocking adapter: {@link #collect(Flow.Publisher)} subscribes,
+   * requests every update, and assembles them into one response when the stream completes. No
+   * thread is blocked and no executor is used — the response stage completes on whatever thread
+   * signalled the publisher's terminal.
    */
   private static Function<ModelRequest, CompletionStage<ModelResponse>> resolveModelInvoker(
-      ModelClient client, AgentRunRequest request) {
-    Optional<String> continuationToken = request.options().continuationToken();
-    if (continuationToken.isEmpty()) {
-      return client::run;
-    }
-    if (!(client instanceof ContinuationModelClient continuationClient)) {
-      throw new UnsupportedOperationException("model client does not support continuation");
-    }
-    return modelRequest ->
-        continuationClient.resume(modelRequest, modelRequest.continuationToken());
+      ModelClient client) {
+    return modelRequest -> collect(client.execute(modelRequest));
   }
 
   /** The streaming counterpart of {@link #resolveModelInvoker}. */
   private static Function<ModelRequest, Flow.Publisher<ModelResponseUpdate>>
-      resolveStreamingInvoker(ModelClient client, AgentRunRequest request) {
-    Optional<String> continuationToken = request.options().continuationToken();
-    if (continuationToken.isEmpty()) {
-      if (!(client instanceof StreamingModelClient streamingClient)) {
-        throw new UnsupportedOperationException("model client does not support streaming");
+      resolveStreamingInvoker(ModelClient client) {
+    return client::execute;
+  }
+
+  /**
+   * Collects a model invocation's update publisher into the single {@link ModelResponse} the
+   * ordinary tool loop consumes, without blocking a thread. This is a temporary bridge: the run
+   * pipeline still speaks in whole responses, so the unified update stream is reassembled here
+   * until the pipeline itself is redesigned to consume updates directly. A publisher that completes
+   * without a single update fails the stage, and any terminal {@code onError} is propagated as the
+   * stage's failure.
+   */
+  private static CompletionStage<ModelResponse> collect(
+      Flow.Publisher<ModelResponseUpdate> publisher) {
+    Objects.requireNonNull(publisher, "model client update publisher must not be null");
+    CompletableFuture<ModelResponse> future = new CompletableFuture<>();
+    publisher.subscribe(new CollectingSubscriber(future));
+    return future.minimalCompletionStage();
+  }
+
+  private static ModelResponse assembleResponse(List<ModelResponseUpdate> updates) {
+    if (updates.isEmpty()) {
+      throw new IllegalStateException("model stream completed without any update");
+    }
+    if (updates.size() == 1) {
+      ModelResponseUpdate update = updates.get(0);
+      return ModelResponse.builder()
+          .messages(update.messages())
+          .usage(update.usage())
+          .finishReason(update.finishReason())
+          .continuationToken(update.continuationToken())
+          .metadata(update.metadata())
+          .rawRepresentation(update.rawRepresentation())
+          .build();
+    }
+    StreamingModelResponseAccumulator accumulator =
+        new StreamingModelResponseAccumulator(
+            new ResponseIdentity("model", UUID.randomUUID().toString(), null, Instant.now()));
+    for (ModelResponseUpdate update : updates) {
+      accumulator.record(update);
+    }
+    return accumulator.toModelResponse();
+  }
+
+  private static final class CollectingSubscriber implements Flow.Subscriber<ModelResponseUpdate> {
+    private final CompletableFuture<ModelResponse> future;
+    private final List<ModelResponseUpdate> updates = new ArrayList<>();
+
+    private CollectingSubscriber(CompletableFuture<ModelResponse> future) {
+      this.future = future;
+    }
+
+    @Override
+    public void onSubscribe(Flow.Subscription subscription) {
+      subscription.request(Long.MAX_VALUE);
+    }
+
+    @Override
+    public void onNext(ModelResponseUpdate item) {
+      updates.add(item);
+    }
+
+    @Override
+    public void onError(Throwable throwable) {
+      future.completeExceptionally(throwable);
+    }
+
+    @Override
+    public void onComplete() {
+      try {
+        future.complete(assembleResponse(updates));
+      } catch (RuntimeException failure) {
+        future.completeExceptionally(failure);
       }
-      return streamingClient::runStreaming;
     }
-    if (!(client instanceof StreamingContinuationModelClient continuationClient)) {
-      throw new UnsupportedOperationException(
-          "model client does not support streaming continuation");
-    }
-    return modelRequest ->
-        continuationClient.resumeStreaming(modelRequest, modelRequest.continuationToken());
   }
 
   /**

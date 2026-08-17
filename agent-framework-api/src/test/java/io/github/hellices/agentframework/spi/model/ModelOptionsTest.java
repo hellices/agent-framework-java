@@ -4,7 +4,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.github.hellices.agentframework.api.agent.CancellationSignal;
-import io.github.hellices.agentframework.api.message.FinishReason;
 import io.github.hellices.agentframework.api.message.Message;
 import io.github.hellices.agentframework.api.message.Role;
 import io.github.hellices.agentframework.api.message.TextContent;
@@ -13,8 +12,6 @@ import io.github.hellices.agentframework.api.value.JsonString;
 import java.lang.reflect.Method;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.Flow;
 import org.junit.jupiter.api.Test;
 
 class ModelOptionsTest {
@@ -140,62 +137,6 @@ class ModelOptionsTest {
             .build();
 
     assertThat(first).isEqualTo(second).hasSameHashCodeAs(second);
-  }
-
-  @Test
-  void streamingCapabilityIsOptInInterface() {
-    ModelClient basicClient =
-        request ->
-            CompletableFuture.completedFuture(
-                ModelResponse.builder().finishReason(FinishReason.STOP).build());
-    StreamingModelClient streamingClient =
-        new StreamingModelClient() {
-          @Override
-          public java.util.concurrent.CompletionStage<ModelResponse> run(ModelRequest request) {
-            return CompletableFuture.completedFuture(
-                ModelResponse.builder().finishReason(FinishReason.STOP).build());
-          }
-
-          @Override
-          public Flow.Publisher<ModelResponseUpdate> runStreaming(ModelRequest request) {
-            return new SingleChunkPublisher(
-                ModelResponseUpdate.builder().finishReason(FinishReason.STOP).build());
-          }
-        };
-
-    assertThat(basicClient).isNotInstanceOf(StreamingModelClient.class);
-    assertThat(streamingClient).isInstanceOf(StreamingModelClient.class);
-  }
-
-  private static final class SingleChunkPublisher implements Flow.Publisher<ModelResponseUpdate> {
-    private final ModelResponseUpdate update;
-
-    private SingleChunkPublisher(ModelResponseUpdate update) {
-      this.update = update;
-    }
-
-    @Override
-    public void subscribe(Flow.Subscriber<? super ModelResponseUpdate> subscriber) {
-      subscriber.onSubscribe(
-          new Flow.Subscription() {
-            private boolean done;
-
-            @Override
-            public void request(long n) {
-              if (done || n <= 0) {
-                return;
-              }
-              done = true;
-              subscriber.onNext(update);
-              subscriber.onComplete();
-            }
-
-            @Override
-            public void cancel() {
-              done = true;
-            }
-          });
-    }
   }
 
   private static java.util.Optional<Method> findMethod(

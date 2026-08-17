@@ -16,6 +16,7 @@ import io.github.hellices.agentframework.api.tool.ToolDefinition;
 import io.github.hellices.agentframework.api.tool.ToolHandler;
 import io.github.hellices.agentframework.api.tool.ToolResult;
 import io.github.hellices.agentframework.spi.model.ModelClient;
+import io.github.hellices.agentframework.spi.model.StubModelClients;
 import io.github.hellices.agentframework.spi.session.ContextProvider;
 import io.github.hellices.agentframework.spi.session.ProviderSessionState;
 import java.lang.reflect.Field;
@@ -43,7 +44,7 @@ class AgentRuntimeTest {
         .isInstanceOf(NullPointerException.class)
         .hasMessage("modelClient must not be null");
 
-    ModelClient modelClient = request -> completedFuture(null);
+    ModelClient modelClient = StubModelClients.stub();
 
     AgentRuntime runtime = AgentRuntime.builder().modelClient(modelClient).build();
 
@@ -58,7 +59,7 @@ class AgentRuntimeTest {
     assertThatThrownBy(
             () ->
                 AgentRuntime.builder()
-                    .modelClient(request -> completedFuture(null))
+                    .modelClient(StubModelClients.stub())
                     .toolBinding(ToolBinding.of("lookup", successfulHandler()))
                     .toolBinding(ToolBinding.of("lookup", successfulHandler()))
                     .build())
@@ -66,16 +67,13 @@ class AgentRuntimeTest {
         .hasMessage("duplicate tool binding name: lookup");
 
     assertThatThrownBy(
-            () ->
-                AgentRuntime.builder()
-                    .modelClient(request -> completedFuture(null))
-                    .contextProvider(null))
+            () -> AgentRuntime.builder().modelClient(StubModelClients.stub()).contextProvider(null))
         .isInstanceOf(NullPointerException.class)
         .hasMessage("contextProvider must not be null");
     assertThatThrownBy(
             () ->
                 AgentRuntime.builder()
-                    .modelClient(request -> completedFuture(null))
+                    .modelClient(StubModelClients.stub())
                     .contextProviders(Arrays.asList(new NamedContextProvider("history"), null)))
         .isInstanceOf(NullPointerException.class)
         .hasMessage("contextProvider must not be null");
@@ -88,7 +86,7 @@ class AgentRuntimeTest {
     assertThatThrownBy(
             () ->
                 AgentRuntime.builder()
-                    .modelClient(request -> completedFuture(null))
+                    .modelClient(StubModelClients.stub())
                     .contextProvider(provider)
                     .contextProvider(provider)
                     .build())
@@ -101,7 +99,7 @@ class AgentRuntimeTest {
     assertThatThrownBy(
             () ->
                 AgentRuntime.builder()
-                    .modelClient(request -> completedFuture(null))
+                    .modelClient(StubModelClients.stub())
                     .contextProviders(
                         List.of(
                             new NamedContextProvider("memory"), new NamedContextProvider("memory")))
@@ -115,7 +113,7 @@ class AgentRuntimeTest {
     assertThatThrownBy(
             () ->
                 AgentRuntime.builder()
-                    .modelClient(request -> completedFuture(null))
+                    .modelClient(StubModelClients.stub())
                     .contextProvider(new NamedContextProvider(" "))
                     .build())
         .isInstanceOf(IllegalArgumentException.class)
@@ -124,7 +122,7 @@ class AgentRuntimeTest {
 
   @Test
   void builderDefensivelyCopiesImmutableCollectionsAndPreservesOrder() {
-    ModelClient modelClient = request -> completedFuture(null);
+    ModelClient modelClient = StubModelClients.stub();
     ContextKey<String> tenant = ContextKey.of("agent", "tenant", String.class);
     ContextAttributes attributes = ContextAttributes.builder().put(tenant, "acme").build();
     List<ToolBinding> bindings = new ArrayList<>();
@@ -165,7 +163,7 @@ class AgentRuntimeTest {
         AgentDefinition.builder().tool(tool("lookup")).tool(tool("remote-search")).build();
     AgentRuntime runtime =
         AgentRuntime.builder()
-            .modelClient(request -> completedFuture(null))
+            .modelClient(StubModelClients.stub())
             .toolBinding(ToolBinding.of("lookup", successfulHandler()))
             .build();
 
@@ -177,7 +175,7 @@ class AgentRuntimeTest {
     AgentDefinition definition = AgentDefinition.builder().tool(tool("lookup")).build();
     AgentRuntime runtime =
         AgentRuntime.builder()
-            .modelClient(request -> completedFuture(null))
+            .modelClient(StubModelClients.stub())
             .toolBinding(ToolBinding.of("remote-search", successfulHandler()))
             .build();
 

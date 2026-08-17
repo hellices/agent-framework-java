@@ -29,13 +29,10 @@ import io.github.hellices.agentframework.api.tool.ToolHandler;
 import io.github.hellices.agentframework.api.tool.ToolResult;
 import io.github.hellices.agentframework.api.value.JsonObject;
 import io.github.hellices.agentframework.api.value.JsonValues;
-import io.github.hellices.agentframework.spi.model.ContinuationModelClient;
 import io.github.hellices.agentframework.spi.model.ModelClient;
 import io.github.hellices.agentframework.spi.model.ModelRequest;
 import io.github.hellices.agentframework.spi.model.ModelResponse;
 import io.github.hellices.agentframework.spi.model.ModelResponseUpdate;
-import io.github.hellices.agentframework.spi.model.StreamingContinuationModelClient;
-import io.github.hellices.agentframework.spi.model.StreamingModelClient;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -60,7 +57,7 @@ class AgentEngineTest {
     ModelClient client =
         request -> {
           capturedRequest.set(request);
-          return completedFuture(response("hello"));
+          return EngineModels.of(response("hello"));
         };
     Agent engine =
         boundBuilder(client).id("agent-1").name("assistant").description("test agent").build();
@@ -99,7 +96,7 @@ class AgentEngineTest {
     ModelClient client =
         request -> {
           if (firstRequest.getAndSet(false)) {
-            return completedFuture(
+            return EngineModels.of(
                 modelResponse(
                     List.of(
                         new Message(
@@ -112,7 +109,7 @@ class AgentEngineTest {
                     null,
                     Map.of()));
           }
-          return completedFuture(response("done"));
+          return EngineModels.of(response("done"));
         };
     FunctionTool weather =
         tool(
@@ -145,9 +142,9 @@ class AgentEngineTest {
     ModelClient original =
         request -> {
           originalCalled.set(true);
-          return completedFuture(response("original"));
+          return EngineModels.of(response("original"));
         };
-    ModelClient replacement = request -> completedFuture(response("replacement"));
+    ModelClient replacement = request -> EngineModels.of(response("replacement"));
     Agent engine = boundBuilder(original).build();
     AgentRunOptions options =
         AgentRunOptions.builder().modelClientFactory(ignored -> replacement).build();
@@ -177,7 +174,7 @@ class AgentEngineTest {
     ModelClient client =
         request -> {
           capturedRequest.set(request);
-          return completedFuture(response("done"));
+          return EngineModels.of(response("done"));
         };
     Agent engine = boundBuilder(client).build();
     AgentRunRequest request =
@@ -208,35 +205,13 @@ class AgentEngineTest {
   }
 
   @Test
-  void streamingFailsExplicitlyWhenTheClientLacksTheCapability() {
-    ModelClient client = request -> completedFuture(response("unused"));
-    Agent engine = boundBuilder(client).build();
-
-    assertThatThrownBy(() -> engine.runStreaming("hi"))
-        .isInstanceOf(UnsupportedOperationException.class)
-        .hasMessage("model client does not support streaming");
-  }
-
-  @Test
-  void continuationUsesTheTypedContinuationCapability() {
-    AtomicBoolean ordinaryRunCalled = new AtomicBoolean();
-    AtomicReference<String> capturedToken = new AtomicReference<>();
+  void continuationTokenOnTheRequestReachesTheModelClient() {
     AtomicReference<ModelRequest> capturedRequest = new AtomicReference<>();
-    ContinuationModelClient client =
-        new ContinuationModelClient() {
-          @Override
-          public java.util.concurrent.CompletionStage<ModelResponse> run(ModelRequest request) {
-            ordinaryRunCalled.set(true);
-            return completedFuture(response("ordinary"));
-          }
-
-          @Override
-          public java.util.concurrent.CompletionStage<ModelResponse> resume(
-              ModelRequest request, String continuationToken) {
-            capturedRequest.set(request);
-            capturedToken.set(continuationToken);
-            return completedFuture(response("resumed"));
-          }
+    ModelClient client =
+        request -> {
+          capturedRequest.set(request);
+          String token = request.continuationToken();
+          return EngineModels.of(response(token == null ? "ordinary" : "resumed"));
         };
     Agent engine = boundBuilder(client).build();
     AgentRunRequest request =
@@ -249,30 +224,12 @@ class AgentEngineTest {
 
     var response = engine.run(request).response().toCompletableFuture().join();
 
-    assertThat(ordinaryRunCalled).isFalse();
     assertThat(capturedRequest.get().continuationToken()).isEqualTo("continuation-1");
-    assertThat(capturedToken).hasValue("continuation-1");
     assertThat(response.text()).isEqualTo("resumed");
   }
 
   @Test
-  void continuationFailsExplicitlyWhenTheClientLacksTheCapability() {
-    Agent engine = boundBuilder(request -> completedFuture(response("unused"))).build();
-    AgentRunRequest request =
-        request(
-            List.of(),
-            null,
-            AgentRunOptions.builder().continuationToken("continuation-1").build(),
-            new CancellationSignal(),
-            ContextAttributes.empty());
-
-    assertThatThrownBy(() -> engine.run(request))
-        .isInstanceOf(UnsupportedOperationException.class)
-        .hasMessage("model client does not support continuation");
-  }
-
-  @Test
-  void streamingContinuationUsesTheCombinedCapability() {
+  void streamingContinuationTokenOnTheRequestReachesTheModelClient() {
     Agent engine = boundBuilder(new StreamingContinuationFakeClient()).build();
     AgentRunRequest request =
         request(
@@ -292,7 +249,7 @@ class AgentEngineTest {
   @Test
   void cancellingAnInFlightRunCompletesTheResponseExceptionally() {
     CompletableFuture<ModelResponse> pendingResponse = new CompletableFuture<>();
-    Agent engine = boundBuilder(request -> pendingResponse).build();
+    Agent engine = boundBuilder(request -> EngineModels.fromStage(pendingResponse)).build();
 
     var run = engine.run("hi");
     run.cancel();
@@ -304,7 +261,7 @@ class AgentEngineTest {
   @Test
   void cancellingTheSharedSignalCompletesAnInFlightRunExceptionally() {
     CompletableFuture<ModelResponse> pendingResponse = new CompletableFuture<>();
-    Agent engine = boundBuilder(request -> pendingResponse).build();
+    Agent engine = boundBuilder(request -> EngineModels.fromStage(pendingResponse)).build();
     CancellationSignal signal = new CancellationSignal();
     AgentRunRequest request =
         request(
@@ -324,7 +281,7 @@ class AgentEngineTest {
   void continuationTokenIsPreservedFromTheModelResponse() {
     ModelClient client =
         request ->
-            completedFuture(
+            EngineModels.of(
                 modelResponse(
                     List.of(message("done")), null, FinishReason.STOP, "continuation-2", Map.of()));
     Agent engine = boundBuilder(client).build();
@@ -338,26 +295,17 @@ class AgentEngineTest {
   void cancellingAStreamingRunCompletesTheResponseExceptionally() {
     Agent engine =
         boundBuilder(
-                new StreamingModelClient() {
-                  @Override
-                  public java.util.concurrent.CompletionStage<ModelResponse> run(
-                      ModelRequest request) {
-                    return completedFuture(response("unused"));
-                  }
+                (ModelClient)
+                    request ->
+                        subscriber ->
+                            subscriber.onSubscribe(
+                                new Flow.Subscription() {
+                                  @Override
+                                  public void request(long n) {}
 
-                  @Override
-                  public Flow.Publisher<ModelResponseUpdate> runStreaming(ModelRequest request) {
-                    return subscriber ->
-                        subscriber.onSubscribe(
-                            new Flow.Subscription() {
-                              @Override
-                              public void request(long n) {}
-
-                              @Override
-                              public void cancel() {}
-                            });
-                  }
-                })
+                                  @Override
+                                  public void cancel() {}
+                                }))
             .build();
     AgentStreamingRun<AgentResponseUpdate> run = engine.runStreaming("hi");
     run.updates().subscribe(new NoOpSubscriber());
@@ -371,28 +319,19 @@ class AgentEngineTest {
   void emptyModelStreamCompletesWithAnEmptyResponse() {
     Agent engine =
         boundBuilder(
-                new StreamingModelClient() {
-                  @Override
-                  public java.util.concurrent.CompletionStage<ModelResponse> run(
-                      ModelRequest request) {
-                    return completedFuture(response(""));
-                  }
+                (ModelClient)
+                    request ->
+                        subscriber ->
+                            subscriber.onSubscribe(
+                                new Flow.Subscription() {
+                                  @Override
+                                  public void request(long n) {
+                                    subscriber.onComplete();
+                                  }
 
-                  @Override
-                  public Flow.Publisher<ModelResponseUpdate> runStreaming(ModelRequest request) {
-                    return subscriber ->
-                        subscriber.onSubscribe(
-                            new Flow.Subscription() {
-                              @Override
-                              public void request(long n) {
-                                subscriber.onComplete();
-                              }
-
-                              @Override
-                              public void cancel() {}
-                            });
-                  }
-                })
+                                  @Override
+                                  public void cancel() {}
+                                }))
             .build();
     AgentStreamingRun<AgentResponseUpdate> run = engine.runStreaming("hi");
 
@@ -407,7 +346,7 @@ class AgentEngineTest {
         request -> {
           requests.add(request);
           if (requests.size() == 1) {
-            return completedFuture(
+            return EngineModels.of(
                 modelResponse(
                     List.of(
                         new Message(
@@ -420,7 +359,7 @@ class AgentEngineTest {
                     null,
                     Map.of()));
           }
-          return completedFuture(response("It is sunny"));
+          return EngineModels.of(response("It is sunny"));
         };
     FunctionTool weather =
         tool(
@@ -469,7 +408,7 @@ class AgentEngineTest {
 
     assertThatThrownBy(
             () ->
-                boundBuilder(request -> completedFuture(response("unused")))
+                boundBuilder(request -> EngineModels.of(response("unused")))
                     .tools(first, second)
                     .build())
         .isInstanceOf(IllegalArgumentException.class)
@@ -481,7 +420,7 @@ class AgentEngineTest {
     Agent engine =
         boundBuilder(
                 request ->
-                    completedFuture(
+                    EngineModels.of(
                         modelResponse(
                             List.of(
                                 new Message(
@@ -513,9 +452,9 @@ class AgentEngineTest {
         request -> {
           requests.add(request);
           if (request.tools().isEmpty()) {
-            return completedFuture(response("finished"));
+            return EngineModels.of(response("finished"));
           }
-          return completedFuture(
+          return EngineModels.of(
               modelResponse(
                   List.of(
                       new Message(
@@ -544,31 +483,29 @@ class AgentEngineTest {
             "tool",
             Map.of(),
             (arguments, context) -> completedFuture(ToolResult.success(new TextContent("done"))));
-    StreamingModelClient client =
-        new StreamingModelClient() {
+    ModelClient client =
+        new ModelClient() {
           private final List<ModelRequest> requests = new ArrayList<>();
 
-          @Override
-          public java.util.concurrent.CompletionStage<ModelResponse> run(ModelRequest request) {
+          private ModelResponse nextResponse(ModelRequest request) {
             requests.add(request);
             if (requests.size() == 1) {
-              return completedFuture(
-                  modelResponse(
-                      List.of(
-                          new Message(
-                              Role.ASSISTANT,
-                              List.of(new ToolCallContent("call-1", "tool", JsonObject.empty())))),
-                      null,
-                      FinishReason.TOOL_CALLS,
-                      null,
-                      Map.of()));
+              return modelResponse(
+                  List.of(
+                      new Message(
+                          Role.ASSISTANT,
+                          List.of(new ToolCallContent("call-1", "tool", JsonObject.empty())))),
+                  null,
+                  FinishReason.TOOL_CALLS,
+                  null,
+                  Map.of());
             }
-            return completedFuture(response("finished"));
+            return response("finished");
           }
 
           @Override
-          public Flow.Publisher<ModelResponseUpdate> runStreaming(ModelRequest request) {
-            ModelResponse response = run(request).toCompletableFuture().join();
+          public Flow.Publisher<ModelResponseUpdate> execute(ModelRequest request) {
+            ModelResponse response = nextResponse(request);
             return subscriber ->
                 subscriber.onSubscribe(
                     new Flow.Subscription() {
@@ -642,7 +579,7 @@ class AgentEngineTest {
             (arguments, context) -> completedFuture(ToolResult.success(new TextContent("done"))));
     ModelClient client =
         request ->
-            completedFuture(
+            EngineModels.of(
                 modelResponse(
                     List.of(message("pending")),
                     null,
@@ -669,7 +606,7 @@ class AgentEngineTest {
         request -> {
           calls[0]++;
           if (calls[0] == 1) {
-            return completedFuture(
+            return EngineModels.of(
                 modelResponse(
                     List.of(
                         new Message(
@@ -680,7 +617,7 @@ class AgentEngineTest {
                     null,
                     Map.of()));
           }
-          return completedFuture(
+          return EngineModels.of(
               modelResponse(
                   List.of(message("done")),
                   new Usage(4, 5, 9, jsonObject(Map.of("cachedTokens", 2L))),
@@ -754,14 +691,9 @@ class AgentEngineTest {
     return values;
   }
 
-  private static final class StreamingFakeClient implements StreamingModelClient {
+  private static final class StreamingFakeClient implements ModelClient {
     @Override
-    public java.util.concurrent.CompletionStage<ModelResponse> run(ModelRequest request) {
-      return completedFuture(response("hello"));
-    }
-
-    @Override
-    public Flow.Publisher<ModelResponseUpdate> runStreaming(ModelRequest request) {
+    public Flow.Publisher<ModelResponseUpdate> execute(ModelRequest request) {
       return subscriber ->
           subscriber.onSubscribe(
               new Flow.Subscription() {
@@ -790,28 +722,11 @@ class AgentEngineTest {
     }
   }
 
-  private static final class StreamingContinuationFakeClient
-      implements StreamingContinuationModelClient {
+  private static final class StreamingContinuationFakeClient implements ModelClient {
     @Override
-    public java.util.concurrent.CompletionStage<ModelResponse> run(ModelRequest request) {
-      return completedFuture(response("ordinary"));
-    }
-
-    @Override
-    public Flow.Publisher<ModelResponseUpdate> runStreaming(ModelRequest request) {
-      return new SingleUpdatePublisher("ordinary");
-    }
-
-    @Override
-    public java.util.concurrent.CompletionStage<ModelResponse> resume(
-        ModelRequest request, String continuationToken) {
-      return completedFuture(response("resumed"));
-    }
-
-    @Override
-    public Flow.Publisher<ModelResponseUpdate> resumeStreaming(
-        ModelRequest request, String continuationToken) {
-      return new SingleUpdatePublisher("resumed");
+    public Flow.Publisher<ModelResponseUpdate> execute(ModelRequest request) {
+      return new SingleUpdatePublisher(
+          request.continuationToken() == null ? "ordinary" : "resumed");
     }
   }
 

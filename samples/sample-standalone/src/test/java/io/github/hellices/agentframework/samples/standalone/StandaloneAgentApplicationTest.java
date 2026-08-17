@@ -25,6 +25,7 @@ import io.github.hellices.agentframework.engine.session.JacksonSessionSnapshotCo
 import io.github.hellices.agentframework.spi.model.ModelClient;
 import io.github.hellices.agentframework.spi.model.ModelRequest;
 import io.github.hellices.agentframework.spi.model.ModelResponse;
+import io.github.hellices.agentframework.spi.model.ModelResponseUpdate;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
@@ -34,7 +35,7 @@ import java.util.Deque;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionStage;
+import java.util.concurrent.Flow;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -421,13 +422,41 @@ class StandaloneAgentApplicationTest {
     }
 
     @Override
-    public CompletionStage<ModelResponse> run(ModelRequest request) {
+    public Flow.Publisher<ModelResponseUpdate> execute(ModelRequest request) {
       requests.add(request);
       ModelResponse answer = answers.poll();
       if (answer == null) {
         throw new IllegalStateException("the sample called the model more times than scripted");
       }
-      return CompletableFuture.completedFuture(answer);
+      ModelResponseUpdate update =
+          ModelResponseUpdate.builder()
+              .messages(answer.messages())
+              .usage(answer.usage())
+              .finishReason(answer.finishReason())
+              .continuationToken(answer.continuationToken())
+              .metadata(answer.metadata())
+              .rawRepresentation(answer.rawRepresentation())
+              .build();
+      return subscriber ->
+          subscriber.onSubscribe(
+              new Flow.Subscription() {
+                private boolean done;
+
+                @Override
+                public void request(long n) {
+                  if (done || n <= 0) {
+                    return;
+                  }
+                  done = true;
+                  subscriber.onNext(update);
+                  subscriber.onComplete();
+                }
+
+                @Override
+                public void cancel() {
+                  done = true;
+                }
+              });
     }
 
     List<ModelRequest> requests() {

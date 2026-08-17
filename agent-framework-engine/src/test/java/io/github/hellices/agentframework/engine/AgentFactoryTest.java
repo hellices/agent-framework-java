@@ -23,11 +23,12 @@ import io.github.hellices.agentframework.spi.model.ModelCatalog;
 import io.github.hellices.agentframework.spi.model.ModelClient;
 import io.github.hellices.agentframework.spi.model.ModelRequest;
 import io.github.hellices.agentframework.spi.model.ModelResponse;
+import io.github.hellices.agentframework.spi.model.ModelResponseUpdate;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.CompletionStage;
+import java.util.concurrent.Flow;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 
@@ -35,7 +36,7 @@ class AgentFactoryTest {
 
   @Test
   void factoryBuildsAnAgentFromTheDefaultCatalogModel() {
-    ModelClient client = request -> completedFuture(response("default"));
+    ModelClient client = request -> EngineModels.of(response("default"));
     AgentEngine engine = AgentEngine.builder().build();
 
     Agent agent =
@@ -57,7 +58,7 @@ class AgentFactoryTest {
 
   @Test
   void noArgFactoryBuildsAnAgentFromAnExplicitClientWithoutACatalog() {
-    ModelClient client = request -> completedFuture(response("direct"));
+    ModelClient client = request -> EngineModels.of(response("direct"));
     AgentEngine engine = AgentEngine.builder().build();
 
     Agent agent =
@@ -88,8 +89,8 @@ class AgentFactoryTest {
 
   @Test
   void factoryCanSelectNamedAndExplicitModels() {
-    ModelClient named = request -> completedFuture(response("named"));
-    ModelClient explicit = request -> completedFuture(response("explicit"));
+    ModelClient named = request -> EngineModels.of(response("named"));
+    ModelClient explicit = request -> EngineModels.of(response("explicit"));
     AgentEngine engine = AgentEngine.builder().build();
 
     assertThat(
@@ -118,7 +119,7 @@ class AgentFactoryTest {
 
   @Test
   void factoryHandsOutAFreshBuilderPerCall() {
-    ModelClient client = request -> completedFuture(response("shared"));
+    ModelClient client = request -> EngineModels.of(response("shared"));
     AgentFactory factory = AgentEngine.builder().build().factory();
 
     AgentBuilder first = factory.builderWithClient(client).id("first");
@@ -131,7 +132,7 @@ class AgentFactoryTest {
 
   @Test
   void buildDefinitionReturnsDeclarationsWithoutBindingAnAgent() {
-    ModelClient client = request -> completedFuture(response("declared"));
+    ModelClient client = request -> EngineModels.of(response("declared"));
     AgentFactory factory = AgentEngine.builder().build().factory();
 
     AgentDefinition definition =
@@ -164,7 +165,7 @@ class AgentFactoryTest {
 
   @Test
   void bindPreservesADeclarationOnlyToolFromAManuallyConstructedDefinition() {
-    ModelClient client = request -> completedFuture(response("noop"));
+    ModelClient client = request -> EngineModels.of(response("noop"));
     AgentFactory factory = AgentEngine.builder().build().factory();
     AgentDefinition definition = AgentDefinition.builder().tool(weatherTool().definition()).build();
     AgentRuntime runtime = AgentRuntime.builder().modelClient(client).build();
@@ -180,7 +181,7 @@ class AgentFactoryTest {
     ModelClient client =
         request -> {
           captured.add(request);
-          return completedFuture(response("answer"));
+          return EngineModels.of(response("answer"));
         };
     AgentFactory factory = AgentEngine.builder().build().factory();
 
@@ -210,7 +211,7 @@ class AgentFactoryTest {
 
   @Test
   void maxIterationsRejectsANonPositiveBudget() {
-    ModelClient client = request -> completedFuture(response("x"));
+    ModelClient client = request -> EngineModels.of(response("x"));
     AgentFactory factory = AgentEngine.builder().build().factory();
     assertThatThrownBy(() -> factory.builderWithClient(client).maxIterations(0))
         .isInstanceOf(IllegalArgumentException.class)
@@ -219,7 +220,7 @@ class AgentFactoryTest {
 
   @Test
   void toolsRejectsANullEntry() {
-    ModelClient client = request -> completedFuture(response("x"));
+    ModelClient client = request -> EngineModels.of(response("x"));
     AgentFactory factory = AgentEngine.builder().build().factory();
     assertThatThrownBy(() -> factory.builderWithClient(client).tools((FunctionTool) null))
         .isInstanceOf(IllegalArgumentException.class)
@@ -231,9 +232,9 @@ class AgentFactoryTest {
     private final AtomicInteger calls = new AtomicInteger();
 
     @Override
-    public CompletionStage<ModelResponse> run(ModelRequest request) {
+    public Flow.Publisher<ModelResponseUpdate> execute(ModelRequest request) {
       if (calls.getAndIncrement() == 0) {
-        return completedFuture(
+        return EngineModels.of(
             ModelResponse.builder()
                 .messages(
                     List.of(
@@ -247,7 +248,7 @@ class AgentFactoryTest {
                 .finishReason(FinishReason.TOOL_CALLS)
                 .build());
       }
-      return completedFuture(response("done"));
+      return EngineModels.of(response("done"));
     }
   }
 

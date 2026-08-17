@@ -1,18 +1,16 @@
 package io.github.hellices.agentframework.api.agent;
 
-import static java.util.concurrent.CompletableFuture.completedFuture;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.github.hellices.agentframework.api.context.ContextAttributes;
 import io.github.hellices.agentframework.api.context.ContextKey;
-import io.github.hellices.agentframework.api.message.FinishReason;
 import io.github.hellices.agentframework.api.message.Message;
 import io.github.hellices.agentframework.api.session.SessionContext;
 import io.github.hellices.agentframework.api.tool.ToolContext;
 import io.github.hellices.agentframework.spi.model.ModelClient;
 import io.github.hellices.agentframework.spi.model.ModelRequest;
-import io.github.hellices.agentframework.spi.model.ModelResponse;
+import io.github.hellices.agentframework.spi.model.StubModelClients;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Method;
 import java.util.List;
@@ -69,17 +67,17 @@ class AgentRunOptionsTest {
     ModelClient original =
         request -> {
           originalCalled.set(true);
-          return completedFuture(response());
+          return StubModelClients.completing();
         };
     ModelClient replacement =
         request -> {
           replacementCalled.set(true);
-          return completedFuture(response());
+          return StubModelClients.completing();
         };
     AgentRunOptions options =
         AgentRunOptions.builder().modelClientFactory(ignored -> replacement).build();
 
-    options.resolveModelClient(original).run(ModelRequest.builder().build());
+    options.resolveModelClient(original).execute(ModelRequest.builder().build());
 
     assertThat(originalCalled).isFalse();
     assertThat(replacementCalled).isTrue();
@@ -87,7 +85,7 @@ class AgentRunOptionsTest {
 
   @Test
   void absentFactoryKeepsTheDefaultClient() {
-    ModelClient original = request -> completedFuture(response());
+    ModelClient original = StubModelClients.stub();
 
     assertThat(new AgentRunOptions().resolveModelClient(original)).isSameAs(original);
   }
@@ -96,7 +94,7 @@ class AgentRunOptionsTest {
   void factoryCannotReturnNull() {
     AgentRunOptions options = AgentRunOptions.builder().modelClientFactory(ignored -> null).build();
 
-    assertThatThrownBy(() -> options.resolveModelClient(request -> completedFuture(response())))
+    assertThatThrownBy(() -> options.resolveModelClient(StubModelClients.stub()))
         .isInstanceOf(IllegalStateException.class)
         .hasMessage("modelClientFactory must not return null");
   }
@@ -153,10 +151,6 @@ class AgentRunOptionsTest {
         .cancellationSignal(new CancellationSignal())
         .attributes(ContextAttributes.empty())
         .build();
-  }
-
-  private static ModelResponse response() {
-    return ModelResponse.builder().finishReason(FinishReason.STOP).build();
   }
 
   private static java.util.Optional<Method> findMethod(

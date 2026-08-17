@@ -41,7 +41,6 @@ import io.github.hellices.agentframework.spi.model.ModelClient;
 import io.github.hellices.agentframework.spi.model.ModelRequest;
 import io.github.hellices.agentframework.spi.model.ModelResponse;
 import io.github.hellices.agentframework.spi.model.ModelResponseUpdate;
-import io.github.hellices.agentframework.spi.model.StreamingModelClient;
 import io.github.hellices.agentframework.spi.session.ContextProvider;
 import io.github.hellices.agentframework.spi.session.ProviderSessionState;
 import java.util.ArrayList;
@@ -84,14 +83,14 @@ class AgentEngineStreamingToolLoopTest {
         request -> {
           ordinaryRequests.add(request);
           if (ordinaryRequests.size() == 1) {
-            return completedFuture(
+            return EngineModels.of(
                 modelResponse(
                     List.of(toolCall("call-1", "weather", SEOUL)),
                     new Usage(1, 2, 3, jsonObject(Map.of("cachedTokens", 1L))),
                     FinishReason.TOOL_CALLS,
                     Map.of()));
           }
-          return completedFuture(
+          return EngineModels.of(
               modelResponse(
                   List.of(assistant("It is sunny")),
                   new Usage(4, 5, 9, jsonObject(Map.of("cachedTokens", 2L))),
@@ -99,7 +98,7 @@ class AgentEngineStreamingToolLoopTest {
                   Map.of()));
         };
     List<ModelRequest> streamingRequests = new ArrayList<>();
-    StreamingModelClient streamingClient =
+    ModelClient streamingClient =
         scripted(
             streamingRequests,
             List.of(
@@ -212,7 +211,7 @@ class AgentEngineStreamingToolLoopTest {
   void aWholeToolCallEmittedAfterATextUpdateIsExecutedOnce() {
     List<Map<String, Object>> observedArguments = new ArrayList<>();
     FunctionTool weather = recordingWeatherTool(observedArguments);
-    StreamingModelClient client =
+    ModelClient client =
         scripted(
             new ArrayList<>(),
             List.of(
@@ -238,7 +237,7 @@ class AgentEngineStreamingToolLoopTest {
   void aToolCallSplitAcrossTwoUpdatesIsExecutedOnceWithItsMergedArguments() {
     List<Map<String, Object>> observedArguments = new ArrayList<>();
     FunctionTool weather = recordingWeatherTool(observedArguments);
-    StreamingModelClient client =
+    ModelClient client =
         scripted(
             new ArrayList<>(),
             List.of(
@@ -265,7 +264,7 @@ class AgentEngineStreamingToolLoopTest {
   @Test
   void theNextRequestEchoesTheMergedCallOfSplitFragmentsExactlyOnce() {
     List<ModelRequest> requests = new ArrayList<>();
-    StreamingModelClient client =
+    ModelClient client =
         scripted(
             requests,
             List.of(
@@ -307,7 +306,7 @@ class AgentEngineStreamingToolLoopTest {
     List<String> invocations = new ArrayList<>();
     FunctionTool first = recordingTool("first", invocations);
     FunctionTool second = recordingTool("second", invocations);
-    StreamingModelClient client =
+    ModelClient client =
         scripted(
             new ArrayList<>(),
             List.of(
@@ -339,7 +338,7 @@ class AgentEngineStreamingToolLoopTest {
     List<String> invocations = new ArrayList<>();
     FunctionTool first = recordingTool("first", invocations);
     FunctionTool second = recordingTool("second", invocations);
-    StreamingModelClient client =
+    ModelClient client =
         scripted(
             new ArrayList<>(),
             List.of(
@@ -381,7 +380,7 @@ class AgentEngineStreamingToolLoopTest {
               invocations.add("second");
               return completedFuture(ToolResult.success(new TextContent("two")));
             });
-    StreamingModelClient client =
+    ModelClient client =
         scripted(
             new ArrayList<>(),
             List.of(
@@ -424,7 +423,7 @@ class AgentEngineStreamingToolLoopTest {
             Map.of(),
             (arguments, context) ->
                 completedFuture(ToolResult.failure(new TextContent("tool said no"))));
-    StreamingModelClient client =
+    ModelClient client =
         scripted(
             new ArrayList<>(),
             List.of(
@@ -453,7 +452,7 @@ class AgentEngineStreamingToolLoopTest {
             Map.of(),
             (arguments, context) ->
                 CompletableFuture.failedFuture(new IllegalStateException("tool failure")));
-    StreamingModelClient client =
+    ModelClient client =
         scripted(
             new ArrayList<>(),
             List.of(
@@ -478,7 +477,7 @@ class AgentEngineStreamingToolLoopTest {
   void aToolHandlerReturningNoStageFailsTheStream() {
     List<CompletionStage<ToolResult>> stages = Collections.singletonList(null);
     FunctionTool silent = tool("silent", "silent", Map.of(), (arguments, context) -> stages.get(0));
-    StreamingModelClient client =
+    ModelClient client =
         scripted(
             new ArrayList<>(),
             List.of(
@@ -497,7 +496,7 @@ class AgentEngineStreamingToolLoopTest {
 
   @Test
   void anUnknownToolCallFailsTheStream() {
-    StreamingModelClient client =
+    ModelClient client =
         scripted(
             new ArrayList<>(),
             List.of(
@@ -516,7 +515,7 @@ class AgentEngineStreamingToolLoopTest {
 
   @Test
   void anEmptyStreamingIterationFailsExplicitly() {
-    StreamingModelClient client =
+    ModelClient client =
         streaming(
             request -> subscriber -> subscriber.onSubscribe(new EmptySubscription(subscriber)));
 
@@ -532,7 +531,7 @@ class AgentEngineStreamingToolLoopTest {
   @Test
   void aNullModelUpdateFailsTheStream() {
     List<ModelResponseUpdate> updates = Collections.singletonList(null);
-    StreamingModelClient client =
+    ModelClient client =
         streaming(
             request ->
                 subscriber ->
@@ -567,7 +566,7 @@ class AgentEngineStreamingToolLoopTest {
   @Test
   void aNullPublisherForALaterIterationFailsTheStream() {
     AtomicInteger calls = new AtomicInteger();
-    StreamingModelClient client =
+    ModelClient client =
         streaming(
             request -> {
               if (calls.getAndIncrement() == 0) {
@@ -590,7 +589,7 @@ class AgentEngineStreamingToolLoopTest {
 
   @Test
   void aFirstIterationPublisherThatThrowsFromSubscribeFailsTheStream() {
-    StreamingModelClient client =
+    ModelClient client =
         streaming(
             request ->
                 subscriber -> {
@@ -612,7 +611,7 @@ class AgentEngineStreamingToolLoopTest {
   @Test
   void aLaterIterationPublisherThatThrowsFromSubscribeFailsTheStream() {
     AtomicInteger calls = new AtomicInteger();
-    StreamingModelClient client =
+    ModelClient client =
         streaming(
             request -> {
               if (calls.getAndIncrement() == 0) {
@@ -660,7 +659,7 @@ class AgentEngineStreamingToolLoopTest {
 
   @Test
   void aModelContinuationTokenFailsAToolsEnabledStreamingRun() {
-    StreamingModelClient client =
+    ModelClient client =
         streaming(
             request ->
                 publisher(
@@ -683,7 +682,7 @@ class AgentEngineStreamingToolLoopTest {
 
   @Test
   void aStreamingRunWithToolsAndAContinuationTokenIsRejectedSynchronously() {
-    StreamingModelClient client =
+    ModelClient client =
         streaming(
             request -> publisher(List.of(update(assistant("unused"), null, FinishReason.STOP))));
     Agent engine = engine(client, weatherTool());
@@ -713,10 +712,10 @@ class AgentEngineStreamingToolLoopTest {
         request -> {
           ordinaryRequests.add(request);
           if (request.tools().isEmpty()) {
-            return completedFuture(
+            return EngineModels.of(
                 modelResponse(List.of(assistant("finished")), null, FinishReason.STOP, Map.of()));
           }
-          return completedFuture(
+          return EngineModels.of(
               modelResponse(
                   List.of(toolCall("call-1", "again", Map.of())),
                   null,
@@ -724,7 +723,7 @@ class AgentEngineStreamingToolLoopTest {
                   Map.of()));
         };
     List<ModelRequest> streamingRequests = new ArrayList<>();
-    StreamingModelClient streamingClient =
+    ModelClient streamingClient =
         streaming(
             request -> {
               streamingRequests.add(request);
@@ -769,13 +768,13 @@ class AgentEngineStreamingToolLoopTest {
             (arguments, context) -> completedFuture(ToolResult.success(new TextContent("done"))));
     ModelClient ordinaryClient =
         request ->
-            completedFuture(
+            EngineModels.of(
                 modelResponse(
                     List.of(toolCall("call-1", "tool", Map.of())),
                     null,
                     FinishReason.TOOL_CALLS,
                     Map.of()));
-    StreamingModelClient streamingClient =
+    ModelClient streamingClient =
         streaming(
             request ->
                 publisher(
@@ -810,7 +809,7 @@ class AgentEngineStreamingToolLoopTest {
   void providerHooksAndTheSessionSaveWrapTheWholeStreamingToolLoop() {
     List<String> log = new ArrayList<>();
     List<ModelRequest> requests = new ArrayList<>();
-    StreamingModelClient client =
+    ModelClient client =
         streaming(
             request -> {
               requests.add(request);
@@ -1089,19 +1088,19 @@ class AgentEngineStreamingToolLoopTest {
     ModelClient ordinaryClient =
         request ->
             ordinaryCalls.getAndIncrement() == 0
-                ? completedFuture(
+                ? EngineModels.of(
                     modelResponse(
                         List.of(toolCall("call-1", "weather", SEOUL)),
                         null,
                         FinishReason.TOOL_CALLS,
                         Map.of()))
-                : completedFuture(
+                : EngineModels.of(
                     modelResponse(
                         List.of(assistant("It is "), assistant("sunny")),
                         null,
                         FinishReason.STOP,
                         Map.of()));
-    StreamingModelClient streamingClient =
+    ModelClient streamingClient =
         scripted(
             new ArrayList<>(),
             List.of(
@@ -1145,7 +1144,7 @@ class AgentEngineStreamingToolLoopTest {
     AgentDefinition definition =
         AgentDefinition.builder().id("agent-1").name("assistant").tool(forecast).build();
     List<ModelRequest> requests = new ArrayList<>();
-    StreamingModelClient client =
+    ModelClient client =
         scripted(
             requests,
             List.of(
@@ -1262,19 +1261,19 @@ class AgentEngineStreamingToolLoopTest {
     AtomicInteger calls = new AtomicInteger();
     return request ->
         calls.getAndIncrement() == 0
-            ? completedFuture(
+            ? EngineModels.of(
                 modelResponse(
                     List.of(toolCall("call-1", "weather", SEOUL)),
                     null,
                     FinishReason.TOOL_CALLS,
                     firstMetadata))
-            : completedFuture(
+            : EngineModels.of(
                 modelResponse(
                     List.of(assistant("It is sunny")), null, FinishReason.STOP, terminalMetadata));
   }
 
   /** The streaming counterpart of {@link #twoIterations}, one update per iteration. */
-  private static StreamingModelClient twoStreamedIterations(
+  private static ModelClient twoStreamedIterations(
       Map<String, Object> firstMetadata, Map<String, Object> terminalMetadata) {
     return scripted(
         new ArrayList<>(),
@@ -1289,7 +1288,7 @@ class AgentEngineStreamingToolLoopTest {
   }
 
   /** Consumes a whole streaming run with unbounded demand and returns its assembled response. */
-  private static AgentResponse streamedResponse(StreamingModelClient client) {
+  private static AgentResponse streamedResponse(ModelClient client) {
     AgentStreamingRun<AgentResponseUpdate> run =
         engine(client, weatherTool()).runStreaming("weather?");
     subscribe(run.updates(), Long.MAX_VALUE).completion.join();
@@ -1420,22 +1419,12 @@ class AgentEngineStreamingToolLoopTest {
     return described;
   }
 
-  private static StreamingModelClient streaming(
+  private static ModelClient streaming(
       Function<ModelRequest, Flow.Publisher<ModelResponseUpdate>> streaming) {
-    return new StreamingModelClient() {
-      @Override
-      public CompletionStage<ModelResponse> run(ModelRequest request) {
-        throw new IllegalStateException("a streaming run must not call the ordinary model port");
-      }
-
-      @Override
-      public Flow.Publisher<ModelResponseUpdate> runStreaming(ModelRequest request) {
-        return streaming.apply(request);
-      }
-    };
+    return streaming::apply;
   }
 
-  private static StreamingModelClient scripted(
+  private static ModelClient scripted(
       List<ModelRequest> requests, List<List<ModelResponseUpdate>> iterations) {
     AtomicInteger index = new AtomicInteger();
     return streaming(
@@ -1598,7 +1587,7 @@ class AgentEngineStreamingToolLoopTest {
   private static final class ManualStreams {
     private final List<ManualStream> streams = new ArrayList<>();
 
-    private StreamingModelClient client() {
+    private ModelClient client() {
       return streaming(
           request -> {
             ManualStream stream = new ManualStream();

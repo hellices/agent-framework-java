@@ -38,7 +38,7 @@ class BoundAgentTest {
     AgentDefinition definition =
         AgentDefinition.builder().id("bound-1").name("assistant").description("desc").build();
     AgentRuntime runtime =
-        AgentRuntime.builder().modelClient(request -> completedFuture(response("hi"))).build();
+        AgentRuntime.builder().modelClient(request -> EngineModels.of(response("hi"))).build();
 
     Agent agent = engine.bind(definition, runtime);
 
@@ -53,7 +53,7 @@ class BoundAgentTest {
     AgentEngine engine = new AgentEngine(null);
     AgentDefinition definition = AgentDefinition.builder().id("bound-2").build();
     AgentRuntime runtime =
-        AgentRuntime.builder().modelClient(request -> completedFuture(response("hello"))).build();
+        AgentRuntime.builder().modelClient(request -> EngineModels.of(response("hello"))).build();
 
     Agent agent = engine.bind(definition, runtime);
 
@@ -69,7 +69,7 @@ class BoundAgentTest {
     AgentDefinition definition = AgentDefinition.builder().build();
     AgentRuntime runtime =
         AgentRuntime.builder()
-            .modelClient(request -> completedFuture(response("unused")))
+            .modelClient(request -> EngineModels.of(response("unused")))
             .toolBinding(
                 ToolBinding.of(
                     "ghost",
@@ -93,7 +93,7 @@ class BoundAgentTest {
             .build();
     ModelClient client =
         request ->
-            completedFuture(
+            EngineModels.of(
                 ModelResponse.builder()
                     .messages(
                         List.of(
@@ -129,7 +129,7 @@ class BoundAgentTest {
     ModelClient client =
         request -> {
           captured.set(request);
-          return completedFuture(response("done"));
+          return EngineModels.of(response("done"));
         };
     AgentRuntime runtime = AgentRuntime.builder().modelClient(client).build();
 
@@ -146,7 +146,7 @@ class BoundAgentTest {
     AgentDefinition definition = AgentDefinition.builder().tool(forecast).build();
     ModelClient client =
         request ->
-            completedFuture(
+            EngineModels.of(
                 toolCallResponse(new ToolCallContent("call-1", "forecast", JsonObject.empty())));
     AgentRuntime runtime = AgentRuntime.builder().modelClient(client).build();
 
@@ -166,7 +166,7 @@ class BoundAgentTest {
     AgentDefinition definition = AgentDefinition.builder().tool(weather).tool(forecast).build();
     ModelClient client =
         request ->
-            completedFuture(
+            EngineModels.of(
                 toolCallResponse(
                     new ToolCallContent("call-1", "weather", JsonObject.empty()),
                     new ToolCallContent("call-2", "forecast", JsonObject.empty())));
