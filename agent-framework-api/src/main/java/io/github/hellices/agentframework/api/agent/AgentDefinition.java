@@ -37,6 +37,10 @@ public final class AgentDefinition {
     if (normalizedRunOptions.modelClientFactory().isPresent()) {
       throw new IllegalArgumentException("defaultRunOptions must not include modelClientFactory");
     }
+    if (normalizedRunOptions.continuationToken().isPresent()) {
+      throw new IllegalArgumentException(
+          "defaultRunOptions must not include continuationToken; use AgentRunRequest options for per-run continuation");
+    }
     List<ToolDefinition> normalizedTools = List.copyOf(builder.tools);
     validateUniqueToolNames(normalizedTools);
     this.id = normalizedId;

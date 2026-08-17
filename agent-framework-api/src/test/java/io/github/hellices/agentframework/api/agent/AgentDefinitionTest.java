@@ -91,6 +91,17 @@ class AgentDefinitionTest {
   }
 
   @Test
+  void continuationTokenCannotAppearInDefaultRunOptions() {
+    AgentRunOptions options = AgentRunOptions.builder().continuationToken("resume-1").build();
+
+    assertThatThrownBy(() -> AgentDefinition.builder().defaultRunOptions(options).build())
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessage(
+            "defaultRunOptions must not include continuationToken; "
+                + "use AgentRunRequest options for per-run continuation");
+  }
+
+  @Test
   void toBuilderProducesEqualValueObjects() {
     ContextKey<String> tenant = ContextKey.of("agent", "tenant", String.class);
     ContextAttributes attributes = ContextAttributes.builder().put(tenant, "acme").build();
