@@ -23,7 +23,9 @@ public final class AgentRuntime {
     List<ToolBinding> normalizedBindings = List.copyOf(builder.toolBindings);
     validateUniqueBindingNames(normalizedBindings);
     this.toolBindings = normalizedBindings;
-    this.contextProviders = List.copyOf(builder.contextProviders);
+    List<ContextProvider> normalizedProviders = List.copyOf(builder.contextProviders);
+    validateContextProviders(normalizedProviders);
+    this.contextProviders = normalizedProviders;
     this.attributes = builder.attributes == null ? ContextAttributes.empty() : builder.attributes;
   }
 
@@ -67,6 +69,19 @@ public final class AgentRuntime {
       if (!names.add(toolBinding.toolName())) {
         throw new IllegalArgumentException(
             "duplicate tool binding name: " + toolBinding.toolName());
+      }
+    }
+  }
+
+  private static void validateContextProviders(List<ContextProvider> contextProviders) {
+    Set<String> sourceIds = new LinkedHashSet<>();
+    for (ContextProvider contextProvider : contextProviders) {
+      String sourceId = contextProvider.sourceId();
+      if (sourceId == null || sourceId.isBlank()) {
+        throw new IllegalArgumentException("context provider sourceId must not be blank");
+      }
+      if (!sourceIds.add(sourceId)) {
+        throw new IllegalArgumentException("duplicate context provider sourceId: " + sourceId);
       }
     }
   }

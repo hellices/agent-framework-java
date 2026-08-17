@@ -82,6 +82,47 @@ class AgentRuntimeTest {
   }
 
   @Test
+  void builderRejectsSameContextProviderAddedTwice() {
+    NamedContextProvider provider = new NamedContextProvider("memory");
+
+    assertThatThrownBy(
+            () ->
+                AgentRuntime.builder()
+                    .modelClient(request -> completedFuture(null))
+                    .contextProvider(provider)
+                    .contextProvider(provider)
+                    .build())
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessage("duplicate context provider sourceId: memory");
+  }
+
+  @Test
+  void builderRejectsDifferentContextProvidersWithSameSourceId() {
+    assertThatThrownBy(
+            () ->
+                AgentRuntime.builder()
+                    .modelClient(request -> completedFuture(null))
+                    .contextProviders(
+                        List.of(
+                            new NamedContextProvider("memory"), new NamedContextProvider("memory")))
+                    .build())
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessage("duplicate context provider sourceId: memory");
+  }
+
+  @Test
+  void builderRejectsBlankContextProviderSourceId() {
+    assertThatThrownBy(
+            () ->
+                AgentRuntime.builder()
+                    .modelClient(request -> completedFuture(null))
+                    .contextProvider(new NamedContextProvider(" "))
+                    .build())
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessage("context provider sourceId must not be blank");
+  }
+
+  @Test
   void builderDefensivelyCopiesImmutableCollectionsAndPreservesOrder() {
     ModelClient modelClient = request -> completedFuture(null);
     ContextKey<String> tenant = ContextKey.of("agent", "tenant", String.class);
