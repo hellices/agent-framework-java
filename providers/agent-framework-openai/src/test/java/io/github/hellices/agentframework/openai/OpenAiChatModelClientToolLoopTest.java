@@ -25,6 +25,7 @@ import io.github.hellices.agentframework.api.tool.ToolResult;
 import io.github.hellices.agentframework.api.value.JsonObject;
 import io.github.hellices.agentframework.api.value.JsonValues;
 import io.github.hellices.agentframework.engine.AgentEngine;
+import io.github.hellices.agentframework.spi.model.ModelCatalog;
 import io.github.hellices.agentframework.spi.model.ModelClient;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -223,7 +224,12 @@ class OpenAiChatModelClientToolLoopTest {
               return CompletableFuture.completedFuture(
                   ToolResult.success(new TextContent("sunny:" + city)));
             });
-    return AgentEngine.builder().modelClient(client).tools(weather).build();
+    return AgentEngine.builder()
+        .build()
+        .factory(ModelCatalog.builder().build())
+        .builderWithClient(client)
+        .tools(weather)
+        .build();
   }
 
   private static JsonObject weatherSchema() {

@@ -81,7 +81,7 @@ public final class StandaloneAgentApplication {
   public static Agent createAgent(ModelClient modelClient, Clock clock) {
     ModelCatalog catalog =
         ModelCatalog.builder().add("openai", modelClient).defaultModel("openai").build();
-    AgentFactory factory = AgentEngine.factory(catalog);
+    AgentFactory factory = AgentEngine.builder().build().factory(catalog);
     return factory
         .builder()
         .id("standalone-agent")
