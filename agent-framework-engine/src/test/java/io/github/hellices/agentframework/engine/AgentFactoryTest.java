@@ -56,6 +56,37 @@ class AgentFactoryTest {
   }
 
   @Test
+  void noArgFactoryBuildsAnAgentFromAnExplicitClientWithoutACatalog() {
+    ModelClient client = request -> completedFuture(response("direct"));
+    AgentEngine engine = AgentEngine.builder().build();
+
+    Agent agent =
+        engine.factory().builderWithClient(client).id("direct-agent").name("Direct").build();
+
+    assertThat(agent.id()).isEqualTo("direct-agent");
+    assertThat(agent.run("hi").response().toCompletableFuture().join().text()).isEqualTo("direct");
+  }
+
+  @Test
+  void noArgFactoryDefaultBuilderFailsWithAnActionableMessage() {
+    AgentEngine engine = AgentEngine.builder().build();
+
+    assertThatThrownBy(() -> engine.factory().builder())
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessage(
+            "no default model is configured; configure defaultModel(name) or resolve a named model");
+  }
+
+  @Test
+  void noArgFactoryNamedBuilderFailsWithAnActionableMessage() {
+    AgentEngine engine = AgentEngine.builder().build();
+
+    assertThatThrownBy(() -> engine.factory().builder("gpt"))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessage("unknown model: gpt");
+  }
+
+  @Test
   void factoryCanSelectNamedAndExplicitModels() {
     ModelClient named = request -> completedFuture(response("named"));
     ModelClient explicit = request -> completedFuture(response("explicit"));
@@ -74,7 +105,7 @@ class AgentFactoryTest {
         .isEqualTo("named");
     assertThat(
             engine
-                .factory(ModelCatalog.builder().build())
+                .factory()
                 .builderWithClient(explicit)
                 .build()
                 .run("hi")
@@ -88,7 +119,7 @@ class AgentFactoryTest {
   @Test
   void factoryHandsOutAFreshBuilderPerCall() {
     ModelClient client = request -> completedFuture(response("shared"));
-    AgentFactory factory = AgentEngine.builder().build().factory(ModelCatalog.builder().build());
+    AgentFactory factory = AgentEngine.builder().build().factory();
 
     AgentBuilder first = factory.builderWithClient(client).id("first");
     AgentBuilder second = factory.builderWithClient(client).id("second");
@@ -101,7 +132,7 @@ class AgentFactoryTest {
   @Test
   void buildDefinitionReturnsDeclarationsWithoutBindingAnAgent() {
     ModelClient client = request -> completedFuture(response("declared"));
-    AgentFactory factory = AgentEngine.builder().build().factory(ModelCatalog.builder().build());
+    AgentFactory factory = AgentEngine.builder().build().factory();
 
     AgentDefinition definition =
         factory
@@ -122,7 +153,7 @@ class AgentFactoryTest {
 
   @Test
   void aFunctionToolProducesBothADeclarationAndAnExecutableBinding() {
-    AgentFactory factory = AgentEngine.builder().build().factory(ModelCatalog.builder().build());
+    AgentFactory factory = AgentEngine.builder().build().factory();
 
     Agent agent =
         factory.builderWithClient(new WeatherThenTextClient()).tools(weatherTool()).build();
@@ -134,7 +165,7 @@ class AgentFactoryTest {
   @Test
   void bindPreservesADeclarationOnlyToolFromAManuallyConstructedDefinition() {
     ModelClient client = request -> completedFuture(response("noop"));
-    AgentFactory factory = AgentEngine.builder().build().factory(ModelCatalog.builder().build());
+    AgentFactory factory = AgentEngine.builder().build().factory();
     AgentDefinition definition = AgentDefinition.builder().tool(weatherTool().definition()).build();
     AgentRuntime runtime = AgentRuntime.builder().modelClient(client).build();
 
@@ -151,7 +182,7 @@ class AgentFactoryTest {
           captured.add(request);
           return completedFuture(response("answer"));
         };
-    AgentFactory factory = AgentEngine.builder().build().factory(ModelCatalog.builder().build());
+    AgentFactory factory = AgentEngine.builder().build().factory();
 
     Agent agent =
         factory.builderWithClient(client).instructions("you are a helpful assistant").build();
@@ -171,7 +202,7 @@ class AgentFactoryTest {
 
   @Test
   void builderWithClientRejectsANullModelClient() {
-    AgentFactory factory = AgentEngine.builder().build().factory(ModelCatalog.builder().build());
+    AgentFactory factory = AgentEngine.builder().build().factory();
     assertThatThrownBy(() -> factory.builderWithClient(null))
         .isInstanceOf(NullPointerException.class)
         .hasMessage("modelClient must not be null");
@@ -180,7 +211,7 @@ class AgentFactoryTest {
   @Test
   void maxIterationsRejectsANonPositiveBudget() {
     ModelClient client = request -> completedFuture(response("x"));
-    AgentFactory factory = AgentEngine.builder().build().factory(ModelCatalog.builder().build());
+    AgentFactory factory = AgentEngine.builder().build().factory();
     assertThatThrownBy(() -> factory.builderWithClient(client).maxIterations(0))
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessage("maxIterations must be greater than 0");
@@ -189,7 +220,7 @@ class AgentFactoryTest {
   @Test
   void toolsRejectsANullEntry() {
     ModelClient client = request -> completedFuture(response("x"));
-    AgentFactory factory = AgentEngine.builder().build().factory(ModelCatalog.builder().build());
+    AgentFactory factory = AgentEngine.builder().build().factory();
     assertThatThrownBy(() -> factory.builderWithClient(client).tools((FunctionTool) null))
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessage("tools must not contain null entries");

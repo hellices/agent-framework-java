@@ -17,7 +17,6 @@ import io.github.hellices.agentframework.api.value.JsonObject;
 import io.github.hellices.agentframework.api.value.JsonValues;
 import io.github.hellices.agentframework.engine.AgentEngine;
 import io.github.hellices.agentframework.openai.OpenAiChatModelClient;
-import io.github.hellices.agentframework.spi.model.ModelCatalog;
 import io.github.hellices.agentframework.spi.model.ModelClient;
 import java.time.Clock;
 import java.time.format.DateTimeFormatter;
@@ -79,11 +78,9 @@ public final class StandaloneAgentApplication {
    * @return the assembled agent, never {@code null}
    */
   public static Agent createAgent(ModelClient modelClient, Clock clock) {
-    ModelCatalog catalog =
-        ModelCatalog.builder().add("openai", modelClient).defaultModel("openai").build();
-    AgentFactory factory = AgentEngine.builder().build().factory(catalog);
+    AgentFactory factory = AgentEngine.builder().build().factory();
     return factory
-        .builder()
+        .builderWithClient(modelClient)
         .id("standalone-agent")
         .name("Standalone Agent")
         .description("Runs without a host framework, calling an OpenAI-compatible endpoint.")

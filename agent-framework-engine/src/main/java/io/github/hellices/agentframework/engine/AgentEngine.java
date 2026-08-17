@@ -87,6 +87,22 @@ public final class AgentEngine {
   }
 
   /**
+   * Returns an {@link AgentFactory} over this engine with no model catalog, for direct-client
+   * assembly: {@code factory().builderWithClient(client)} produces an agent from a supplied {@link
+   * ModelClient} without manufacturing a synthetic one-entry catalog first.
+   *
+   * <p>The factory carries an empty catalog, so the catalog-backed routes still fail with their
+   * usual actionable messages: {@link AgentFactory#builder()} reports that no default model is
+   * configured, and {@link AgentFactory#builder(String)} reports the named model is unknown. Reach
+   * for {@link #factory(ModelCatalog)} when default or named model selection is needed.
+   *
+   * @return a factory that binds every agent it produces to this engine
+   */
+  public AgentFactory factory() {
+    return factory(ModelCatalog.builder().build());
+  }
+
+  /**
    * Binds this model-independent engine to a concrete agent by pairing a declarative {@link
    * AgentDefinition} with a runnable {@link AgentRuntime}, validating the runtime against the
    * definition before returning so no agent exists whose bound handlers do not match its declared

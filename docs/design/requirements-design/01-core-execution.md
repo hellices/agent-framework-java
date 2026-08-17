@@ -109,12 +109,28 @@ propagation construct `AgentRunRequest` with their own signal.
 Framework adapters and the standalone assembly provide a factory with fully assembled ports, so
 general users do not interact directly with `AgentEngineBuilder`.
 
-`AgentFactory` composes `AgentEngine` and `ModelCatalog`.
+`AgentFactory` composes a shared, model-independent `AgentEngine` with a `ModelCatalog`. The engine
+is created once through `AgentEngine.builder()` (session services only) and reused; each factory
+binds it to a catalog. `AgentEngine` exposes two composition overloads:
+
+- `engine.factory(ModelCatalog)`: a factory over an explicit catalog for `builder()`/`builder(name)`
+  model selection
+- `engine.factory()`: a factory over an empty catalog for the explicit-client path
+  (`builderWithClient`); catalog-backed routes still fail with the same actionable messages
 
 - `builder()`: uses the catalog's default model; fails with actionable guidance if there is no
   default
 - `builder(name)`: resolves a named model
 - `builderWithClient(ModelClient)`: uses an explicit model without a null-ambiguous Java overload
+- `bind(AgentDefinition, AgentRuntime)`: binds an externally constructed, immutable definition and
+  its runtime to the shared engine, preserving declaration-only tools that carry no binding
+
+An `AgentBuilder` separates declaration from binding. `buildDefinition()` returns the declarative
+`AgentDefinition` (id, name, description, instructions, tool declarations, context providers) with no
+runtime binding. `build()` derives the `AgentRuntime` (selected `ModelClient`, tool bindings,
+iteration limits) and calls `engine.bind(definition, runtime)`. A `FunctionTool` supplied to
+`tools()` always contributes both a declaration and a binding; a manually constructed
+`AgentDefinition` may hold declaration-only tools, and `bind` preserves that distinction.
 
 ### 3.2 AgentEngine
 
@@ -130,9 +146,11 @@ implementation. The host injects the following ports through the builder.
 At build time, the builder rejects unsupported interceptor seams, missing mandatory ports, and
 conflicting tool options.
 
-The engine is not bound to a specific model. `AgentFactory` selects a model from `ModelCatalog`,
-associates its `ModelClient` with an immutable Agent definition, and the engine runs that
-definition. A run-level model override uses the same public port.
+The engine is not bound to a specific model. `AgentEngine.builder()` configures only shared session
+services (session store, state codec registry) and `build()` returns the reusable engine.
+`AgentFactory` selects a model from `ModelCatalog`, associates its `ModelClient` with an immutable
+Agent definition, and `engine.bind(definition, runtime)` runs that definition. A run-level model
+override uses the same public port.
 
 ### 3.3 Tool facade
 

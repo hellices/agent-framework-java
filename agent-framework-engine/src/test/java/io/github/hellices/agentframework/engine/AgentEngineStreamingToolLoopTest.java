@@ -37,7 +37,6 @@ import io.github.hellices.agentframework.api.value.JsonValue;
 import io.github.hellices.agentframework.api.value.JsonValues;
 import io.github.hellices.agentframework.engine.session.InMemorySessionStore;
 import io.github.hellices.agentframework.engine.session.JacksonSessionSnapshotCodec;
-import io.github.hellices.agentframework.spi.model.ModelCatalog;
 import io.github.hellices.agentframework.spi.model.ModelClient;
 import io.github.hellices.agentframework.spi.model.ModelRequest;
 import io.github.hellices.agentframework.spi.model.ModelResponse;
@@ -72,10 +71,8 @@ import org.junit.jupiter.api.Test;
  */
 class AgentEngineStreamingToolLoopTest {
 
-  private static final ModelCatalog EMPTY_CATALOG = ModelCatalog.builder().build();
-
   private static AgentBuilder boundBuilder(ModelClient client) {
-    return AgentEngine.builder().build().factory(EMPTY_CATALOG).builderWithClient(client);
+    return AgentEngine.builder().build().factory().builderWithClient(client);
   }
 
   private static final Map<String, Object> SEOUL = Map.of("city", "Seoul");
@@ -832,7 +829,7 @@ class AgentEngineStreamingToolLoopTest {
         AgentEngine.builder()
             .sessionStore(store)
             .build()
-            .factory(EMPTY_CATALOG)
+            .factory()
             .builderWithClient(client)
             .tools(weatherTool())
             .contextProviders(provider)

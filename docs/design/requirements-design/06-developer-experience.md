@@ -65,6 +65,7 @@ public interface AgentFactory {
     AgentBuilder builder();
     AgentBuilder builder(String modelName);
     AgentBuilder builderWithClient(ModelClient model);
+    Agent bind(AgentDefinition definition, AgentRuntime runtime);
 }
 ```
 
@@ -74,6 +75,15 @@ public interface AgentFactory {
 - create the factory even when multiple named models exist; only a `builder()` call without a
   default fails explicitly, while `builder(name)` selects the corresponding model
 - builders are thread-confined and build results are immutable
+- `AgentBuilder.buildDefinition()` returns the declarative `AgentDefinition` (id, name, description,
+  instructions, tool declarations, context providers) without a runtime binding; `build()` derives
+  the `AgentRuntime` and binds it to the shared engine
+- `bind(definition, runtime)` binds an externally constructed definition; declaration-only tools on
+  a manually built `AgentDefinition` are preserved
+
+Compose the shared engine once and reuse it. `AgentEngine.builder().build()` configures only session
+services; `engine.factory(catalog)` binds a model catalog, and `engine.factory()` provides the
+explicit-client path over an empty catalog for `builderWithClient(model)`.
 
 ## 4. Plain Java / standalone
 
