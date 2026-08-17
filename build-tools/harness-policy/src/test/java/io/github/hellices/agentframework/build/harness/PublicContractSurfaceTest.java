@@ -94,6 +94,88 @@ class PublicContractSurfaceTest {
         .containsExactlyInAnyOrder("metadata", "accept");
   }
 
+  @Test
+  void detectsRawObjectMapFieldsDeclaredInPublicInterfaces() throws Exception {
+    write(
+        "module/src/main/java/io/github/hellices/agentframework/api/example/Surface.java",
+        """
+        package io.github.hellices.agentframework.api.example;
+
+        public interface Surface {
+          java.util.Map<java.lang.String, java.lang.Object> META =
+              java.util.Map.of("key", "value");
+        }
+        """);
+
+    PublicContractSurface.Report report = PublicContractSurface.inspect(repository);
+
+    assertThat(report.rawMapSignatures())
+        .extracting(PublicContractSurface.RawMapSignature::member)
+        .containsExactly("META");
+  }
+
+  @Test
+  void detectsAnnotatedRawObjectMapGenericArguments() throws Exception {
+    write(
+        "module/src/main/java/io/github/hellices/agentframework/api/example/Marker.java",
+        """
+        package io.github.hellices.agentframework.api.example;
+
+        public @interface Marker {}
+        """);
+    write(
+        "module/src/main/java/io/github/hellices/agentframework/api/example/Surface.java",
+        """
+        package io.github.hellices.agentframework.api.example;
+
+        public interface Surface {
+          java.util.Map<@Marker java.lang.String, @Marker java.lang.Object> metadata();
+        }
+        """);
+
+    PublicContractSurface.Report report = PublicContractSurface.inspect(repository);
+
+    assertThat(report.rawMapSignatures())
+        .extracting(PublicContractSurface.RawMapSignature::member)
+        .containsExactly("metadata");
+  }
+
+  @Test
+  void detectsRawObjectMapsInPublicTopLevelTypeParameterBounds() throws Exception {
+    write(
+        "module/src/main/java/io/github/hellices/agentframework/api/example/Surface.java",
+        """
+        package io.github.hellices.agentframework.api.example;
+
+        public interface Surface<T extends java.util.Map<java.lang.String, java.lang.Object>> {}
+        """);
+
+    PublicContractSurface.Report report = PublicContractSurface.inspect(repository);
+
+    assertThat(report.rawMapSignatures())
+        .extracting(PublicContractSurface.RawMapSignature::owner)
+        .containsExactly("io.github.hellices.agentframework.api.example.Surface");
+  }
+
+  @Test
+  void detectsRawObjectMapsInNestedPublicTypeParameterBounds() throws Exception {
+    write(
+        "module/src/main/java/io/github/hellices/agentframework/api/example/Outer.java",
+        """
+        package io.github.hellices.agentframework.api.example;
+
+        public interface Outer {
+          interface Inner<T extends java.util.Map<java.lang.String, java.lang.Object>> {}
+        }
+        """);
+
+    PublicContractSurface.Report report = PublicContractSurface.inspect(repository);
+
+    assertThat(report.rawMapSignatures())
+        .extracting(PublicContractSurface.RawMapSignature::owner)
+        .containsExactly("io.github.hellices.agentframework.api.example.Outer.Inner");
+  }
+
   private void write(String relativePath, String text) throws Exception {
     Path file = repository.resolve(relativePath);
     Files.createDirectories(Objects.requireNonNull(file.getParent(), "file must have a parent"));

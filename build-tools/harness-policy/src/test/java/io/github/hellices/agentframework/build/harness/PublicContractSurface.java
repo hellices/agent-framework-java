@@ -92,6 +92,13 @@ final class PublicContractSurface {
     if (type.getKind() == Tree.Kind.RECORD) {
       records.add(new UnexpectedRecord(source, qualifiedName));
     }
+    for (TypeParameterTree typeParameter : type.getTypeParameters()) {
+      if (containsRawObjectMap(typeParameter)) {
+        rawMapSignatures.add(
+            new RawMapSignature(
+                source, qualifiedName, "<type-parameters>", normalized(typeParameter.toString())));
+      }
+    }
     boolean interfaceMember = type.getKind() == Tree.Kind.INTERFACE;
     for (Tree member : type.getMembers()) {
       if (member instanceof MethodTree method) {
@@ -101,7 +108,7 @@ final class PublicContractSurface {
                   source, qualifiedName, methodName(type, method), methodSignature(method)));
         }
       } else if (member instanceof VariableTree field) {
-        if (field.getModifiers().getFlags().contains(Modifier.PUBLIC)
+        if (isPubliclyReachableField(interfaceMember, field)
             && containsRawObjectMap(field.getType())) {
           rawMapSignatures.add(
               new RawMapSignature(
@@ -117,6 +124,10 @@ final class PublicContractSurface {
             rawMapSignatures);
       }
     }
+  }
+
+  private static boolean isPubliclyReachableField(boolean interfaceMember, VariableTree field) {
+    return interfaceMember || field.getModifiers().getFlags().contains(Modifier.PUBLIC);
   }
 
   private static boolean exposesRawMap(boolean interfaceMember, MethodTree method) {
@@ -192,13 +203,21 @@ final class PublicContractSurface {
   }
 
   private static boolean isRawObjectMap(ParameterizedTypeTree parameterized) {
-    if (!isMapType(parameterized.getType().toString())) {
+    if (!isMapType(typeName(parameterized.getType()))) {
       return false;
     }
     List<? extends Tree> arguments = parameterized.getTypeArguments();
     return arguments.size() == 2
-        && isStringType(arguments.get(0).toString())
-        && isObjectType(arguments.get(1).toString());
+        && isStringType(typeName(arguments.get(0)))
+        && isObjectType(typeName(arguments.get(1)));
+  }
+
+  private static String typeName(Tree type) {
+    Tree current = type;
+    while (current instanceof AnnotatedTypeTree annotated) {
+      current = annotated.getUnderlyingType();
+    }
+    return current.toString().replaceAll("@[\\w.]+(?:\\([^)]*\\))?\\s*", "").trim();
   }
 
   private static boolean isMapType(String typeName) {
