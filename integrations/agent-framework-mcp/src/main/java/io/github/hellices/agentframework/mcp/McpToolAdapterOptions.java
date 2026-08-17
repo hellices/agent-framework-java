@@ -1,8 +1,8 @@
 package io.github.hellices.agentframework.mcp;
 
+import io.github.hellices.agentframework.api.value.JsonObject;
 import java.util.Collection;
 import java.util.LinkedHashSet;
-import java.util.Map;
 import java.util.Set;
 
 /**
@@ -14,7 +14,7 @@ import java.util.Set;
  */
 public final class McpToolAdapterOptions {
 
-  private static final McpCallMetadataProvider NO_METADATA = context -> Map.of();
+  private static final McpCallMetadataProvider NO_METADATA = context -> JsonObject.empty();
   private static final int DEFAULT_MAX_DISCOVERY_PAGES = 256;
 
   private final String localNamePrefix;

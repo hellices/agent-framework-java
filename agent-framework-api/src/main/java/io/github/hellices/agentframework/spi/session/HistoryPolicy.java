@@ -16,26 +16,14 @@ import java.util.Set;
  *
  * <p>Values are configured through {@link #builder()} (or the canonical constructor) and never
  * change afterwards, so one policy instance can be shared by every session a provider serves.
- *
- * @param loadMessages whether {@link HistoryProvider#beforeRun} loads stored history into the run
- * @param storeInputs whether {@link HistoryProvider#afterRun} stores the caller's input messages
- * @param storeContextMessages whether {@code afterRun} stores context messages other providers
- *     contributed to the run
- * @param storeContextFrom the context source ids to store when {@code storeContextMessages} is
- *     enabled. {@code null} means "no source filter": every context source except the provider's
- *     own is stored, so a provider never re-stores the history it just loaded. A non-null value
- *     must name at least one source and then selects exactly those sources; an empty selection is
- *     rejected because "store context, but from nothing" is expressed by {@code
- *     storeContextMessages=false} instead. Order is not significant. The value is ignored entirely
- *     when {@code storeContextMessages} is disabled.
- * @param storeOutputs whether {@code afterRun} stores the run response's messages
  */
-public record HistoryPolicy(
-    boolean loadMessages,
-    boolean storeInputs,
-    boolean storeContextMessages,
-    Set<String> storeContextFrom,
-    boolean storeOutputs) {
+public final class HistoryPolicy {
+
+  private final boolean loadMessages;
+  private final boolean storeInputs;
+  private final boolean storeContextMessages;
+  private final Set<String> storeContextFrom;
+  private final boolean storeOutputs;
 
   /**
    * Normalizes the source filter and keeps it tri-state: {@code null} stays {@code null} and means
@@ -48,9 +36,18 @@ public record HistoryPolicy(
    *     a blank entry
    * @throws NullPointerException if {@code storeContextFrom} contains a {@code null} entry
    */
-  public HistoryPolicy {
-    storeContextFrom =
+  public HistoryPolicy(
+      boolean loadMessages,
+      boolean storeInputs,
+      boolean storeContextMessages,
+      Set<String> storeContextFrom,
+      boolean storeOutputs) {
+    this.loadMessages = loadMessages;
+    this.storeInputs = storeInputs;
+    this.storeContextMessages = storeContextMessages;
+    this.storeContextFrom =
         storeContextFrom == null ? null : Set.copyOf(validatedSources(storeContextFrom));
+    this.storeOutputs = storeOutputs;
   }
 
   /**
@@ -63,6 +60,26 @@ public record HistoryPolicy(
 
   public static Builder builder() {
     return new Builder();
+  }
+
+  public boolean loadMessages() {
+    return loadMessages;
+  }
+
+  public boolean storeInputs() {
+    return storeInputs;
+  }
+
+  public boolean storeContextMessages() {
+    return storeContextMessages;
+  }
+
+  public Set<String> storeContextFrom() {
+    return storeContextFrom;
+  }
+
+  public boolean storeOutputs() {
+    return storeOutputs;
   }
 
   private static Set<String> validatedSources(Collection<String> sources) {
@@ -159,5 +176,38 @@ public record HistoryPolicy(
       return new HistoryPolicy(
           loadMessages, storeInputs, storeContextMessages, storeContextFrom, storeOutputs);
     }
+  }
+
+  @Override
+  public boolean equals(Object other) {
+    if (!(other instanceof HistoryPolicy that)) {
+      return false;
+    }
+    return loadMessages == that.loadMessages
+        && storeInputs == that.storeInputs
+        && storeContextMessages == that.storeContextMessages
+        && storeOutputs == that.storeOutputs
+        && Objects.equals(storeContextFrom, that.storeContextFrom);
+  }
+
+  @Override
+  public int hashCode() {
+    return Objects.hash(
+        loadMessages, storeInputs, storeContextMessages, storeContextFrom, storeOutputs);
+  }
+
+  @Override
+  public String toString() {
+    return "HistoryPolicy[loadMessages="
+        + loadMessages
+        + ", storeInputs="
+        + storeInputs
+        + ", storeContextMessages="
+        + storeContextMessages
+        + ", storeContextFrom="
+        + storeContextFrom
+        + ", storeOutputs="
+        + storeOutputs
+        + "]";
   }
 }

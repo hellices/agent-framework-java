@@ -109,8 +109,9 @@ Prohibited:
 
 - Default to immutable final classes and defensive copies.
 - Provide a builder and `toBuilder()` for requests/options with many optional fields.
-- Use records only for values with fixed components, such as IDs, closed snapshots, and stable
-  events.
+- Use records only for explicitly reviewed fixed values. In the current public surface that means
+  `Usage` and `MessageAttribution`; session, tool, request, response, and option values stay final
+  classes so later slices can add fields without breaking callers.
 - Copy collections on construction and return unmodifiable views.
 - Public parameters are non-null; represent an absent return value as `Optional<T>`.
 
@@ -235,6 +236,10 @@ extension contract.
 
 Exact natural language and exact tool-call ordering are not long-term contracts. Only observable
 semantics such as event ordering, state transitions, budgets, and result shapes are fixed.
+
+The architecture policy includes an executable public-contract check: only the reviewed fixed-value
+records above may remain public, and primary API/SPI signatures fail if they expose raw
+`Map<String, Object>` instead of typed values or `JsonObject`.
 
 ## 9. First vertical slice
 

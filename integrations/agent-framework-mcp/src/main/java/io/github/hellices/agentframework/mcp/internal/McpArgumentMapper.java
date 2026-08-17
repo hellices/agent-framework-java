@@ -2,6 +2,7 @@ package io.github.hellices.agentframework.mcp.internal;
 
 import io.github.hellices.agentframework.api.tool.ToolArguments;
 import io.github.hellices.agentframework.api.tool.ToolContext;
+import io.github.hellices.agentframework.api.value.JsonNull;
 import io.github.hellices.agentframework.api.value.JsonObject;
 import io.github.hellices.agentframework.api.value.JsonValue;
 import io.github.hellices.agentframework.api.value.JsonValues;
@@ -68,8 +69,8 @@ public final class McpArgumentMapper {
    * @param context execution context of the invocation, never {@code null}
    * @return the request to send, never {@code null}
    * @throws IllegalStateException if the metadata provider returns {@code null}
-   * @throws IllegalArgumentException if the metadata provider returns a null or blank key, or a
-   *     null value
+   * @throws IllegalArgumentException if the metadata provider returns a blank key, or a JSON null
+   *     value
    */
   public McpSchema.CallToolRequest toRequest(
       String remoteName,
@@ -86,7 +87,7 @@ public final class McpArgumentMapper {
   }
 
   private Map<String, Object> requestMetadata(ToolContext context) {
-    Map<String, Object> metadata = options.callMetadataProvider().metadata(context);
+    JsonObject metadata = options.callMetadataProvider().metadata(context);
     if (metadata == null) {
       throw new IllegalStateException("callMetadataProvider must not return null metadata");
     }
@@ -94,19 +95,19 @@ public final class McpArgumentMapper {
       return null;
     }
     Map<String, Object> copy = new LinkedHashMap<>();
-    for (Map.Entry<String, Object> entry : metadata.entrySet()) {
+    for (Map.Entry<String, JsonValue> entry : metadata.values().entrySet()) {
       String key = entry.getKey();
-      if (key == null || key.isBlank()) {
-        throw new IllegalArgumentException("call metadata must not hold a null or blank key");
+      if (key.isBlank()) {
+        throw new IllegalArgumentException("call metadata must not hold a blank key");
       }
-      if (entry.getValue() == null) {
-        // A null reaches the server as a JSON null the protocol does not define for `_meta`, and
-        // it is far more often a provider that failed to resolve a value than a value that is
+      if (entry.getValue() instanceof JsonNull) {
+        // A JSON null reaches the server as a null the protocol does not define for `_meta`, and it
+        // is far more often a provider that failed to resolve a value than a value that is
         // meaningfully absent, so it fails here with the key that produced it.
         throw new IllegalArgumentException(
-            "call metadata value for '" + key + "' must not be null");
+            "call metadata value for '" + key + "' must not be JsonNull");
       }
-      copy.put(key, entry.getValue());
+      copy.put(key, JsonValues.toJava(entry.getValue()));
     }
     return copy;
   }

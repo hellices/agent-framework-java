@@ -24,7 +24,9 @@ import io.github.hellices.agentframework.api.tool.FunctionTool;
 import io.github.hellices.agentframework.api.tool.ToolArguments;
 import io.github.hellices.agentframework.api.tool.ToolContext;
 import io.github.hellices.agentframework.api.tool.ToolResult;
+import io.github.hellices.agentframework.api.value.JsonNull;
 import io.github.hellices.agentframework.api.value.JsonObject;
+import io.github.hellices.agentframework.api.value.JsonString;
 import io.github.hellices.agentframework.api.value.JsonValue;
 import io.github.hellices.agentframework.api.value.JsonValues;
 import io.github.hellices.agentframework.mcp.internal.McpAsyncOperations;
@@ -376,7 +378,10 @@ class ConnectedMcpClientAdapterTest {
     McpToolAdapterOptions options =
         McpToolAdapterOptions.builder()
             .callMetadataProvider(
-                context -> Map.of("runId", context.attributes().get(RUN_ID).orElse(null)))
+                context ->
+                    JsonObject.builder()
+                        .put("runId", JsonString.of(context.attributes().get(RUN_ID).orElseThrow()))
+                        .build())
             .build();
 
     singleTool(operations, options)
@@ -391,16 +396,13 @@ class ConnectedMcpClientAdapterTest {
   }
 
   @Test
-  void copiesProviderMetadataSoLaterMutationCannotReachTheRequest() {
+  void providerMetadataIsAlreadyImmutableAtThePublicBoundary() {
     FakeMcpAsyncOperations operations = new FakeMcpAsyncOperations();
-    Map<String, Object> mutable = new LinkedHashMap<>();
-    mutable.put("traceId", "trace-1");
+    JsonObject metadata = JsonObject.builder().put("traceId", JsonString.of("trace-1")).build();
     McpToolAdapterOptions options =
-        McpToolAdapterOptions.builder().callMetadataProvider(context -> mutable).build();
+        McpToolAdapterOptions.builder().callMetadataProvider(context -> metadata).build();
 
     invoke(singleTool(operations, options), toolArguments(Map.of("query", "issues")));
-    mutable.put("traceId", "mutated");
-    mutable.put("added", "later");
 
     assertThat(operations.lastCallRequest().meta())
         .containsExactly(Map.entry("traceId", "trace-1"));
@@ -413,24 +415,20 @@ class ConnectedMcpClientAdapterTest {
         singleTool(
             operations,
             McpToolAdapterOptions.builder().callMetadataProvider(context -> null).build());
-    Map<String, Object> blankKey = new LinkedHashMap<>();
-    blankKey.put("  ", "value");
     FunctionTool blankKeyMetadata =
         singleTool(
             new FakeMcpAsyncOperations(),
-            McpToolAdapterOptions.builder().callMetadataProvider(context -> blankKey).build());
-    Map<String, Object> nullKey = new LinkedHashMap<>();
-    nullKey.put(null, "value");
-    FunctionTool nullKeyMetadata =
-        singleTool(
-            new FakeMcpAsyncOperations(),
-            McpToolAdapterOptions.builder().callMetadataProvider(context -> nullKey).build());
-    Map<String, Object> nullValue = new LinkedHashMap<>();
-    nullValue.put("traceId", null);
+            McpToolAdapterOptions.builder()
+                .callMetadataProvider(
+                    context -> JsonObject.builder().put("  ", JsonString.of("value")).build())
+                .build());
     FunctionTool nullValueMetadata =
         singleTool(
             new FakeMcpAsyncOperations(),
-            McpToolAdapterOptions.builder().callMetadataProvider(context -> nullValue).build());
+            McpToolAdapterOptions.builder()
+                .callMetadataProvider(
+                    context -> JsonObject.builder().put("traceId", JsonNull.instance()).build())
+                .build());
 
     assertThatThrownBy(() -> invoke(nullMetadata, toolArguments(Map.of())))
         .rootCause()
@@ -438,11 +436,7 @@ class ConnectedMcpClientAdapterTest {
     assertThatThrownBy(() -> invoke(blankKeyMetadata, toolArguments(Map.of())))
         .rootCause()
         .isInstanceOf(IllegalArgumentException.class)
-        .hasMessageContaining("null or blank key");
-    assertThatThrownBy(() -> invoke(nullKeyMetadata, toolArguments(Map.of())))
-        .rootCause()
-        .isInstanceOf(IllegalArgumentException.class)
-        .hasMessageContaining("null or blank key");
+        .hasMessageContaining("blank key");
     assertThatThrownBy(() -> invoke(nullValueMetadata, toolArguments(Map.of())))
         .rootCause()
         .isInstanceOf(IllegalArgumentException.class)

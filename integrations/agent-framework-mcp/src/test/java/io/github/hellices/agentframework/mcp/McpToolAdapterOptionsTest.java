@@ -6,10 +6,11 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import io.github.hellices.agentframework.api.context.ContextAttributes;
 import io.github.hellices.agentframework.api.context.ContextKey;
 import io.github.hellices.agentframework.api.tool.ToolContext;
+import io.github.hellices.agentframework.api.value.JsonObject;
+import io.github.hellices.agentframework.api.value.JsonString;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
-import java.util.Map;
 import org.junit.jupiter.api.Test;
 
 class McpToolAdapterOptionsTest {
@@ -27,7 +28,7 @@ class McpToolAdapterOptionsTest {
                 .callMetadataProvider()
                 .metadata(
                     new ToolContext(null, ContextAttributes.builder().put(RUN_ID, "r").build())))
-        .isEmpty();
+        .isEqualTo(JsonObject.empty());
     assertThat(options.includeResultPayload()).isFalse();
     assertThat(options.maxDiscoveryPages()).isEqualTo(256);
   }
@@ -38,7 +39,8 @@ class McpToolAdapterOptionsTest {
         McpToolAdapterOptions.builder()
             .localNamePrefix("github_")
             .additionalArgumentNames(List.of("tenant", "region"))
-            .callMetadataProvider(context -> Map.of("traceId", "t"))
+            .callMetadataProvider(
+                context -> JsonObject.builder().put("traceId", JsonString.of("t")).build())
             .includeResultPayload(true)
             .maxDiscoveryPages(8)
             .build();
@@ -49,7 +51,7 @@ class McpToolAdapterOptionsTest {
             options
                 .callMetadataProvider()
                 .metadata(new ToolContext(null, ContextAttributes.empty())))
-        .containsEntry("traceId", "t");
+        .isEqualTo(JsonObject.builder().put("traceId", JsonString.of("t")).build());
     assertThat(options.includeResultPayload()).isTrue();
     assertThat(options.maxDiscoveryPages()).isEqualTo(8);
   }

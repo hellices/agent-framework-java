@@ -12,9 +12,10 @@ This project does not build an application server or a dependency injection cont
 deliverable is an embeddable `AgentEngine`. A host runtime such as Spring Boot keeps owning object
 lifecycle, execution resources, security, transactions, and observability configuration.
 
-> **Status:** early. Deterministic single-agent execution, the core function-tool loop, session
-> persistence, and one Preview provider adapter (OpenAI Chat Completions) are implemented; streaming
-> for that adapter and host integrations remain in progress. See [Current state](#current-state).
+> **Status:** early. Deterministic single-agent execution, typed public-contract policy, the core
+> function-tool loop, session persistence, and one Preview provider adapter (OpenAI Chat
+> Completions) are implemented; streaming for that adapter and host integrations remain in progress.
+> See [Current state](#current-state).
 >
 > **API stability:** pre-1.0. Public contracts may evolve between requirement slices while the core
 > execution semantics are being established.
@@ -178,6 +179,8 @@ and a live standalone execution path over a real endpoint.
 - CI on the `arc-java-build` ARC scale set with a fork-safe verification path
 - 244 requirements derived from a pinned upstream snapshot
 - Five published product modules with a compiled and tested surface
+- Executable public-contract policy: only reviewed fixed records remain public and primary API/SPI
+  signatures fail if they regress to raw `Map<String, Object>` contracts
 - Deterministic `AgentEngine` run and function-tool loops, shared by ordinary and streaming runs
 - Session persistence and restoration: versioned snapshots, in-memory and file session stores, the
   context provider pipeline, and default in-memory chat history

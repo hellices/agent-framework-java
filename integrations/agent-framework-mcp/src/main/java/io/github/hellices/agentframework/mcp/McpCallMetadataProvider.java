@@ -1,7 +1,7 @@
 package io.github.hellices.agentframework.mcp;
 
 import io.github.hellices.agentframework.api.tool.ToolContext;
-import java.util.Map;
+import io.github.hellices.agentframework.api.value.JsonObject;
 
 /**
  * Supplies protocol level request metadata for a single MCP tool call.
@@ -24,7 +24,7 @@ public interface McpCallMetadataProvider {
    * Returns the request metadata for one tool call.
    *
    * @param context execution context of the invoking tool call, never {@code null}
-   * @return metadata entries to publish, never {@code null}; an empty map omits {@code _meta}
+   * @return metadata entries to publish, never {@code null}; an empty object omits {@code _meta}
    */
-  Map<String, Object> metadata(ToolContext context);
+  JsonObject metadata(ToolContext context);
 }

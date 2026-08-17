@@ -162,6 +162,11 @@ handlers, and the core does not create fake tool results.
 A raw provider SDK object is a transient diagnostic handle. Snapshot and wire conversions consider
 only JSON-safe extension values.
 
+Executable architecture policy keeps these value rules honest: primary public API/SPI signatures do
+not expose raw `Map<String, Object>` contracts, and only reviewed fixed values (`Usage` and
+`MessageAttribution`) remain records. Session/tool/request/response/options values stay final
+classes so later slices can extend them compatibly.
+
 ## 4. Execution state machine
 
 ```text

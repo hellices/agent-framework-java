@@ -20,11 +20,13 @@ import java.util.Objects;
  * to a session can never be changed in place by whoever built it — the invariant {@code
  * ProviderSessionState#set(Object)} documents for stored values.
  */
-public record MessageHistory(List<Message> messages) {
+public final class MessageHistory {
 
   private static final MessageHistory EMPTY = new MessageHistory(List.of());
 
-  public MessageHistory {
+  private final List<Message> messages;
+
+  public MessageHistory(List<Message> messages) {
     Objects.requireNonNull(messages, "messages must not be null");
     List<Message> normalized = new ArrayList<>(messages.size());
     for (Object entry : messages) {
@@ -34,7 +36,7 @@ public record MessageHistory(List<Message> messages) {
       }
       normalized.add(message);
     }
-    messages = Collections.unmodifiableList(normalized);
+    this.messages = Collections.unmodifiableList(normalized);
   }
 
   /** Returns the shared empty history. */
@@ -48,6 +50,10 @@ public record MessageHistory(List<Message> messages) {
     return new MessageHistory(messages);
   }
 
+  public List<Message> messages() {
+    return messages;
+  }
+
   /**
    * Returns a new history with {@code additional} appended after this history's messages. This
    * history is left unchanged.
@@ -58,5 +64,20 @@ public record MessageHistory(List<Message> messages) {
     combined.addAll(messages);
     combined.addAll(additional);
     return new MessageHistory(combined);
+  }
+
+  @Override
+  public boolean equals(Object other) {
+    return other instanceof MessageHistory that && messages.equals(that.messages);
+  }
+
+  @Override
+  public int hashCode() {
+    return messages.hashCode();
+  }
+
+  @Override
+  public String toString() {
+    return "MessageHistory[messages=" + messages + "]";
   }
 }
