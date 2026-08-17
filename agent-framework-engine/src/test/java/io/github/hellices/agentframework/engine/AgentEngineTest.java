@@ -4,6 +4,7 @@ import static java.util.concurrent.CompletableFuture.completedFuture;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import io.github.hellices.agentframework.api.agent.Agent;
 import io.github.hellices.agentframework.api.agent.AgentResponse;
 import io.github.hellices.agentframework.api.agent.AgentResponseUpdate;
 import io.github.hellices.agentframework.api.agent.AgentRunOptions;
@@ -63,7 +64,7 @@ class AgentEngineTest {
           capturedRequest.set(request);
           return completedFuture(response("hello"));
         };
-    AgentEngine engine =
+    Agent engine =
         AgentEngine.builder()
             .id("agent-1")
             .name("assistant")
@@ -128,7 +129,7 @@ class AgentEngineTest {
               capturedContext.set(context);
               return completedFuture(ToolResult.success(new TextContent("sunny")));
             });
-    AgentEngine engine = AgentEngine.builder().modelClient(client).tools(weather).build();
+    Agent engine = AgentEngine.builder().modelClient(client).tools(weather).build();
     AgentRunRequest request =
         request(
             Message.normalize("weather?"),
@@ -153,7 +154,7 @@ class AgentEngineTest {
           return completedFuture(response("original"));
         };
     ModelClient replacement = request -> completedFuture(response("replacement"));
-    AgentEngine engine = AgentEngine.builder().modelClient(original).build();
+    Agent engine = AgentEngine.builder().modelClient(original).build();
     AgentRunOptions options =
         AgentRunOptions.builder().modelClientFactory(ignored -> replacement).build();
     AgentRunRequest request =
@@ -184,7 +185,7 @@ class AgentEngineTest {
           capturedRequest.set(request);
           return completedFuture(response("done"));
         };
-    AgentEngine engine = AgentEngine.builder().modelClient(client).build();
+    Agent engine = AgentEngine.builder().modelClient(client).build();
     AgentRunRequest request =
         request(
             Message.normalize("hi"),
@@ -202,7 +203,7 @@ class AgentEngineTest {
 
   @Test
   void streamingRunUsesStreamingCapabilityAndReconstructsFinalResponse() {
-    AgentEngine engine = AgentEngine.builder().modelClient(new StreamingFakeClient()).build();
+    Agent engine = AgentEngine.builder().modelClient(new StreamingFakeClient()).build();
 
     AgentStreamingRun<AgentResponseUpdate> run = engine.runStreaming("hi");
 
@@ -215,7 +216,7 @@ class AgentEngineTest {
   @Test
   void streamingFailsExplicitlyWhenTheClientLacksTheCapability() {
     ModelClient client = request -> completedFuture(response("unused"));
-    AgentEngine engine = AgentEngine.builder().modelClient(client).build();
+    Agent engine = AgentEngine.builder().modelClient(client).build();
 
     assertThatThrownBy(() -> engine.runStreaming("hi"))
         .isInstanceOf(UnsupportedOperationException.class)
@@ -243,7 +244,7 @@ class AgentEngineTest {
             return completedFuture(response("resumed"));
           }
         };
-    AgentEngine engine = AgentEngine.builder().modelClient(client).build();
+    Agent engine = AgentEngine.builder().modelClient(client).build();
     AgentRunRequest request =
         request(
             List.of(),
@@ -262,7 +263,7 @@ class AgentEngineTest {
 
   @Test
   void continuationFailsExplicitlyWhenTheClientLacksTheCapability() {
-    AgentEngine engine =
+    Agent engine =
         AgentEngine.builder().modelClient(request -> completedFuture(response("unused"))).build();
     AgentRunRequest request =
         request(
@@ -279,8 +280,7 @@ class AgentEngineTest {
 
   @Test
   void streamingContinuationUsesTheCombinedCapability() {
-    AgentEngine engine =
-        AgentEngine.builder().modelClient(new StreamingContinuationFakeClient()).build();
+    Agent engine = AgentEngine.builder().modelClient(new StreamingContinuationFakeClient()).build();
     AgentRunRequest request =
         request(
             List.of(),
@@ -299,7 +299,7 @@ class AgentEngineTest {
   @Test
   void cancellingAnInFlightRunCompletesTheResponseExceptionally() {
     CompletableFuture<ModelResponse> pendingResponse = new CompletableFuture<>();
-    AgentEngine engine = AgentEngine.builder().modelClient(request -> pendingResponse).build();
+    Agent engine = AgentEngine.builder().modelClient(request -> pendingResponse).build();
 
     var run = engine.run("hi");
     run.cancel();
@@ -311,7 +311,7 @@ class AgentEngineTest {
   @Test
   void cancellingTheSharedSignalCompletesAnInFlightRunExceptionally() {
     CompletableFuture<ModelResponse> pendingResponse = new CompletableFuture<>();
-    AgentEngine engine = AgentEngine.builder().modelClient(request -> pendingResponse).build();
+    Agent engine = AgentEngine.builder().modelClient(request -> pendingResponse).build();
     CancellationSignal signal = new CancellationSignal();
     AgentRunRequest request =
         request(
@@ -334,7 +334,7 @@ class AgentEngineTest {
             completedFuture(
                 modelResponse(
                     List.of(message("done")), null, FinishReason.STOP, "continuation-2", Map.of()));
-    AgentEngine engine = AgentEngine.builder().modelClient(client).build();
+    Agent engine = AgentEngine.builder().modelClient(client).build();
 
     var response = engine.run("hi").response().toCompletableFuture().join();
 
@@ -343,7 +343,7 @@ class AgentEngineTest {
 
   @Test
   void cancellingAStreamingRunCompletesTheResponseExceptionally() {
-    AgentEngine engine =
+    Agent engine =
         AgentEngine.builder()
             .modelClient(
                 new StreamingModelClient() {
@@ -377,7 +377,7 @@ class AgentEngineTest {
 
   @Test
   void emptyModelStreamCompletesWithAnEmptyResponse() {
-    AgentEngine engine =
+    Agent engine =
         AgentEngine.builder()
             .modelClient(
                 new StreamingModelClient() {
@@ -439,7 +439,7 @@ class AgentEngineTest {
             (arguments, context) ->
                 completedFuture(
                     ToolResult.success(new TextContent("sunny:" + arguments.get("city")))));
-    AgentEngine engine = AgentEngine.builder().modelClient(client).tools(weather).build();
+    Agent engine = AgentEngine.builder().modelClient(client).tools(weather).build();
 
     var response = engine.run("weather?").response().toCompletableFuture().join();
 
@@ -488,7 +488,7 @@ class AgentEngineTest {
 
   @Test
   void unknownToolCallFailsTheRun() {
-    AgentEngine engine =
+    Agent engine =
         AgentEngine.builder()
             .modelClient(
                 request ->
@@ -537,8 +537,7 @@ class AgentEngineTest {
                   null,
                   Map.of()));
         };
-    AgentEngine engine =
-        AgentEngine.builder().modelClient(client).tools(tool).maxIterations(2).build();
+    Agent engine = AgentEngine.builder().modelClient(client).tools(tool).maxIterations(2).build();
 
     var response = engine.run("loop").response().toCompletableFuture().join();
 
@@ -609,7 +608,7 @@ class AgentEngineTest {
                     });
           }
         };
-    AgentEngine engine = AgentEngine.builder().modelClient(client).tools(tool).build();
+    Agent engine = AgentEngine.builder().modelClient(client).tools(tool).build();
 
     AgentStreamingRun<AgentResponseUpdate> run = engine.runStreaming("hi");
 
@@ -629,7 +628,7 @@ class AgentEngineTest {
             "tool",
             Map.of(),
             (arguments, context) -> completedFuture(ToolResult.success(new TextContent("done"))));
-    AgentEngine engine =
+    Agent engine =
         AgentEngine.builder()
             .modelClient(new StreamingContinuationFakeClient())
             .tools(tool)
@@ -664,7 +663,7 @@ class AgentEngineTest {
                     FinishReason.STOP,
                     "continuation-1",
                     Map.of()));
-    AgentEngine engine = AgentEngine.builder().modelClient(client).tools(tool).build();
+    Agent engine = AgentEngine.builder().modelClient(client).tools(tool).build();
 
     assertThatThrownBy(() -> engine.run("hi").response().toCompletableFuture().join())
         .hasRootCauseInstanceOf(UnsupportedOperationException.class)
@@ -703,7 +702,7 @@ class AgentEngineTest {
                   null,
                   Map.of()));
         };
-    AgentEngine engine = AgentEngine.builder().modelClient(client).tools(tool).build();
+    Agent engine = AgentEngine.builder().modelClient(client).tools(tool).build();
 
     var usage = engine.run("hi").response().toCompletableFuture().join().usage();
 

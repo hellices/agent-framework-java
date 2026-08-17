@@ -1,29 +1,29 @@
 package io.github.hellices.agentframework.engine;
 
 import io.github.hellices.agentframework.api.agent.Agent;
+import io.github.hellices.agentframework.api.agent.AgentDefinition;
 import io.github.hellices.agentframework.api.agent.AgentFactory;
 import io.github.hellices.agentframework.api.agent.AgentResponse;
 import io.github.hellices.agentframework.api.agent.AgentResponseUpdate;
 import io.github.hellices.agentframework.api.agent.AgentRun;
 import io.github.hellices.agentframework.api.agent.AgentRunContext;
 import io.github.hellices.agentframework.api.agent.AgentRunRequest;
-import io.github.hellices.agentframework.api.agent.AgentSession;
+import io.github.hellices.agentframework.api.agent.AgentRuntime;
 import io.github.hellices.agentframework.api.agent.AgentStreamingRun;
 import io.github.hellices.agentframework.api.agent.CancellationSignal;
 import io.github.hellices.agentframework.api.message.Message;
 import io.github.hellices.agentframework.api.message.ToolCallContent;
 import io.github.hellices.agentframework.api.message.Usage;
 import io.github.hellices.agentframework.api.session.SessionContext;
-import io.github.hellices.agentframework.api.tool.FunctionTool;
 import io.github.hellices.agentframework.api.value.JsonNumber;
 import io.github.hellices.agentframework.api.value.JsonObject;
 import io.github.hellices.agentframework.api.value.JsonValue;
+import io.github.hellices.agentframework.engine.AgentBinding.ProviderBinding;
 import io.github.hellices.agentframework.engine.internal.model.ModelResponseMapper;
 import io.github.hellices.agentframework.engine.internal.model.ResponseIdentity;
 import io.github.hellices.agentframework.engine.internal.session.SessionCoordinator;
 import io.github.hellices.agentframework.engine.internal.tool.StreamingToolLoopPublisher;
 import io.github.hellices.agentframework.engine.internal.tool.ToolLoopPolicy;
-import io.github.hellices.agentframework.engine.session.InMemoryHistoryProvider;
 import io.github.hellices.agentframework.spi.model.ContinuationModelClient;
 import io.github.hellices.agentframework.spi.model.ModelCatalog;
 import io.github.hellices.agentframework.spi.model.ModelClient;
@@ -33,19 +33,13 @@ import io.github.hellices.agentframework.spi.model.ModelResponse;
 import io.github.hellices.agentframework.spi.model.ModelResponseUpdate;
 import io.github.hellices.agentframework.spi.model.StreamingContinuationModelClient;
 import io.github.hellices.agentframework.spi.model.StreamingModelClient;
-import io.github.hellices.agentframework.spi.session.ContextProvider;
-import io.github.hellices.agentframework.spi.session.HistoryPolicy;
-import io.github.hellices.agentframework.spi.session.HistoryProvider;
-import io.github.hellices.agentframework.spi.session.ProviderSessionState;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
-import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
@@ -56,142 +50,49 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 import java.util.function.Supplier;
 
-public final class AgentEngine extends Agent {
+/**
+ * The embeddable, model-independent execution engine. It owns only the services an agent's runs
+ * share — session coordination — and holds no per-agent identity, model client, tool set, or
+ * provider list, so one immutable engine is safe to share across every agent and every concurrent
+ * run.
+ *
+ * <p>An agent is produced by {@link #bind(AgentDefinition, AgentRuntime)}: the declarative {@link
+ * AgentDefinition} and the runnable {@link AgentRuntime} become an immutable {@link AgentBinding}
+ * that a {@link BoundAgent} carries back into this engine's execution hooks. Because the engine is
+ * stateless per agent, the same run, streaming, tool-loop, and session behaviour applies regardless
+ * of which agent a binding describes.
+ */
+public final class AgentEngine {
 
-  private final ModelClient modelClient;
-  private final ToolLoopPolicy toolLoop;
-  private final List<ProviderBinding> configuredProviders;
-  private final DefaultHistory defaultHistory;
   private final SessionCoordinator sessionCoordinator;
 
-  AgentEngine(
-      String id,
-      String name,
-      String description,
-      ModelClient modelClient,
-      List<FunctionTool> tools,
-      List<ContextProvider> contextProviders,
-      SessionCoordinator sessionCoordinator,
-      int maxIterations) {
-    super(id, name, description);
-    this.modelClient = Objects.requireNonNull(modelClient, "modelClient must not be null");
-    this.toolLoop = new ToolLoopPolicy(tools, maxIterations);
-    this.configuredProviders = bindContextProviders(contextProviders);
-    this.defaultHistory = bindDefaultHistory(this.configuredProviders);
+  AgentEngine(SessionCoordinator sessionCoordinator) {
     this.sessionCoordinator = sessionCoordinator;
   }
 
-  /**
-   * Reads every provider's {@code sourceId} exactly once, so the session state namespace a provider
-   * owns is fixed for this agent's lifetime and cannot drift between runs, and rejects a blank or
-   * duplicated namespace before any run can mix two providers' state.
-   */
-  private static List<ProviderBinding> bindContextProviders(List<ContextProvider> providers) {
-    List<ProviderBinding> bindings = new ArrayList<>();
-    Set<String> sourceIds = new LinkedHashSet<>();
-    for (ContextProvider provider : providers) {
-      String sourceId = provider.sourceId();
-      if (sourceId == null || sourceId.isBlank()) {
-        throw new IllegalArgumentException("context provider sourceId must not be blank");
-      }
-      if (!sourceIds.add(sourceId)) {
-        throw new IllegalArgumentException("duplicate context provider sourceId: " + sourceId);
-      }
-      bindings.add(new ProviderBinding(sourceId, provider));
-    }
-    return List.copyOf(bindings);
+  public static AgentEngineBuilder builder() {
+    return new AgentEngineBuilder();
+  }
+
+  public static AgentFactory factory(ModelCatalog catalog) {
+    return new CatalogAgentFactory(catalog);
   }
 
   /**
-   * Decides once, when the agent is built, whether this agent owns a default in-memory chat history
-   * (SES-014).
+   * Binds this model-independent engine to a concrete agent by pairing a declarative {@link
+   * AgentDefinition} with a runnable {@link AgentRuntime}, validating the runtime against the
+   * definition before returning so no agent exists whose bound handlers do not match its declared
+   * tools.
    *
-   * <p>A configured {@link HistoryProvider} that loads messages already answers "what did we say
-   * before?" for every run, so injecting a second history on top of it would replay the same
-   * conversation twice into one model request. A history provider that only records — an audit or
-   * evaluation sink with {@code loadMessages(false)} — answers nothing, so it does not suppress the
-   * default: without it a session would silently lose multi-turn behaviour.
-   *
-   * <p>The namespace is always {@link InMemoryHistoryProvider#DEFAULT_SOURCE_ID}. Deriving it from
-   * the configuration instead — picking the first free {@code in_memory-N} — would make a stored
-   * conversation unreadable the moment a provider is added on that name: the run would load nothing
-   * and append into a second namespace while the durable conversation stayed orphaned under the
-   * first. A stable namespace makes the collision a configuration error instead, reported by {@link
-   * #resolveProviders(SessionContext)} for the runs that would actually need the default.
-   *
-   * @return the binding to append for eligible runs, or a conflicting or suppressed marker
+   * @param definition the agent's declarative identity, tools, and default run options
+   * @param runtime the agent's model client, tool handlers, and context providers
+   * @return an {@link Agent} that delegates its execution hooks to this engine
    */
-  private static DefaultHistory bindDefaultHistory(List<ProviderBinding> configured) {
-    for (ProviderBinding binding : configured) {
-      if (binding.provider() instanceof HistoryProvider history
-          && history.policy().loadMessages()) {
-        return new DefaultHistory(null, false);
-      }
-    }
-    for (ProviderBinding binding : configured) {
-      if (InMemoryHistoryProvider.DEFAULT_SOURCE_ID.equals(binding.sourceId())) {
-        return new DefaultHistory(null, true);
-      }
-    }
-    return new DefaultHistory(
-        new ProviderBinding(
-            InMemoryHistoryProvider.DEFAULT_SOURCE_ID,
-            new InMemoryHistoryProvider(
-                InMemoryHistoryProvider.DEFAULT_SOURCE_ID, HistoryPolicy.defaults())),
-        false);
-  }
-
-  /**
-   * The agent's build-time answer to "does this agent have a default in-memory chat history, and
-   * can it use its namespace?".
-   *
-   * @param binding the provider to append for eligible runs, or {@code null} when a configured
-   *     load-enabled history provider already covers history or the namespace is taken
-   * @param namespaceConflict whether the default namespace is owned by a configured provider that
-   *     does not load history, which makes an otherwise eligible run a configuration error
-   */
-  private record DefaultHistory(ProviderBinding binding, boolean namespaceConflict) {}
-
-  /**
-   * Resolves the provider list for one run: the configured providers, plus the default in-memory
-   * history when this run is eligible for it (SES-014).
-   *
-   * <p>A run is eligible only when it has a session to keep history in and the effective session is
-   * not service-managed. A sessionless run has nowhere to store the conversation, and a run whose
-   * session carries a {@code serviceSessionId} has the conversation kept by the model service, so
-   * in both cases injecting a history would either lose it or duplicate it.
-   *
-   * <p>An eligible run whose default namespace is owned by a configured provider fails here, before
-   * the model is called and before anything is saved, rather than quietly moving the default
-   * elsewhere: the alternative orphans whatever conversation is already stored under that name. The
-   * failure is scoped to the runs that need the default, so a sessionless or service-managed run of
-   * the same agent is unaffected.
-   *
-   * <p>The decision reads the run's effective session, which is the stored one once the coordinator
-   * hydrated the context. Because hydration happens before this is ever called and is set-once, and
-   * because the configured list and the default binding are both fixed at build time, this function
-   * returns the same list — the same provider instances in the same order — for the before-run and
-   * after-run hooks of one run.
-   */
-  private List<ProviderBinding> resolveProviders(SessionContext sessionContext) {
-    AgentSession session = sessionContext.session();
-    if (session == null || session.serviceSessionId().isPresent()) {
-      return configuredProviders;
-    }
-    if (defaultHistory.namespaceConflict()) {
-      throw new IllegalStateException(
-          "context provider sourceId '"
-              + InMemoryHistoryProvider.DEFAULT_SOURCE_ID
-              + "' is reserved for the default in-memory chat history of a session run; "
-              + "configure a load-enabled HistoryProvider or a different sourceId");
-    }
-    if (defaultHistory.binding() == null) {
-      return configuredProviders;
-    }
-    List<ProviderBinding> resolved = new ArrayList<>(configuredProviders.size() + 1);
-    resolved.addAll(configuredProviders);
-    resolved.add(defaultHistory.binding());
-    return List.copyOf(resolved);
+  public Agent bind(AgentDefinition definition, AgentRuntime runtime) {
+    Objects.requireNonNull(definition, "definition must not be null");
+    Objects.requireNonNull(runtime, "runtime must not be null");
+    runtime.validate(definition);
+    return new BoundAgent(definition, runtime, this);
   }
 
   /**
@@ -203,22 +104,14 @@ public final class AgentEngine extends Agent {
    * than an isolation boundary, so without this a provider reaching a sibling namespace would have
    * that write persisted under a name nobody owned in this run.
    */
-  private List<ProviderBinding> bindRun(SessionContext sessionContext) {
-    List<ProviderBinding> resolved = resolveProviders(sessionContext);
+  private List<ProviderBinding> bindRun(AgentBinding binding, SessionContext sessionContext) {
+    List<ProviderBinding> resolved = binding.resolveProviders(sessionContext);
     List<String> sourceIds = new ArrayList<>(resolved.size());
-    for (ProviderBinding binding : resolved) {
-      sourceIds.add(binding.sourceId());
+    for (ProviderBinding providerBinding : resolved) {
+      sourceIds.add(providerBinding.sourceId());
     }
     sessionContext.restrictPersistedSources(sourceIds);
     return resolved;
-  }
-
-  public static AgentEngineBuilder builder() {
-    return new AgentEngineBuilder();
-  }
-
-  public static AgentFactory factory(ModelCatalog catalog) {
-    return new CatalogAgentFactory(catalog);
   }
 
   /**
@@ -242,31 +135,32 @@ public final class AgentEngine extends Agent {
    * alone: making it depend on whether the store or a hook happened to complete before the check
    * would make the same code throw synchronously or asynchronously from one run to the next.
    */
-  @Override
-  protected AgentRun runInternal(AgentRunContext context, AgentRunRequest request) {
+  AgentRun runInternal(AgentBinding binding, AgentRunContext context, AgentRunRequest request) {
+    ToolLoopPolicy toolLoop = binding.toolLoop();
     if (toolLoop.hasTools() && request.options().continuationToken().isPresent()) {
       throw new UnsupportedOperationException("continuation tool execution is not supported");
     }
-    ModelClient selectedClient = request.options().resolveModelClient(modelClient);
+    ModelClient selectedClient = request.options().resolveModelClient(binding.modelClient());
     Function<ModelRequest, CompletionStage<ModelResponse>> modelInvoker =
         resolveModelInvoker(selectedClient, request);
     SessionContext sessionContext = context.sessionContext();
     String responseId = UUID.randomUUID().toString();
     Instant createdAt = Instant.now();
-    Supplier<CompletionStage<ToolLoopResult>> toolLoop =
+    Supplier<CompletionStage<ToolLoopResult>> firstToolLoop =
         () ->
             runToolLoop(
+                toolLoop,
                 selectedClient,
                 modelInvoker,
-                toModelRequest(request, sessionContext),
+                toModelRequest(binding, request, sessionContext),
                 request,
                 0,
                 List.of(),
                 null);
-    CompletionStage<Void> gate = runGate(sessionContext, request.cancellationSignal());
+    CompletionStage<Void> gate = runGate(binding, sessionContext, request.cancellationSignal());
     CompletionStage<ToolLoopResult> toolLoopResult =
         gate == null
-            ? toolLoop.get()
+            ? firstToolLoop.get()
             : gate.thenCompose(
                 ignored -> {
                   // The gate makes the first model call asynchronous, so the run can be cancelled
@@ -276,7 +170,7 @@ public final class AgentEngine extends Agent {
                   if (request.cancellationSignal().isCancelled()) {
                     throw new CancellationException("run was cancelled");
                   }
-                  return toolLoop.get();
+                  return firstToolLoop.get();
                 });
     CompletionStage<AgentResponse> response =
         toolLoopResult.thenApply(
@@ -286,9 +180,9 @@ public final class AgentEngine extends Agent {
               }
               ModelResponse terminal = result.terminalResponse();
               return ModelResponseMapper.toAgentResponse(
-                  id(),
+                  binding.id(),
                   responseId,
-                  name(),
+                  binding.name(),
                   createdAt,
                   ModelResponse.builder()
                       .messages(result.messages())
@@ -318,14 +212,15 @@ public final class AgentEngine extends Agent {
    * that carries a session.
    */
   private CompletionStage<Void> runGate(
-      SessionContext sessionContext, CancellationSignal cancellationSignal) {
+      AgentBinding binding, SessionContext sessionContext, CancellationSignal cancellationSignal) {
     if (sessionCoordinator != null && sessionContext.session() != null) {
       return sessionCoordinator
           .load(sessionContext)
           .thenCompose(
-              ignored -> beforeRun(bindRun(sessionContext), sessionContext, cancellationSignal));
+              ignored ->
+                  beforeRun(bindRun(binding, sessionContext), sessionContext, cancellationSignal));
     }
-    List<ProviderBinding> resolved = bindRun(sessionContext);
+    List<ProviderBinding> resolved = bindRun(binding, sessionContext);
     if (resolved.isEmpty()) {
       return null;
     }
@@ -354,23 +249,24 @@ public final class AgentEngine extends Agent {
    * message identity would be worse. A run without tools keeps mapping the single model stream
    * directly, so nothing about it changed.
    */
-  @Override
-  protected AgentStreamingRun<AgentResponseUpdate> runStreamingInternal(
-      AgentRunContext context, AgentRunRequest request) {
+  AgentStreamingRun<AgentResponseUpdate> runStreamingInternal(
+      AgentBinding binding, AgentRunContext context, AgentRunRequest request) {
+    ToolLoopPolicy toolLoop = binding.toolLoop();
     if (toolLoop.hasTools() && request.options().continuationToken().isPresent()) {
       throw new UnsupportedOperationException("continuation tool execution is not supported");
     }
-    ModelClient selectedClient = request.options().resolveModelClient(modelClient);
+    ModelClient selectedClient = request.options().resolveModelClient(binding.modelClient());
     Function<ModelRequest, Flow.Publisher<ModelResponseUpdate>> streamingInvoker =
         resolveStreamingInvoker(selectedClient, request);
     SessionContext sessionContext = context.sessionContext();
     ResponseIdentity identity =
-        new ResponseIdentity(id(), UUID.randomUUID().toString(), name(), Instant.now());
-    CompletionStage<Void> gate = runGate(sessionContext, request.cancellationSignal());
+        new ResponseIdentity(
+            binding.id(), UUID.randomUUID().toString(), binding.name(), Instant.now());
+    CompletionStage<Void> gate = runGate(binding, sessionContext, request.cancellationSignal());
     AtomicReference<ModelRequest> firstRequest = new AtomicReference<>();
     Supplier<Flow.Publisher<ModelResponseUpdate>> firstStream =
         () -> {
-          ModelRequest modelRequest = toModelRequest(request, sessionContext);
+          ModelRequest modelRequest = toModelRequest(binding, request, sessionContext);
           firstRequest.set(modelRequest);
           return Objects.requireNonNull(
               streamingInvoker.apply(modelRequest),
@@ -456,7 +352,7 @@ public final class AgentEngine extends Agent {
    *
    * <p>The provider list is recomputed rather than carried from the start of the run, because
    * {@code Agent} hands this seam nothing but the context. That is safe precisely because
-   * resolution is a pure function of the agent's build-time configuration and the run's set-once
+   * resolution is a pure function of the agent's bind-time configuration and the run's set-once
    * effective session: this recomputation yields the same bindings, in the same order, that {@code
    * beforeRun} used.
    *
@@ -467,17 +363,18 @@ public final class AgentEngine extends Agent {
    * from "stored with no local state" and would accept any service handle for it. The cost is one
    * revision and one write per run of such a session.
    */
-  @Override
-  protected CompletionStage<Void> afterRun(SessionContext sessionContext) {
-    List<ProviderBinding> providers = resolveProviders(sessionContext);
+  CompletionStage<Void> afterRun(AgentBinding binding, SessionContext sessionContext) {
+    List<ProviderBinding> providers = binding.resolveProviders(sessionContext);
     CompletionStage<Void> stage = CompletableFuture.completedFuture(null);
     for (int index = providers.size() - 1; index >= 0; index--) {
-      ProviderBinding binding = providers.get(index);
+      ProviderBinding providerBinding = providers.get(index);
       stage =
           stage.thenCompose(
               ignored ->
                   Objects.requireNonNull(
-                      binding.provider().afterRun(sessionContext, binding.state(sessionContext)),
+                      providerBinding
+                          .provider()
+                          .afterRun(sessionContext, providerBinding.state(sessionContext)),
                       "context provider after-run stage must not be null"));
     }
     if (sessionCoordinator == null || sessionContext.session() == null) {
@@ -490,7 +387,8 @@ public final class AgentEngine extends Agent {
    * Builds the model request for a run: provider-contributed context messages come first, in the
    * order the providers contributed them, followed by the caller's input messages.
    */
-  private ModelRequest toModelRequest(AgentRunRequest request, SessionContext sessionContext) {
+  private ModelRequest toModelRequest(
+      AgentBinding binding, AgentRunRequest request, SessionContext sessionContext) {
     List<Message> messages = new ArrayList<>(sessionContext.contextMessages());
     messages.addAll(request.messages());
     return ModelRequest.builder()
@@ -499,12 +397,13 @@ public final class AgentEngine extends Agent {
         .continuationToken(request.options().continuationToken().orElse(null))
         .attributes(sessionContext.attributes())
         .cancellationSignal(request.cancellationSignal())
-        .tools(toolLoop.toolsForIteration(0))
+        .tools(binding.toolLoop().toolsForIteration(0))
         .metadata(JsonObject.empty())
         .build();
   }
 
   private CompletionStage<ToolLoopResult> runToolLoop(
+      ToolLoopPolicy toolLoop,
       ModelClient client,
       Function<ModelRequest, CompletionStage<ModelResponse>> modelInvoker,
       ModelRequest modelRequest,
@@ -544,6 +443,7 @@ public final class AgentEngine extends Agent {
                                 iteration);
                         outputMessages.add(toolResultMessage);
                         return runToolLoop(
+                            toolLoop,
                             client,
                             modelInvoker,
                             nextRequest,
@@ -610,17 +510,6 @@ public final class AgentEngine extends Agent {
 
   private record ToolLoopResult(
       ModelResponse terminalResponse, List<Message> messages, Usage usage) {}
-
-  /**
-   * A context provider bound to the fixed source id read once when the agent was built, so a
-   * provider cannot change the session state namespace it owns between runs or hooks.
-   */
-  private record ProviderBinding(String sourceId, ContextProvider provider) {
-
-    private ProviderSessionState state(SessionContext sessionContext) {
-      return sessionContext.providerState(sourceId);
-    }
-  }
 
   /**
    * Resolves how the first model call of this run is made, without making it. Capability mismatches

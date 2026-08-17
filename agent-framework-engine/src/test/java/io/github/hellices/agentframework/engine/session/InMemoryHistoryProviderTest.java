@@ -4,6 +4,7 @@ import static java.util.concurrent.CompletableFuture.completedFuture;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import io.github.hellices.agentframework.api.agent.Agent;
 import io.github.hellices.agentframework.api.agent.AgentResponse;
 import io.github.hellices.agentframework.api.agent.AgentRunOptions;
 import io.github.hellices.agentframework.api.agent.AgentRunRequest;
@@ -541,7 +542,7 @@ class InMemoryHistoryProviderTest {
           capturedRequest.set(request);
           return completedFuture(modelResponse("hello"));
         };
-    AgentEngine engine =
+    Agent engine =
         AgentEngine.builder()
             .modelClient(client)
             .contextProviders(provider, new ContextCapturingProvider(capturedContext))
@@ -570,7 +571,7 @@ class InMemoryHistoryProviderTest {
           capturedRequest.set(request);
           return completedFuture(modelResponse("hello"));
         };
-    AgentEngine engine =
+    Agent engine =
         AgentEngine.builder()
             .modelClient(client)
             .contextProviders(provider, new ContextCapturingProvider(capturedContext))
@@ -765,7 +766,7 @@ class InMemoryHistoryProviderTest {
         .join();
   }
 
-  private static void run(AgentEngine engine, AgentSession session, String input) {
+  private static void run(Agent engine, AgentSession session, String input) {
     engine
         .run(
             request(

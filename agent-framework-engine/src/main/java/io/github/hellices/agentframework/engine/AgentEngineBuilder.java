@@ -1,7 +1,11 @@
 package io.github.hellices.agentframework.engine;
 
-import io.github.hellices.agentframework.api.agent.AgentBuilder;
+import io.github.hellices.agentframework.api.agent.Agent;
+import io.github.hellices.agentframework.api.agent.AgentDefinition;
+import io.github.hellices.agentframework.api.agent.AgentRunOptions;
+import io.github.hellices.agentframework.api.agent.AgentRuntime;
 import io.github.hellices.agentframework.api.tool.FunctionTool;
+import io.github.hellices.agentframework.api.tool.ToolBinding;
 import io.github.hellices.agentframework.engine.internal.session.SessionCoordinator;
 import io.github.hellices.agentframework.spi.model.ModelClient;
 import io.github.hellices.agentframework.spi.session.ContextProvider;
@@ -11,7 +15,18 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 
-public final class AgentEngineBuilder implements AgentBuilder {
+/**
+ * Assembles a runnable agent by collecting an agent's declarative identity and tools alongside the
+ * model client, context providers, and session services it runs with, then binding them through a
+ * model-independent {@link AgentEngine}.
+ *
+ * <p>This builder is the bridge between the pre-separation single-object configuration and the
+ * split {@link AgentDefinition}/{@link AgentRuntime}/{@link AgentEngine} model: {@link #build()}
+ * derives a definition and a runtime from the configured values, constructs an engine over the
+ * shared session services, and returns the bound {@link Agent}. It is intentionally not an {@code
+ * AgentBuilder}, so the split objects are the only contract a later plan needs to refine.
+ */
+public final class AgentEngineBuilder {
 
   private String id;
   private String name;
@@ -21,23 +36,20 @@ public final class AgentEngineBuilder implements AgentBuilder {
   private final List<ContextProvider> contextProviders = new ArrayList<>();
   private SessionStore sessionStore;
   private StateCodecRegistry stateCodecRegistry;
-  private int maxIterations = 5;
+  private int maxIterations = AgentRunOptions.DEFAULT_MAX_TOOL_ITERATIONS;
 
   AgentEngineBuilder() {}
 
-  @Override
   public AgentEngineBuilder id(String id) {
     this.id = id;
     return this;
   }
 
-  @Override
   public AgentEngineBuilder name(String name) {
     this.name = name;
     return this;
   }
 
-  @Override
   public AgentEngineBuilder description(String description) {
     this.description = description;
     return this;
@@ -48,7 +60,6 @@ public final class AgentEngineBuilder implements AgentBuilder {
     return this;
   }
 
-  @Override
   public AgentEngineBuilder tools(FunctionTool... tools) {
     if (tools != null) {
       for (FunctionTool tool : tools) {
@@ -66,7 +77,7 @@ public final class AgentEngineBuilder implements AgentBuilder {
    * declaration order: {@code beforeRun} hooks run in this order before the first model call, and
    * {@code afterRun} hooks run in reverse order after a successful run.
    *
-   * <p>Each provider's {@link ContextProvider#sourceId()} is read once when the agent is built and
+   * <p>Each provider's {@link ContextProvider#sourceId()} is read once when the agent is bound and
    * fixes the session state namespace it owns for the agent's lifetime. A blank source id or a
    * source id shared by two providers is rejected at build time, because both would let one
    * provider silently read or overwrite another provider's state.
@@ -122,7 +133,6 @@ public final class AgentEngineBuilder implements AgentBuilder {
     return this;
   }
 
-  @Override
   public AgentEngineBuilder maxIterations(int maxIterations) {
     if (maxIterations < 1) {
       throw new IllegalArgumentException("maxIterations must be greater than 0");
@@ -131,8 +141,7 @@ public final class AgentEngineBuilder implements AgentBuilder {
     return this;
   }
 
-  @Override
-  public AgentEngine build() {
+  public Agent build() {
     if (modelClient == null) {
       throw new IllegalStateException("modelClient must be configured");
     }
@@ -147,14 +156,37 @@ public final class AgentEngineBuilder implements AgentBuilder {
                 stateCodecRegistry == null
                     ? StateCodecRegistry.builder().build()
                     : stateCodecRegistry);
-    return new AgentEngine(
-        id,
-        name,
-        description,
-        modelClient,
-        tools,
-        contextProviders,
-        sessionCoordinator,
-        maxIterations);
+    AgentEngine engine = new AgentEngine(sessionCoordinator);
+    return engine.bind(toDefinition(), toRuntime());
+  }
+
+  private AgentDefinition toDefinition() {
+    AgentDefinition.Builder definition =
+        AgentDefinition.builder()
+            .defaultRunOptions(AgentRunOptions.builder().maxToolIterations(maxIterations).build());
+    if (id != null && !id.isBlank()) {
+      definition.id(id);
+    }
+    if (name != null && !name.isBlank()) {
+      definition.name(name);
+    }
+    if (description != null) {
+      definition.description(description);
+    }
+    for (FunctionTool tool : tools) {
+      definition.tool(tool.definition());
+    }
+    return definition.build();
+  }
+
+  private AgentRuntime toRuntime() {
+    AgentRuntime.Builder runtime = AgentRuntime.builder().modelClient(modelClient);
+    for (FunctionTool tool : tools) {
+      runtime.toolBinding(ToolBinding.of(tool.definition().name(), tool::execute));
+    }
+    for (ContextProvider contextProvider : contextProviders) {
+      runtime.contextProvider(contextProvider);
+    }
+    return runtime.build();
   }
 }

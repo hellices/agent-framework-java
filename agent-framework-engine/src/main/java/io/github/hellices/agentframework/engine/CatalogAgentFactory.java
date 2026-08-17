@@ -26,7 +26,7 @@ final class CatalogAgentFactory implements AgentFactory {
 
   @Override
   public AgentBuilder builderWithClient(ModelClient modelClient) {
-    return AgentEngine.builder()
-        .modelClient(Objects.requireNonNull(modelClient, "modelClient must not be null"));
+    return new BoundAgentBuilder(
+        Objects.requireNonNull(modelClient, "modelClient must not be null"));
   }
 }

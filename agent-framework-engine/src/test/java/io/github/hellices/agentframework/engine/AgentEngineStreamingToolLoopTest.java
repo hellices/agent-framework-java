@@ -4,6 +4,7 @@ import static java.util.concurrent.CompletableFuture.completedFuture;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import io.github.hellices.agentframework.api.agent.Agent;
 import io.github.hellices.agentframework.api.agent.AgentResponse;
 import io.github.hellices.agentframework.api.agent.AgentResponseUpdate;
 import io.github.hellices.agentframework.api.agent.AgentRunOptions;
@@ -677,7 +678,7 @@ class AgentEngineStreamingToolLoopTest {
     StreamingModelClient client =
         streaming(
             request -> publisher(List.of(update(assistant("unused"), null, FinishReason.STOP))));
-    AgentEngine engine = engine(client, weatherTool());
+    Agent engine = engine(client, weatherTool());
     AgentRunRequest request =
         request(
             List.of(),
@@ -826,7 +827,7 @@ class AgentEngineStreamingToolLoopTest {
             });
     CountingProvider provider = new CountingProvider("memory", log);
     InMemorySessionStore store = new InMemorySessionStore(new JacksonSessionSnapshotCodec());
-    AgentEngine engine =
+    Agent engine =
         AgentEngine.builder()
             .modelClient(client)
             .tools(weatherTool())
@@ -1058,7 +1059,7 @@ class AgentEngineStreamingToolLoopTest {
   @Test
   void demandRejectedFromOnSubscribeStartsNoModelCall() {
     ManualStreams streams = new ManualStreams();
-    AgentEngine engine =
+    Agent engine =
         AgentEngine.builder()
             .modelClient(streams.client())
             .tools(weatherTool())
@@ -1139,7 +1140,7 @@ class AgentEngineStreamingToolLoopTest {
                 .toList());
   }
 
-  private static AgentEngine engine(ModelClient client, FunctionTool... tools) {
+  private static Agent engine(ModelClient client, FunctionTool... tools) {
     return AgentEngine.builder()
         .id("agent-1")
         .name("assistant")

@@ -11,6 +11,7 @@ import com.openai.models.chat.completions.ChatCompletionMessageFunctionToolCall;
 import com.openai.models.chat.completions.ChatCompletionMessageParam;
 import com.openai.models.chat.completions.ChatCompletionMessageToolCall;
 import com.openai.models.completions.CompletionUsage;
+import io.github.hellices.agentframework.api.agent.Agent;
 import io.github.hellices.agentframework.api.agent.AgentResponse;
 import io.github.hellices.agentframework.api.message.Content;
 import io.github.hellices.agentframework.api.message.FinishReason;
@@ -166,7 +167,7 @@ class OpenAiChatModelClientToolLoopTest {
   @Test
   void needsNoTransportOfItsOwnToRunTheWholeLoop() {
     FakeChatCompletionsOperations operations = scriptedProvider();
-    AgentEngine engine = engineOver(operations, new ArrayList<>());
+    Agent engine = engineOver(operations, new ArrayList<>());
 
     CompletableFuture<AgentResponse> response =
         engine.run(USER_INPUT).response().toCompletableFuture();
@@ -182,7 +183,7 @@ class OpenAiChatModelClientToolLoopTest {
   private static Loop runLoop() throws InterruptedException, ExecutionException, TimeoutException {
     FakeChatCompletionsOperations operations = scriptedProvider();
     List<Map<String, Object>> executedArguments = new ArrayList<>();
-    AgentEngine engine = engineOver(operations, executedArguments);
+    Agent engine = engineOver(operations, executedArguments);
 
     AgentResponse response =
         engine
@@ -207,7 +208,7 @@ class OpenAiChatModelClientToolLoopTest {
    *
    * @param executedArguments collects what each call handed the tool, in call order
    */
-  private static AgentEngine engineOver(
+  private static Agent engineOver(
       FakeChatCompletionsOperations operations, List<Map<String, Object>> executedArguments) {
     ModelClient client =
         OpenAiChatModelClient.builder().operations(operations).model(MODEL).build();
