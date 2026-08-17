@@ -47,6 +47,17 @@ public final class StandaloneAgentApplication {
   /** The one tool this sample registers. Named in the default prompt so the two cannot drift. */
   static final String TOOL_NAME = "current_utc_time";
 
+  /**
+   * The whole output of a run without a credential. One sentence, printed to standard error, and
+   * quoted verbatim in the provider README, so the sample and the documentation cannot drift.
+   */
+  static final String MISSING_API_KEY_MESSAGE =
+      "OPENAI_API_KEY is not set. Export a key (and optionally OPENAI_BASE_URL /"
+          + " OPENAI_MODEL) before running the sample.";
+
+  /** A failed run must not look like a completed one to a shell, a script, or a CI step. */
+  static final int MISSING_API_KEY_EXIT_CODE = 1;
+
   private static final String API_KEY_VARIABLE = "OPENAI_API_KEY";
   private static final String BASE_URL_VARIABLE = "OPENAI_BASE_URL";
   private static final String MODEL_VARIABLE = "OPENAI_MODEL";
@@ -81,19 +92,27 @@ public final class StandaloneAgentApplication {
   /**
    * Runs one turn and prints the answer and a footer of counts.
    *
-   * <p>Fails before a client is built when {@code OPENAI_API_KEY} is missing or blank, so a run
-   * without a credential costs no request and reports why.
+   * <p>A missing or blank {@code OPENAI_API_KEY} is the one failure this method formats itself: it
+   * prints {@value #MISSING_API_KEY_MESSAGE} to standard error and exits non-zero, before a client
+   * is built, so a run without a credential costs no request, reports why in one line, and still
+   * fails loudly enough for a script to notice. It is a configuration mistake, not a defect, and a
+   * JVM stack trace would say nothing the sentence does not. Every other failure — a provider
+   * fault, a transport error, a cancelled run — is deliberately left to the JVM's default handler,
+   * trace and all, because there the trace is the diagnostic.
    *
    * @param args the prompt; the default prompt asks for {@value #TOOL_NAME} when none is given
    */
   public static void main(String[] args) {
     Map<String, String> environment = System.getenv();
+    String apiKey = configuredApiKey(environment);
+    if (apiKey == null) {
+      System.err.println(MISSING_API_KEY_MESSAGE);
+      System.exit(MISSING_API_KEY_EXIT_CODE);
+      return;
+    }
     String model = model(environment);
     OpenAIClientAsync client =
-        OpenAIOkHttpClientAsync.builder()
-            .apiKey(requiredApiKey(environment))
-            .baseUrl(baseUrl(environment))
-            .build();
+        OpenAIOkHttpClientAsync.builder().apiKey(apiKey).baseUrl(baseUrl(environment)).build();
     try {
       Agent agent =
           createAgent(
@@ -136,14 +155,16 @@ public final class StandaloneAgentApplication {
     return args.length == 0 ? defaultPrompt() : String.join(" ", args);
   }
 
-  static String requiredApiKey(Map<String, String> environment) {
+  /**
+   * The configured API key, or {@code null} when the variable is unset or blank.
+   *
+   * <p>Returns rather than throws because the caller has to print one sentence and exit, and an
+   * exception thrown out of {@code main} prints a stack trace instead. A blank value is treated as
+   * missing: an exported but empty variable is a mistake, not a credential.
+   */
+  static String configuredApiKey(Map<String, String> environment) {
     String apiKey = environment.get(API_KEY_VARIABLE);
-    if (apiKey == null || apiKey.isBlank()) {
-      throw new IllegalStateException(
-          "OPENAI_API_KEY is not set. Export a key (and optionally OPENAI_BASE_URL /"
-              + " OPENAI_MODEL) before running the sample.");
-    }
-    return apiKey;
+    return apiKey == null || apiKey.isBlank() ? null : apiKey;
   }
 
   static String baseUrl(Map<String, String> environment) {

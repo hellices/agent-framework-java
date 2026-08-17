@@ -1,7 +1,6 @@
 package io.github.hellices.agentframework.samples.standalone;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.github.hellices.agentframework.api.agent.Agent;
 import io.github.hellices.agentframework.api.agent.AgentResponse;
@@ -231,21 +230,27 @@ class StandaloneAgentApplicationTest {
   }
 
   @Test
-  void failsWithAnExplicitMessageWhenTheApiKeyIsMissing() {
+  void reportsTheDocumentedMessageWhenTheApiKeyIsMissing() {
     // No silent fallback to a fake model. A sample that answers without a key teaches the wrong
-    // thing and hides a misconfiguration until it matters.
-    assertThatThrownBy(() -> StandaloneAgentApplication.requiredApiKey(Map.of()))
-        .isInstanceOf(IllegalStateException.class)
-        .hasMessage(
+    // thing and hides a misconfiguration until it matters. The message is a constant because the
+    // provider README quotes it verbatim.
+    assertThat(StandaloneAgentApplication.configuredApiKey(Map.of())).isNull();
+    assertThat(StandaloneAgentApplication.MISSING_API_KEY_MESSAGE)
+        .isEqualTo(
             "OPENAI_API_KEY is not set. Export a key (and optionally OPENAI_BASE_URL /"
                 + " OPENAI_MODEL) before running the sample.");
   }
 
   @Test
   void treatsABlankApiKeyAsMissing() {
-    assertThatThrownBy(
-            () -> StandaloneAgentApplication.requiredApiKey(Map.of("OPENAI_API_KEY", "   ")))
-        .isInstanceOf(IllegalStateException.class);
+    assertThat(StandaloneAgentApplication.configuredApiKey(Map.of("OPENAI_API_KEY", "   ")))
+        .isNull();
+  }
+
+  @Test
+  void returnsAConfiguredApiKeyUnchanged() {
+    assertThat(StandaloneAgentApplication.configuredApiKey(Map.of("OPENAI_API_KEY", "sk-test")))
+        .isEqualTo("sk-test");
   }
 
   @Test
