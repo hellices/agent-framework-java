@@ -4,17 +4,37 @@ import static java.util.concurrent.CompletableFuture.completedFuture;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import io.github.hellices.agentframework.api.context.ContextAttributes;
+import io.github.hellices.agentframework.api.context.ContextKey;
 import io.github.hellices.agentframework.api.message.FinishReason;
 import io.github.hellices.agentframework.api.message.Message;
 import io.github.hellices.agentframework.spi.model.ModelClient;
 import io.github.hellices.agentframework.spi.model.ModelRequest;
 import io.github.hellices.agentframework.spi.model.ModelResponse;
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Method;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.Test;
 
 class AgentRunOptionsTest {
+
+  @Test
+  void attributesUseTypedContextKeys() {
+    ContextKey<String> tenant = ContextKey.of("agent", "tenant", String.class);
+    ContextAttributes attributes = ContextAttributes.builder().put(tenant, "acme").build();
+
+    AgentRunOptions options = AgentRunOptions.builder().attributes(attributes).build();
+
+    assertThat(options.attributes().get(tenant)).contains("acme");
+  }
+
+  @Test
+  void rawMapAttributeBridgesAreRemoved() {
+    assertThat(findMethod(AgentRunOptions.Builder.class, "attributes", Map.class)).isEmpty();
+    assertThat(findConstructor(AgentRunOptions.class, Map.class)).isEmpty();
+  }
 
   @Test
   void modelClientFactoryReplacesTheDefaultForOneRun() {
@@ -86,5 +106,23 @@ class AgentRunOptionsTest {
 
   private static ModelResponse response() {
     return new ModelResponse(List.of(), null, FinishReason.STOP, Map.of(), null);
+  }
+
+  private static java.util.Optional<Method> findMethod(
+      Class<?> type, String name, Class<?>... parameterTypes) {
+    try {
+      return java.util.Optional.of(type.getDeclaredMethod(name, parameterTypes));
+    } catch (NoSuchMethodException missing) {
+      return java.util.Optional.empty();
+    }
+  }
+
+  private static java.util.Optional<Constructor<?>> findConstructor(
+      Class<?> type, Class<?>... parameterTypes) {
+    try {
+      return java.util.Optional.of(type.getDeclaredConstructor(parameterTypes));
+    } catch (NoSuchMethodException missing) {
+      return java.util.Optional.empty();
+    }
   }
 }

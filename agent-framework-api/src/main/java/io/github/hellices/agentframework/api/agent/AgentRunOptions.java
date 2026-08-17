@@ -1,30 +1,30 @@
 package io.github.hellices.agentframework.api.agent;
 
+import io.github.hellices.agentframework.api.context.ContextAttributes;
 import io.github.hellices.agentframework.spi.model.ModelClient;
 import io.github.hellices.agentframework.spi.model.ModelClientFactory;
-import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 
 public final class AgentRunOptions {
 
-  private final Map<String, Object> attributes;
+  private final ContextAttributes attributes;
   private final ModelClientFactory modelClientFactory;
   private final String continuationToken;
 
   public AgentRunOptions() {
-    this(Map.of(), null, null);
+    this(ContextAttributes.empty(), null, null);
   }
 
-  public AgentRunOptions(Map<String, Object> attributes) {
+  public AgentRunOptions(ContextAttributes attributes) {
     this(attributes, null, null);
   }
 
   private AgentRunOptions(
-      Map<String, Object> attributes,
+      ContextAttributes attributes,
       ModelClientFactory modelClientFactory,
       String continuationToken) {
-    this.attributes = attributes == null ? Map.of() : Map.copyOf(attributes);
+    this.attributes = attributes == null ? ContextAttributes.empty() : attributes;
     this.modelClientFactory = modelClientFactory;
     this.continuationToken = continuationToken;
   }
@@ -33,7 +33,7 @@ public final class AgentRunOptions {
     return new Builder();
   }
 
-  public Map<String, Object> attributes() {
+  public ContextAttributes attributes() {
     return attributes;
   }
 
@@ -58,14 +58,14 @@ public final class AgentRunOptions {
   }
 
   public static final class Builder {
-    private Map<String, Object> attributes = Map.of();
+    private ContextAttributes attributes = ContextAttributes.empty();
     private ModelClientFactory modelClientFactory;
     private String continuationToken;
 
     private Builder() {}
 
-    public Builder attributes(Map<String, Object> attributes) {
-      this.attributes = attributes == null ? Map.of() : Map.copyOf(attributes);
+    public Builder attributes(ContextAttributes attributes) {
+      this.attributes = attributes == null ? ContextAttributes.empty() : attributes;
       return this;
     }
 

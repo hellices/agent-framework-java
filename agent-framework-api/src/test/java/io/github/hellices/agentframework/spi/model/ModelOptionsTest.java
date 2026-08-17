@@ -8,6 +8,7 @@ import io.github.hellices.agentframework.api.message.FinishReason;
 import io.github.hellices.agentframework.api.message.Message;
 import io.github.hellices.agentframework.api.message.Role;
 import io.github.hellices.agentframework.api.message.TextContent;
+import java.lang.reflect.Method;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -18,43 +19,68 @@ class ModelOptionsTest {
 
   @Test
   void runTimeModelOptionsOverrideAgentDefaults() {
+    OpenAiOptions agentDefaultsOption = new OpenAiOptions("reasoning-low");
+    OpenAiOptions runTimeOpenAiOption = new OpenAiOptions("reasoning-high");
+    AzureOpenAiOptions azureOpenAiOption = new AzureOpenAiOptions("preview");
     ModelRequestOptions agentDefaults =
         ModelRequestOptions.builder()
             .temperature(0.2)
             .maxOutputTokens(256)
-            .providerOption(ModelProviderOption.of("openai", Map.of("parallelToolCalls", false)))
+            .providerOption(agentDefaultsOption)
             .build();
     ModelRequestOptions runTimeOverride =
         ModelRequestOptions.builder()
             .temperature(0.9)
-            .providerOption(ModelProviderOption.of("openai", Map.of("parallelToolCalls", true)))
-            .providerOption(ModelProviderOption.of("azure-openai", Map.of("apiVersion", "preview")))
+            .providerOption(runTimeOpenAiOption)
+            .providerOption(azureOpenAiOption)
             .build();
 
     ModelRequestOptions merged = agentDefaults.merge(runTimeOverride);
 
     assertThat(merged.temperature()).hasValue(0.9);
     assertThat(merged.maxOutputTokens()).hasValue(256);
-    assertThat(merged.providerOption("openai")).contains(Map.of("parallelToolCalls", true));
-    assertThat(merged.providerOption("azure-openai")).contains(Map.of("apiVersion", "preview"));
+    assertThat(merged.providerOption(OpenAiOptions.class)).containsSame(runTimeOpenAiOption);
+    assertThat(merged.providerOption(AzureOpenAiOptions.class)).containsSame(azureOpenAiOption);
   }
 
   @Test
-  void providerOptionsMergePerKeyForTheSameProvider() {
+  void providerOptionsMergePerConcreteOptionClass() {
+    OpenAiOptions defaultsOption = new OpenAiOptions("reasoning-low");
+    OpenAiOptions overridesOption = new OpenAiOptions("reasoning-high");
     ModelRequestOptions defaults =
-        ModelRequestOptions.builder()
-            .providerOption(
-                ModelProviderOption.of("openai", Map.of("parallelToolCalls", false, "seed", 7)))
-            .build();
+        ModelRequestOptions.builder().providerOption(defaultsOption).build();
     ModelRequestOptions overrides =
-        ModelRequestOptions.builder()
-            .providerOption(ModelProviderOption.of("openai", Map.of("parallelToolCalls", true)))
-            .build();
+        ModelRequestOptions.builder().providerOption(overridesOption).build();
 
     ModelRequestOptions merged = defaults.merge(overrides);
 
-    assertThat(merged.providerOption("openai"))
-        .contains(Map.of("parallelToolCalls", true, "seed", 7));
+    assertThat(merged.providerOption(OpenAiOptions.class)).containsSame(overridesOption);
+  }
+
+  @Test
+  void requestRejectsDuplicateConcreteProviderOptionClasses() {
+    assertThatThrownBy(
+            () ->
+                ModelRequestOptions.builder()
+                    .providerOption(new OpenAiOptions("reasoning-low"))
+                    .providerOption(new OpenAiOptions("reasoning-high"))
+                    .build())
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessage("provider option type already configured: " + OpenAiOptions.class.getName());
+  }
+
+  @Test
+  void requestRejectsBlankProviderIds() {
+    assertThatThrownBy(
+            () -> ModelRequestOptions.builder().providerOption(new BlankProviderOption()).build())
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessage("providerId must not be blank");
+  }
+
+  @Test
+  void rawMapProviderOptionBridgesAreRemoved() {
+    assertThat(findMethod(ModelRequestOptions.class, "fromLegacyOptions", Map.class)).isEmpty();
+    assertThat(findMethod(ModelProviderOption.class, "of", String.class, Map.class)).isEmpty();
   }
 
   @Test
@@ -100,19 +126,6 @@ class ModelOptionsTest {
     ModelRequest second = new ModelRequest(List.of(), options, new CancellationSignal(), Map.of());
 
     assertThat(first).isEqualTo(second).hasSameHashCodeAs(second);
-  }
-
-  @Test
-  void legacyOptionMapConstructorRemainsAvailable() {
-    ModelRequest request =
-        ModelRequest.fromLegacyOptions(
-            List.of(new Message(Role.USER, List.of(new TextContent("hello")))),
-            Map.of("temperature", 0.6, "maxOutputTokens", 128, "toolChoice", "none"),
-            Map.of());
-
-    assertThat(request.options().temperature()).hasValue(0.6);
-    assertThat(request.options().maxOutputTokens()).hasValue(128);
-    assertThat(request.options().providerOption("legacy")).contains(Map.of("toolChoice", "none"));
   }
 
   @Test
@@ -168,6 +181,36 @@ class ModelOptionsTest {
               done = true;
             }
           });
+    }
+  }
+
+  private static java.util.Optional<Method> findMethod(
+      Class<?> type, String name, Class<?>... parameterTypes) {
+    try {
+      return java.util.Optional.of(type.getDeclaredMethod(name, parameterTypes));
+    } catch (NoSuchMethodException missing) {
+      return java.util.Optional.empty();
+    }
+  }
+
+  private record OpenAiOptions(String reasoningEffort) implements ModelProviderOption {
+    @Override
+    public String providerId() {
+      return "openai";
+    }
+  }
+
+  private record AzureOpenAiOptions(String apiVersion) implements ModelProviderOption {
+    @Override
+    public String providerId() {
+      return "azure-openai";
+    }
+  }
+
+  private record BlankProviderOption() implements ModelProviderOption {
+    @Override
+    public String providerId() {
+      return " ";
     }
   }
 }

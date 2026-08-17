@@ -156,9 +156,7 @@ class ChatCompletionRequestMapperTest {
     // AGT-011 says a provider-specific option handed to a provider that does not support it is not
     // silently ignored. This adapter supports none yet, so it says so instead of dropping them.
     ModelRequestOptions options =
-        ModelRequestOptions.builder()
-            .providerOption(ModelProviderOption.of("openai", Map.of("seed", 7)))
-            .build();
+        ModelRequestOptions.builder().providerOption(new UnsupportedOpenAiOption(7)).build();
 
     assertThatThrownBy(
             () ->
@@ -172,6 +170,13 @@ class ChatCompletionRequestMapperTest {
                     DEFAULTS))
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessageContaining("openai");
+  }
+
+  private record UnsupportedOpenAiOption(int seed) implements ModelProviderOption {
+    @Override
+    public String providerId() {
+      return "openai";
+    }
   }
 
   @Test

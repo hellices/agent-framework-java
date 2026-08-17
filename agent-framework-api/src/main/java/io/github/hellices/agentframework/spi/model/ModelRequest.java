@@ -45,16 +45,6 @@ public record ModelRequest(
     this(messages, options, cancellationSignal, List.of(), metadata);
   }
 
-  public static ModelRequest fromLegacyOptions(
-      List<Message> messages, Map<String, Object> legacyOptions, Map<String, Object> metadata) {
-    return new ModelRequest(
-        messages,
-        ModelRequestOptions.fromLegacyOptions(legacyOptions),
-        new CancellationSignal(),
-        List.of(),
-        metadata);
-  }
-
   @Override
   public boolean equals(Object other) {
     if (this == other) {
