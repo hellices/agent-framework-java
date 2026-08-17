@@ -193,6 +193,13 @@ Each of these is a fact about the shipped code, not a roadmap promise.
 - **Provider options are rejected rather than ignored.** A request carrying a non-empty
   `providerOptions()` fails, naming the provider ids present, until a typed OpenAI option surface
   exists. Silently dropping them would be worse.
+- **A tool call that is not a function call fails, and so does a blank call id or a blank function
+  name.** Chat Completions can also return a custom tool call
+  (`ChatCompletionMessageCustomToolCall`), which this adapter does not map; a function call is
+  expected to carry both an id and a name, and either arriving blank fails the same way. **No id or
+  name is ever synthesised**: a synthesised id would key a tool result to a call the model never
+  issued, and a synthesised name would invoke a tool the model never named. Each of the three is its
+  own `IllegalStateException`, distinct from the argument-parsing failures below.
 - **Tool-call arguments must be a JSON object** (G3). A `null` *value* inside that object is kept as
   a null-valued key, so `{"unit":null}` — an explicitly nulled optional parameter — is not confused
   with an omitted one.

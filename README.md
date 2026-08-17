@@ -167,7 +167,8 @@ satisfies it. Reference the id in the commit message so the contract and the cod
 
 ## Current state
 
-The repository has a verified foundation and a runnable deterministic single-agent execution path.
+The repository has a verified foundation, a deterministic offline engine and provider test suite,
+and a live standalone execution path over a real endpoint.
 
 **In place**
 

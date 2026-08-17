@@ -56,7 +56,7 @@
 
 ## 현재 상태
 
-저장소는 검증 가능한 기반과 결정적인 `AgentEngine` 실행 및 함수 도구 루프를 갖췄습니다. `samples/sample-standalone`은 `OPENAI_API_KEY`가 필요하며, 실제 OpenAI 호환 엔드포인트를 호출해 `agent.run(...)`을 실행합니다. `OPENAI_BASE_URL`과 `OPENAI_MODEL`은 선택 값이고, 기본 프롬프트가 로컬 `current_utc_time` 도구를 이름으로 요청하므로 기본 실행은 함수 도구 루프 전체를 거칩니다. 다만 실제 모델이 도구를 호출할지는 모델의 판단이며, 실행 결과로 출력되는 것은 마지막 assistant 라운드의 답변과 `toolCalls` 횟수를 담은 요약 한 줄입니다. 토큰 수가 `n/a`로 표시되면 엔드포인트가 사용량을 보고하지 않았다는 뜻이고, 측정된 `0`과는 다릅니다. API 키는 자격 증명이므로 저장소나 빌드 파일에 커밋하지 않습니다. 후속 엔진·provider·host 작업은 같은 공개 계약 위에 쌓입니다.
+저장소는 검증 가능한 기반과 결정적인 `AgentEngine` 실행 및 함수 도구 루프를 갖췄습니다. `samples/sample-standalone`은 `OPENAI_API_KEY`가 필요하며, 실제 OpenAI 호환 엔드포인트를 호출해 `agent.run(...)`을 실행합니다. `OPENAI_BASE_URL`과 `OPENAI_MODEL`은 선택 값이고, 기본 프롬프트가 로컬 `current_utc_time` 도구를 이름으로 요청하므로 기본 실행은 함수 도구 루프 전체를 거칩니다. 다만 실제 모델이 도구를 호출할지는 모델의 판단이며, 실행 결과로 출력되는 것은 마지막 assistant 라운드의 답변과 `toolCalls` 횟수를 담은 요약 한 줄입니다. 도구 호출과 함께 모델이 남긴 사전 설명(preamble)은 CLI가 출력하는 마지막 assistant 라운드에는 나타나지 않지만, 그 사전 설명은 버려지는 것이 아니라 `response.messages()`와 트랜스크립트에 그대로 남아 있습니다. 토큰 수가 `n/a`로 표시되면 엔드포인트가 사용량을 보고하지 않았다는 뜻이고, 측정된 `0`과는 다릅니다. API 키는 자격 증명이므로 저장소나 빌드 파일에 커밋하지 않습니다. 후속 엔진·provider·host 작업은 같은 공개 계약 위에 쌓입니다.
 
 ## 기여와 보안 안내
 
