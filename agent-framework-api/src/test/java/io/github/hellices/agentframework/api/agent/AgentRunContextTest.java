@@ -4,8 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.github.hellices.agentframework.api.context.ContextAttributes;
-import io.github.hellices.agentframework.api.context.ContextKey;
 import io.github.hellices.agentframework.api.session.SessionContext;
+import java.lang.reflect.Constructor;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
@@ -13,8 +13,6 @@ import org.junit.jupiter.api.Test;
 class AgentRunContextTest {
 
   private static final Agent AGENT = new NoOpAgent();
-  private static final ContextKey<String> ATTRIBUTE_KEY =
-      ContextKey.of("agent", "key", String.class);
 
   @Test
   void acceptsMatchingSession() {
@@ -80,56 +78,12 @@ class AgentRunContextTest {
         .hasMessage("session must match sessionContext.session()");
   }
 
-  @SuppressWarnings({"deprecation", "removal"})
   @Test
-  void deprecatedThreeArgConstructorDelegatesToCanonicalConstructorWithAnEmptySessionContext() {
-    AgentSession session = new AgentSession("session-1", "service-1", Map.of());
-    ContextAttributes attributes = ContextAttributes.builder().put(ATTRIBUTE_KEY, "value").build();
-
-    AgentRunContext context = new AgentRunContext(AGENT, session, attributes);
-
-    assertThat(context.agent()).isEqualTo(AGENT);
-    assertThat(context.session()).isEqualTo(session);
-    assertThat(context.attributes()).isEqualTo(attributes);
-    assertThat(context.sessionContext().session()).isEqualTo(session);
-    assertThat(context.sessionContext().inputMessages()).isEmpty();
-    assertThat(context.sessionContext().contextMessages()).isEmpty();
-    assertThat(context.sessionContext().metadata()).isEqualTo(attributes);
-    assertThat(context.sessionContext().cancellationSignal()).isNotNull();
-    assertThat(context.sessionContext().cancellationSignal().isCancelled()).isFalse();
-  }
-
-  @SuppressWarnings({"deprecation", "removal"})
-  @Test
-  void deprecatedThreeArgConstructorNormalizesNullAttributesForBothContextAndSessionContext() {
-    AgentSession session = new AgentSession("session-1", "service-1", Map.of());
-
-    AgentRunContext context = new AgentRunContext(AGENT, session, null);
-
-    assertThat(context.attributes()).isEqualTo(ContextAttributes.empty());
-    assertThat(context.sessionContext().metadata()).isEqualTo(ContextAttributes.empty());
-  }
-
-  @SuppressWarnings({"deprecation", "removal"})
-  @Test
-  void deprecatedThreeArgConstructorProducesAFreshCancellationSignalPerCall() {
-    AgentSession session = new AgentSession("session-1", "service-1", Map.of());
-
-    AgentRunContext first = new AgentRunContext(AGENT, session, ContextAttributes.empty());
-    AgentRunContext second = new AgentRunContext(AGENT, session, ContextAttributes.empty());
-
-    assertThat(first.sessionContext().cancellationSignal())
-        .isNotSameAs(second.sessionContext().cancellationSignal());
-  }
-
-  @SuppressWarnings({"deprecation", "removal"})
-  @Test
-  void deprecatedThreeArgConstructorStillValidatesAgentNonNull() {
-    AgentSession session = new AgentSession("session-1", "service-1", Map.of());
-
-    assertThatThrownBy(() -> new AgentRunContext(null, session, ContextAttributes.empty()))
-        .isInstanceOf(NullPointerException.class)
-        .hasMessage("agent must not be null");
+  void rawThreeArgumentConstructorIsRemoved() {
+    assertThat(
+            findConstructor(
+                AgentRunContext.class, Agent.class, AgentSession.class, ContextAttributes.class))
+        .isEmpty();
   }
 
   private static final class NoOpAgent extends Agent {
@@ -146,6 +100,15 @@ class AgentRunContextTest {
     protected AgentStreamingRun<AgentResponseUpdate> runStreamingInternal(
         AgentRunContext context, AgentRunRequest request) {
       throw new UnsupportedOperationException("not used by this test");
+    }
+  }
+
+  private static java.util.Optional<Constructor<?>> findConstructor(
+      Class<?> type, Class<?>... parameterTypes) {
+    try {
+      return java.util.Optional.of(type.getDeclaredConstructor(parameterTypes));
+    } catch (NoSuchMethodException missing) {
+      return java.util.Optional.empty();
     }
   }
 }

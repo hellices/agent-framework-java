@@ -2,7 +2,6 @@ package io.github.hellices.agentframework.api.agent;
 
 import io.github.hellices.agentframework.api.context.ContextAttributes;
 import io.github.hellices.agentframework.api.session.SessionContext;
-import java.util.List;
 import java.util.Objects;
 
 /**
@@ -28,26 +27,5 @@ public record AgentRunContext(
     if (!Objects.equals(session, sessionContext.session())) {
       throw new IllegalArgumentException("session must match sessionContext.session()");
     }
-  }
-
-  /**
-   * Convenience constructor that delegates to the canonical 4-argument constructor with a fresh
-   * {@link SessionContext} built from {@code session} and {@code attributes}, so the
-   * session-consistency invariant enforced above still applies.
-   *
-   * <p>Limitations: because the legacy signature carries no message list, the resulting {@code
-   * SessionContext} always has empty {@link SessionContext#inputMessages()} and empty {@link
-   * SessionContext#contextMessages()}; {@code sessionContext.metadata()} mirrors the normalized
-   * {@code attributes}; and the cancellation signal is a brand-new {@link CancellationSignal},
-   * using {@code SessionContext}'s fresh-null normalization (see the canonical {@code
-   * SessionContext} constructor) rather than sharing one with any other run. Prefer the canonical
-   * 4-argument constructor, which lets {@link Agent} share a single {@code SessionContext} between
-   * the run context and its completion callback.
-   *
-   * @deprecated Use the 4-argument constructor instead.
-   */
-  @Deprecated(forRemoval = true)
-  public AgentRunContext(Agent agent, AgentSession session, ContextAttributes attributes) {
-    this(agent, session, attributes, new SessionContext(session, List.of(), attributes, null));
   }
 }
