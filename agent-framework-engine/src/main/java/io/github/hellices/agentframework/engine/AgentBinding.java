@@ -71,6 +71,14 @@ final class AgentBinding {
     return definition.name();
   }
 
+  AgentDefinition definition() {
+    return definition;
+  }
+
+  AgentRuntime runtime() {
+    return runtime;
+  }
+
   io.github.hellices.agentframework.spi.model.ModelClient modelClient() {
     return runtime.modelClient();
   }

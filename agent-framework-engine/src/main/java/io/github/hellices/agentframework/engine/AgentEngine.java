@@ -12,18 +12,14 @@ import io.github.hellices.agentframework.api.agent.AgentRuntime;
 import io.github.hellices.agentframework.api.agent.AgentStreamingRun;
 import io.github.hellices.agentframework.api.agent.CancellationSignal;
 import io.github.hellices.agentframework.api.message.Message;
-import io.github.hellices.agentframework.api.message.ToolCallContent;
-import io.github.hellices.agentframework.api.message.Usage;
 import io.github.hellices.agentframework.api.session.SessionContext;
-import io.github.hellices.agentframework.api.value.JsonNumber;
 import io.github.hellices.agentframework.api.value.JsonObject;
-import io.github.hellices.agentframework.api.value.JsonValue;
 import io.github.hellices.agentframework.engine.AgentBinding.ProviderBinding;
 import io.github.hellices.agentframework.engine.internal.model.ModelResponseMapper;
 import io.github.hellices.agentframework.engine.internal.model.ResponseIdentity;
-import io.github.hellices.agentframework.engine.internal.model.StreamingModelResponseAccumulator;
+import io.github.hellices.agentframework.engine.internal.run.RunExecution;
+import io.github.hellices.agentframework.engine.internal.run.RunPipeline;
 import io.github.hellices.agentframework.engine.internal.session.SessionCoordinator;
-import io.github.hellices.agentframework.engine.internal.tool.StreamingToolLoopPublisher;
 import io.github.hellices.agentframework.engine.internal.tool.ToolLoopPolicy;
 import io.github.hellices.agentframework.spi.model.ModelCatalog;
 import io.github.hellices.agentframework.spi.model.ModelClient;
@@ -33,9 +29,7 @@ import io.github.hellices.agentframework.spi.model.ModelResponse;
 import io.github.hellices.agentframework.spi.model.ModelResponseUpdate;
 import java.time.Instant;
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.CancellationException;
@@ -157,63 +151,72 @@ public final class AgentEngine {
    * would make the same code throw synchronously or asynchronously from one run to the next.
    */
   AgentRun runInternal(AgentBinding binding, AgentRunContext context, AgentRunRequest request) {
+    ResponseIdentity identity =
+        new ResponseIdentity(
+            binding.id(), UUID.randomUUID().toString(), binding.name(), Instant.now());
+    RunPipeline pipeline = buildPipeline(binding, context, request, identity);
+    // The ordinary run observes the loop's single assembled response, so an internal subscriber
+    // drives every model and tool iteration to completion while the caller reads terminalResponse.
+    CompletionStage<ModelResponse> terminal = pipeline.terminalResponse();
+    pipeline.subscribe(new DrainingSubscriber());
+    CompletionStage<AgentResponse> response =
+        terminal.thenApply(
+            model ->
+                ModelResponseMapper.toAgentResponse(
+                    identity.agentId(),
+                    identity.responseId(),
+                    identity.authorName(),
+                    identity.createdAt(),
+                    model));
+    return new AgentRun(response, request.cancellationSignal());
+  }
+
+  /**
+   * Builds the one update-oriented pipeline a run executes, whichever way it is consumed. The first
+   * model call is decided here so that a run without an asynchronous gate keeps failing
+   * synchronously when its client throws or returns {@code null}, exactly as it did before the
+   * context provider pipeline existed; with a gate the first call is deferred until the session was
+   * loaded and every {@code beforeRun} hook completed, so the same failures are instead reported on
+   * the run's terminal signal. The run's explicit state machine is advanced through the phases the
+   * engine owns — validation, session load and context preparation — before the pipeline takes it
+   * from the first model request through response finalisation.
+   */
+  private RunPipeline buildPipeline(
+      AgentBinding binding,
+      AgentRunContext context,
+      AgentRunRequest request,
+      ResponseIdentity identity) {
     ToolLoopPolicy toolLoop = binding.toolLoop();
     if (toolLoop.hasTools() && request.options().continuationToken().isPresent()) {
       throw new UnsupportedOperationException("continuation tool execution is not supported");
     }
     ModelClient selectedClient = request.options().resolveModelClient(binding.modelClient());
-    Function<ModelRequest, CompletionStage<ModelResponse>> modelInvoker =
-        resolveModelInvoker(selectedClient);
+    Function<ModelRequest, Flow.Publisher<ModelResponseUpdate>> invoker = selectedClient::execute;
     SessionContext sessionContext = context.sessionContext();
-    String responseId = UUID.randomUUID().toString();
-    Instant createdAt = Instant.now();
-    Supplier<CompletionStage<ToolLoopResult>> firstToolLoop =
-        () ->
-            runToolLoop(
-                toolLoop,
-                modelInvoker,
-                toModelRequest(binding, request, sessionContext),
-                request,
-                0,
-                List.of(),
-                null);
+    RunExecution execution = RunExecution.create(request, binding.definition(), binding.runtime());
     CompletionStage<Void> gate = runGate(binding, sessionContext, request.cancellationSignal());
-    CompletionStage<ToolLoopResult> toolLoopResult =
+    AtomicReference<ModelRequest> firstRequest = new AtomicReference<>();
+    Supplier<Flow.Publisher<ModelResponseUpdate>> firstStream =
+        () -> {
+          ModelRequest modelRequest = toModelRequest(binding, request, sessionContext);
+          firstRequest.set(modelRequest);
+          return Objects.requireNonNull(
+              invoker.apply(modelRequest), "model client update publisher must not be null");
+        };
+    Flow.Publisher<ModelResponseUpdate> modelUpdates =
         gate == null
-            ? firstToolLoop.get()
-            : gate.thenCompose(
-                ignored -> {
-                  // The gate makes the first model call asynchronous, so the run can be cancelled
-                  // while the store or a hook is still pending. Re-checking here keeps the ordinary
-                  // path aligned with the streaming one: once the caller observed cancellation, no
-                  // model request is issued when the gate finally completes.
+            ? firstStream.get()
+            : deferUntil(
+                gate,
+                request.cancellationSignal(),
+                () -> {
                   if (request.cancellationSignal().isCancelled()) {
                     throw new CancellationException("run was cancelled");
                   }
-                  return firstToolLoop.get();
+                  return firstStream.get();
                 });
-    CompletionStage<AgentResponse> response =
-        toolLoopResult.thenApply(
-            result -> {
-              if (request.cancellationSignal().isCancelled()) {
-                throw new CancellationException("run was cancelled");
-              }
-              ModelResponse terminal = result.terminalResponse();
-              return ModelResponseMapper.toAgentResponse(
-                  binding.id(),
-                  responseId,
-                  binding.name(),
-                  createdAt,
-                  ModelResponse.builder()
-                      .messages(result.messages())
-                      .usage(result.usage())
-                      .finishReason(terminal.finishReason())
-                      .continuationToken(terminal.continuationToken())
-                      .metadata(terminal.metadata())
-                      .rawRepresentation(terminal.rawRepresentation())
-                      .build());
-            });
-    return new AgentRun(response, request.cancellationSignal());
+    return new RunPipeline(
+        () -> modelUpdates, firstRequest::get, invoker, toolLoop, request, identity, execution);
   }
 
   /**
@@ -259,70 +262,24 @@ public final class AgentEngine {
    * shapes. Which shape applies follows the same rule {@link #runInternal} documents: a run that
    * carries a session always has a gate.
    *
-   * <p>A run with tools streams through {@link StreamingToolLoopPublisher}, which turns the same
-   * tool loop the ordinary run executes into one update stream: every model call's updates are
-   * forwarded live, each tool result is reported as an update the engine synthesised, and the whole
-   * loop assembles into one response carrying the content, order, tool results, usage and terminal
-   * outcome of an equivalent ordinary run (TOOL-015). What that response does not reproduce is the
-   * message boundaries an ordinary client returned, because a streamed response is reconstructed by
-   * {@link AgentResponse#fromUpdates} — see {@link StreamingToolLoopPublisher} for why inventing a
-   * message identity would be worse. A run without tools keeps mapping the single model stream
-   * directly, so nothing about it changed.
+   * <p>A run streams through the shared {@link RunPipeline}, which turns the same tool loop the
+   * ordinary run executes into one update stream: every model call's updates are forwarded live,
+   * each tool result is reported as an update the engine synthesised, and the whole loop assembles
+   * into one response carrying the content, order, tool results, usage and terminal outcome of an
+   * equivalent ordinary run (TOOL-015). What that response does not reproduce is the message
+   * boundaries an ordinary client returned, because a streamed response is reconstructed by {@link
+   * AgentResponse#fromUpdates} — see {@link RunPipeline} for why inventing a message identity would
+   * be worse. A run without tools follows the same pipeline, so an unknown tool call fails it as it
+   * does an ordinary run rather than being forwarded unexecuted.
    */
   AgentStreamingRun<AgentResponseUpdate> runStreamingInternal(
       AgentBinding binding, AgentRunContext context, AgentRunRequest request) {
-    ToolLoopPolicy toolLoop = binding.toolLoop();
-    if (toolLoop.hasTools() && request.options().continuationToken().isPresent()) {
-      throw new UnsupportedOperationException("continuation tool execution is not supported");
-    }
-    ModelClient selectedClient = request.options().resolveModelClient(binding.modelClient());
-    Function<ModelRequest, Flow.Publisher<ModelResponseUpdate>> streamingInvoker =
-        resolveStreamingInvoker(selectedClient);
-    SessionContext sessionContext = context.sessionContext();
     ResponseIdentity identity =
         new ResponseIdentity(
             binding.id(), UUID.randomUUID().toString(), binding.name(), Instant.now());
-    CompletionStage<Void> gate = runGate(binding, sessionContext, request.cancellationSignal());
-    AtomicReference<ModelRequest> firstRequest = new AtomicReference<>();
-    Supplier<Flow.Publisher<ModelResponseUpdate>> firstStream =
-        () -> {
-          ModelRequest modelRequest = toModelRequest(binding, request, sessionContext);
-          firstRequest.set(modelRequest);
-          return Objects.requireNonNull(
-              streamingInvoker.apply(modelRequest),
-              "model client update publisher must not be null");
-        };
-    Flow.Publisher<ModelResponseUpdate> modelUpdates =
-        gate == null
-            ? firstStream.get()
-            : deferUntil(
-                gate,
-                request.cancellationSignal(),
-                () -> {
-                  if (request.cancellationSignal().isCancelled()) {
-                    throw new CancellationException("run was cancelled");
-                  }
-                  return firstStream.get();
-                });
-    Flow.Publisher<AgentResponseUpdate> agentUpdates =
-        toolLoop.hasTools()
-            ? new StreamingToolLoopPublisher(
-                () -> modelUpdates,
-                firstRequest::get,
-                streamingInvoker,
-                toolLoop,
-                request,
-                identity)
-            : subscriber ->
-                modelUpdates.subscribe(
-                    new MappingSubscriber(
-                        subscriber,
-                        identity.agentId(),
-                        identity.responseId(),
-                        identity.authorName(),
-                        identity.createdAt()));
+    RunPipeline pipeline = buildPipeline(binding, context, request, identity);
     return AgentStreamingRun.fromUpdates(
-        agentUpdates,
+        pipeline,
         request.cancellationSignal(),
         () ->
             AgentResponse.builder()
@@ -422,193 +379,14 @@ public final class AgentEngine {
         .build();
   }
 
-  private CompletionStage<ToolLoopResult> runToolLoop(
-      ToolLoopPolicy toolLoop,
-      Function<ModelRequest, CompletionStage<ModelResponse>> modelInvoker,
-      ModelRequest modelRequest,
-      AgentRunRequest request,
-      int iteration,
-      List<Message> accumulatedMessages,
-      Usage accumulatedUsage) {
-    CompletionStage<ModelResponse> responseStage = modelInvoker.apply(modelRequest);
-    return Objects.requireNonNull(responseStage, "model client response stage must not be null")
-        .thenCompose(
-            response -> {
-              toolLoop.validateContinuation(response);
-              List<Message> outputMessages = new ArrayList<>(accumulatedMessages);
-              outputMessages.addAll(response.messages());
-              Usage usage = combineUsage(accumulatedUsage, response.usage());
-              List<ToolCallContent> calls = ToolLoopPolicy.toolCalls(response);
-              if (calls.isEmpty()) {
-                return CompletableFuture.completedFuture(
-                    new ToolLoopResult(response, List.copyOf(outputMessages), usage));
-              }
-              if (request.cancellationSignal().isCancelled()) {
-                throw new CancellationException("run was cancelled");
-              }
-              toolLoop.requireIterationBudget(iteration);
-              if (!toolLoop.canExecuteAll(calls) && toolLoop.declaresAll(calls)) {
-                // The model invoked a declaration-only tool: it is declared and offered to the
-                // model but has no local body, so the run ends with this response (its tool calls
-                // intact) rather than fabricating a result the Java core cannot produce
-                // (TOOL-006). Host or provider code can still act on the returned tool calls. A
-                // call to an undeclared tool is not handled here: it reaches execution and fails
-                // with the existing safe error.
-                return CompletableFuture.completedFuture(
-                    new ToolLoopResult(response, List.copyOf(outputMessages), usage));
-              }
-              return toolLoop
-                  .executeToolCalls(calls, request)
-                  .thenCompose(
-                      results -> {
-                        Message toolResultMessage = ToolLoopPolicy.toolResultMessage(results);
-                        ModelRequest nextRequest =
-                            toolLoop.nextRequest(
-                                modelRequest,
-                                response.messages(),
-                                calls,
-                                toolResultMessage,
-                                iteration);
-                        outputMessages.add(toolResultMessage);
-                        return runToolLoop(
-                            toolLoop,
-                            modelInvoker,
-                            nextRequest,
-                            request,
-                            iteration + 1,
-                            List.copyOf(outputMessages),
-                            usage);
-                      });
-            });
-  }
-
-  private static Usage combineUsage(Usage accumulated, Usage update) {
-    if (accumulated == null) {
-      return update;
-    }
-    if (update == null) {
-      return accumulated;
-    }
-    return new Usage(
-        Math.addExact(accumulated.inputTokens(), update.inputTokens()),
-        Math.addExact(accumulated.outputTokens(), update.outputTokens()),
-        Math.addExact(accumulated.totalTokens(), update.totalTokens()),
-        mergeAdditionalProperties(
-            accumulated.additionalProperties(),
-            update.additionalProperties(),
-            AgentEngine::combineUsageProperty));
-  }
-
-  private static JsonValue combineUsageProperty(JsonValue accumulated, JsonValue update) {
-    if (accumulated instanceof JsonNumber left && update instanceof JsonNumber right) {
-      return JsonNumber.of(left.value().add(right.value()));
-    }
-    return update;
-  }
-
-  private static JsonObject mergeAdditionalProperties(
-      JsonObject accumulated,
-      JsonObject update,
-      java.util.function.BiFunction<JsonValue, JsonValue, JsonValue> merger) {
-    if ((accumulated == null || accumulated.isEmpty()) && (update == null || update.isEmpty())) {
-      return JsonObject.empty();
-    }
-    if (accumulated == null || accumulated.isEmpty()) {
-      return update == null ? JsonObject.empty() : update;
-    }
-    if (update == null || update.isEmpty()) {
-      return accumulated;
-    }
-    Map<String, JsonValue> merged = new LinkedHashMap<>(accumulated.values());
-    update
-        .values()
-        .forEach(
-            (key, value) ->
-                merged.merge(
-                    key,
-                    value,
-                    (left, right) ->
-                        Objects.requireNonNull(
-                            merger.apply(left, right), "merged value must not be null")));
-    JsonObject.Builder builder = JsonObject.builder();
-    merged.forEach(builder::put);
-    return builder.build();
-  }
-
-  private record ToolLoopResult(
-      ModelResponse terminalResponse, List<Message> messages, Usage usage) {}
-
   /**
-   * Resolves how the first model call of this run is made, without making it. Every provider is
-   * invoked the same way now — through {@link ModelClient#execute(ModelRequest)} — so the run no
-   * longer probes a client's type for a streaming or continuation capability; a continuation token,
-   * when present, travels on the {@link ModelRequest} itself and it is the provider that decides
-   * whether it honours it.
-   *
-   * <p>An ordinary run needs a single {@link ModelResponse}, so the update publisher the provider
-   * returns is collected by a non-blocking adapter: {@link #collect(Flow.Publisher)} subscribes,
-   * requests every update, and assembles them into one response when the stream completes. No
-   * thread is blocked and no executor is used — the response stage completes on whatever thread
-   * signalled the publisher's terminal.
+   * The subscriber an ordinary run installs to drive its pipeline to completion. It requests every
+   * update and discards them: the run's response is read from {@link
+   * RunPipeline#terminalResponse()} instead, so the loop's live updates have somewhere to go while
+   * the ordinary caller waits only for the assembled response. Terminal signals are ignored here
+   * because the terminal response stage already carries the run's success or failure.
    */
-  private static Function<ModelRequest, CompletionStage<ModelResponse>> resolveModelInvoker(
-      ModelClient client) {
-    return modelRequest -> collect(client.execute(modelRequest));
-  }
-
-  /** The streaming counterpart of {@link #resolveModelInvoker}. */
-  private static Function<ModelRequest, Flow.Publisher<ModelResponseUpdate>>
-      resolveStreamingInvoker(ModelClient client) {
-    return client::execute;
-  }
-
-  /**
-   * Collects a model invocation's update publisher into the single {@link ModelResponse} the
-   * ordinary tool loop consumes, without blocking a thread. This is a temporary bridge: the run
-   * pipeline still speaks in whole responses, so the unified update stream is reassembled here
-   * until the pipeline itself is redesigned to consume updates directly. A publisher that completes
-   * without a single update fails the stage, and any terminal {@code onError} is propagated as the
-   * stage's failure.
-   */
-  private static CompletionStage<ModelResponse> collect(
-      Flow.Publisher<ModelResponseUpdate> publisher) {
-    Objects.requireNonNull(publisher, "model client update publisher must not be null");
-    CompletableFuture<ModelResponse> future = new CompletableFuture<>();
-    publisher.subscribe(new CollectingSubscriber(future));
-    return future.minimalCompletionStage();
-  }
-
-  private static ModelResponse assembleResponse(List<ModelResponseUpdate> updates) {
-    if (updates.isEmpty()) {
-      throw new IllegalStateException("model stream completed without any update");
-    }
-    if (updates.size() == 1) {
-      ModelResponseUpdate update = updates.get(0);
-      return ModelResponse.builder()
-          .messages(update.messages())
-          .usage(update.usage())
-          .finishReason(update.finishReason())
-          .continuationToken(update.continuationToken())
-          .metadata(update.metadata())
-          .rawRepresentation(update.rawRepresentation())
-          .build();
-    }
-    StreamingModelResponseAccumulator accumulator =
-        new StreamingModelResponseAccumulator(
-            new ResponseIdentity("model", UUID.randomUUID().toString(), null, Instant.now()));
-    for (ModelResponseUpdate update : updates) {
-      accumulator.record(update);
-    }
-    return accumulator.toModelResponse();
-  }
-
-  private static final class CollectingSubscriber implements Flow.Subscriber<ModelResponseUpdate> {
-    private final CompletableFuture<ModelResponse> future;
-    private final List<ModelResponseUpdate> updates = new ArrayList<>();
-
-    private CollectingSubscriber(CompletableFuture<ModelResponse> future) {
-      this.future = future;
-    }
+  private static final class DrainingSubscriber implements Flow.Subscriber<AgentResponseUpdate> {
 
     @Override
     public void onSubscribe(Flow.Subscription subscription) {
@@ -616,22 +394,18 @@ public final class AgentEngine {
     }
 
     @Override
-    public void onNext(ModelResponseUpdate item) {
-      updates.add(item);
+    public void onNext(AgentResponseUpdate item) {
+      // The ordinary run observes the assembled terminal response, not the individual updates.
     }
 
     @Override
     public void onError(Throwable throwable) {
-      future.completeExceptionally(throwable);
+      // The terminal response stage carries the failure the ordinary caller observes.
     }
 
     @Override
     public void onComplete() {
-      try {
-        future.complete(assembleResponse(updates));
-      } catch (RuntimeException failure) {
-        future.completeExceptionally(failure);
-      }
+      // The terminal response stage carries the success the ordinary caller observes.
     }
   }
 
@@ -709,49 +483,6 @@ public final class AgentEngine {
     @Override
     public void cancel() {
       // A stream that failed before it started has nothing left to cancel.
-    }
-  }
-
-  private static final class MappingSubscriber implements Flow.Subscriber<ModelResponseUpdate> {
-    private final Flow.Subscriber<? super AgentResponseUpdate> downstream;
-    private final String agentId;
-    private final String responseId;
-    private final String authorName;
-    private final Instant createdAt;
-
-    private MappingSubscriber(
-        Flow.Subscriber<? super AgentResponseUpdate> downstream,
-        String agentId,
-        String responseId,
-        String authorName,
-        Instant createdAt) {
-      this.downstream = downstream;
-      this.agentId = agentId;
-      this.responseId = responseId;
-      this.authorName = authorName;
-      this.createdAt = createdAt;
-    }
-
-    @Override
-    public void onSubscribe(Flow.Subscription subscription) {
-      downstream.onSubscribe(subscription);
-    }
-
-    @Override
-    public void onNext(ModelResponseUpdate item) {
-      downstream.onNext(
-          ModelResponseMapper.toAgentResponseUpdate(
-              agentId, responseId, authorName, createdAt, item));
-    }
-
-    @Override
-    public void onError(Throwable throwable) {
-      downstream.onError(throwable);
-    }
-
-    @Override
-    public void onComplete() {
-      downstream.onComplete();
     }
   }
 }

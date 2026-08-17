@@ -1,20 +1,29 @@
-package io.github.hellices.agentframework.engine.internal.tool;
+package io.github.hellices.agentframework.engine.internal.run;
 
+import io.github.hellices.agentframework.api.agent.AgentResponse;
 import io.github.hellices.agentframework.api.agent.AgentResponseUpdate;
 import io.github.hellices.agentframework.api.agent.AgentRunRequest;
 import io.github.hellices.agentframework.api.message.Content;
 import io.github.hellices.agentframework.api.message.Message;
 import io.github.hellices.agentframework.api.message.ToolCallContent;
+import io.github.hellices.agentframework.api.message.Usage;
+import io.github.hellices.agentframework.api.value.JsonNumber;
+import io.github.hellices.agentframework.api.value.JsonObject;
+import io.github.hellices.agentframework.api.value.JsonValue;
 import io.github.hellices.agentframework.engine.internal.model.ResponseIdentity;
 import io.github.hellices.agentframework.engine.internal.model.StreamingModelResponseAccumulator;
+import io.github.hellices.agentframework.engine.internal.tool.ToolLoopPolicy;
 import io.github.hellices.agentframework.spi.model.ModelRequest;
 import io.github.hellices.agentframework.spi.model.ModelResponse;
 import io.github.hellices.agentframework.spi.model.ModelResponseUpdate;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Queue;
 import java.util.concurrent.CancellationException;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentLinkedQueue;
@@ -22,34 +31,31 @@ import java.util.concurrent.Flow;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BiFunction;
 import java.util.function.Function;
 import java.util.function.Supplier;
 
 /**
- * Publishes the updates of a streaming run that executes function tools (TOOL-015).
+ * The one update-oriented pipeline every run of an agent executes, observed two ways.
  *
- * <p>A streaming run with tools is a loop over several model calls, and this publisher is that loop
- * expressed as a single subscription: the subscriber sees one continuous stream of updates in which
- * every model call's own updates are forwarded as they arrive, each round of tool results appears
- * as updates the engine synthesised, and the next model call happens only once the results before
- * it were delivered. Because every update carries the same {@link ResponseIdentity}, {@link
- * io.github.hellices.agentframework.api.agent.AgentResponse#fromUpdates} assembles the whole loop
- * into one response.
+ * <p>A run is a loop over one or more model calls that may execute function tools between them.
+ * This publisher is that loop expressed as a single subscription: every model call's updates are
+ * forwarded as they arrive, each round of tool results is reported as updates the engine
+ * synthesised, and the next model call happens only once the results before it were delivered.
+ * Because every update carries the same {@link ResponseIdentity}, {@link AgentResponse#fromUpdates}
+ * assembles the whole loop into one response.
  *
- * <h2>What the assembled response has in common with an ordinary run</h2>
+ * <h2>Two consumers, one execution</h2>
  *
- * <p>The assembled response reports the same roles in the same order, the same content in the same
- * order within them, the same tool results, the summed usage, the terminal call's finish reason,
- * continuation token and metadata, and the run's own identity — which is what makes a streamed run
- * and an ordinary run of the same script interchangeable to a caller that reads the response.
- *
- * <p>What it does not promise is the message objects themselves. A streamed response is
- * reconstructed by {@code fromUpdates}, which coalesces consecutive same-role content into one
- * message while no update reports a message id, and no model port in this repository reports one.
- * Two assistant chunks an ordinary client returned as two messages therefore arrive as one
- * reconstructed message. Inventing an id per update to force the boundaries apart would claim an
- * identity the provider never gave, so the parity this loop maintains is of content and order, not
- * of message boundaries.
+ * <p>A streaming run subscribes the caller to this publisher and sees the cold, unicast update
+ * stream directly. An ordinary run installs an internal draining subscriber and reads {@link
+ * #terminalResponse()} instead: the same loop runs, but the caller observes only the single {@link
+ * ModelResponse} it assembled — with the message boundaries an ordinary client returned preserved,
+ * because that response is built from each model call's own updates rather than reconstructed by
+ * {@code fromUpdates}. The two consumers therefore agree on the roles, content, order, tool
+ * results, usage, finish reason, continuation token and terminal metadata of a run, and differ only
+ * where they must: a streamed response coalesces consecutive same-role chunks a stream never gave a
+ * message id, and an empty model stream is an empty streamed response but an ordinary failure.
  *
  * <h2>State machine</h2>
  *
@@ -63,7 +69,7 @@ import java.util.function.Supplier;
  *   <li><b>Tools</b> — when the model call completes, its accumulated response decides the run:
  *       without tool calls the loop is finished, the call's metadata is queued as the stream's last
  *       update and the stream completes; with tool calls the shared {@link ToolLoopPolicy}
- *       validates the budget and executes them, exactly as an ordinary run does.
+ *       validates the budget and executes them, exactly as before.
  *   <li><b>Results</b> — each tool result is queued as its own update and emitted under downstream
  *       demand, in call order. The next iteration starts only after the last of them was delivered,
  *       so the model never sees a request whose results the subscriber has not seen yet.
@@ -75,24 +81,19 @@ import java.util.function.Supplier;
  * together with the currently active model subscription so that credit granted while no model call
  * is running is handed to the next one when it subscribes, and never handed out twice. Emission
  * runs in a work-in-progress trampoline, so a synchronous publisher that emits from inside {@code
- * request} cannot re-enter {@code onNext}, and so the next iteration is started by whichever thread
- * drained the last queued result. Exactly one terminal signal is delivered: the first failure wins,
- * completion is delivered only once the queue is empty, and a cancelled subscription emits neither
- * — the run's own terminal handling reports cancellation to the caller.
+ * request} cannot re-enter {@code onNext}. Exactly one terminal signal is delivered: the first
+ * failure wins, completion is delivered only once the queue is empty, and a cancelled subscription
+ * emits neither.
  *
  * <p>Cancellation is honoured from both sides — the subscriber cancelling and the run's {@link
  * io.github.hellices.agentframework.api.agent.CancellationSignal} — and stops the loop wherever it
  * is: the active model subscription is cancelled, queued results are dropped, and a tool stage that
- * completes afterwards neither emits its results nor starts another iteration. The state is read
- * again immediately before each model call is made, so no iteration starts once cancellation is
- * observable there; a cancellation that becomes observable while a client is producing its
- * publisher cannot unmake that call, but that publisher is cancelled instead of read and delivers
- * no signal.
+ * completes afterwards neither emits its results nor starts another iteration.
  *
  * <p>No executor, thread or {@link java.util.concurrent.SubmissionPublisher} is created: every
  * signal runs on the thread that caused it.
  */
-public final class StreamingToolLoopPublisher implements Flow.Publisher<AgentResponseUpdate> {
+public final class RunPipeline implements Flow.Publisher<AgentResponseUpdate> {
 
   private final Supplier<Flow.Publisher<ModelResponseUpdate>> firstStream;
   private final Supplier<ModelRequest> firstRequest;
@@ -100,6 +101,8 @@ public final class StreamingToolLoopPublisher implements Flow.Publisher<AgentRes
   private final ToolLoopPolicy policy;
   private final AgentRunRequest request;
   private final ResponseIdentity identity;
+  private final RunExecution execution;
+  private final CompletableFuture<ModelResponse> ordinaryTerminal = new CompletableFuture<>();
   private final AtomicBoolean subscribed = new AtomicBoolean();
 
   /**
@@ -108,23 +111,36 @@ public final class StreamingToolLoopPublisher implements Flow.Publisher<AgentRes
    * @param firstRequest the request the first model call was made with, readable once that call was
    *     made
    * @param nextStream how every later model call is made
-   * @param policy the shared tool budget rules this run's ordinary counterpart would follow
-   * @param request the run being streamed, carrying its cancellation signal and attributes
+   * @param policy the shared tool budget rules this run follows
+   * @param request the run being executed, carrying its cancellation signal and attributes
    * @param identity the response every update of this run belongs to
+   * @param execution the run's explicit state machine, driven through {@code FINALIZE_RESPONSE}
    */
-  public StreamingToolLoopPublisher(
+  public RunPipeline(
       Supplier<Flow.Publisher<ModelResponseUpdate>> firstStream,
       Supplier<ModelRequest> firstRequest,
       Function<ModelRequest, Flow.Publisher<ModelResponseUpdate>> nextStream,
       ToolLoopPolicy policy,
       AgentRunRequest request,
-      ResponseIdentity identity) {
+      ResponseIdentity identity,
+      RunExecution execution) {
     this.firstStream = Objects.requireNonNull(firstStream, "firstStream must not be null");
     this.firstRequest = Objects.requireNonNull(firstRequest, "firstRequest must not be null");
     this.nextStream = Objects.requireNonNull(nextStream, "nextStream must not be null");
     this.policy = Objects.requireNonNull(policy, "policy must not be null");
     this.request = Objects.requireNonNull(request, "request must not be null");
     this.identity = Objects.requireNonNull(identity, "identity must not be null");
+    this.execution = Objects.requireNonNull(execution, "execution must not be null");
+  }
+
+  /**
+   * The single response an ordinary run observes, completed when the loop finished. It preserves
+   * the message boundaries each model call returned and fails with the same error a streamed run's
+   * subscriber would see, except that an empty model stream fails this stage where it completes a
+   * streamed run empty.
+   */
+  public CompletionStage<ModelResponse> terminalResponse() {
+    return ordinaryTerminal.minimalCompletionStage();
   }
 
   @Override
@@ -159,9 +175,11 @@ public final class StreamingToolLoopPublisher implements Flow.Publisher<AgentRes
     private final AtomicInteger wip = new AtomicInteger();
     private final AtomicBoolean terminated = new AtomicBoolean();
     private final Object lock = new Object();
+    private final List<Message> ordinaryMessages = new ArrayList<>();
     private volatile boolean cancelled;
     private volatile boolean finished;
     private volatile Runnable removeCancellationListener = () -> {};
+    private Usage ordinaryUsage;
     private long demand;
     private Flow.Subscription upstream;
 
@@ -179,6 +197,8 @@ public final class StreamingToolLoopPublisher implements Flow.Publisher<AgentRes
         removeListener.run();
         return;
       }
+      advance(RunPhase.LOAD_SESSION);
+      advance(RunPhase.PREPARE_CONTEXT);
       beginIteration(0, null, firstStream);
     }
 
@@ -213,6 +233,7 @@ public final class StreamingToolLoopPublisher implements Flow.Publisher<AgentRes
       removeCancellationListener.run();
       queue.clear();
       pending.set(null);
+      ordinaryTerminal.completeExceptionally(new CancellationException("run was cancelled"));
       if (active != null) {
         active.cancel();
       }
@@ -221,26 +242,9 @@ public final class StreamingToolLoopPublisher implements Flow.Publisher<AgentRes
     /**
      * Subscribes the model call of {@code index}. The upstream slot is cleared first, so demand
      * granted between two iterations is handed to the new subscription when it arrives rather than
-     * to the finished one.
-     *
-     * <p>The cancellation state is read once more immediately before the model client is asked for
-     * its publisher, because the decision to start this iteration was taken earlier — when a
-     * finished tool round was armed, or when the last queued result was delivered — and the run may
-     * have been cancelled since. The check is deliberately not held under {@code lock}: obtaining
-     * and subscribing a publisher calls foreign code, and holding the demand monitor across it
-     * would let a client that emits synchronously deadlock the subscription. What the check
-     * guarantees is therefore stated in terms of what it observes: once cancellation is observable
-     * here, this iteration does not start. A cancellation that becomes observable in the instant
-     * after it — while the client is producing its publisher — cannot unmake that call, but no
-     * signal of it reaches the subscriber either, because {@link ModelSubscriber#onSubscribe}
-     * cancels the new subscription instead of requesting from it.
-     *
-     * <p>Producing the publisher and subscribing to it are guarded together, because both are the
-     * client's code and a client that rejects a subscription fails the run for the same reason one
-     * that cannot produce a publisher does. Letting the throw escape instead would unwind through
-     * whichever thread happened to start the iteration — the subscriber's own {@code request} call
-     * for the first iteration, a tool stage's completion for a later one — and leave the run with
-     * no terminal signal at all.
+     * to the finished one. The cancellation state is read once more immediately before the model
+     * client is asked for its publisher, because the decision to start this iteration was taken
+     * earlier and the run may have been cancelled since.
      */
     private void beginIteration(
         int index,
@@ -252,9 +256,11 @@ public final class StreamingToolLoopPublisher implements Flow.Publisher<AgentRes
       if (cancelled || terminated.get() || request.cancellationSignal().isCancelled()) {
         return;
       }
+      advance(RunPhase.PREPARE_MODEL_REQUEST);
       try {
         Flow.Publisher<ModelResponseUpdate> publisher =
             Objects.requireNonNull(source.get(), "model client update publisher must not be null");
+        advance(RunPhase.CALL_MODEL);
         publisher.subscribe(new ModelSubscriber(index, iterationRequest));
       } catch (RuntimeException startFailure) {
         fail(startFailure);
@@ -263,20 +269,31 @@ public final class StreamingToolLoopPublisher implements Flow.Publisher<AgentRes
 
     /**
      * Decides what a finished model call means for the run: end it, or execute the tools it asked
-     * for. This is the point at which a streaming iteration and an ordinary one are made to agree —
-     * both read the same reassembled response and both ask the same {@link ToolLoopPolicy}.
+     * for. This is the point at which the streaming and ordinary views of the same run are made to
+     * agree — both read the same reassembled response and both ask the same {@link ToolLoopPolicy}.
      *
-     * <p>The call that ends the run is also the one whose metadata the run reports. Its metadata is
-     * queued as the last update of the stream, because that is the only place a metadata-unioning
-     * assembler can be told which model call's metadata the response has: no update before it
-     * carried any, so the assembled map is exactly this call's, down to being empty when the call
-     * reported nothing.
+     * <p>An empty model call is the one place the two views diverge on lifecycle. With tools it is
+     * always a failure: the loop has no response to inspect. Without tools it is the empty response
+     * a streamed run completes with, so the stream finishes while the ordinary terminal fails with
+     * the same error the ordinary path always reported.
      */
     private void completeIteration(
-        int index, ModelRequest iterationRequest, StreamingModelResponseAccumulator accumulator) {
+        int index,
+        ModelRequest iterationRequest,
+        StreamingModelResponseAccumulator accumulator,
+        List<ModelResponseUpdate> rawUpdates) {
       if (cancelled || terminated.get()) {
         return;
       }
+      if (accumulator.isEmpty()) {
+        if (policy.hasTools()) {
+          fail(new IllegalStateException("model stream completed without any update"));
+        } else {
+          completeWithoutUpdates();
+        }
+        return;
+      }
+      advance(RunPhase.ACCUMULATE_MODEL_UPDATES);
       CompletionStage<List<Content>> results;
       ModelResponse response;
       ModelRequest current;
@@ -284,13 +301,12 @@ public final class StreamingToolLoopPublisher implements Flow.Publisher<AgentRes
       try {
         response = accumulator.toModelResponse();
         policy.validateContinuation(response);
+        ModelResponse ordinaryResponse = assembleResponse(rawUpdates);
+        recordOrdinaryIteration(ordinaryResponse);
         calls = ToolLoopPolicy.toolCalls(response);
+        advance(RunPhase.PLAN_TOOL_ACTION);
         if (calls.isEmpty()) {
-          if (!response.metadata().isEmpty()) {
-            queue.add(identity.metadataUpdate(response.metadata()));
-          }
-          finished = true;
-          drain();
+          completeRun(response, ordinaryResponse);
           return;
         }
         if (request.cancellationSignal().isCancelled()) {
@@ -299,22 +315,18 @@ public final class StreamingToolLoopPublisher implements Flow.Publisher<AgentRes
         policy.requireIterationBudget(index);
         if (!policy.canExecuteAll(calls) && policy.declaresAll(calls)) {
           // A declaration-only tool was invoked: it is declared and offered to the model but has
-          // no local body, so the stream ends with the reassembled response — whose tool-call
-          // updates were already emitted — instead of fabricating results the Java core cannot
-          // produce (TOOL-006). This mirrors the empty-call termination so host or provider code
-          // can act on the streamed tool calls. A call to an undeclared tool is not handled here:
-          // it reaches execution and fails with the existing safe error.
-          if (!response.metadata().isEmpty()) {
-            queue.add(identity.metadataUpdate(response.metadata()));
-          }
-          finished = true;
-          drain();
+          // no local body, so the run ends with the reassembled response — whose tool-call updates
+          // were already emitted — instead of fabricating results the Java core cannot produce
+          // (TOOL-006). A call to an undeclared tool is not handled here: it reaches execution and
+          // fails with the existing safe error.
+          completeRun(response, ordinaryResponse);
           return;
         }
         current =
             iterationRequest == null
                 ? Objects.requireNonNull(firstRequest.get(), "model request must not be null")
                 : iterationRequest;
+        advance(RunPhase.EXECUTE_TOOL_BATCH);
         results = policy.executeToolCalls(calls, request);
       } catch (RuntimeException iterationFailure) {
         fail(iterationFailure);
@@ -323,6 +335,38 @@ public final class StreamingToolLoopPublisher implements Flow.Publisher<AgentRes
       results.whenComplete(
           (values, toolFailure) ->
               completeTools(index, current, response, calls, values, toolFailure));
+    }
+
+    /**
+     * Ends the run with the reassembled model response. Its metadata is queued as the stream's last
+     * update — the only place a metadata-unioning assembler can be told which model call's metadata
+     * the response has — and the ordinary terminal is completed with the boundary-preserving
+     * response the ordinary path assembled.
+     */
+    private void completeRun(ModelResponse decision, ModelResponse ordinaryResponse) {
+      if (!decision.metadata().isEmpty()) {
+        queue.add(identity.metadataUpdate(decision.metadata()));
+      }
+      completeOrdinaryTerminal(ordinaryResponse);
+      advance(RunPhase.FINALIZE_RESPONSE);
+      finished = true;
+      drain();
+    }
+
+    /**
+     * Ends a run whose model stream completed without a single update. The streamed view completes
+     * empty; the ordinary view fails with the error the ordinary path always reported, because an
+     * invented empty response would silently turn a broken client into a run that ends with no
+     * answer and no error.
+     */
+    private void completeWithoutUpdates() {
+      advance(RunPhase.ACCUMULATE_MODEL_UPDATES);
+      advance(RunPhase.PLAN_TOOL_ACTION);
+      advance(RunPhase.FINALIZE_RESPONSE);
+      ordinaryTerminal.completeExceptionally(
+          new IllegalStateException("model stream completed without any update"));
+      finished = true;
+      drain();
     }
 
     /**
@@ -353,6 +397,7 @@ public final class StreamingToolLoopPublisher implements Flow.Publisher<AgentRes
         }
         ModelRequest next =
             policy.nextRequest(current, response.messages(), calls, toolResults, index);
+        ordinaryMessages.add(toolResults);
         queue.addAll(updates);
         pending.set(new PendingIteration(index + 1, next));
       } catch (RuntimeException resultFailure) {
@@ -362,18 +407,56 @@ public final class StreamingToolLoopPublisher implements Flow.Publisher<AgentRes
       drain();
     }
 
+    /** Accumulates one model call's boundary-preserving response into the ordinary terminal. */
+    private void recordOrdinaryIteration(ModelResponse ordinaryResponse) {
+      ordinaryMessages.addAll(ordinaryResponse.messages());
+      ordinaryUsage = combineUsage(ordinaryUsage, ordinaryResponse.usage());
+    }
+
+    /** Completes the ordinary terminal with the run's accumulated messages and terminal outcome. */
+    private void completeOrdinaryTerminal(ModelResponse terminalIteration) {
+      ordinaryTerminal.complete(
+          ModelResponse.builder()
+              .messages(List.copyOf(ordinaryMessages))
+              .usage(ordinaryUsage)
+              .finishReason(terminalIteration.finishReason())
+              .continuationToken(terminalIteration.continuationToken())
+              .metadata(terminalIteration.metadata())
+              .rawRepresentation(terminalIteration.rawRepresentation())
+              .build());
+    }
+
     /** Records the first failure of the run and lets the drain deliver it. */
     private void fail(Throwable throwable) {
-      if (failure.compareAndSet(null, unwrap(throwable))) {
+      Throwable cause = unwrap(throwable);
+      if (failure.compareAndSet(null, cause)) {
+        ordinaryTerminal.completeExceptionally(cause);
+        execution.fail(cause);
         drain();
       }
     }
 
     /**
+     * Drives the run's explicit state machine, swallowing only the transition a concurrent
+     * cancellation already made terminal. A transition that is illegal for any other reason is a
+     * pipeline defect and is allowed to surface.
+     */
+    private void advance(RunPhase next) {
+      try {
+        if (!execution.state().isTerminal()) {
+          execution.transitionTo(next);
+        }
+      } catch (IllegalStateException raced) {
+        if (!execution.state().isTerminal()) {
+          throw raced;
+        }
+      }
+    }
+
+    /**
      * Runs the emission trampoline. A signal a downstream callback throws out of is not this
-     * subscription's failure to record — the subscriber violated its own contract — but the
-     * work-in-progress counter is reset before the throw leaves, because leaving it raised would
-     * make every later drain a no-op and strand the run without a terminal signal.
+     * subscription's failure to record, but the work-in-progress counter is reset before the throw
+     * leaves, because leaving it raised would strand the run without a terminal signal.
      */
     private void drain() {
       if (wip.getAndIncrement() != 0) {
@@ -475,6 +558,7 @@ public final class StreamingToolLoopPublisher implements Flow.Publisher<AgentRes
       private final ModelRequest iterationRequest;
       private final StreamingModelResponseAccumulator accumulator =
           new StreamingModelResponseAccumulator(identity);
+      private final List<ModelResponseUpdate> rawUpdates = new ArrayList<>();
       private volatile boolean done;
 
       private ModelSubscriber(int index, ModelRequest iterationRequest) {
@@ -511,6 +595,7 @@ public final class StreamingToolLoopPublisher implements Flow.Publisher<AgentRes
         AgentResponseUpdate mapped;
         try {
           mapped = accumulator.record(update);
+          rawUpdates.add(update);
         } catch (RuntimeException recordFailure) {
           done = true;
           fail(recordFailure);
@@ -535,7 +620,7 @@ public final class StreamingToolLoopPublisher implements Flow.Publisher<AgentRes
           return;
         }
         done = true;
-        completeIteration(index, iterationRequest, accumulator);
+        completeIteration(index, iterationRequest, accumulator, rawUpdates);
       }
     }
   }
@@ -552,5 +637,89 @@ public final class StreamingToolLoopPublisher implements Flow.Publisher<AgentRes
     public void cancel() {
       // Nothing to cancel.
     }
+  }
+
+  /**
+   * Reassembles one model call's updates into the single {@link ModelResponse} an ordinary run
+   * observes for that call. A call an ordinary client returned as one update keeps its message
+   * boundaries; a call a stream delivered in pieces is coalesced by {@link
+   * AgentResponse#fromUpdates}, exactly as the streamed view coalesces it.
+   */
+  private static ModelResponse assembleResponse(List<ModelResponseUpdate> updates) {
+    if (updates.isEmpty()) {
+      throw new IllegalStateException("model stream completed without any update");
+    }
+    if (updates.size() == 1) {
+      ModelResponseUpdate update = updates.get(0);
+      return ModelResponse.builder()
+          .messages(update.messages())
+          .usage(update.usage())
+          .finishReason(update.finishReason())
+          .continuationToken(update.continuationToken())
+          .metadata(update.metadata())
+          .rawRepresentation(update.rawRepresentation())
+          .build();
+    }
+    StreamingModelResponseAccumulator accumulator =
+        new StreamingModelResponseAccumulator(
+            new ResponseIdentity(
+                "model", java.util.UUID.randomUUID().toString(), null, java.time.Instant.now()));
+    for (ModelResponseUpdate update : updates) {
+      accumulator.record(update);
+    }
+    return accumulator.toModelResponse();
+  }
+
+  private static Usage combineUsage(Usage accumulated, Usage update) {
+    if (accumulated == null) {
+      return update;
+    }
+    if (update == null) {
+      return accumulated;
+    }
+    return new Usage(
+        Math.addExact(accumulated.inputTokens(), update.inputTokens()),
+        Math.addExact(accumulated.outputTokens(), update.outputTokens()),
+        Math.addExact(accumulated.totalTokens(), update.totalTokens()),
+        mergeAdditionalProperties(
+            accumulated.additionalProperties(),
+            update.additionalProperties(),
+            RunPipeline::combineUsageProperty));
+  }
+
+  private static JsonValue combineUsageProperty(JsonValue accumulated, JsonValue update) {
+    if (accumulated instanceof JsonNumber left && update instanceof JsonNumber right) {
+      return JsonNumber.of(left.value().add(right.value()));
+    }
+    return update;
+  }
+
+  private static JsonObject mergeAdditionalProperties(
+      JsonObject accumulated,
+      JsonObject update,
+      BiFunction<JsonValue, JsonValue, JsonValue> merger) {
+    if ((accumulated == null || accumulated.isEmpty()) && (update == null || update.isEmpty())) {
+      return JsonObject.empty();
+    }
+    if (accumulated == null || accumulated.isEmpty()) {
+      return update == null ? JsonObject.empty() : update;
+    }
+    if (update == null || update.isEmpty()) {
+      return accumulated;
+    }
+    Map<String, JsonValue> merged = new LinkedHashMap<>(accumulated.values());
+    update
+        .values()
+        .forEach(
+            (key, value) ->
+                merged.merge(
+                    key,
+                    value,
+                    (left, right) ->
+                        Objects.requireNonNull(
+                            merger.apply(left, right), "merged value must not be null")));
+    JsonObject.Builder builder = JsonObject.builder();
+    merged.forEach(builder::put);
+    return builder.build();
   }
 }
