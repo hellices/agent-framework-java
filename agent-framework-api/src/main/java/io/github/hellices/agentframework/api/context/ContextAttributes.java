@@ -44,6 +44,18 @@ public final class ContextAttributes {
     return builder;
   }
 
+  public ContextAttributes merge(ContextAttributes override) {
+    Objects.requireNonNull(override, "override must not be null");
+    if (override.entries.isEmpty()) {
+      return this;
+    }
+    Builder builder = toBuilder();
+    for (Entry<?> entry : override.entries.values()) {
+      builder.putEntry(entry);
+    }
+    return builder.build();
+  }
+
   @Override
   public boolean equals(Object other) {
     if (this == other) {
@@ -110,6 +122,10 @@ public final class ContextAttributes {
         return empty();
       }
       return new ContextAttributes(Map.copyOf(entries));
+    }
+
+    private <T> void putEntry(Entry<T> entry) {
+      put(entry.key, entry.value);
     }
   }
 

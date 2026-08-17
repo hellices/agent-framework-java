@@ -1,6 +1,7 @@
 package io.github.hellices.agentframework.engine.internal.tool;
 
 import io.github.hellices.agentframework.api.agent.AgentRunRequest;
+import io.github.hellices.agentframework.api.context.ContextAttributes;
 import io.github.hellices.agentframework.api.message.Content;
 import io.github.hellices.agentframework.api.message.Message;
 import io.github.hellices.agentframework.api.message.Role;
@@ -189,7 +190,7 @@ public final class ToolLoopPolicy {
         Objects.requireNonNull(
             tool.execute(
                 new ToolArguments(call.arguments()),
-                new ToolContext(request.cancellationSignal(), request.attributes())),
+                new ToolContext(request.cancellationSignal(), effectiveAttributes(request))),
             "tool handler response stage must not be null");
     return resultStage.thenCompose(
         result -> {
@@ -203,6 +204,10 @@ public final class ToolLoopPolicy {
   /** The single tool message one round of tool results is reported to the model as. */
   public static Message toolResultMessage(List<Content> results) {
     return new Message(Role.TOOL, results);
+  }
+
+  private static ContextAttributes effectiveAttributes(AgentRunRequest request) {
+    return request.options().attributes().merge(request.attributes());
   }
 
   /**

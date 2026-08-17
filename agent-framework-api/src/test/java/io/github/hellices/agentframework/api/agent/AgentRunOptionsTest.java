@@ -8,6 +8,8 @@ import io.github.hellices.agentframework.api.context.ContextAttributes;
 import io.github.hellices.agentframework.api.context.ContextKey;
 import io.github.hellices.agentframework.api.message.FinishReason;
 import io.github.hellices.agentframework.api.message.Message;
+import io.github.hellices.agentframework.api.session.SessionContext;
+import io.github.hellices.agentframework.api.tool.ToolContext;
 import io.github.hellices.agentframework.spi.model.ModelClient;
 import io.github.hellices.agentframework.spi.model.ModelRequest;
 import io.github.hellices.agentframework.spi.model.ModelResponse;
@@ -34,6 +36,30 @@ class AgentRunOptionsTest {
   void rawMapAttributeBridgesAreRemoved() {
     assertThat(findMethod(AgentRunOptions.Builder.class, "attributes", Map.class)).isEmpty();
     assertThat(findConstructor(AgentRunOptions.class, Map.class)).isEmpty();
+    assertThat(
+            findConstructor(
+                AgentRunRequest.class,
+                List.class,
+                AgentSession.class,
+                AgentRunOptions.class,
+                CancellationSignal.class,
+                Map.class))
+        .isEmpty();
+    assertThat(findConstructor(AgentRunContext.class, Agent.class, AgentSession.class, Map.class))
+        .isEmpty();
+    assertThat(
+            findConstructor(
+                SessionContext.class,
+                AgentSession.class,
+                List.class,
+                Map.class,
+                CancellationSignal.class))
+        .isEmpty();
+    assertThat(findConstructor(ToolContext.class, CancellationSignal.class, Map.class)).isEmpty();
+    assertThat(returnType(AgentRunRequest.class, "attributes")).isEqualTo(ContextAttributes.class);
+    assertThat(returnType(AgentRunContext.class, "attributes")).isEqualTo(ContextAttributes.class);
+    assertThat(returnType(SessionContext.class, "attributes")).isEqualTo(ContextAttributes.class);
+    assertThat(returnType(ToolContext.class, "attributes")).isEqualTo(ContextAttributes.class);
   }
 
   @Test
@@ -101,7 +127,8 @@ class AgentRunOptionsTest {
 
   private static AgentRunRequest request(
       List<? extends Message> messages, AgentRunOptions options) {
-    return new AgentRunRequest(messages, null, options, new CancellationSignal(), Map.of());
+    return new AgentRunRequest(
+        messages, null, options, new CancellationSignal(), ContextAttributes.empty());
   }
 
   private static ModelResponse response() {
@@ -123,6 +150,14 @@ class AgentRunOptionsTest {
       return java.util.Optional.of(type.getDeclaredConstructor(parameterTypes));
     } catch (NoSuchMethodException missing) {
       return java.util.Optional.empty();
+    }
+  }
+
+  private static Class<?> returnType(Class<?> type, String methodName) {
+    try {
+      return type.getMethod(methodName).getReturnType();
+    } catch (NoSuchMethodException failure) {
+      throw new AssertionError(failure);
     }
   }
 }

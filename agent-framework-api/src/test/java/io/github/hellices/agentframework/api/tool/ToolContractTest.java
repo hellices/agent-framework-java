@@ -5,6 +5,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.github.hellices.agentframework.api.agent.CancellationSignal;
+import io.github.hellices.agentframework.api.context.ContextAttributes;
+import io.github.hellices.agentframework.api.context.ContextKey;
 import io.github.hellices.agentframework.api.message.Content;
 import io.github.hellices.agentframework.api.message.TextContent;
 import io.github.hellices.agentframework.api.message.ToolCallContent;
@@ -29,7 +31,11 @@ class ToolContractTest {
     ToolResult result =
         tool.execute(
                 new ToolArguments(Map.of("city", "Seoul")),
-                new ToolContext(new CancellationSignal(), Map.of("traceId", "1")))
+                new ToolContext(
+                    new CancellationSignal(),
+                    ContextAttributes.builder()
+                        .put(ContextKey.of("tool", "traceId", String.class), "1")
+                        .build()))
             .toCompletableFuture()
             .join();
 

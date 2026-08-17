@@ -10,6 +10,8 @@ import io.github.hellices.agentframework.api.agent.AgentRunOptions;
 import io.github.hellices.agentframework.api.agent.AgentRunRequest;
 import io.github.hellices.agentframework.api.agent.AgentStreamingRun;
 import io.github.hellices.agentframework.api.agent.CancellationSignal;
+import io.github.hellices.agentframework.api.context.ContextAttributes;
+import io.github.hellices.agentframework.api.context.ContextKey;
 import io.github.hellices.agentframework.api.message.Content;
 import io.github.hellices.agentframework.api.message.FinishReason;
 import io.github.hellices.agentframework.api.message.Message;
@@ -19,6 +21,7 @@ import io.github.hellices.agentframework.api.message.ToolCallContent;
 import io.github.hellices.agentframework.api.message.ToolResultContent;
 import io.github.hellices.agentframework.api.message.Usage;
 import io.github.hellices.agentframework.api.tool.FunctionTool;
+import io.github.hellices.agentframework.api.tool.ToolContext;
 import io.github.hellices.agentframework.api.tool.ToolResult;
 import io.github.hellices.agentframework.spi.model.ContinuationModelClient;
 import io.github.hellices.agentframework.spi.model.ModelClient;
@@ -37,6 +40,9 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 
 class AgentEngineTest {
+
+  private static final ContextKey<String> TRACE_ID =
+      ContextKey.of("agent", "traceId", String.class);
 
   @Test
   void builderRejectsMissingModelClient() {
@@ -63,18 +69,75 @@ class AgentEngineTest {
     CancellationSignal signal = new CancellationSignal();
     AgentRunRequest request =
         new AgentRunRequest(
-            Message.normalize("hi"), null, new AgentRunOptions(), signal, Map.of("traceId", "1"));
+            Message.normalize("hi"),
+            null,
+            new AgentRunOptions(),
+            signal,
+            ContextAttributes.builder().put(TRACE_ID, "1").build());
 
     var response = engine.run(request).response().toCompletableFuture().join();
 
     assertThat(capturedRequest.get().messages()).extracting(Message::text).containsExactly("hi");
     assertThat(capturedRequest.get().cancellationSignal()).isSameAs(signal);
-    assertThat(capturedRequest.get().metadata()).containsEntry("traceId", "1");
+    assertThat(capturedRequest.get().metadata()).isEmpty();
     assertThat(response.agentId()).isEqualTo("agent-1");
     assertThat(response.authorName()).isEqualTo("assistant");
     assertThat(response.responseId()).isNotBlank();
     assertThat(response.text()).isEqualTo("hello");
     assertThat(response.finishReason()).isEqualTo(FinishReason.STOP);
+  }
+
+  @Test
+  void toolContextReceivesMergedRunAttributesWithRequestOverrides() {
+    ContextKey<String> tenant = ContextKey.of("agent", "tenant", String.class);
+    ContextKey<String> region = ContextKey.of("agent", "region", String.class);
+    ContextAttributes optionAttributes =
+        ContextAttributes.builder().put(tenant, "from-options").put(region, "westus").build();
+    ContextAttributes requestAttributes =
+        ContextAttributes.builder().put(tenant, "from-request").build();
+    AtomicReference<ToolContext> capturedContext = new AtomicReference<>();
+    AtomicBoolean firstRequest = new AtomicBoolean(true);
+    ModelClient client =
+        request -> {
+          if (firstRequest.getAndSet(false)) {
+            return completedFuture(
+                new ModelResponse(
+                    List.of(
+                        new Message(
+                            Role.ASSISTANT,
+                            List.of(
+                                new ToolCallContent(
+                                    "call-1", "weather", Map.of("city", "Seoul"))))),
+                    null,
+                    FinishReason.TOOL_CALLS,
+                    Map.of(),
+                    null));
+          }
+          return completedFuture(response("done"));
+        };
+    FunctionTool weather =
+        FunctionTool.create(
+            "weather",
+            "Gets weather",
+            Map.of("type", "object"),
+            (arguments, context) -> {
+              capturedContext.set(context);
+              return completedFuture(ToolResult.success(new TextContent("sunny")));
+            });
+    AgentEngine engine = AgentEngine.builder().modelClient(client).tools(weather).build();
+    AgentRunRequest request =
+        new AgentRunRequest(
+            Message.normalize("weather?"),
+            null,
+            AgentRunOptions.builder().attributes(optionAttributes).build(),
+            new CancellationSignal(),
+            requestAttributes);
+
+    engine.run(request).response().toCompletableFuture().join();
+
+    assertThat(capturedContext.get()).isNotNull();
+    assertThat(capturedContext.get().attributes().get(tenant)).contains("from-request");
+    assertThat(capturedContext.get().attributes().get(region)).contains("westus");
   }
 
   @Test
@@ -91,7 +154,11 @@ class AgentEngineTest {
         AgentRunOptions.builder().modelClientFactory(ignored -> replacement).build();
     AgentRunRequest request =
         new AgentRunRequest(
-            Message.normalize("hi"), null, options, new CancellationSignal(), Map.of());
+            Message.normalize("hi"),
+            null,
+            options,
+            new CancellationSignal(),
+            ContextAttributes.empty());
 
     var response = engine.run(request).response().toCompletableFuture().join();
 
@@ -147,7 +214,7 @@ class AgentEngineTest {
             null,
             AgentRunOptions.builder().continuationToken("continuation-1").build(),
             new CancellationSignal(),
-            Map.of());
+            ContextAttributes.empty());
 
     var response = engine.run(request).response().toCompletableFuture().join();
 
@@ -166,7 +233,7 @@ class AgentEngineTest {
             null,
             AgentRunOptions.builder().continuationToken("continuation-1").build(),
             new CancellationSignal(),
-            Map.of());
+            ContextAttributes.empty());
 
     assertThatThrownBy(() -> engine.run(request))
         .isInstanceOf(UnsupportedOperationException.class)
@@ -183,7 +250,7 @@ class AgentEngineTest {
             null,
             AgentRunOptions.builder().continuationToken("continuation-1").build(),
             new CancellationSignal(),
-            Map.of());
+            ContextAttributes.empty());
 
     AgentStreamingRun<AgentResponseUpdate> run = engine.runStreaming(request);
 
@@ -210,7 +277,12 @@ class AgentEngineTest {
     AgentEngine engine = AgentEngine.builder().modelClient(request -> pendingResponse).build();
     CancellationSignal signal = new CancellationSignal();
     AgentRunRequest request =
-        new AgentRunRequest(Message.normalize("hi"), null, new AgentRunOptions(), signal, Map.of());
+        new AgentRunRequest(
+            Message.normalize("hi"),
+            null,
+            new AgentRunOptions(),
+            signal,
+            ContextAttributes.empty());
     var run = engine.run(request);
 
     signal.cancel();
@@ -534,7 +606,7 @@ class AgentEngineTest {
             null,
             AgentRunOptions.builder().continuationToken("continuation-1").build(),
             new CancellationSignal(),
-            Map.of());
+            ContextAttributes.empty());
 
     assertThatThrownBy(() -> engine.run(request))
         .isInstanceOf(UnsupportedOperationException.class)

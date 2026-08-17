@@ -3,6 +3,7 @@ package io.github.hellices.agentframework.api.session;
 import io.github.hellices.agentframework.api.agent.AgentResponse;
 import io.github.hellices.agentframework.api.agent.AgentSession;
 import io.github.hellices.agentframework.api.agent.CancellationSignal;
+import io.github.hellices.agentframework.api.context.ContextAttributes;
 import io.github.hellices.agentframework.api.message.Message;
 import io.github.hellices.agentframework.api.message.MessageAttribution;
 import io.github.hellices.agentframework.spi.session.ProviderSessionState;
@@ -54,7 +55,7 @@ public final class SessionContext {
   private final List<Message> inputMessages;
   private final List<ContextMessageContribution> contextContributions = new ArrayList<>();
   private final Map<String, ProviderState> providerStates = new LinkedHashMap<>();
-  private final Map<String, Object> metadata;
+  private final ContextAttributes attributes;
   private final CancellationSignal cancellationSignal;
   private AgentSession session;
   private SessionSnapshotMetadata snapshotMetadata;
@@ -64,7 +65,7 @@ public final class SessionContext {
   public SessionContext(
       AgentSession session,
       List<? extends Message> inputMessages,
-      Map<String, Object> metadata,
+      ContextAttributes attributes,
       CancellationSignal cancellationSignal) {
     this.session = session;
     List<Message> normalizedInputMessages = new ArrayList<>();
@@ -75,7 +76,7 @@ public final class SessionContext {
       }
     }
     this.inputMessages = List.copyOf(normalizedInputMessages);
-    this.metadata = metadata == null ? Map.of() : Map.copyOf(metadata);
+    this.attributes = attributes == null ? ContextAttributes.empty() : attributes;
     this.cancellationSignal =
         cancellationSignal == null ? new CancellationSignal() : cancellationSignal;
   }
@@ -403,13 +404,13 @@ public final class SessionContext {
     return sourceId;
   }
 
-  public Map<String, Object> metadata() {
-    return metadata;
+  public ContextAttributes metadata() {
+    return attributes;
   }
 
   /** Returns the run request attributes exposed as session context metadata. */
-  public Map<String, Object> attributes() {
-    return metadata;
+  public ContextAttributes attributes() {
+    return attributes;
   }
 
   public CancellationSignal cancellationSignal() {

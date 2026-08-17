@@ -1,5 +1,6 @@
 package io.github.hellices.agentframework.api.agent;
 
+import io.github.hellices.agentframework.api.context.ContextAttributes;
 import io.github.hellices.agentframework.api.session.SessionContext;
 import java.util.Objects;
 import java.util.UUID;
@@ -46,10 +47,11 @@ public abstract class Agent {
     if (session != null) {
       validateSessionCompatibility(session);
     }
-    SessionContext sessionContext = newSessionContext(normalizedRequest);
+    ContextAttributes effectiveAttributes = effectiveAttributes(normalizedRequest);
+    SessionContext sessionContext = newSessionContext(normalizedRequest, effectiveAttributes);
     AgentRun run =
         runInternal(
-            new AgentRunContext(this, session, normalizedRequest.attributes(), sessionContext),
+            new AgentRunContext(this, session, effectiveAttributes, sessionContext),
             normalizedRequest);
     AgentRun completed = run.withCompletion(completionAction(sessionContext));
     return completed.withResponse(
@@ -67,10 +69,11 @@ public abstract class Agent {
     if (session != null) {
       validateSessionCompatibility(session);
     }
-    SessionContext sessionContext = newSessionContext(normalizedRequest);
+    ContextAttributes effectiveAttributes = effectiveAttributes(normalizedRequest);
+    SessionContext sessionContext = newSessionContext(normalizedRequest, effectiveAttributes);
     AgentStreamingRun<AgentResponseUpdate> run =
         runStreamingInternal(
-            new AgentRunContext(this, session, normalizedRequest.attributes(), sessionContext),
+            new AgentRunContext(this, session, effectiveAttributes, sessionContext),
             normalizedRequest);
     AgentStreamingRun<AgentResponseUpdate> completed =
         run.withCompletion(completionAction(sessionContext));
@@ -121,9 +124,14 @@ public abstract class Agent {
     return CompletableFuture.completedFuture(null);
   }
 
-  private static SessionContext newSessionContext(AgentRunRequest request) {
+  private static SessionContext newSessionContext(
+      AgentRunRequest request, ContextAttributes effectiveAttributes) {
     return new SessionContext(
-        request.session(), request.messages(), request.attributes(), request.cancellationSignal());
+        request.session(), request.messages(), effectiveAttributes, request.cancellationSignal());
+  }
+
+  private static ContextAttributes effectiveAttributes(AgentRunRequest request) {
+    return request.options().attributes().merge(request.attributes());
   }
 
   /**

@@ -4,6 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.github.hellices.agentframework.api.agent.CancellationSignal;
+import io.github.hellices.agentframework.api.context.ContextAttributes;
+import io.github.hellices.agentframework.api.context.ContextKey;
 import io.github.hellices.agentframework.api.tool.FunctionTool;
 import io.github.hellices.agentframework.api.tool.ToolArguments;
 import io.github.hellices.agentframework.api.tool.ToolContext;
@@ -29,6 +31,9 @@ import org.junit.jupiter.api.Test;
  */
 class BorrowedMcpClientIntegrationTest {
 
+  private static final ContextKey<String> CONVERSATION_ID =
+      ContextKey.of("mcp", "conversationId", String.class);
+
   private static final Map<String, Object> SCHEMA =
       Map.of("type", "object", "properties", Map.of("query", Map.of("type", "string")));
 
@@ -46,7 +51,8 @@ class BorrowedMcpClientIntegrationTest {
             .get(0)
             .execute(
                 new ToolArguments(Map.of("query", "open", "smuggled", "value")),
-                new ToolContext(null, Map.of("conversationId", "c-1")))
+                new ToolContext(
+                    null, ContextAttributes.builder().put(CONVERSATION_ID, "c-1").build()))
             .toCompletableFuture()
             .join();
 
@@ -94,7 +100,9 @@ class BorrowedMcpClientIntegrationTest {
     FunctionTool tool = adapter.discoverTools().toCompletableFuture().join().get(0);
     assertThatThrownBy(
             () ->
-                tool.execute(new ToolArguments(Map.of()), new ToolContext(null, Map.of()))
+                tool.execute(
+                        new ToolArguments(Map.of()),
+                        new ToolContext(null, ContextAttributes.empty()))
                     .toCompletableFuture()
                     .join())
         .isNotNull();
@@ -132,7 +140,9 @@ class BorrowedMcpClientIntegrationTest {
         .hasMessageContaining("initialized");
     assertThatThrownBy(
             () ->
-                tool.execute(new ToolArguments(Map.of()), new ToolContext(null, Map.of()))
+                tool.execute(
+                        new ToolArguments(Map.of()),
+                        new ToolContext(null, ContextAttributes.empty()))
                     .toCompletableFuture()
                     .join())
         .rootCause()
@@ -204,7 +214,8 @@ class BorrowedMcpClientIntegrationTest {
     transport.withholding(McpSchema.METHOD_TOOLS_CALL);
 
     CompletableFuture<ToolResult> call =
-        tool.execute(new ToolArguments(Map.of()), new ToolContext(signal, Map.of()))
+        tool.execute(
+                new ToolArguments(Map.of()), new ToolContext(signal, ContextAttributes.empty()))
             .toCompletableFuture();
     signal.cancel();
 

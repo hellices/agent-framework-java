@@ -6,6 +6,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import io.github.hellices.agentframework.api.agent.AgentResponse;
 import io.github.hellices.agentframework.api.agent.AgentSession;
 import io.github.hellices.agentframework.api.agent.CancellationSignal;
+import io.github.hellices.agentframework.api.context.ContextAttributes;
+import io.github.hellices.agentframework.api.context.ContextKey;
 import io.github.hellices.agentframework.api.message.FinishReason;
 import io.github.hellices.agentframework.api.message.Message;
 import io.github.hellices.agentframework.api.message.MessageAttribution;
@@ -20,10 +22,12 @@ import org.junit.jupiter.api.Test;
 
 class SessionContextTest {
 
+  private static final ContextKey<String> TENANT = ContextKey.of("agent", "tenant", String.class);
+
   @Test
   void responseIsEmptyUntilCompleted() {
     SessionContext sessionContext =
-        new SessionContext(null, List.of(), Map.of(), new CancellationSignal());
+        new SessionContext(null, List.of(), ContextAttributes.empty(), new CancellationSignal());
 
     assertThat(sessionContext.response()).isEmpty();
   }
@@ -31,7 +35,7 @@ class SessionContextTest {
   @Test
   void completeFillsTheResponseSlotExactlyOnce() {
     SessionContext sessionContext =
-        new SessionContext(null, List.of(), Map.of(), new CancellationSignal());
+        new SessionContext(null, List.of(), ContextAttributes.empty(), new CancellationSignal());
     AgentResponse response = sampleResponse();
 
     sessionContext.complete(response);
@@ -42,7 +46,7 @@ class SessionContextTest {
   @Test
   void completeRejectsASecondCallEvenWithTheSameValue() {
     SessionContext sessionContext =
-        new SessionContext(null, List.of(), Map.of(), new CancellationSignal());
+        new SessionContext(null, List.of(), ContextAttributes.empty(), new CancellationSignal());
     AgentResponse response = sampleResponse();
     sessionContext.complete(response);
 
@@ -58,7 +62,7 @@ class SessionContextTest {
   @Test
   void completeRejectsASecondCallWithADifferentValue() {
     SessionContext sessionContext =
-        new SessionContext(null, List.of(), Map.of(), new CancellationSignal());
+        new SessionContext(null, List.of(), ContextAttributes.empty(), new CancellationSignal());
     AgentResponse first = sampleResponse();
     AgentResponse second = sampleResponse();
     sessionContext.complete(first);
@@ -72,7 +76,7 @@ class SessionContextTest {
   @Test
   void completeRejectsANullResponse() {
     SessionContext sessionContext =
-        new SessionContext(null, List.of(), Map.of(), new CancellationSignal());
+        new SessionContext(null, List.of(), ContextAttributes.empty(), new CancellationSignal());
 
     assertThatThrownBy(() -> sessionContext.complete(null))
         .isInstanceOf(NullPointerException.class)
@@ -82,7 +86,8 @@ class SessionContextTest {
 
   @Test
   void normalizesANullCancellationSignalToAFreshOne() {
-    SessionContext sessionContext = new SessionContext(null, List.of(), Map.of(), null);
+    SessionContext sessionContext =
+        new SessionContext(null, List.of(), ContextAttributes.empty(), null);
 
     assertThat(sessionContext.cancellationSignal()).isNotNull();
     assertThat(sessionContext.cancellationSignal().isCancelled()).isFalse();
@@ -90,15 +95,15 @@ class SessionContextTest {
 
   @Test
   void normalizedCancellationSignalIsFreshPerInstance() {
-    SessionContext first = new SessionContext(null, List.of(), Map.of(), null);
-    SessionContext second = new SessionContext(null, List.of(), Map.of(), null);
+    SessionContext first = new SessionContext(null, List.of(), ContextAttributes.empty(), null);
+    SessionContext second = new SessionContext(null, List.of(), ContextAttributes.empty(), null);
 
     assertThat(first.cancellationSignal()).isNotSameAs(second.cancellationSignal());
   }
 
   @Test
   void attributesAliasesRequestMetadata() {
-    Map<String, Object> attributes = Map.of("tenant", "test");
+    ContextAttributes attributes = ContextAttributes.builder().put(TENANT, "test").build();
     SessionContext sessionContext =
         new SessionContext(null, List.of(), attributes, new CancellationSignal());
 
@@ -109,7 +114,7 @@ class SessionContextTest {
   @Test
   void addContextMessagesAppendsInOrderAcrossMultipleCalls() {
     SessionContext sessionContext =
-        new SessionContext(null, List.of(), Map.of(), new CancellationSignal());
+        new SessionContext(null, List.of(), ContextAttributes.empty(), new CancellationSignal());
     Message first = sampleMessage("first");
     Message second = sampleMessage("second");
     Message third = sampleMessage("third");
@@ -123,7 +128,7 @@ class SessionContextTest {
   @Test
   void addContextMessagesCopiesTheCallerListSoLaterMutationsDoNotLeak() {
     SessionContext sessionContext =
-        new SessionContext(null, List.of(), Map.of(), new CancellationSignal());
+        new SessionContext(null, List.of(), ContextAttributes.empty(), new CancellationSignal());
     Message first = sampleMessage("first");
     List<Message> callerList = new ArrayList<>(List.of(first));
 
@@ -136,7 +141,7 @@ class SessionContextTest {
   @Test
   void contextMessagesReturnsAnImmutableSnapshotThatDoesNotExposeTheBackingList() {
     SessionContext sessionContext =
-        new SessionContext(null, List.of(), Map.of(), new CancellationSignal());
+        new SessionContext(null, List.of(), ContextAttributes.empty(), new CancellationSignal());
     Message first = sampleMessage("first");
     sessionContext.addContextMessages(List.of(first));
 
@@ -151,7 +156,7 @@ class SessionContextTest {
   @Test
   void addContextMessagesTreatsANullCollectionAsANoOp() {
     SessionContext sessionContext =
-        new SessionContext(null, List.of(), Map.of(), new CancellationSignal());
+        new SessionContext(null, List.of(), ContextAttributes.empty(), new CancellationSignal());
     Message first = sampleMessage("first");
     sessionContext.addContextMessages(List.of(first));
 
@@ -163,7 +168,7 @@ class SessionContextTest {
   @Test
   void addContextMessagesRejectsNullEntriesAndLeavesStateUnchanged() {
     SessionContext sessionContext =
-        new SessionContext(null, List.of(), Map.of(), new CancellationSignal());
+        new SessionContext(null, List.of(), ContextAttributes.empty(), new CancellationSignal());
     Message first = sampleMessage("first");
     sessionContext.addContextMessages(List.of(first));
     List<Message> withNullEntry = new ArrayList<>();
@@ -182,7 +187,7 @@ class SessionContextTest {
     AgentSession session =
         new AgentSession("session-1", null, Map.of("memory", 7, "history", List.of("kept")));
     SessionContext sessionContext =
-        new SessionContext(session, List.of(), Map.of(), new CancellationSignal());
+        new SessionContext(session, List.of(), ContextAttributes.empty(), new CancellationSignal());
 
     ProviderSessionState memory = sessionContext.providerState("memory");
 
@@ -195,7 +200,7 @@ class SessionContextTest {
   void providerStateIsTheSameViewForTheSameSourceIdAcrossHookPhases() {
     AgentSession session = new AgentSession("session-1", null, Map.of());
     SessionContext sessionContext =
-        new SessionContext(session, List.of(), Map.of(), new CancellationSignal());
+        new SessionContext(session, List.of(), ContextAttributes.empty(), new CancellationSignal());
 
     assertThat(sessionContext.providerState("memory"))
         .isSameAs(sessionContext.providerState("memory"));
@@ -205,7 +210,7 @@ class SessionContextTest {
   void providerStateSlotsAreIsolatedBetweenSourceIds() {
     AgentSession session = new AgentSession("session-1", null, Map.of("memory", 7));
     SessionContext sessionContext =
-        new SessionContext(session, List.of(), Map.of(), new CancellationSignal());
+        new SessionContext(session, List.of(), ContextAttributes.empty(), new CancellationSignal());
 
     ProviderSessionState memory = sessionContext.providerState("memory");
     ProviderSessionState history = sessionContext.providerState("history");
@@ -218,7 +223,7 @@ class SessionContextTest {
   @Test
   void providerStateRejectsABlankSourceId() {
     SessionContext sessionContext =
-        new SessionContext(null, List.of(), Map.of(), new CancellationSignal());
+        new SessionContext(null, List.of(), ContextAttributes.empty(), new CancellationSignal());
 
     assertThatThrownBy(() -> sessionContext.providerState("  "))
         .isInstanceOf(IllegalArgumentException.class)
@@ -229,7 +234,7 @@ class SessionContextTest {
   void typedProviderStateValueRejectsAMismatchedType() {
     AgentSession session = new AgentSession("session-1", null, Map.of("memory", "text"));
     SessionContext sessionContext =
-        new SessionContext(session, List.of(), Map.of(), new CancellationSignal());
+        new SessionContext(session, List.of(), ContextAttributes.empty(), new CancellationSignal());
 
     assertThatThrownBy(() -> sessionContext.providerState("memory").value(Integer.class))
         .isInstanceOf(IllegalStateException.class)
@@ -239,7 +244,7 @@ class SessionContextTest {
   @Test
   void providerStateStartsEmptyForASessionlessRun() {
     SessionContext sessionContext =
-        new SessionContext(null, List.of(), Map.of(), new CancellationSignal());
+        new SessionContext(null, List.of(), ContextAttributes.empty(), new CancellationSignal());
 
     assertThat(sessionContext.providerState("memory").value()).isEmpty();
     assertThat(sessionContext.updatedSession()).isEmpty();
@@ -249,7 +254,7 @@ class SessionContextTest {
   void updatedSessionReturnsTheOriginalWhenNoProviderStateWasViewed() {
     AgentSession session = new AgentSession("session-1", null, Map.of("stored", "value"));
     SessionContext sessionContext =
-        new SessionContext(session, List.of(), Map.of(), new CancellationSignal());
+        new SessionContext(session, List.of(), ContextAttributes.empty(), new CancellationSignal());
 
     assertThat(sessionContext.updatedSession()).containsSame(session);
   }
@@ -258,7 +263,7 @@ class SessionContextTest {
   void updatedSessionReturnsTheOriginalWhenNoViewedSourceCanBePersisted() {
     AgentSession session = new AgentSession("session-1", null, Map.of("stored", "value"));
     SessionContext sessionContext =
-        new SessionContext(session, List.of(), Map.of(), new CancellationSignal());
+        new SessionContext(session, List.of(), ContextAttributes.empty(), new CancellationSignal());
     sessionContext.restrictPersistedSources(List.of());
     sessionContext.providerState("unbound").set("dropped");
 
@@ -270,7 +275,7 @@ class SessionContextTest {
     AgentSession session =
         new AgentSession("session-1", "service-1", Map.of("memory", 1, "keep", "as-is"));
     SessionContext sessionContext =
-        new SessionContext(session, List.of(), Map.of(), new CancellationSignal());
+        new SessionContext(session, List.of(), ContextAttributes.empty(), new CancellationSignal());
 
     sessionContext.providerState("memory").set(2);
     AgentSession updated = sessionContext.updatedSession().orElseThrow();
@@ -286,7 +291,7 @@ class SessionContextTest {
     AgentSession session =
         new AgentSession("session-1", null, Map.of("memory", 1, "keep", "as-is"));
     SessionContext sessionContext =
-        new SessionContext(session, List.of(), Map.of(), new CancellationSignal());
+        new SessionContext(session, List.of(), ContextAttributes.empty(), new CancellationSignal());
 
     sessionContext.providerState("memory").clear();
 
@@ -298,7 +303,7 @@ class SessionContextTest {
   @Test
   void providerStateSetRejectsANullValue() {
     SessionContext sessionContext =
-        new SessionContext(null, List.of(), Map.of(), new CancellationSignal());
+        new SessionContext(null, List.of(), ContextAttributes.empty(), new CancellationSignal());
     ProviderSessionState state = sessionContext.providerState("memory");
 
     assertThatThrownBy(() -> state.set(null))
@@ -310,7 +315,7 @@ class SessionContextTest {
   void sourceBoundContextMessagesAreStampedWithTheProviderAttribution() {
     AgentSession session = new AgentSession("session-1", null, Map.of());
     SessionContext sessionContext =
-        new SessionContext(session, List.of(), Map.of(), new CancellationSignal());
+        new SessionContext(session, List.of(), ContextAttributes.empty(), new CancellationSignal());
 
     sessionContext.addContextMessages("memory", List.of(sampleMessage("remembered")));
 
@@ -322,7 +327,7 @@ class SessionContextTest {
   @Test
   void sourceBoundContextMessagesUseThePinnedProviderSourceTypeName() {
     SessionContext sessionContext =
-        new SessionContext(null, List.of(), Map.of(), new CancellationSignal());
+        new SessionContext(null, List.of(), ContextAttributes.empty(), new CancellationSignal());
 
     sessionContext.addContextMessages("memory", List.of(sampleMessage("remembered")));
 
@@ -337,7 +342,7 @@ class SessionContextTest {
   void sourceBoundContextMessagesTreatABlankExistingSourceIdAsAbsent() {
     AgentSession session = new AgentSession("session-1", null, Map.of());
     SessionContext sessionContext =
-        new SessionContext(session, List.of(), Map.of(), new CancellationSignal());
+        new SessionContext(session, List.of(), ContextAttributes.empty(), new CancellationSignal());
     Message blankSource =
         new Message(
             Role.USER,
@@ -356,7 +361,7 @@ class SessionContextTest {
   @Test
   void sourceBoundContextMessagesKeepAnExplicitProviderAttribution() {
     SessionContext sessionContext =
-        new SessionContext(null, List.of(), Map.of(), new CancellationSignal());
+        new SessionContext(null, List.of(), ContextAttributes.empty(), new CancellationSignal());
     Message attributed =
         new Message(
             Role.USER,
@@ -374,7 +379,7 @@ class SessionContextTest {
   void sourceBoundContextMessagesKeepAPreExistingOriginSessionId() {
     AgentSession session = new AgentSession("session-1", null, Map.of());
     SessionContext sessionContext =
-        new SessionContext(session, List.of(), Map.of(), new CancellationSignal());
+        new SessionContext(session, List.of(), ContextAttributes.empty(), new CancellationSignal());
     Message retrievedElsewhere =
         new Message(
             Role.USER,
@@ -394,7 +399,7 @@ class SessionContextTest {
   void sourceBoundContextMessagesUseThisRunsSessionIdOnlyWhenNoOriginIsCarried() {
     AgentSession session = new AgentSession("session-1", null, Map.of());
     SessionContext sessionContext =
-        new SessionContext(session, List.of(), Map.of(), new CancellationSignal());
+        new SessionContext(session, List.of(), ContextAttributes.empty(), new CancellationSignal());
     Message withoutOrigin =
         new Message(
             Role.USER,
@@ -413,7 +418,7 @@ class SessionContextTest {
   @Test
   void sourceBoundContextMessagesKeepAPreExistingOriginSessionIdOnASessionlessRun() {
     SessionContext sessionContext =
-        new SessionContext(null, List.of(), Map.of(), new CancellationSignal());
+        new SessionContext(null, List.of(), ContextAttributes.empty(), new CancellationSignal());
     Message retrievedElsewhere =
         new Message(
             Role.USER,
@@ -432,7 +437,7 @@ class SessionContextTest {
   @Test
   void sourceBoundContextMessagesRejectABlankSourceId() {
     SessionContext sessionContext =
-        new SessionContext(null, List.of(), Map.of(), new CancellationSignal());
+        new SessionContext(null, List.of(), ContextAttributes.empty(), new CancellationSignal());
     List<Message> messages = List.of(sampleMessage("remembered"));
 
     assertThatThrownBy(() -> sessionContext.addContextMessages("", messages))
@@ -443,7 +448,7 @@ class SessionContextTest {
   @Test
   void contextContributionsRecordTheContributingProviderInGlobalOrder() {
     SessionContext sessionContext =
-        new SessionContext(null, List.of(), Map.of(), new CancellationSignal());
+        new SessionContext(null, List.of(), ContextAttributes.empty(), new CancellationSignal());
 
     sessionContext.addContextMessages("rag", List.of(sampleMessage("retrieved")));
     sessionContext.addContextMessages("notes", List.of(sampleMessage("noted")));
@@ -465,7 +470,7 @@ class SessionContextTest {
   @Test
   void aContributionKeepsItsContributorEvenWhenTheMessageCarriesAnotherAttribution() {
     SessionContext sessionContext =
-        new SessionContext(null, List.of(), Map.of(), new CancellationSignal());
+        new SessionContext(null, List.of(), ContextAttributes.empty(), new CancellationSignal());
     Message preAttributed =
         new Message(
             Role.USER,
@@ -490,7 +495,7 @@ class SessionContextTest {
   @Test
   void theUnattributedHookContributesWithoutAContributingProvider() {
     SessionContext sessionContext =
-        new SessionContext(null, List.of(), Map.of(), new CancellationSignal());
+        new SessionContext(null, List.of(), ContextAttributes.empty(), new CancellationSignal());
 
     sessionContext.addContextMessages(List.of(sampleMessage("external")));
 
@@ -503,7 +508,7 @@ class SessionContextTest {
   @Test
   void contextContributionsReturnAnImmutableSnapshot() {
     SessionContext sessionContext =
-        new SessionContext(null, List.of(), Map.of(), new CancellationSignal());
+        new SessionContext(null, List.of(), ContextAttributes.empty(), new CancellationSignal());
     sessionContext.addContextMessages("rag", List.of(sampleMessage("retrieved")));
 
     List<ContextMessageContribution> snapshot = sessionContext.contextContributions();
@@ -531,7 +536,8 @@ class SessionContextTest {
     AgentSession requested =
         new AgentSession("session-1", null, Map.of("history", List.of("request")));
     SessionContext sessionContext =
-        new SessionContext(requested, List.of(), Map.of(), new CancellationSignal());
+        new SessionContext(
+            requested, List.of(), ContextAttributes.empty(), new CancellationSignal());
     AgentSession stored =
         new AgentSession("session-1", "service-1", Map.of("history", List.of("stored")));
 
@@ -550,7 +556,7 @@ class SessionContextTest {
         new SessionContext(
             new AgentSession("session-1", null, Map.of()),
             List.of(),
-            Map.of(),
+            ContextAttributes.empty(),
             new CancellationSignal());
     AgentSession stored = new AgentSession("session-1", "service-1", Map.of());
 
@@ -566,7 +572,7 @@ class SessionContextTest {
         new SessionContext(
             new AgentSession("session-1", "service-1", Map.of()),
             List.of(),
-            Map.of(),
+            ContextAttributes.empty(),
             new CancellationSignal());
     AgentSession stored = new AgentSession("session-1", "service-1", Map.of("history", "stored"));
 
@@ -582,7 +588,7 @@ class SessionContextTest {
         new SessionContext(
             new AgentSession("session-1", "service-9", Map.of()),
             List.of(),
-            Map.of(),
+            ContextAttributes.empty(),
             new CancellationSignal());
     AgentSession stored = new AgentSession("session-1", null, Map.of());
     SessionSnapshotMetadata metadata =
@@ -601,7 +607,7 @@ class SessionContextTest {
         new SessionContext(
             new AgentSession("session-1", "service-a", Map.of()),
             List.of(),
-            Map.of(),
+            ContextAttributes.empty(),
             new CancellationSignal());
     AgentSession stored = new AgentSession("session-1", "service-b", Map.of());
     SessionSnapshotMetadata metadata =
@@ -620,7 +626,7 @@ class SessionContextTest {
         new SessionContext(
             new AgentSession("session-1", null, Map.of()),
             List.of(),
-            Map.of(),
+            ContextAttributes.empty(),
             new CancellationSignal());
 
     assertThat(sessionContext.snapshotMetadata()).isEmpty();
@@ -632,7 +638,7 @@ class SessionContextTest {
         new SessionContext(
             new AgentSession("session-1", null, Map.of()),
             List.of(),
-            Map.of(),
+            ContextAttributes.empty(),
             new CancellationSignal());
     AgentSession other = new AgentSession("session-2", null, Map.of());
     SessionSnapshotMetadata metadata =
@@ -649,7 +655,7 @@ class SessionContextTest {
         new SessionContext(
             new AgentSession("session-1", null, Map.of()),
             List.of(),
-            Map.of(),
+            ContextAttributes.empty(),
             new CancellationSignal());
     AgentSession stored = new AgentSession("session-1", null, Map.of());
     SessionSnapshotMetadata metadata =
@@ -667,7 +673,7 @@ class SessionContextTest {
         new SessionContext(
             new AgentSession("session-1", null, Map.of()),
             List.of(),
-            Map.of(),
+            ContextAttributes.empty(),
             new CancellationSignal());
     sessionContext.providerState("history");
     AgentSession stored = new AgentSession("session-1", null, Map.of());
@@ -685,7 +691,7 @@ class SessionContextTest {
         new SessionContext(
             new AgentSession("session-1", null, Map.of()),
             List.of(),
-            Map.of(),
+            ContextAttributes.empty(),
             new CancellationSignal());
     AgentSession stored = new AgentSession("session-1", null, Map.of());
     SessionSnapshotMetadata metadata =
@@ -702,7 +708,7 @@ class SessionContextTest {
   @Test
   void hydrateIsRejectedForASessionlessRun() {
     SessionContext sessionContext =
-        new SessionContext(null, List.of(), Map.of(), new CancellationSignal());
+        new SessionContext(null, List.of(), ContextAttributes.empty(), new CancellationSignal());
     AgentSession stored = new AgentSession("session-1", null, Map.of());
     SessionSnapshotMetadata metadata =
         new SessionSnapshotMetadata(0, Instant.parse("2026-01-01T00:00:00Z"));
@@ -718,7 +724,7 @@ class SessionContextTest {
         new SessionContext(
             new AgentSession("session-1", null, Map.of()),
             List.of(),
-            Map.of(),
+            ContextAttributes.empty(),
             new CancellationSignal());
 
     sessionContext.providerState("bound").set("kept");
@@ -734,7 +740,7 @@ class SessionContextTest {
         new SessionContext(
             new AgentSession("session-1", null, Map.of("stored", "untouched")),
             List.of(),
-            Map.of(),
+            ContextAttributes.empty(),
             new CancellationSignal());
     sessionContext.restrictPersistedSources(List.of("bound"));
 
@@ -751,7 +757,7 @@ class SessionContextTest {
         new SessionContext(
             new AgentSession("session-1", null, Map.of("sibling", "untouched")),
             List.of(),
-            Map.of(),
+            ContextAttributes.empty(),
             new CancellationSignal());
     sessionContext.restrictPersistedSources(List.of("bound"));
 
@@ -767,7 +773,7 @@ class SessionContextTest {
         new SessionContext(
             new AgentSession("session-1", null, Map.of()),
             List.of(),
-            Map.of(),
+            ContextAttributes.empty(),
             new CancellationSignal());
     sessionContext.restrictPersistedSources(List.of());
 
@@ -782,7 +788,7 @@ class SessionContextTest {
         new SessionContext(
             new AgentSession("session-1", null, Map.of()),
             List.of(),
-            Map.of(),
+            ContextAttributes.empty(),
             new CancellationSignal());
     sessionContext.restrictPersistedSources(List.of("bound"));
 
@@ -794,7 +800,7 @@ class SessionContextTest {
         new SessionContext(
             new AgentSession("session-1", null, Map.of()),
             List.of(),
-            Map.of(),
+            ContextAttributes.empty(),
             new CancellationSignal());
     viewed.providerState("bound");
 
@@ -809,7 +815,7 @@ class SessionContextTest {
         new SessionContext(
             new AgentSession("session-1", null, Map.of()),
             List.of(),
-            Map.of(),
+            ContextAttributes.empty(),
             new CancellationSignal());
     List<String> blank = List.of("  ");
 

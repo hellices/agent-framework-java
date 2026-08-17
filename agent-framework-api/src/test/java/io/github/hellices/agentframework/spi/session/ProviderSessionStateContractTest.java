@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import io.github.hellices.agentframework.api.agent.AgentSession;
 import io.github.hellices.agentframework.api.agent.CancellationSignal;
+import io.github.hellices.agentframework.api.context.ContextAttributes;
 import io.github.hellices.agentframework.api.session.SessionContext;
 import java.lang.reflect.Method;
 import java.util.List;
@@ -39,7 +40,7 @@ class ProviderSessionStateContractTest {
     AgentSession session =
         new AgentSession("session-1", null, Map.of("memory", 1, "untouched", "keep"));
     SessionContext sessionContext =
-        new SessionContext(session, List.of(), Map.of(), new CancellationSignal());
+        new SessionContext(session, List.of(), ContextAttributes.empty(), new CancellationSignal());
 
     ProviderSessionState bound = sessionContext.providerState("memory");
     bound.set(bound.value(Integer.class).orElseThrow() + 1);

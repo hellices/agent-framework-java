@@ -9,6 +9,7 @@ import io.github.hellices.agentframework.api.agent.AgentRunOptions;
 import io.github.hellices.agentframework.api.agent.AgentRunRequest;
 import io.github.hellices.agentframework.api.agent.AgentSession;
 import io.github.hellices.agentframework.api.agent.CancellationSignal;
+import io.github.hellices.agentframework.api.context.ContextAttributes;
 import io.github.hellices.agentframework.api.message.FinishReason;
 import io.github.hellices.agentframework.api.message.Message;
 import io.github.hellices.agentframework.api.message.MessageAttribution;
@@ -774,14 +775,15 @@ class InMemoryHistoryProviderTest {
                 session,
                 new AgentRunOptions(),
                 new CancellationSignal(),
-                Map.of()))
+                ContextAttributes.empty()))
         .response()
         .toCompletableFuture()
         .join();
   }
 
   private static SessionContext contextWith(AgentSession session, List<Message> inputMessages) {
-    return new SessionContext(session, inputMessages, Map.of(), new CancellationSignal());
+    return new SessionContext(
+        session, inputMessages, ContextAttributes.empty(), new CancellationSignal());
   }
 
   private static AgentSession sessionWithHistory(String sessionId, List<Message> history) {

@@ -3,6 +3,8 @@ package io.github.hellices.agentframework.api.agent;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import io.github.hellices.agentframework.api.context.ContextAttributes;
+import io.github.hellices.agentframework.api.context.ContextKey;
 import io.github.hellices.agentframework.api.message.FinishReason;
 import io.github.hellices.agentframework.api.message.Message;
 import io.github.hellices.agentframework.api.message.Role;
@@ -25,6 +27,9 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 
 class AgentLifecycleTest {
+
+  private static final ContextKey<String> TRACE_ID =
+      ContextKey.of("agent", "traceId", String.class);
 
   @Test
   void cancellationSignalTracksState() {
@@ -63,7 +68,7 @@ class AgentLifecycleTest {
             new AgentSession("session-1", "service-1", Map.of()),
             new AgentRunOptions(),
             new CancellationSignal(),
-            Map.of());
+            ContextAttributes.empty());
 
     assertThatThrownBy(() -> agent.run(request))
         .isInstanceOf(IllegalArgumentException.class)
@@ -82,7 +87,7 @@ class AgentLifecycleTest {
             new AgentSession("session-1", "service-1", Map.of()),
             new AgentRunOptions(),
             new CancellationSignal(),
-            Map.of());
+            ContextAttributes.empty());
 
     assertThatThrownBy(() -> agent.runStreaming(request))
         .isInstanceOf(IllegalArgumentException.class)
@@ -126,14 +131,41 @@ class AgentLifecycleTest {
             session,
             new AgentRunOptions(),
             new CancellationSignal(),
-            Map.of("traceId", "trace-42"));
+            ContextAttributes.builder().put(TRACE_ID, "trace-42").build());
 
     agent.run(request);
 
     assertThat(agent.lastContext).isNotNull();
     assertThat(agent.lastContext.agent()).isEqualTo(agent);
     assertThat(agent.lastContext.session()).isEqualTo(session);
-    assertThat(agent.lastContext.attributes()).containsEntry("traceId", "trace-42");
+    assertThat(agent.lastContext.attributes().get(TRACE_ID)).contains("trace-42");
+  }
+
+  @Test
+  void runMergesOptionAttributesIntoAgentAndSessionContextsWithRequestOverrides() {
+    ContextCapturingAgent agent = new ContextCapturingAgent("ctx-agent");
+    AgentSession session = new AgentSession("session-42", "service-42", Map.of());
+    ContextKey<String> tenant = ContextKey.of("agent", "tenant", String.class);
+    ContextKey<String> region = ContextKey.of("agent", "region", String.class);
+    ContextAttributes optionAttributes =
+        ContextAttributes.builder().put(tenant, "from-options").put(region, "westus").build();
+    ContextAttributes requestAttributes =
+        ContextAttributes.builder().put(tenant, "from-request").build();
+    AgentRunRequest request =
+        new AgentRunRequest(
+            Message.normalize("hello"),
+            session,
+            AgentRunOptions.builder().attributes(optionAttributes).build(),
+            new CancellationSignal(),
+            requestAttributes);
+
+    agent.run(request);
+
+    assertThat(agent.lastContext.attributes().get(tenant)).contains("from-request");
+    assertThat(agent.lastContext.attributes().get(region)).contains("westus");
+    assertThat(agent.lastContext.sessionContext().attributes().get(tenant))
+        .contains("from-request");
+    assertThat(agent.lastContext.sessionContext().attributes().get(region)).contains("westus");
   }
 
   @Test
@@ -154,14 +186,14 @@ class AgentLifecycleTest {
             session,
             new AgentRunOptions(),
             new CancellationSignal(),
-            Map.of("traceId", "trace-42"));
+            ContextAttributes.builder().put(TRACE_ID, "trace-42").build());
 
     CompletableFuture.runAsync(() -> agent.run(request)).join();
 
     assertThat(agent.lastContext).isNotNull();
     assertThat(agent.lastContext.agent()).isEqualTo(agent);
     assertThat(agent.lastContext.session()).isEqualTo(session);
-    assertThat(agent.lastContext.attributes()).containsEntry("traceId", "trace-42");
+    assertThat(agent.lastContext.attributes().get(TRACE_ID)).contains("trace-42");
   }
 
   @Test
@@ -170,7 +202,11 @@ class AgentLifecycleTest {
     CancellationSignal signal = new CancellationSignal();
     AgentRunRequest request =
         new AgentRunRequest(
-            Message.normalize("hello"), null, new AgentRunOptions(), signal, Map.of());
+            Message.normalize("hello"),
+            null,
+            new AgentRunOptions(),
+            signal,
+            ContextAttributes.empty());
 
     agent.runStreaming(request).cancel();
 
@@ -183,7 +219,11 @@ class AgentLifecycleTest {
     CancellationSignal signal = new CancellationSignal();
     AgentRunRequest request =
         new AgentRunRequest(
-            Message.normalize("hello"), null, new AgentRunOptions(), signal, Map.of());
+            Message.normalize("hello"),
+            null,
+            new AgentRunOptions(),
+            signal,
+            ContextAttributes.empty());
 
     agent.run(request).cancel();
 
@@ -215,14 +255,14 @@ class AgentLifecycleTest {
             session,
             new AgentRunOptions(),
             new CancellationSignal(),
-            Map.of("traceId", "trace-42"));
+            ContextAttributes.builder().put(TRACE_ID, "trace-42").build());
 
     agent.run(request);
 
     SessionContext sessionContext = agent.contexts.get(0);
     assertThat(sessionContext.session()).isEqualTo(session);
     assertThat(sessionContext.inputMessages()).isEqualTo(request.messages());
-    assertThat(sessionContext.metadata()).containsEntry("traceId", "trace-42");
+    assertThat(sessionContext.metadata().get(TRACE_ID)).contains("trace-42");
     assertThat(sessionContext.contextMessages()).isEmpty();
     assertThat(sessionContext.cancellationSignal()).isEqualTo(request.cancellationSignal());
   }
@@ -619,7 +659,7 @@ class AgentLifecycleTest {
                 new AgentSession("session-1", null, Map.of()),
                 new AgentRunOptions(),
                 new CancellationSignal(),
-                Map.of()));
+                ContextAttributes.empty()));
     AgentSession updated = run.session().toCompletableFuture().join().orElseThrow();
 
     assertThat(agent.afterRunInvocations).isEqualTo(1);
@@ -638,7 +678,7 @@ class AgentLifecycleTest {
                 new AgentSession("session-1", null, Map.of()),
                 new AgentRunOptions(),
                 new CancellationSignal(),
-                Map.of()));
+                ContextAttributes.empty()));
     assertThat(run.session().toCompletableFuture().isDone()).isFalse();
     consume(run.updates());
     AgentSession updated = run.session().toCompletableFuture().join().orElseThrow();
@@ -658,7 +698,7 @@ class AgentLifecycleTest {
                 new AgentSession("session-1", null, Map.of()),
                 new AgentRunOptions(),
                 new CancellationSignal(),
-                Map.of()));
+                ContextAttributes.empty()));
 
     assertThatThrownBy(() -> run.session().toCompletableFuture().join())
         .hasCauseInstanceOf(IllegalStateException.class)
@@ -678,7 +718,7 @@ class AgentLifecycleTest {
                 new AgentSession("session-1", null, Map.of()),
                 new AgentRunOptions(),
                 new CancellationSignal(),
-                Map.of()));
+                ContextAttributes.empty()));
     run.cancel();
 
     assertThatThrownBy(() -> run.session().toCompletableFuture().join())
@@ -696,7 +736,7 @@ class AgentLifecycleTest {
                 new AgentSession("session-1", null, Map.of()),
                 new AgentRunOptions(),
                 new CancellationSignal(),
-                Map.of()));
+                ContextAttributes.empty()));
     AgentStreamingRun<String> mapped = run.mapUpdates(update -> "mapped");
     consume(mapped.updates());
 

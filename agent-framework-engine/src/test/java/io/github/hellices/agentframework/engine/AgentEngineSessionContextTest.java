@@ -12,6 +12,7 @@ import io.github.hellices.agentframework.api.agent.AgentRunRequest;
 import io.github.hellices.agentframework.api.agent.AgentSession;
 import io.github.hellices.agentframework.api.agent.AgentStreamingRun;
 import io.github.hellices.agentframework.api.agent.CancellationSignal;
+import io.github.hellices.agentframework.api.context.ContextAttributes;
 import io.github.hellices.agentframework.api.message.FinishReason;
 import io.github.hellices.agentframework.api.message.Message;
 import io.github.hellices.agentframework.api.message.MessageAttribution;
@@ -364,7 +365,12 @@ class AgentEngineSessionContextTest {
     AgentEngine engine =
         AgentEngine.builder().modelClient(fixedClient("hello")).contextProviders(provider).build();
     AgentRunRequest request =
-        new AgentRunRequest(Message.normalize("hi"), null, new AgentRunOptions(), signal, Map.of());
+        new AgentRunRequest(
+            Message.normalize("hi"),
+            null,
+            new AgentRunOptions(),
+            signal,
+            ContextAttributes.empty());
 
     assertThatThrownBy(() -> engine.run(request).response().toCompletableFuture().join())
         .hasCauseInstanceOf(CancellationException.class);
@@ -617,7 +623,7 @@ class AgentEngineSessionContextTest {
                 session,
                 new AgentRunOptions(),
                 new CancellationSignal(),
-                Map.of()));
+                ContextAttributes.empty()));
     consume(run.updates());
     run.response().toCompletableFuture().join();
   }
@@ -630,7 +636,7 @@ class AgentEngineSessionContextTest {
                 session,
                 new AgentRunOptions(),
                 new CancellationSignal(),
-                Map.of()))
+                ContextAttributes.empty()))
         .response()
         .toCompletableFuture()
         .join();

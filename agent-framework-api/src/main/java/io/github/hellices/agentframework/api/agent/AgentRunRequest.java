@@ -1,9 +1,9 @@
 package io.github.hellices.agentframework.api.agent;
 
+import io.github.hellices.agentframework.api.context.ContextAttributes;
 import io.github.hellices.agentframework.api.message.Message;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
 
 public final class AgentRunRequest {
@@ -12,14 +12,14 @@ public final class AgentRunRequest {
   private final AgentSession session;
   private final AgentRunOptions options;
   private final CancellationSignal cancellationSignal;
-  private final Map<String, Object> attributes;
+  private final ContextAttributes attributes;
 
   public AgentRunRequest(
       List<? extends Message> messages,
       AgentSession session,
       AgentRunOptions options,
       CancellationSignal cancellationSignal,
-      Map<String, Object> attributes) {
+      ContextAttributes attributes) {
     List<Message> normalizedMessages = new ArrayList<>();
     if (messages != null) {
       for (Message message : messages) {
@@ -36,12 +36,16 @@ public final class AgentRunRequest {
     }
     this.cancellationSignal =
         cancellationSignal == null ? new CancellationSignal() : cancellationSignal;
-    this.attributes = attributes == null ? Map.of() : Map.copyOf(attributes);
+    this.attributes = attributes == null ? ContextAttributes.empty() : attributes;
   }
 
   public static AgentRunRequest empty() {
     return new AgentRunRequest(
-        List.of(), (AgentSession) null, new AgentRunOptions(), new CancellationSignal(), Map.of());
+        List.of(),
+        (AgentSession) null,
+        new AgentRunOptions(),
+        new CancellationSignal(),
+        ContextAttributes.empty());
   }
 
   public static AgentRunRequest of(String input) {
@@ -51,12 +55,16 @@ public final class AgentRunRequest {
         (AgentSession) null,
         new AgentRunOptions(),
         new CancellationSignal(),
-        Map.of());
+        ContextAttributes.empty());
   }
 
   public static AgentRunRequest of(List<? extends Message> messages) {
     return new AgentRunRequest(
-        messages, (AgentSession) null, new AgentRunOptions(), new CancellationSignal(), Map.of());
+        messages,
+        (AgentSession) null,
+        new AgentRunOptions(),
+        new CancellationSignal(),
+        ContextAttributes.empty());
   }
 
   public List<Message> messages() {
@@ -79,7 +87,7 @@ public final class AgentRunRequest {
     return cancellationSignal;
   }
 
-  public Map<String, Object> attributes() {
+  public ContextAttributes attributes() {
     return attributes;
   }
 }

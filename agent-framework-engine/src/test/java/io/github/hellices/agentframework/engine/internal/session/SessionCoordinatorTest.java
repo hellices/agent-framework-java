@@ -11,6 +11,7 @@ import io.github.hellices.agentframework.api.agent.AgentRunRequest;
 import io.github.hellices.agentframework.api.agent.AgentSession;
 import io.github.hellices.agentframework.api.agent.AgentStreamingRun;
 import io.github.hellices.agentframework.api.agent.CancellationSignal;
+import io.github.hellices.agentframework.api.context.ContextAttributes;
 import io.github.hellices.agentframework.api.message.FinishReason;
 import io.github.hellices.agentframework.api.message.Message;
 import io.github.hellices.agentframework.api.message.Role;
@@ -613,7 +614,7 @@ class SessionCoordinatorTest {
                 new AgentSession("session-1", null, Map.of()),
                 new AgentRunOptions(),
                 signal,
-                Map.of()));
+                ContextAttributes.empty()));
     signal.cancel();
     pending.complete(modelResponse("hello"));
 
@@ -810,7 +811,7 @@ class SessionCoordinatorTest {
                 new AgentSession("session-1", null, Map.of()),
                 new AgentRunOptions(),
                 new CancellationSignal(),
-                Map.of()));
+                ContextAttributes.empty()));
     consume(streamingRun);
 
     AgentSession updated = streamingRun.session().toCompletableFuture().join().orElseThrow();
@@ -898,7 +899,7 @@ class SessionCoordinatorTest {
                 new AgentSession("session-1", null, Map.of()),
                 new AgentRunOptions(),
                 signal,
-                Map.of()));
+                ContextAttributes.empty()));
     signal.cancel();
     pending.complete(modelResponse("hello"));
 
@@ -988,7 +989,7 @@ class SessionCoordinatorTest {
             session,
             new AgentRunOptions(),
             new CancellationSignal(),
-            Map.of()));
+            ContextAttributes.empty()));
   }
 
   private static void runStreaming(AgentEngine engine, AgentSession session, String input) {
@@ -999,7 +1000,7 @@ class SessionCoordinatorTest {
                 session,
                 new AgentRunOptions(),
                 new CancellationSignal(),
-                Map.of())));
+                ContextAttributes.empty())));
   }
 
   private static void consume(AgentStreamingRun<AgentResponseUpdate> streamingRun) {

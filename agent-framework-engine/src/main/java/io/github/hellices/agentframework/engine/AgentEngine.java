@@ -497,7 +497,7 @@ public final class AgentEngine extends Agent {
         ModelRequestOptions.empty(),
         request.cancellationSignal(),
         toolLoop.toolsForIteration(0),
-        request.attributes());
+        Map.of());
   }
 
   private CompletionStage<ToolLoopResult> runToolLoop(

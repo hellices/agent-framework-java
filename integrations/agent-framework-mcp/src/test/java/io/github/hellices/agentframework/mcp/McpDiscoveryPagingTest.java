@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.catchThrowable;
 
+import io.github.hellices.agentframework.api.context.ContextAttributes;
 import io.github.hellices.agentframework.api.tool.FunctionTool;
 import io.github.hellices.agentframework.api.tool.ToolArguments;
 import io.github.hellices.agentframework.api.tool.ToolContext;
@@ -215,7 +216,9 @@ class McpDiscoveryPagingTest {
     ToolResult result =
         tools
             .get(0)
-            .execute(new ToolArguments(Map.of("query", "open")), new ToolContext(null, Map.of()))
+            .execute(
+                new ToolArguments(Map.of("query", "open")),
+                new ToolContext(null, ContextAttributes.empty()))
             .toCompletableFuture()
             .join();
 

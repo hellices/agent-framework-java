@@ -10,6 +10,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.github.hellices.agentframework.api.agent.AgentSession;
 import io.github.hellices.agentframework.api.agent.CancellationSignal;
+import io.github.hellices.agentframework.api.context.ContextAttributes;
+import io.github.hellices.agentframework.api.context.ContextKey;
 import io.github.hellices.agentframework.api.message.Content;
 import io.github.hellices.agentframework.api.message.Message;
 import io.github.hellices.agentframework.api.message.Role;
@@ -35,6 +37,8 @@ import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 
 class ConnectedMcpClientAdapterTest {
+
+  private static final ContextKey<String> RUN_ID = ContextKey.of("mcp", "runId", String.class);
 
   private static final Map<String, Object> SEARCH_SCHEMA = objectSchema("query", "limit");
 
@@ -347,7 +351,8 @@ class ConnectedMcpClientAdapterTest {
   @Test
   void keepsRuntimeContextOutOfArgumentsAndMetadata() {
     FakeMcpAsyncOperations operations = new FakeMcpAsyncOperations();
-    ToolContext context = new ToolContext(null, Map.of("runId", "run-1"));
+    ToolContext context =
+        new ToolContext(null, ContextAttributes.builder().put(RUN_ID, "run-1").build());
 
     singleTool(operations)
         .execute(new ToolArguments(Map.of("query", "issues")), context)
@@ -363,13 +368,14 @@ class ConnectedMcpClientAdapterTest {
     FakeMcpAsyncOperations operations = new FakeMcpAsyncOperations();
     McpToolAdapterOptions options =
         McpToolAdapterOptions.builder()
-            .callMetadataProvider(context -> Map.of("runId", context.attributes().get("runId")))
+            .callMetadataProvider(
+                context -> Map.of("runId", context.attributes().get(RUN_ID).orElse(null)))
             .build();
 
     singleTool(operations, options)
         .execute(
             new ToolArguments(Map.of("query", "issues")),
-            new ToolContext(null, Map.of("runId", "run-1")))
+            new ToolContext(null, ContextAttributes.builder().put(RUN_ID, "run-1").build()))
         .toCompletableFuture()
         .join();
 
@@ -449,7 +455,7 @@ class ConnectedMcpClientAdapterTest {
     FunctionTool tool = singleTool(operations, options);
 
     CompletionStage<ToolResult> execution =
-        tool.execute(new ToolArguments(Map.of()), new ToolContext(null, Map.of()));
+        tool.execute(new ToolArguments(Map.of()), new ToolContext(null, ContextAttributes.empty()));
 
     assertThat(execution.toCompletableFuture()).isCompletedExceptionally();
     assertThatThrownBy(() -> execution.toCompletableFuture().join())
@@ -651,7 +657,7 @@ class ConnectedMcpClientAdapterTest {
     FunctionTool tool = singleTool(operations);
 
     CompletionStage<ToolResult> execution =
-        tool.execute(new ToolArguments(Map.of()), new ToolContext(null, Map.of()));
+        tool.execute(new ToolArguments(Map.of()), new ToolContext(null, ContextAttributes.empty()));
 
     assertThat(execution.toCompletableFuture()).isCompletedExceptionally();
     assertThatThrownBy(() -> execution.toCompletableFuture().join())
@@ -666,7 +672,7 @@ class ConnectedMcpClientAdapterTest {
     FunctionTool tool = singleTool(operations);
 
     CompletionStage<ToolResult> execution =
-        tool.execute(new ToolArguments(Map.of()), new ToolContext(null, Map.of()));
+        tool.execute(new ToolArguments(Map.of()), new ToolContext(null, ContextAttributes.empty()));
     assertThat(execution.toCompletableFuture().cancel(true)).isTrue();
 
     assertThat(pending).isCancelled();
@@ -682,7 +688,8 @@ class ConnectedMcpClientAdapterTest {
     CancellationSignal signal = new CancellationSignal();
 
     CompletionStage<ToolResult> execution =
-        tool.execute(new ToolArguments(Map.of()), new ToolContext(signal, Map.of()));
+        tool.execute(
+            new ToolArguments(Map.of()), new ToolContext(signal, ContextAttributes.empty()));
     signal.cancel();
 
     assertThat(execution.toCompletableFuture()).isCompletedExceptionally();
@@ -698,7 +705,8 @@ class ConnectedMcpClientAdapterTest {
     signal.cancel();
 
     CompletionStage<ToolResult> execution =
-        tool.execute(new ToolArguments(Map.of()), new ToolContext(signal, Map.of()));
+        tool.execute(
+            new ToolArguments(Map.of()), new ToolContext(signal, ContextAttributes.empty()));
 
     assertThat(execution.toCompletableFuture()).isCompletedExceptionally();
     assertThat(pending).isCancelled();
@@ -714,7 +722,8 @@ class ConnectedMcpClientAdapterTest {
     CancellationSignal signal = new CancellationSignal();
 
     CompletionStage<ToolResult> execution =
-        tool.execute(new ToolArguments(Map.of()), new ToolContext(signal, Map.of()));
+        tool.execute(
+            new ToolArguments(Map.of()), new ToolContext(signal, ContextAttributes.empty()));
     pending.complete(callResult(List.of(new McpSchema.TextContent(null, "ok", null)), null));
     signal.cancel();
 
@@ -729,7 +738,7 @@ class ConnectedMcpClientAdapterTest {
     FunctionTool tool = singleTool(operations);
 
     CompletionStage<ToolResult> execution =
-        tool.execute(new ToolArguments(Map.of()), new ToolContext(null, Map.of()));
+        tool.execute(new ToolArguments(Map.of()), new ToolContext(null, ContextAttributes.empty()));
     pending.complete(callResult(List.of(new McpSchema.TextContent(null, "ok", null)), null));
 
     assertThat(execution.toCompletableFuture().cancel(true)).isFalse();
@@ -800,7 +809,9 @@ class ConnectedMcpClientAdapterTest {
   }
 
   private static ToolResult invoke(FunctionTool tool, ToolArguments arguments) {
-    return tool.execute(arguments, new ToolContext(null, Map.of())).toCompletableFuture().join();
+    return tool.execute(arguments, new ToolContext(null, ContextAttributes.empty()))
+        .toCompletableFuture()
+        .join();
   }
 
   private static SessionSnapshot snapshotOf(ToolResult result) {

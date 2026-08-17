@@ -11,6 +11,7 @@ import io.github.hellices.agentframework.api.agent.AgentRunRequest;
 import io.github.hellices.agentframework.api.agent.AgentSession;
 import io.github.hellices.agentframework.api.agent.AgentStreamingRun;
 import io.github.hellices.agentframework.api.agent.CancellationSignal;
+import io.github.hellices.agentframework.api.context.ContextAttributes;
 import io.github.hellices.agentframework.api.message.Content;
 import io.github.hellices.agentframework.api.message.FinishReason;
 import io.github.hellices.agentframework.api.message.Message;
@@ -678,7 +679,7 @@ class AgentEngineStreamingToolLoopTest {
             null,
             AgentRunOptions.builder().continuationToken("continuation-1").build(),
             new CancellationSignal(),
-            Map.of());
+            ContextAttributes.empty());
 
     assertThatThrownBy(() -> engine.runStreaming(request))
         .isInstanceOf(UnsupportedOperationException.class)
@@ -836,7 +837,7 @@ class AgentEngineStreamingToolLoopTest {
             new AgentSession("session-1", null, Map.of()),
             new AgentRunOptions(),
             new CancellationSignal(),
-            Map.of());
+            ContextAttributes.empty());
 
     AgentStreamingRun<AgentResponseUpdate> run = engine.runStreaming(request);
     RecordingSubscriber subscriber = subscribe(run.updates(), Long.MAX_VALUE);
@@ -1034,7 +1035,7 @@ class AgentEngineStreamingToolLoopTest {
                     null,
                     new AgentRunOptions(),
                     signal,
-                    Map.<String, Object>of()));
+                    ContextAttributes.empty()));
     RecordingSubscriber subscriber = subscribe(run.updates(), 0);
     subscriberRef.set(subscriber);
     subscriber.request(1);

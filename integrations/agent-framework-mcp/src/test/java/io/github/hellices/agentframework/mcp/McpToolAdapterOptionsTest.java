@@ -3,6 +3,8 @@ package io.github.hellices.agentframework.mcp;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import io.github.hellices.agentframework.api.context.ContextAttributes;
+import io.github.hellices.agentframework.api.context.ContextKey;
 import io.github.hellices.agentframework.api.tool.ToolContext;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -12,13 +14,19 @@ import org.junit.jupiter.api.Test;
 
 class McpToolAdapterOptionsTest {
 
+  private static final ContextKey<String> RUN_ID = ContextKey.of("mcp", "runId", String.class);
+
   @Test
   void defaultsCarryNoPrefixNoExtrasAndEmptyMetadata() {
     McpToolAdapterOptions options = McpToolAdapterOptions.defaults();
 
     assertThat(options.localNamePrefix()).isEmpty();
     assertThat(options.additionalArgumentNames()).isEmpty();
-    assertThat(options.callMetadataProvider().metadata(new ToolContext(null, Map.of("runId", "r"))))
+    assertThat(
+            options
+                .callMetadataProvider()
+                .metadata(
+                    new ToolContext(null, ContextAttributes.builder().put(RUN_ID, "r").build())))
         .isEmpty();
     assertThat(options.includeResultPayload()).isFalse();
     assertThat(options.maxDiscoveryPages()).isEqualTo(256);
@@ -37,7 +45,10 @@ class McpToolAdapterOptionsTest {
 
     assertThat(options.localNamePrefix()).isEqualTo("github_");
     assertThat(options.additionalArgumentNames()).containsExactlyInAnyOrder("tenant", "region");
-    assertThat(options.callMetadataProvider().metadata(new ToolContext(null, Map.of())))
+    assertThat(
+            options
+                .callMetadataProvider()
+                .metadata(new ToolContext(null, ContextAttributes.empty())))
         .containsEntry("traceId", "t");
     assertThat(options.includeResultPayload()).isTrue();
     assertThat(options.maxDiscoveryPages()).isEqualTo(8);

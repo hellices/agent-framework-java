@@ -3,6 +3,7 @@ package io.github.hellices.agentframework.mcp;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import io.github.hellices.agentframework.api.context.ContextAttributes;
 import io.github.hellices.agentframework.api.tool.FunctionTool;
 import io.github.hellices.agentframework.api.tool.ToolArguments;
 import io.github.hellices.agentframework.api.tool.ToolContext;
@@ -188,7 +189,9 @@ class OwnedMcpClientOperationTest {
 
     assertThatThrownBy(
             () ->
-                tool.execute(new ToolArguments(Map.of()), new ToolContext(null, Map.of()))
+                tool.execute(
+                        new ToolArguments(Map.of()),
+                        new ToolContext(null, ContextAttributes.empty()))
                     .toCompletableFuture()
                     .join())
         .rootCause()
