@@ -31,7 +31,7 @@ public final class AgentStreamingRun<T> {
       Flow.Publisher<T> updates,
       CompletionStage<AgentResponse> response,
       CancellationSignal cancellationSignal) {
-    this.updates = Objects.requireNonNull(updates, "updates must not be null");
+    this.updates = singleSubscriber(updates);
     this.response = Objects.requireNonNull(response, "response must not be null");
     this.session = AgentRun.noSession();
     this.cancellationSignal =
@@ -47,7 +47,7 @@ public final class AgentStreamingRun<T> {
       CancellationSignal cancellationSignal,
       Runnable cancellationAction,
       Predicate<Throwable> failureAction) {
-    this.updates = Objects.requireNonNull(updates, "updates must not be null");
+    this.updates = singleSubscriber(updates);
     this.response = Objects.requireNonNull(response, "response must not be null");
     this.session = Objects.requireNonNull(session, "session must not be null");
     this.cancellationSignal =
@@ -230,6 +230,15 @@ public final class AgentStreamingRun<T> {
         cancellationSignal,
         cancellationAction,
         failureAction);
+  }
+
+  @SuppressWarnings("unchecked")
+  private static <T> Flow.Publisher<T> singleSubscriber(Flow.Publisher<T> updates) {
+    Flow.Publisher<T> source = Objects.requireNonNull(updates, "updates must not be null");
+    if (source instanceof SingleSubscriberPublisher<?> singleSubscriberPublisher) {
+      return (Flow.Publisher<T>) singleSubscriberPublisher;
+    }
+    return new SingleSubscriberPublisher<>(source);
   }
 
   private static final class FinalizingPublisher implements Flow.Publisher<AgentResponseUpdate> {
@@ -635,6 +644,26 @@ public final class AgentStreamingRun<T> {
               completed = true;
             }
           });
+    }
+  }
+
+  private static final class SingleSubscriberPublisher<T> implements Flow.Publisher<T> {
+    private final Flow.Publisher<T> source;
+    private final AtomicBoolean subscribed = new AtomicBoolean();
+
+    private SingleSubscriberPublisher(Flow.Publisher<T> source) {
+      this.source = source;
+    }
+
+    @Override
+    public void subscribe(Flow.Subscriber<? super T> subscriber) {
+      Objects.requireNonNull(subscriber, "subscriber must not be null");
+      if (!subscribed.compareAndSet(false, true)) {
+        subscriber.onSubscribe(EmptySubscription.INSTANCE);
+        subscriber.onError(new IllegalStateException("updates can only be consumed once"));
+        return;
+      }
+      source.subscribe(subscriber);
     }
   }
 
