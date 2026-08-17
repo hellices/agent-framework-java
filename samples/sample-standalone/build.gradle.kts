@@ -28,12 +28,24 @@ application {
 // The missing-credential regression runs the sample's real `main` in a child JVM, so it needs the
 // sample's own runtime classpath. A Gradle test worker does not expose it through
 // `java.class.path`, and reconstructing it from the test classpath would silently drift.
-val sampleRuntimeClasspath: FileCollection = sourceSets.main.get().runtimeClasspath
+//
+// A named type rather than a lambda: a lambda here closes over the build script object, which the
+// configuration cache cannot serialize, so `--configuration-cache` failed to store an entry for
+// this project's `Test` tasks. The type also declares what it reads. The classpath was already an
+// input by accident - the test runtime classpath contains it - but `@Classpath` states it, and
+// states it as classpath normalization rather than as absolute paths.
+abstract class SampleRuntimeClasspathArgumentProvider : CommandLineArgumentProvider {
+    @get:Classpath
+    abstract val runtimeClasspath: ConfigurableFileCollection
+
+    override fun asArguments(): Iterable<String> =
+        listOf("-Dsample.runtime.classpath=${runtimeClasspath.asPath}")
+}
 
 tasks.withType<Test>().configureEach {
     jvmArgumentProviders.add(
-        CommandLineArgumentProvider {
-            listOf("-Dsample.runtime.classpath=${sampleRuntimeClasspath.asPath}")
+        objects.newInstance<SampleRuntimeClasspathArgumentProvider>().apply {
+            runtimeClasspath.from(sourceSets.main.map { it.runtimeClasspath })
         }
     )
 }
