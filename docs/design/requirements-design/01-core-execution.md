@@ -126,11 +126,13 @@ binds it to a catalog. `AgentEngine` exposes two composition overloads:
   its runtime to the shared engine, preserving declaration-only tools that carry no binding
 
 An `AgentBuilder` separates declaration from binding. `buildDefinition()` returns the declarative
-`AgentDefinition` (id, name, description, instructions, tool declarations, context providers) with no
-runtime binding. `build()` derives the `AgentRuntime` (selected `ModelClient`, tool bindings,
-iteration limits) and calls `engine.bind(definition, runtime)`. A `FunctionTool` supplied to
-`tools()` always contributes both a declaration and a binding; a manually constructed
-`AgentDefinition` may hold declaration-only tools, and `bind` preserves that distinction.
+`AgentDefinition` (id, name, description, instructions, tool declarations, and `defaultRunOptions`
+including the `maxToolIterations` budget) with no runtime binding. `build()` derives the
+`AgentRuntime` (selected `ModelClient`, tool bindings, and context providers) and calls
+`engine.bind(definition, runtime)`. Context providers and executable tool bindings live only in the
+runtime, never in the definition. A `FunctionTool` supplied to `tools()` always contributes both a
+declaration and a binding; a manually constructed `AgentDefinition` may hold declaration-only tools,
+and `bind` preserves that distinction.
 
 ### 3.2 AgentEngine
 

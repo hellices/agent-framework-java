@@ -76,8 +76,10 @@ public interface AgentFactory {
   default fails explicitly, while `builder(name)` selects the corresponding model
 - builders are thread-confined and build results are immutable
 - `AgentBuilder.buildDefinition()` returns the declarative `AgentDefinition` (id, name, description,
-  instructions, tool declarations, context providers) without a runtime binding; `build()` derives
-  the `AgentRuntime` and binds it to the shared engine
+  instructions, tool declarations, and `defaultRunOptions` including `maxToolIterations`) without a
+  runtime binding; `build()` derives the `AgentRuntime` (model client, tool bindings, context
+  providers) and binds it to the shared engine. Context providers and executable tool bindings live
+  only in the runtime.
 - `bind(definition, runtime)` binds an externally constructed definition; declaration-only tools on
   a manually built `AgentDefinition` are preserved
 

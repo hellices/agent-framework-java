@@ -120,7 +120,8 @@ try {
 
   ModelCatalog catalog =
       ModelCatalog.builder().add("openai", modelClient).defaultModel("openai").build();
-  Agent agent = AgentEngine.factory(catalog).builder().id("assistant").build();
+  AgentEngine engine = AgentEngine.builder().build();
+  Agent agent = engine.factory(catalog).builder().id("assistant").build();
   AgentResponse response = agent.run("hello").response().toCompletableFuture().join();
 } finally {
   client.close(); // the host built it, so the host closes it
