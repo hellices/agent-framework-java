@@ -45,6 +45,7 @@ final class AgentBinding {
     this.runtime = runtime;
     this.toolLoop =
         new ToolLoopPolicy(
+            definition.tools(),
             executableTools(definition, runtime),
             definition.defaultRunOptions().maxToolIterations());
     this.configuredProviders = bindContextProviders(runtime.contextProviders());
@@ -79,10 +80,11 @@ final class AgentBinding {
   }
 
   /**
-   * Rebuilds each declared tool as a callable pair by pairing its declaration with the handler the
-   * runtime bound to it. A declared tool with no matching binding is declaration-only and is not
-   * reconstructed here, so it is neither offered to the model nor executable, exactly as the engine
-   * behaved before bindings existed.
+   * Rebuilds each bound tool as a callable pair by pairing its declaration with the handler the
+   * runtime bound to it. A declared tool with no matching binding is declaration-only: it is still
+   * offered to the model because {@link ToolLoopPolicy} is given every declaration, but no
+   * executable body is reconstructed for it here, so a model call to it ends the run instead of
+   * being executed locally (TOOL-006).
    */
   private static List<FunctionTool> executableTools(
       AgentDefinition definition, AgentRuntime runtime) {

@@ -429,6 +429,16 @@ public final class AgentEngine {
                 throw new CancellationException("run was cancelled");
               }
               toolLoop.requireIterationBudget(iteration);
+              if (!toolLoop.canExecuteAll(calls) && toolLoop.declaresAll(calls)) {
+                // The model invoked a declaration-only tool: it is declared and offered to the
+                // model but has no local body, so the run ends with this response (its tool calls
+                // intact) rather than fabricating a result the Java core cannot produce
+                // (TOOL-006). Host or provider code can still act on the returned tool calls. A
+                // call to an undeclared tool is not handled here: it reaches execution and fails
+                // with the existing safe error.
+                return CompletableFuture.completedFuture(
+                    new ToolLoopResult(response, List.copyOf(outputMessages), usage));
+              }
               return toolLoop
                   .executeToolCalls(calls, request)
                   .thenCompose(

@@ -5,10 +5,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.github.hellices.agentframework.api.agent.Agent;
+import io.github.hellices.agentframework.api.agent.AgentDefinition;
 import io.github.hellices.agentframework.api.agent.AgentResponse;
 import io.github.hellices.agentframework.api.agent.AgentResponseUpdate;
 import io.github.hellices.agentframework.api.agent.AgentRunOptions;
 import io.github.hellices.agentframework.api.agent.AgentRunRequest;
+import io.github.hellices.agentframework.api.agent.AgentRuntime;
 import io.github.hellices.agentframework.api.agent.AgentSession;
 import io.github.hellices.agentframework.api.agent.AgentStreamingRun;
 import io.github.hellices.agentframework.api.agent.CancellationSignal;
@@ -26,6 +28,7 @@ import io.github.hellices.agentframework.api.session.SessionState;
 import io.github.hellices.agentframework.api.session.SessionStateKey;
 import io.github.hellices.agentframework.api.session.SessionStateValues;
 import io.github.hellices.agentframework.api.tool.FunctionTool;
+import io.github.hellices.agentframework.api.tool.ToolDefinition;
 import io.github.hellices.agentframework.api.tool.ToolHandler;
 import io.github.hellices.agentframework.api.tool.ToolResult;
 import io.github.hellices.agentframework.api.value.JsonObject;
@@ -1138,6 +1141,48 @@ class AgentEngineStreamingToolLoopTest {
                 .map(message -> message.role().value())
                 .distinct()
                 .toList());
+  }
+
+  @Test
+  void streamingDeclarationOnlyToolCallEndsTheStreamWithoutExecuting() {
+    ToolDefinition forecast = ToolDefinition.builder().name("forecast").build();
+    AgentDefinition definition =
+        AgentDefinition.builder().id("agent-1").name("assistant").tool(forecast).build();
+    List<ModelRequest> requests = new ArrayList<>();
+    StreamingModelClient client =
+        scripted(
+            requests,
+            List.of(
+                List.of(
+                    update(toolCall("call-1", "forecast", SEOUL), null, FinishReason.TOOL_CALLS))));
+    AgentRuntime runtime = AgentRuntime.builder().modelClient(client).build();
+    Agent agent = new AgentEngine(null).bind(definition, runtime);
+
+    AgentStreamingRun<AgentResponseUpdate> run = agent.runStreaming("weather?");
+    RecordingSubscriber subscriber = subscribe(run.updates(), Long.MAX_VALUE);
+    subscriber.completion.join();
+    AgentResponse response = run.response().toCompletableFuture().join();
+
+    assertThat(requests).hasSize(1);
+    assertThat(requests.get(0).tools()).containsExactly(forecast);
+    assertThat(response.finishReason()).isEqualTo(FinishReason.TOOL_CALLS);
+    assertThat(toolResults(response)).isEmpty();
+    assertThat(subscriber.values)
+        .anySatisfy(
+            emitted ->
+                assertThat(emitted.messages())
+                    .anySatisfy(
+                        message ->
+                            assertThat(message.content())
+                                .anyMatch(ToolCallContent.class::isInstance)));
+    assertThat(subscriber.values)
+        .noneSatisfy(
+            emitted ->
+                assertThat(emitted.messages())
+                    .anySatisfy(
+                        message ->
+                            assertThat(message.content())
+                                .anyMatch(ToolResultContent.class::isInstance)));
   }
 
   private static Agent engine(ModelClient client, FunctionTool... tools) {

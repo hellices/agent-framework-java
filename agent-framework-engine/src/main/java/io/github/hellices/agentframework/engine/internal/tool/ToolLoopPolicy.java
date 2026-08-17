@@ -47,11 +47,18 @@ public final class ToolLoopPolicy {
   private final int maxIterations;
 
   /**
-   * @param tools the agent's function tools, indexed by name; a duplicate name is rejected here
-   *     rather than silently shadowing a tool at call time
+   * @param definitions every tool the agent declares, in declaration order; all of them are offered
+   *     to the model (TOOL-006) even when no local body is bound to them
+   * @param tools the agent's executable function tools, indexed by name; a duplicate name is
+   *     rejected here rather than silently shadowing a tool at call time. A declaration without a
+   *     matching executable tool is declaration-only: it is offered to the model but cannot be run
+   *     locally, so {@link #canExecuteAll(List)} refuses to execute a batch that invokes it.
    * @param maxIterations the agent's iteration budget, counting model calls
    */
-  public ToolLoopPolicy(List<FunctionTool> tools, int maxIterations) {
+  public ToolLoopPolicy(
+      List<ToolDefinition> definitions, List<FunctionTool> tools, int maxIterations) {
+    this.definitions =
+        List.copyOf(Objects.requireNonNull(definitions, "definitions must not be null"));
     Map<String, FunctionTool> indexed = new LinkedHashMap<>();
     for (FunctionTool tool : Objects.requireNonNull(tools, "tools must not be null")) {
       String toolName = tool.definition().name();
@@ -60,15 +67,62 @@ public final class ToolLoopPolicy {
       }
     }
     this.tools = Map.copyOf(indexed);
-    List<ToolDefinition> resolved = new ArrayList<>();
-    indexed.values().forEach(tool -> resolved.add(tool.definition()));
-    this.definitions = List.copyOf(resolved);
     this.maxIterations = maxIterations;
   }
 
-  /** Whether this agent can execute tools at all. */
+  /**
+   * Whether this agent offers any tool to the model at all.
+   *
+   * <p>Measured over declarations rather than executable bodies, so an agent that declares only
+   * declaration-only tools still runs the tool loop: the model is offered those tools, and a call
+   * to one of them is detected and ends the run rather than being silently ignored.
+   */
   public boolean hasTools() {
-    return !tools.isEmpty();
+    return !definitions.isEmpty();
+  }
+
+  /**
+   * Whether every call in {@code calls} has a local body this policy can run.
+   *
+   * <p>True only when each call names an executable tool. A declaration-only call — a call to a
+   * tool that is declared and offered to the model but has no bound body — makes this false, which
+   * is how both loops decide to end the run with the model's response instead of fabricating a
+   * result for a tool the Java core does not implement (TOOL-006).
+   */
+  public boolean canExecuteAll(List<ToolCallContent> calls) {
+    for (ToolCallContent call : calls) {
+      if (!tools.containsKey(call.name())) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /**
+   * Whether every call in {@code calls} names a declared tool — one this agent offered to the
+   * model.
+   *
+   * <p>This is what separates a declaration-only call, which the model was invited to make and
+   * which ends the run without local execution (TOOL-006), from a call to a tool that was never
+   * declared and so never offered. The latter is a broken response, so the loops let it reach
+   * execution and fail with the existing safe error rather than ending the run on it.
+   */
+  public boolean declaresAll(List<ToolCallContent> calls) {
+    for (ToolCallContent call : calls) {
+      if (!isDeclared(call.name())) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  private boolean isDeclared(String name) {
+    for (ToolDefinition definition : definitions) {
+      if (definition.name().equals(name)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /**

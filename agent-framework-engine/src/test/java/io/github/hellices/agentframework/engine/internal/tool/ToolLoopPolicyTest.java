@@ -1,5 +1,6 @@
 package io.github.hellices.agentframework.engine.internal.tool;
 
+import static java.util.concurrent.CompletableFuture.completedFuture;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -10,6 +11,9 @@ import io.github.hellices.agentframework.api.message.Role;
 import io.github.hellices.agentframework.api.message.TextContent;
 import io.github.hellices.agentframework.api.message.ToolCallContent;
 import io.github.hellices.agentframework.api.message.ToolResultContent;
+import io.github.hellices.agentframework.api.tool.FunctionTool;
+import io.github.hellices.agentframework.api.tool.ToolDefinition;
+import io.github.hellices.agentframework.api.tool.ToolResult;
 import io.github.hellices.agentframework.api.value.JsonObject;
 import io.github.hellices.agentframework.api.value.JsonValues;
 import io.github.hellices.agentframework.spi.model.ModelRequest;
@@ -118,7 +122,7 @@ class ToolLoopPolicyTest {
     Message results = ToolLoopPolicy.toolResultMessage(List.of(result("call-1", "weather")));
 
     ModelRequest next =
-        new ToolLoopPolicy(List.of(), 4)
+        new ToolLoopPolicy(List.of(), List.of(), 4)
             .nextRequest(request(), responseMessages, calls, results, 0);
 
     assertThat(next.messages()).hasSize(3);
@@ -153,7 +157,7 @@ class ToolLoopPolicyTest {
     Message results = ToolLoopPolicy.toolResultMessage(List.of(result("call-1", "weather")));
 
     ModelRequest next =
-        new ToolLoopPolicy(List.of(), 4)
+        new ToolLoopPolicy(List.of(), List.of(), 4)
             .nextRequest(request(), responseMessages, calls, results, 0);
 
     assertThat(next.messages()).hasSize(4);
@@ -177,11 +181,45 @@ class ToolLoopPolicyTest {
             List.of(result("call-1", "weather"), result("call-2", "forecast")));
 
     ModelRequest next =
-        new ToolLoopPolicy(List.of(), 4)
+        new ToolLoopPolicy(List.of(), List.of(), 4)
             .nextRequest(request(), responseMessages, calls, results, 0);
 
     assertThat(next.messages()).element(1).isSameAs(assistant);
     assertThat(next.messages()).last().isSameAs(results);
+  }
+
+  @Test
+  void everyDeclarationIsOfferedToTheModelIncludingDeclarationOnlyOnes() {
+    ToolDefinition weather = ToolDefinition.builder().name("weather").build();
+    ToolDefinition forecast = ToolDefinition.builder().name("forecast").build();
+    ToolLoopPolicy policy =
+        new ToolLoopPolicy(List.of(weather, forecast), List.of(boundTool("weather")), 4);
+
+    assertThat(policy.hasTools()).isTrue();
+    assertThat(policy.toolsForIteration(0)).containsExactly(weather, forecast);
+  }
+
+  @Test
+  void canExecuteAllIsTrueOnlyWhenEveryCallHasABoundBody() {
+    ToolDefinition weather = ToolDefinition.builder().name("weather").build();
+    ToolDefinition forecast = ToolDefinition.builder().name("forecast").build();
+    ToolLoopPolicy policy =
+        new ToolLoopPolicy(List.of(weather, forecast), List.of(boundTool("weather")), 4);
+    ToolCallContent boundCall = new ToolCallContent("call-1", "weather", JsonObject.empty());
+    ToolCallContent declarationOnlyCall =
+        new ToolCallContent("call-2", "forecast", JsonObject.empty());
+
+    assertThat(policy.canExecuteAll(List.of(boundCall))).isTrue();
+    assertThat(policy.canExecuteAll(List.of(declarationOnlyCall))).isFalse();
+    assertThat(policy.canExecuteAll(List.of(boundCall, declarationOnlyCall))).isFalse();
+  }
+
+  private static FunctionTool boundTool(String name) {
+    return FunctionTool.create(
+        name,
+        name,
+        JsonObject.empty(),
+        (arguments, context) -> completedFuture(ToolResult.success(new TextContent("ok"))));
   }
 
   private static ModelRequest request() {

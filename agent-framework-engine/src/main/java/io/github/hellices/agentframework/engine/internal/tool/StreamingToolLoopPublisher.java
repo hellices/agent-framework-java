@@ -297,6 +297,20 @@ public final class StreamingToolLoopPublisher implements Flow.Publisher<AgentRes
           throw new CancellationException("run was cancelled");
         }
         policy.requireIterationBudget(index);
+        if (!policy.canExecuteAll(calls) && policy.declaresAll(calls)) {
+          // A declaration-only tool was invoked: it is declared and offered to the model but has
+          // no local body, so the stream ends with the reassembled response — whose tool-call
+          // updates were already emitted — instead of fabricating results the Java core cannot
+          // produce (TOOL-006). This mirrors the empty-call termination so host or provider code
+          // can act on the streamed tool calls. A call to an undeclared tool is not handled here:
+          // it reaches execution and fails with the existing safe error.
+          if (!response.metadata().isEmpty()) {
+            queue.add(identity.metadataUpdate(response.metadata()));
+          }
+          finished = true;
+          drain();
+          return;
+        }
         current =
             iterationRequest == null
                 ? Objects.requireNonNull(firstRequest.get(), "model request must not be null")
