@@ -175,7 +175,7 @@ final class AgentBinding {
    */
   private static DefaultHistory bindDefaultHistory(List<ProviderBinding> configured) {
     for (ProviderBinding binding : configured) {
-      if (binding.provider() instanceof HistoryProvider history
+      if (binding.provider() instanceof HistoryProvider<?> history
           && history.policy().loadMessages()) {
         return new DefaultHistory(null, false);
       }

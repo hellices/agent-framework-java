@@ -1,118 +1,54 @@
 package io.github.hellices.agentframework.spi.session;
 
-import io.github.hellices.agentframework.api.agent.RunContribution;
 import io.github.hellices.agentframework.api.message.Message;
-import io.github.hellices.agentframework.api.message.MessageAttribution;
-import io.github.hellices.agentframework.api.session.ContextMessageContribution;
-import io.github.hellices.agentframework.api.session.MessageHistory;
 import io.github.hellices.agentframework.api.session.SessionContext;
-import io.github.hellices.agentframework.api.session.SessionStateKey;
-import java.util.ArrayList;
 import java.util.List;
-import java.util.Objects;
-import java.util.Set;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 
 /**
- * The single history contract of SES-013: one {@link StatefulContextProvider} whose load and store
+ * The open history contract of SES-013: a {@link StatefulContextProvider} whose load and store
  * behaviour is decided by an immutable {@link HistoryPolicy} rather than by a family of subtypes.
  *
- * <p>History lives in one typed session-state key of {@link MessageHistory}, so the durable slot a
- * provider owns declares its type up front: a first write resolves the {@code MessageHistory} state
- * codec by exact class, with no dynamic type inference. A subclass implements storage only — {@link
- * #getMessages} and {@link #saveMessages} — and inherits the policy-driven hooks. The same
- * implementation is therefore a primary history when it loads and stores, an audit sink when it
- * only stores inputs, an evaluation sink when it only stores outputs, and a context recorder when
- * it stores what other providers contributed.
+ * <p>This is a plain interface, not an engine base class. An implementor keeps history in one typed
+ * session-state key and answers three questions: which {@link HistoryPolicy} governs the run, how
+ * stored history is read, and how a selected batch is appended. The engine only sees the {@link
+ * StatefulContextProvider} hooks {@link #prepare} and {@link #complete}; an implementor is free to
+ * satisfy them by the policy-driven convenience base {@code PolicyDrivenHistoryProvider} in the
+ * engine module, or to implement this interface directly without inheriting from any engine class.
  *
- * <p><strong>Loading.</strong> {@link #prepare} returns loaded messages only when {@link
- * HistoryPolicy#loadMessages()} is enabled, in the order the storage returned them, stamped as
- * {@value #HISTORY_SOURCE_TYPE} attribution carrying this provider's state-key id, so history stays
- * distinguishable from the context a memory or retrieval provider contributed. Stamping replaces
- * the stored source type and source id; only an {@code originSessionId} the storage already held is
- * preserved, so a reloaded message still names the session that produced it, and only a message
- * carrying none gets this run's session id. The engine folds the returned contribution into the run
- * under this provider's state-key id.
+ * <p><strong>Roles.</strong> The same implementation is a primary history when it loads and stores,
+ * an audit sink when it only stores inputs, an evaluation sink when it only stores outputs, and a
+ * context recorder when it stores what other providers contributed. Which role a run plays is a
+ * function of its {@link #policy()} alone.
  *
- * <p><strong>Storing.</strong> {@link #complete} builds exactly one ordered batch and hands it to
- * {@link #saveMessages} once. The batch is the run in conversation order: the selected context
- * messages first (they preceded the caller's input in the model request), then the caller's input,
- * then the run response's messages. Categories the policy disables are left out, and a run that
- * selects nothing does not call {@link #saveMessages} at all.
+ * <p><strong>Loading.</strong> {@link #load} is the supported read path for stored history, oldest
+ * message first. It is storage-only: it returns exactly what was stored and applies no policy. A
+ * policy-driven {@link #prepare} contributes those messages into the run only when {@link
+ * HistoryPolicy#loadMessages()} is enabled, stamped as {@value #HISTORY_SOURCE_TYPE} attribution so
+ * history stays distinguishable from the context a memory or retrieval provider contributed.
  *
- * <p><strong>Context selection.</strong> Selection reads {@link
- * SessionContext#contextContributions()}, so it keys off the provider that actually contributed a
- * message rather than the attribution the message carries — attribution may be preserved from
- * another session or set to any source id by a sibling provider. With {@link
- * HistoryPolicy#storeContextFrom()} absent ({@code null}), every context message except this
- * provider's own contributions is stored — re-storing its own loaded history would duplicate the
- * whole conversation on every run. With source ids configured, exactly those contributing sources
- * are stored, including this provider's own if it is named; context added without a contributing
- * provider ({@link SessionContext#addContextMessages(java.util.List)}) is external and can only be
- * selected by the absent-filter form. The selection is read only when {@link
- * HistoryPolicy#storeContextMessages()} is enabled.
- *
- * <p><strong>Duplication across providers.</strong> Two history providers that both store context
- * with no source filter each re-store the other's loaded prefix on every run, which grows the
- * conversation quadratically. Configure the secondary sink with {@link
- * HistoryPolicy#storeContextFrom()} — or with context storage disabled — when a primary history and
- * an audit sink observe the same run.
+ * <p><strong>Storing.</strong> {@link #append} is the supported write path and the counterpart of
+ * {@link #load}: it appends exactly the ordered batch it is handed, after what is already stored. A
+ * policy-driven {@link #complete} composes that batch — the selected context messages first, then
+ * the caller's input, then the run response's messages — and hands it to {@link #append} once, or
+ * not at all when the policy selects nothing.
  *
  * <p><strong>Security.</strong> Loaded history is not validated or sanitized by the framework, and
  * neither is context contributed by another provider. A storage backend that can be tampered with
  * can therefore change roles or inject adversarial content into a run.
+ *
+ * @param <S> the declared type of this provider's session state
  */
-public abstract class HistoryProvider implements StatefulContextProvider<MessageHistory> {
+public interface HistoryProvider<S> extends StatefulContextProvider<S> {
 
   /**
    * The attribution source type stamped onto loaded history, matching the pinned upstream chat
    * history source type so a message's provenance reads the same in Java as it does upstream.
    */
-  public static final String HISTORY_SOURCE_TYPE = "ChatHistory";
+  String HISTORY_SOURCE_TYPE = "ChatHistory";
 
-  private final SessionStateKey<MessageHistory> stateKey;
-  private final HistoryPolicy policy;
-
-  /**
-   * @param sourceId the fixed session-state namespace and attribution source id; must not be blank
-   * @param policy the immutable load/store policy; must not be {@code null}
-   * @throws IllegalArgumentException if {@code sourceId} is blank
-   * @throws NullPointerException if {@code sourceId} or {@code policy} is {@code null}
-   */
-  protected HistoryProvider(String sourceId, HistoryPolicy policy) {
-    this(new Binding(sourceId, policy));
-  }
-
-  private HistoryProvider(Binding binding) {
-    this.stateKey = SessionStateKey.of(binding.sourceId(), MessageHistory.class);
-    this.policy = binding.policy();
-  }
-
-  /**
-   * Validates the constructor arguments before {@code HistoryProvider} itself starts constructing,
-   * so a rejected argument cannot leave a partially initialised subclass instance behind.
-   */
-  private record Binding(String sourceId, HistoryPolicy policy) {
-
-    private Binding {
-      Objects.requireNonNull(sourceId, "sourceId must not be null");
-      if (sourceId.isBlank()) {
-        throw new IllegalArgumentException("sourceId must not be blank");
-      }
-      Objects.requireNonNull(policy, "policy must not be null");
-    }
-  }
-
-  @Override
-  public final SessionStateKey<MessageHistory> stateKey() {
-    return stateKey;
-  }
-
-  /** Returns the immutable policy this provider was configured with. */
-  public final HistoryPolicy policy() {
-    return policy;
-  }
+  /** Returns the immutable policy this provider was configured with; must not be {@code null}. */
+  HistoryPolicy policy();
 
   /**
    * Reads this session's stored history, oldest message first.
@@ -126,111 +62,20 @@ public abstract class HistoryProvider implements StatefulContextProvider<Message
    * @return a stage carrying the stored messages; neither the stage, the list, nor an entry may be
    *     {@code null}
    */
-  public abstract CompletionStage<List<Message>> getMessages(
-      SessionContext context, ProviderSessionState<MessageHistory> state);
+  CompletionStage<List<Message>> load(SessionContext context, ProviderSessionState<S> state);
 
   /**
    * Persists one ordered batch for this session, appending it after what is already stored.
    *
-   * <p>This is the supported write path for stored history, and the counterpart of {@link
-   * #getMessages}. Implementations are storage-only: the batch has already been selected by the
-   * policy, and calling this directly stores exactly what is passed in.
+   * <p>This is the supported write path for stored history, and the counterpart of {@link #load}.
+   * Implementations are storage-only: the batch has already been selected, and calling this
+   * directly stores exactly what is passed in.
    *
    * @param context the per-run context, for a storage backend that keys history by session id
    * @param state this provider's key-bound session state view
-   * @param messages the non-empty ordered batch selected by the policy
+   * @param messages the non-empty ordered batch to append
    * @return a stage completing when the batch is persisted; must not be {@code null}
    */
-  public abstract CompletionStage<Void> saveMessages(
-      SessionContext context, ProviderSessionState<MessageHistory> state, List<Message> messages);
-
-  /**
-   * Loads stored history into the run when {@link HistoryPolicy#loadMessages()} is enabled, and
-   * contributes nothing otherwise. Override to control loading beyond the policy; the override owns
-   * attribution and ordering in that case.
-   */
-  @Override
-  public CompletionStage<RunContribution> prepare(
-      SessionContext context, ProviderSessionState<MessageHistory> state) {
-    Objects.requireNonNull(context, "context must not be null");
-    Objects.requireNonNull(state, "state must not be null");
-    if (!policy.loadMessages()) {
-      return CompletableFuture.completedFuture(RunContribution.empty());
-    }
-    return Objects.requireNonNull(
-            getMessages(context, state), "history provider get-messages stage must not be null")
-        .thenApply(
-            messages -> RunContribution.builder().messages(asHistory(context, messages)).build());
-  }
-
-  /**
-   * Stores the batch the policy selects from the completed run. Override to control storing beyond
-   * the policy; the override owns batch composition in that case.
-   *
-   * <p>The framework calls this only after the run succeeded and the response slot was filled. When
-   * {@link HistoryPolicy#storeOutputs()} is enabled but no response was recorded — which happens
-   * only outside that framework path — the remaining selected categories are still stored, so a
-   * caller driving the hooks directly never loses the input it already accepted.
-   */
-  @Override
-  public CompletionStage<Void> complete(
-      SessionContext context, ProviderSessionState<MessageHistory> state) {
-    Objects.requireNonNull(context, "context must not be null");
-    Objects.requireNonNull(state, "state must not be null");
-    List<Message> batch = messagesToStore(context);
-    if (batch.isEmpty()) {
-      return CompletableFuture.completedFuture(null);
-    }
-    return Objects.requireNonNull(
-        saveMessages(context, state, batch),
-        "history provider save-messages stage must not be null");
-  }
-
-  private List<Message> asHistory(SessionContext context, List<Message> messages) {
-    Objects.requireNonNull(messages, "history provider messages must not be null");
-    String currentSessionId = context.session() == null ? null : context.session().sessionId();
-    List<Message> history = new ArrayList<>();
-    for (Message message : messages) {
-      Objects.requireNonNull(message, "history provider messages must not contain null entries");
-      MessageAttribution stored = message.attribution();
-      String originSessionId =
-          stored == null || stored.originSessionId() == null
-              ? currentSessionId
-              : stored.originSessionId();
-      history.add(
-          message.withAttribution(
-              new MessageAttribution(HISTORY_SOURCE_TYPE, stateKey.id(), originSessionId)));
-    }
-    return List.copyOf(history);
-  }
-
-  private List<Message> messagesToStore(SessionContext context) {
-    List<Message> batch = new ArrayList<>(contextMessagesToStore(context));
-    if (policy.storeInputs()) {
-      batch.addAll(context.inputMessages());
-    }
-    if (policy.storeOutputs()) {
-      context.response().ifPresent(response -> batch.addAll(response.messages()));
-    }
-    return List.copyOf(batch);
-  }
-
-  private List<Message> contextMessagesToStore(SessionContext context) {
-    if (!policy.storeContextMessages()) {
-      return List.of();
-    }
-    Set<String> selectedSources = policy.storeContextFrom();
-    List<Message> selected = new ArrayList<>();
-    for (ContextMessageContribution contribution : context.contextContributions()) {
-      String contributor = contribution.sourceId();
-      boolean store =
-          selectedSources == null
-              ? !stateKey.id().equals(contributor)
-              : contributor != null && selectedSources.contains(contributor);
-      if (store) {
-        selected.add(contribution.message());
-      }
-    }
-    return selected;
-  }
+  CompletionStage<Void> append(
+      SessionContext context, ProviderSessionState<S> state, List<Message> messages);
 }

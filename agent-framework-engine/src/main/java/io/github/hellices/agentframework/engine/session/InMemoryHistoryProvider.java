@@ -35,7 +35,7 @@ import java.util.concurrent.CompletionStage;
  * publishing a fresh immutable history per save, which is what makes branching and cross-session
  * reuse safe.
  */
-public final class InMemoryHistoryProvider extends HistoryProvider {
+public final class InMemoryHistoryProvider extends PolicyDrivenHistoryProvider<MessageHistory> {
 
   /** The session-state namespace used when no source id is configured. */
   public static final String DEFAULT_SOURCE_ID = "in_memory";
@@ -55,18 +55,18 @@ public final class InMemoryHistoryProvider extends HistoryProvider {
    * an audit sink, for example — can observe the same run without sharing storage.
    */
   public InMemoryHistoryProvider(String sourceId, HistoryPolicy policy) {
-    super(sourceId, policy);
+    super(sourceId, MessageHistory.class, policy);
   }
 
   @Override
-  public CompletionStage<List<Message>> getMessages(
+  public CompletionStage<List<Message>> load(
       SessionContext context, ProviderSessionState<MessageHistory> state) {
     Objects.requireNonNull(state, "state must not be null");
     return CompletableFuture.completedFuture(storedMessages(state));
   }
 
   @Override
-  public CompletionStage<Void> saveMessages(
+  public CompletionStage<Void> append(
       SessionContext context, ProviderSessionState<MessageHistory> state, List<Message> messages) {
     Objects.requireNonNull(state, "state must not be null");
     Objects.requireNonNull(messages, "messages must not be null");

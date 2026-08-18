@@ -18,6 +18,7 @@ import io.github.hellices.agentframework.api.message.Message;
 import io.github.hellices.agentframework.api.message.MessageAttribution;
 import io.github.hellices.agentframework.api.message.Role;
 import io.github.hellices.agentframework.api.message.TextContent;
+import io.github.hellices.agentframework.api.session.ContextMessageContribution;
 import io.github.hellices.agentframework.api.session.MessageHistory;
 import io.github.hellices.agentframework.api.session.SessionContext;
 import io.github.hellices.agentframework.api.session.SessionState;
@@ -40,6 +41,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
@@ -374,11 +376,11 @@ class InMemoryHistoryProviderTest {
     InMemoryHistoryProvider provider = new InMemoryHistoryProvider();
     ProviderSessionState<MessageHistory> state = context.providerState(provider.stateKey());
 
-    List<Message> loaded = provider.getMessages(context, state).toCompletableFuture().join();
-    provider.saveMessages(context, state, List.of(user("two"))).toCompletableFuture().join();
+    List<Message> loaded = provider.load(context, state).toCompletableFuture().join();
+    provider.append(context, state, List.of(user("two"))).toCompletableFuture().join();
 
     assertThat(loaded).extracting(Message::text).containsExactly("one");
-    assertThat(provider.getMessages(context, state).toCompletableFuture().join())
+    assertThat(provider.load(context, state).toCompletableFuture().join())
         .extracting(Message::text)
         .containsExactly("one", "two");
   }
@@ -396,7 +398,7 @@ class InMemoryHistoryProviderTest {
     SessionContext restoredContext = contextWith(restored, List.of(user("again")));
     assertThat(
             new InMemoryHistoryProvider()
-                .getMessages(
+                .load(
                     restoredContext,
                     restoredContext.providerState(
                         SessionStateKey.of("in_memory", MessageHistory.class)))
@@ -702,28 +704,28 @@ class InMemoryHistoryProviderTest {
   @Test
   void aProviderReturningANullLoadStageFails() {
     SessionContext context = contextWith(session("session-1", null, Map.of()), List.of(user("hi")));
-    HistoryProvider provider = new NullStageHistoryProvider();
+    HistoryProvider<MessageHistory> provider = new NullStageHistoryProvider();
 
     assertThatThrownBy(() -> beforeRun(provider, context))
         .isInstanceOf(NullPointerException.class)
-        .hasMessage("history provider get-messages stage must not be null");
+        .hasMessage("history provider load stage must not be null");
   }
 
   @Test
   void aProviderReturningANullSaveStageFails() {
     SessionContext context = contextWith(session("session-1", null, Map.of()), List.of(user("hi")));
     context.complete(response("hello"));
-    HistoryProvider provider = new NullStageHistoryProvider();
+    HistoryProvider<MessageHistory> provider = new NullStageHistoryProvider();
 
     assertThatThrownBy(() -> afterRun(provider, context))
         .isInstanceOf(NullPointerException.class)
-        .hasMessage("history provider save-messages stage must not be null");
+        .hasMessage("history provider append stage must not be null");
   }
 
   @Test
   void aProviderLoadingANullMessageListFails() {
     SessionContext context = contextWith(session("session-1", null, Map.of()), List.of(user("hi")));
-    HistoryProvider provider = new NullMessagesHistoryProvider(null);
+    HistoryProvider<MessageHistory> provider = new NullMessagesHistoryProvider(null);
 
     assertThatThrownBy(() -> beforeRun(provider, context))
         .hasRootCauseInstanceOf(NullPointerException.class)
@@ -735,7 +737,7 @@ class InMemoryHistoryProviderTest {
     SessionContext context = contextWith(session("session-1", null, Map.of()), List.of(user("hi")));
     List<Message> messages = new ArrayList<>();
     messages.add(null);
-    HistoryProvider provider = new NullMessagesHistoryProvider(messages);
+    HistoryProvider<MessageHistory> provider = new NullMessagesHistoryProvider(messages);
 
     assertThatThrownBy(() -> beforeRun(provider, context))
         .hasRootCauseInstanceOf(NullPointerException.class)
@@ -757,7 +759,122 @@ class InMemoryHistoryProviderTest {
     assertThat(second.contextMessages()).isEmpty();
   }
 
-  private static void beforeRun(HistoryProvider provider, SessionContext context) {
+  @Test
+  void aDirectInterfaceProviderLoadsHistoryStampedAsChatHistory() {
+    SessionContext context =
+        contextWith(
+            session("session-1", null, Map.of("direct", MessageHistory.of(List.of(user("one"))))),
+            List.of(user("two")));
+    DirectHistoryProvider provider = new DirectHistoryProvider("direct", HistoryPolicy.defaults());
+
+    beforeRun(provider, context);
+
+    assertThat(context.contextMessages()).extracting(Message::text).containsExactly("one");
+    assertThat(context.contextMessages())
+        .extracting(Message::attribution)
+        .containsExactly(new MessageAttribution("ChatHistory", "direct", "session-1"));
+  }
+
+  @Test
+  void aDirectInterfaceProviderStoresContextThenInputThenOutputInOrder() {
+    SessionContext context =
+        contextWith(session("session-1", null, Map.of()), List.of(user("input")));
+    context.addContextMessages("rag", List.of(user("context")));
+    context.complete(response("output"));
+    DirectHistoryProvider provider =
+        new DirectHistoryProvider(
+            "direct",
+            HistoryPolicy.builder().storeContextMessages(true).storeContextFrom("rag").build());
+
+    afterRun(provider, context);
+
+    assertThat(storedHistory(context, "direct"))
+        .extracting(Message::text)
+        .containsExactly("context", "input", "output");
+  }
+
+  @Test
+  void aDirectInterfaceProviderActsAsAnAuditSinkStoringOnlyInputs() {
+    SessionContext context =
+        contextWith(session("session-1", null, Map.of()), List.of(user("input")));
+    context.complete(response("output"));
+    DirectHistoryProvider provider =
+        new DirectHistoryProvider(
+            "audit", HistoryPolicy.builder().loadMessages(false).storeOutputs(false).build());
+
+    beforeRun(provider, context);
+    afterRun(provider, context);
+
+    assertThat(context.contextMessages()).isEmpty();
+    assertThat(storedHistory(context, "audit")).extracting(Message::text).containsExactly("input");
+  }
+
+  @Test
+  void aDirectInterfaceProviderActsAsAnEvaluationSinkStoringOnlyOutputs() {
+    SessionContext context =
+        contextWith(session("session-1", null, Map.of()), List.of(user("input")));
+    context.complete(response("output"));
+    DirectHistoryProvider provider =
+        new DirectHistoryProvider(
+            "eval", HistoryPolicy.builder().loadMessages(false).storeInputs(false).build());
+
+    afterRun(provider, context);
+
+    assertThat(storedHistory(context, "eval")).extracting(Message::text).containsExactly("output");
+  }
+
+  @Test
+  void aDirectInterfaceProviderSelectsContextByContributorNotAttribution() {
+    SessionContext context =
+        contextWith(session("session-1", null, Map.of()), List.of(user("input")));
+    context.addContextMessages("rag", List.of(user("kept")));
+    context.addContextMessages("memory", List.of(user("dropped")));
+    context.complete(response("output"));
+    DirectHistoryProvider provider =
+        new DirectHistoryProvider(
+            "direct",
+            HistoryPolicy.builder()
+                .loadMessages(false)
+                .storeInputs(false)
+                .storeOutputs(false)
+                .storeContextMessages(true)
+                .storeContextFrom("rag")
+                .build());
+
+    afterRun(provider, context);
+
+    assertThat(storedHistory(context, "direct")).extracting(Message::text).containsExactly("kept");
+  }
+
+  @Test
+  void twoDirectSinksStoringContextWithoutAFilterEachReStoreTheOthersLoadedPrefix() {
+    SessionContext context =
+        contextWith(
+            session(
+                "session-1",
+                null,
+                Map.of(
+                    "primary", MessageHistory.of(List.of(user("history"))),
+                    "audit", MessageHistory.empty())),
+            List.of(user("input")));
+    DirectHistoryProvider primary =
+        new DirectHistoryProvider(
+            "primary", HistoryPolicy.builder().storeContextMessages(true).build());
+    DirectHistoryProvider audit =
+        new DirectHistoryProvider(
+            "audit", HistoryPolicy.builder().storeContextMessages(true).build());
+
+    beforeRun(primary, context);
+    context.complete(response("output"));
+    afterRun(primary, context);
+    afterRun(audit, context);
+
+    assertThat(storedHistory(context, "audit"))
+        .extracting(Message::text)
+        .containsExactly("history", "input", "output");
+  }
+
+  private static void beforeRun(HistoryProvider<MessageHistory> provider, SessionContext context) {
     RunContribution contribution =
         provider
             .prepare(context, context.providerState(provider.stateKey()))
@@ -768,7 +885,7 @@ class InMemoryHistoryProviderTest {
     }
   }
 
-  private static void afterRun(HistoryProvider provider, SessionContext context) {
+  private static void afterRun(HistoryProvider<MessageHistory> provider, SessionContext context) {
     provider
         .complete(context, context.providerState(provider.stateKey()))
         .toCompletableFuture()
@@ -902,20 +1019,21 @@ class InMemoryHistoryProviderTest {
   }
 
   /** A history provider whose storage hooks return no stage at all. */
-  private static final class NullStageHistoryProvider extends HistoryProvider {
+  private static final class NullStageHistoryProvider
+      extends PolicyDrivenHistoryProvider<MessageHistory> {
 
     private NullStageHistoryProvider() {
-      super("broken", HistoryPolicy.defaults());
+      super("broken", MessageHistory.class, HistoryPolicy.defaults());
     }
 
     @Override
-    public CompletionStage<List<Message>> getMessages(
+    public CompletionStage<List<Message>> load(
         SessionContext context, ProviderSessionState<MessageHistory> state) {
       return null;
     }
 
     @Override
-    public CompletionStage<Void> saveMessages(
+    public CompletionStage<Void> append(
         SessionContext context,
         ProviderSessionState<MessageHistory> state,
         List<Message> messages) {
@@ -924,25 +1042,129 @@ class InMemoryHistoryProviderTest {
   }
 
   /** A history provider that loads a message list the base contract must reject. */
-  private static final class NullMessagesHistoryProvider extends HistoryProvider {
+  private static final class NullMessagesHistoryProvider
+      extends PolicyDrivenHistoryProvider<MessageHistory> {
 
     private final List<Message> messages;
 
     private NullMessagesHistoryProvider(List<Message> messages) {
-      super("broken", HistoryPolicy.defaults());
+      super("broken", MessageHistory.class, HistoryPolicy.defaults());
       this.messages = messages;
     }
 
     @Override
-    public CompletionStage<List<Message>> getMessages(
+    public CompletionStage<List<Message>> load(
         SessionContext context, ProviderSessionState<MessageHistory> state) {
       return completedFuture(messages);
     }
 
     @Override
-    public CompletionStage<Void> saveMessages(
+    public CompletionStage<Void> append(
         SessionContext context, ProviderSessionState<MessageHistory> state, List<Message> stored) {
       return completedFuture(null);
+    }
+  }
+
+  /**
+   * A history provider that implements the open {@link HistoryProvider} interface directly, without
+   * extending any engine base class, to prove interface substitution: an external implementor can
+   * reproduce the policy-driven attribution, context selection, and batch ordering on its own.
+   */
+  private static final class DirectHistoryProvider implements HistoryProvider<MessageHistory> {
+
+    private final SessionStateKey<MessageHistory> stateKey;
+    private final HistoryPolicy policy;
+
+    private DirectHistoryProvider(String sourceId, HistoryPolicy policy) {
+      this.stateKey = SessionStateKey.of(sourceId, MessageHistory.class);
+      this.policy = policy;
+    }
+
+    @Override
+    public SessionStateKey<MessageHistory> stateKey() {
+      return stateKey;
+    }
+
+    @Override
+    public HistoryPolicy policy() {
+      return policy;
+    }
+
+    @Override
+    public CompletionStage<List<Message>> load(
+        SessionContext context, ProviderSessionState<MessageHistory> state) {
+      return completedFuture(state.value().orElseGet(MessageHistory::empty).messages());
+    }
+
+    @Override
+    public CompletionStage<Void> append(
+        SessionContext context,
+        ProviderSessionState<MessageHistory> state,
+        List<Message> messages) {
+      state.set(state.value().orElseGet(MessageHistory::empty).append(messages));
+      return completedFuture(null);
+    }
+
+    @Override
+    public CompletionStage<RunContribution> prepare(
+        SessionContext context, ProviderSessionState<MessageHistory> state) {
+      if (!policy.loadMessages()) {
+        return completedFuture(RunContribution.empty());
+      }
+      return load(context, state)
+          .thenApply(
+              messages -> RunContribution.builder().messages(asHistory(context, messages)).build());
+    }
+
+    @Override
+    public CompletionStage<Void> complete(
+        SessionContext context, ProviderSessionState<MessageHistory> state) {
+      List<Message> batch = messagesToStore(context);
+      if (batch.isEmpty()) {
+        return completedFuture(null);
+      }
+      return append(context, state, batch);
+    }
+
+    private List<Message> asHistory(SessionContext context, List<Message> messages) {
+      String currentSessionId = context.session() == null ? null : context.session().sessionId();
+      List<Message> history = new ArrayList<>();
+      for (Message message : messages) {
+        MessageAttribution stored = message.attribution();
+        String originSessionId =
+            stored == null || stored.originSessionId() == null
+                ? currentSessionId
+                : stored.originSessionId();
+        history.add(
+            message.withAttribution(
+                new MessageAttribution(
+                    HistoryProvider.HISTORY_SOURCE_TYPE, stateKey.id(), originSessionId)));
+      }
+      return List.copyOf(history);
+    }
+
+    private List<Message> messagesToStore(SessionContext context) {
+      List<Message> batch = new ArrayList<>();
+      if (policy.storeContextMessages()) {
+        Set<String> selectedSources = policy.storeContextFrom();
+        for (ContextMessageContribution contribution : context.contextContributions()) {
+          String contributor = contribution.sourceId();
+          boolean store =
+              selectedSources == null
+                  ? !stateKey.id().equals(contributor)
+                  : contributor != null && selectedSources.contains(contributor);
+          if (store) {
+            batch.add(contribution.message());
+          }
+        }
+      }
+      if (policy.storeInputs()) {
+        batch.addAll(context.inputMessages());
+      }
+      if (policy.storeOutputs()) {
+        context.response().ifPresent(response -> batch.addAll(response.messages()));
+      }
+      return List.copyOf(batch);
     }
   }
 }
