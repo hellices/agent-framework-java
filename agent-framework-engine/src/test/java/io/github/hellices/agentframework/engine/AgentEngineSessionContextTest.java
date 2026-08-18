@@ -21,15 +21,23 @@ import io.github.hellices.agentframework.api.message.Message;
 import io.github.hellices.agentframework.api.message.MessageAttribution;
 import io.github.hellices.agentframework.api.message.Role;
 import io.github.hellices.agentframework.api.message.TextContent;
+import io.github.hellices.agentframework.api.message.ToolCallContent;
+import io.github.hellices.agentframework.api.message.ToolResultContent;
 import io.github.hellices.agentframework.api.session.SessionContext;
 import io.github.hellices.agentframework.api.session.SessionState;
 import io.github.hellices.agentframework.api.session.SessionStateKey;
 import io.github.hellices.agentframework.api.session.SessionStateValues;
+import io.github.hellices.agentframework.api.tool.FunctionTool;
+import io.github.hellices.agentframework.api.tool.ToolDefinition;
+import io.github.hellices.agentframework.api.tool.ToolResult;
 import io.github.hellices.agentframework.api.value.JsonNumber;
+import io.github.hellices.agentframework.api.value.JsonObject;
 import io.github.hellices.agentframework.api.value.JsonValue;
 import io.github.hellices.agentframework.api.value.JsonValues;
 import io.github.hellices.agentframework.spi.model.ModelClient;
+import io.github.hellices.agentframework.spi.model.ModelProviderOption;
 import io.github.hellices.agentframework.spi.model.ModelRequest;
+import io.github.hellices.agentframework.spi.model.ModelRequestOptions;
 import io.github.hellices.agentframework.spi.model.ModelResponse;
 import io.github.hellices.agentframework.spi.model.ModelResponseUpdate;
 import io.github.hellices.agentframework.spi.session.ContextProvider;
@@ -598,6 +606,282 @@ class AgentEngineSessionContextTest {
     assertThat(log).containsExactly("before:memory", "model", "after:memory");
   }
 
+  @Test
+  void definitionAndProviderInstructionsBecomeLeadingSystemMessagesInRegistrationOrder() {
+    AtomicReference<ModelRequest> captured = new AtomicReference<>();
+    ModelClient client =
+        request -> {
+          captured.set(request);
+          return EngineModels.of(response("ok"));
+        };
+    Agent engine =
+        boundBuilder(client)
+            .instructions("be terse")
+            .contextProviders(
+                new ContributingProvider(
+                    "first",
+                    new ArrayList<>(),
+                    RunContribution.builder().addInstructionAddition("from-first").build()),
+                new ContributingProvider(
+                    "second",
+                    new ArrayList<>(),
+                    RunContribution.builder().addInstructionAddition("from-second").build()))
+            .build();
+
+    engine.run("hi").response().toCompletableFuture().join();
+
+    assertThat(captured.get().messages())
+        .extracting(message -> message.role().value() + ":" + message.text())
+        .containsExactly("system:be terse", "system:from-first", "system:from-second", "user:hi");
+  }
+
+  @Test
+  void aLeadingInstructionDuplicatedByAProviderIsNotInsertedTwice() {
+    AtomicReference<ModelRequest> captured = new AtomicReference<>();
+    ModelClient client =
+        request -> {
+          captured.set(request);
+          return EngineModels.of(response("ok"));
+        };
+    Agent engine =
+        boundBuilder(client)
+            .instructions("shared")
+            .contextProviders(
+                new ContributingProvider(
+                    "dup",
+                    new ArrayList<>(),
+                    RunContribution.builder().addInstructionAddition("shared").build()))
+            .build();
+
+    engine.run("hi").response().toCompletableFuture().join();
+
+    assertThat(captured.get().messages())
+        .extracting(message -> message.role().value() + ":" + message.text())
+        .containsExactly("system:shared", "user:hi");
+  }
+
+  @Test
+  void aContributedToolIsOfferedToTheModelButNotExecutedLocally() {
+    AtomicInteger calls = new AtomicInteger();
+    AtomicReference<ModelRequest> captured = new AtomicReference<>();
+    ModelClient client =
+        request -> {
+          calls.incrementAndGet();
+          captured.set(request);
+          return EngineModels.of(toolCallResponse("call-1", "lookup"));
+        };
+    ToolDefinition lookup = ToolDefinition.builder().name("lookup").description("d").build();
+    Agent engine =
+        boundBuilder(client)
+            .contextProviders(
+                new ContributingProvider(
+                    "tools", new ArrayList<>(), RunContribution.builder().addTool(lookup).build()))
+            .build();
+
+    AgentResponse response = engine.run("hi").response().toCompletableFuture().join();
+
+    assertThat(captured.get().tools()).extracting(ToolDefinition::name).containsExactly("lookup");
+    // A contributed tool is declaration-only: the model is offered it, but the call it makes ends
+    // the run rather than being executed locally, so there is exactly one model call and no result.
+    assertThat(calls.get()).isEqualTo(1);
+    assertThat(response.messages())
+        .allSatisfy(
+            message ->
+                assertThat(message.content())
+                    .noneMatch(content -> content instanceof ToolResultContent));
+  }
+
+  @Test
+  void aContributedToolNameDuplicatingADeclaredToolFailsBeforeTheModelIsCalled() {
+    AtomicInteger calls = new AtomicInteger();
+    ModelClient client =
+        request -> {
+          calls.incrementAndGet();
+          return EngineModels.of(response("ok"));
+        };
+    ToolDefinition duplicate = ToolDefinition.builder().name("weather").description("d").build();
+    Agent engine =
+        boundBuilder(client)
+            .tools(weatherTool())
+            .contextProviders(
+                new ContributingProvider(
+                    "dup", new ArrayList<>(), RunContribution.builder().addTool(duplicate).build()))
+            .build();
+
+    assertThatThrownBy(() -> engine.run("hi").response().toCompletableFuture().join())
+        .hasRootCauseInstanceOf(IllegalStateException.class)
+        .hasRootCauseMessage("duplicate contributed tool name: weather");
+    assertThat(calls.get()).isZero();
+  }
+
+  @Test
+  void contributedModelOptionsMergeInProviderOrderWithLaterProvidersOverridingEarlier() {
+    AtomicReference<ModelRequest> captured = new AtomicReference<>();
+    ModelClient client =
+        request -> {
+          captured.set(request);
+          return EngineModels.of(response("ok"));
+        };
+    TestProviderOption first = new TestProviderOption("first");
+    TestProviderOption second = new TestProviderOption("second");
+    Agent engine =
+        boundBuilder(client)
+            .contextProviders(
+                new ContributingProvider(
+                    "first",
+                    new ArrayList<>(),
+                    RunContribution.builder()
+                        .modelOptions(
+                            ModelRequestOptions.builder()
+                                .temperature(0.2)
+                                .maxOutputTokens(100)
+                                .providerOption(first)
+                                .build())
+                        .build()),
+                new ContributingProvider(
+                    "second",
+                    new ArrayList<>(),
+                    RunContribution.builder()
+                        .modelOptions(
+                            ModelRequestOptions.builder()
+                                .temperature(0.9)
+                                .providerOption(second)
+                                .build())
+                        .build()))
+            .build();
+
+    engine.run("hi").response().toCompletableFuture().join();
+
+    ModelRequestOptions options = captured.get().options();
+    assertThat(options.temperature()).contains(0.9);
+    assertThat(options.maxOutputTokens()).hasValue(100);
+    assertThat(options.providerOption(TestProviderOption.class)).contains(second);
+  }
+
+  @Test
+  void statelessProvidersReserveNoStateAndContributeUnattributedContextMessages() {
+    AtomicReference<ModelRequest> captured = new AtomicReference<>();
+    ModelClient client =
+        request -> {
+          captured.set(request);
+          return EngineModels.of(response("ok"));
+        };
+    Agent engine =
+        boundBuilder(client)
+            .contextProviders(
+                new ContributingProvider(
+                    "a",
+                    new ArrayList<>(),
+                    RunContribution.builder()
+                        .messages(
+                            List.of(new Message(Role.USER, List.of(new TextContent("ctx-a")))))
+                        .build()),
+                new ContributingProvider(
+                    "b",
+                    new ArrayList<>(),
+                    RunContribution.builder()
+                        .messages(
+                            List.of(new Message(Role.USER, List.of(new TextContent("ctx-b")))))
+                        .build()))
+            .build();
+
+    engine.run("hi").response().toCompletableFuture().join();
+
+    assertThat(captured.get().messages())
+        .extracting(Message::text)
+        .containsExactly("ctx-a", "ctx-b", "hi");
+    assertThat(captured.get().messages())
+        .extracting(Message::attribution)
+        .containsExactly(null, null, null);
+  }
+
+  @Test
+  void effectiveInstructionsToolsAndOptionsAreRetainedOnEveryToolLoopIteration() {
+    List<ModelRequest> requests = new ArrayList<>();
+    AtomicInteger calls = new AtomicInteger();
+    ModelClient client =
+        request -> {
+          requests.add(request);
+          return calls.getAndIncrement() == 0
+              ? EngineModels.of(toolCallResponse("call-1", "weather"))
+              : EngineModels.of(response("done"));
+        };
+    Agent engine =
+        boundBuilder(client)
+            .instructions("sys")
+            .tools(weatherTool())
+            .contextProviders(
+                new ContributingProvider(
+                    "opt",
+                    new ArrayList<>(),
+                    RunContribution.builder()
+                        .modelOptions(ModelRequestOptions.builder().temperature(0.5).build())
+                        .build()))
+            .build();
+
+    engine.run("hi").response().toCompletableFuture().join();
+
+    assertThat(requests).hasSize(2);
+    assertThat(requests)
+        .allSatisfy(
+            request -> {
+              assertThat(request.messages().get(0).role()).isEqualTo(Role.SYSTEM);
+              assertThat(request.messages().get(0).text()).isEqualTo("sys");
+              assertThat(request.options().temperature()).contains(0.5);
+              assertThat(request.tools()).extracting(ToolDefinition::name).contains("weather");
+            });
+  }
+
+  @Test
+  void contributionsProduceTheSameEffectiveRequestForOrdinaryAndStreamingRuns() {
+    AtomicReference<ModelRequest> ordinaryRequest = new AtomicReference<>();
+    ModelClient ordinaryClient =
+        request -> {
+          ordinaryRequest.set(request);
+          return EngineModels.of(response("ok"));
+        };
+    StreamingFakeClient streamingClient = new StreamingFakeClient(new ArrayList<>());
+    Agent ordinaryAgent =
+        boundBuilder(ordinaryClient)
+            .instructions("def")
+            .contextProviders(
+                new ContributingProvider("p", new ArrayList<>(), sharedContribution()))
+            .build();
+    Agent streamingAgent =
+        boundBuilder(streamingClient)
+            .instructions("def")
+            .contextProviders(
+                new ContributingProvider("p", new ArrayList<>(), sharedContribution()))
+            .build();
+
+    ordinaryAgent.run("hi").response().toCompletableFuture().join();
+    AgentStreamingRun<AgentResponseUpdate> run = streamingAgent.runStreaming("hi");
+    consume(run.updates());
+    run.response().toCompletableFuture().join();
+
+    ModelRequest ordinary = ordinaryRequest.get();
+    ModelRequest streaming = streamingClient.capturedRequest.get();
+    assertThat(streaming.messages())
+        .extracting(message -> message.role().value() + ":" + message.text())
+        .isEqualTo(
+            ordinary.messages().stream()
+                .map(message -> message.role().value() + ":" + message.text())
+                .toList());
+    assertThat(streaming.tools())
+        .extracting(ToolDefinition::name)
+        .isEqualTo(ordinary.tools().stream().map(ToolDefinition::name).toList());
+    assertThat(streaming.options()).isEqualTo(ordinary.options());
+  }
+
+  private static RunContribution sharedContribution() {
+    return RunContribution.builder()
+        .addInstructionAddition("sys")
+        .addTool(ToolDefinition.builder().name("lookup").description("d").build())
+        .modelOptions(ModelRequestOptions.builder().temperature(0.3).build())
+        .messages(List.of(new Message(Role.USER, List.of(new TextContent("ctx")))))
+        .build();
+  }
+
   private static void runStreamingWithSession(Agent engine, AgentSession session) {
     AgentStreamingRun<AgentResponseUpdate> run =
         engine.runStreaming(
@@ -665,6 +949,60 @@ class AgentEngineSessionContextTest {
         .messages(List.of(new Message(Role.ASSISTANT, List.of(new TextContent(text)))))
         .finishReason(FinishReason.STOP)
         .build();
+  }
+
+  private static ModelResponse toolCallResponse(String callId, String name) {
+    return ModelResponse.builder()
+        .messages(
+            List.of(
+                new Message(
+                    Role.ASSISTANT,
+                    List.of(new ToolCallContent(callId, name, JsonObject.empty())))))
+        .finishReason(FinishReason.TOOL_CALLS)
+        .build();
+  }
+
+  private static FunctionTool weatherTool() {
+    return FunctionTool.create(
+        "weather",
+        "weather",
+        JsonObject.empty(),
+        (arguments, context) -> completedFuture(ToolResult.success(new TextContent("sunny"))));
+  }
+
+  /**
+   * A stateless {@link ContextProvider} that returns a fixed {@link RunContribution}, so a test can
+   * drive contributed instructions, tools, and options through the engine's merge pipeline.
+   */
+  private static final class ContributingProvider implements ContextProvider {
+    private final String id;
+    private final List<String> log;
+    private final RunContribution contribution;
+
+    private ContributingProvider(String id, List<String> log, RunContribution contribution) {
+      this.id = id;
+      this.log = log;
+      this.contribution = contribution;
+    }
+
+    @Override
+    public CompletionStage<RunContribution> prepare(SessionContext context) {
+      log.add("before:" + id);
+      return completedFuture(contribution);
+    }
+
+    @Override
+    public CompletionStage<Void> complete(SessionContext context) {
+      log.add("after:" + id);
+      return completedFuture(null);
+    }
+  }
+
+  private record TestProviderOption(String tag) implements ModelProviderOption {
+    @Override
+    public String providerId() {
+      return "test";
+    }
   }
 
   private static <T> List<T> consume(Flow.Publisher<T> publisher) {

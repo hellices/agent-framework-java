@@ -176,7 +176,7 @@ class AgentFactoryTest {
   }
 
   @Test
-  void instructionsAreStoredDeclarativelyWithoutAffectingTheModelRequest() {
+  void instructionsBecomeALeadingSystemMessageInTheModelRequest() {
     List<ModelRequest> captured = new ArrayList<>();
     ModelClient client =
         request -> {
@@ -191,14 +191,9 @@ class AgentFactoryTest {
     agent.run("hi").response().toCompletableFuture().join();
 
     assertThat(captured).hasSize(1);
-    assertThat(captured.get(0).messages())
-        .noneMatch(
-            message ->
-                message.content().stream()
-                    .anyMatch(
-                        content ->
-                            content instanceof TextContent text
-                                && text.text().contains("you are a helpful assistant")));
+    Message leading = captured.get(0).messages().get(0);
+    assertThat(leading.role()).isEqualTo(Role.SYSTEM);
+    assertThat(leading.text()).isEqualTo("you are a helpful assistant");
   }
 
   @Test

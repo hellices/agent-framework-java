@@ -15,7 +15,9 @@ import io.github.hellices.agentframework.api.agent.RunContribution;
 import io.github.hellices.agentframework.api.message.Message;
 import io.github.hellices.agentframework.api.session.SessionContext;
 import io.github.hellices.agentframework.api.value.JsonObject;
-import io.github.hellices.agentframework.engine.AgentBinding.ProviderBinding;
+import io.github.hellices.agentframework.engine.internal.context.ContextProviderPipeline;
+import io.github.hellices.agentframework.engine.internal.context.ProviderBinding;
+import io.github.hellices.agentframework.engine.internal.context.RunContributionMerger;
 import io.github.hellices.agentframework.engine.internal.model.ModelResponseMapper;
 import io.github.hellices.agentframework.engine.internal.model.ResponseIdentity;
 import io.github.hellices.agentframework.engine.internal.run.RunExecution;
@@ -25,7 +27,6 @@ import io.github.hellices.agentframework.engine.internal.tool.ToolLoopPolicy;
 import io.github.hellices.agentframework.spi.model.ModelCatalog;
 import io.github.hellices.agentframework.spi.model.ModelClient;
 import io.github.hellices.agentframework.spi.model.ModelRequest;
-import io.github.hellices.agentframework.spi.model.ModelRequestOptions;
 import io.github.hellices.agentframework.spi.model.ModelResponse;
 import io.github.hellices.agentframework.spi.model.ModelResponseUpdate;
 import java.time.Instant;
@@ -205,11 +206,15 @@ public final class AgentEngine {
     Function<ModelRequest, Flow.Publisher<ModelResponseUpdate>> invoker = selectedClient::execute;
     SessionContext sessionContext = context.sessionContext();
     RunExecution execution = RunExecution.create(request, binding.definition(), binding.runtime());
-    CompletionStage<Void> gate = runGate(binding, sessionContext, request.cancellationSignal());
+    RunEffectiveState state =
+        new RunEffectiveState(
+            binding, RunContributionMerger.merge(binding.definition(), List.of()));
+    CompletionStage<Void> gate =
+        runGate(binding, sessionContext, request.cancellationSignal(), state);
     AtomicReference<ModelRequest> firstRequest = new AtomicReference<>();
     Supplier<Flow.Publisher<ModelResponseUpdate>> firstStream =
         () -> {
-          ModelRequest modelRequest = toModelRequest(binding, request, sessionContext);
+          ModelRequest modelRequest = toModelRequest(state, request, sessionContext);
           firstRequest.set(modelRequest);
           return Objects.requireNonNull(
               invoker.apply(modelRequest), "model client update publisher must not be null");
@@ -227,7 +232,13 @@ public final class AgentEngine {
                   return firstStream.get();
                 });
     return new RunPipeline(
-        () -> modelUpdates, firstRequest::get, invoker, toolLoop, request, identity, execution);
+        () -> modelUpdates,
+        firstRequest::get,
+        invoker,
+        state::toolLoop,
+        request,
+        identity,
+        execution);
   }
 
   /**
@@ -246,19 +257,27 @@ public final class AgentEngine {
    * that carries a session.
    */
   private CompletionStage<Void> runGate(
-      AgentBinding binding, SessionContext sessionContext, CancellationSignal cancellationSignal) {
+      AgentBinding binding,
+      SessionContext sessionContext,
+      CancellationSignal cancellationSignal,
+      RunEffectiveState state) {
     if (sessionCoordinator != null && sessionContext.session() != null) {
       return sessionCoordinator
           .load(sessionContext)
           .thenCompose(
               ignored ->
-                  beforeRun(bindRun(binding, sessionContext), sessionContext, cancellationSignal));
+                  prepareRun(
+                      binding,
+                      bindRun(binding, sessionContext),
+                      sessionContext,
+                      cancellationSignal,
+                      state));
     }
     List<ProviderBinding> resolved = bindRun(binding, sessionContext);
     if (resolved.isEmpty()) {
       return null;
     }
-    return beforeRun(resolved, sessionContext, cancellationSignal);
+    return prepareRun(binding, resolved, sessionContext, cancellationSignal, state);
   }
 
   /**
@@ -299,60 +318,25 @@ public final class AgentEngine {
   }
 
   /**
-   * Composes every resolved provider's {@code prepare} hook in declaration order, before the run's
-   * first model call. Each hook receives the run's single {@link SessionContext}; a stateful
-   * provider resolves its own key-bound state view through the default {@code prepare} bridge. The
-   * {@link RunContribution} a provider returns is folded into the run's context messages,
-   * attributed to the provider's state-key id when it owns one. A hook that fails, returns {@code
-   * null}, yields a {@code null} contribution, or is reached after the run was cancelled fails the
-   * composed stage, so no later hook and no model call runs.
+   * Composes the run's context providers into their {@code prepare} hooks and folds the resulting
+   * contributions into the run's effective request. The {@link ContextProviderPipeline} runs every
+   * hook in declaration order — checking cancellation before each, folding each contribution's
+   * messages into the run's context with provider attribution, and failing the composed stage on
+   * any hook failure, {@code null} stage, {@code null} contribution, or cancellation observed
+   * before a hook — so no later hook or model call runs. The accumulated contributions are then
+   * merged with the agent's declaration, once, into the effective instructions, tools, and options
+   * the run's first model call is built from; a contributed tool name that duplicates an earlier
+   * declaration fails here, before the model is called.
    */
-  private CompletionStage<Void> beforeRun(
+  private CompletionStage<Void> prepareRun(
+      AgentBinding binding,
       List<ProviderBinding> providers,
       SessionContext sessionContext,
-      CancellationSignal cancellationSignal) {
-    CompletionStage<Void> stage = CompletableFuture.completedFuture(null);
-    for (ProviderBinding binding : providers) {
-      stage =
-          stage.thenCompose(
-              ignored -> {
-                if (cancellationSignal.isCancelled()) {
-                  throw new CancellationException("run was cancelled");
-                }
-                return Objects.requireNonNull(
-                        binding.provider().prepare(sessionContext),
-                        "context provider prepare stage must not be null")
-                    .thenAccept(
-                        contribution ->
-                            applyContribution(
-                                sessionContext,
-                                binding,
-                                Objects.requireNonNull(
-                                    contribution,
-                                    "context provider contribution must not be null")));
-              });
-    }
-    return stage;
-  }
-
-  /**
-   * Folds a provider's {@link RunContribution} into the run's context messages, in declaration
-   * order. Messages a stateful provider contributes are attributed to its state-key id, so history
-   * selection can still key off the contributing provider; a stateless provider owns no id, so its
-   * messages are appended unattributed.
-   */
-  private static void applyContribution(
-      SessionContext sessionContext, ProviderBinding binding, RunContribution contribution) {
-    List<Message> messages = contribution.messages();
-    if (messages.isEmpty()) {
-      return;
-    }
-    String sourceId = binding.sourceId();
-    if (sourceId == null) {
-      sessionContext.addContextMessages(messages);
-    } else {
-      sessionContext.addContextMessages(sourceId, messages);
-    }
+      CancellationSignal cancellationSignal,
+      RunEffectiveState state) {
+    return new ContextProviderPipeline(providers)
+        .prepare(sessionContext, cancellationSignal)
+        .thenAccept(contributions -> state.apply(binding, contributions));
   }
 
   /**
@@ -422,18 +406,8 @@ public final class AgentEngine {
    */
   private CompletionStage<Void> runProviderAfterRun(
       AgentBinding binding, SessionContext sessionContext) {
-    List<ProviderBinding> providers = binding.resolveProviders(sessionContext);
-    CompletionStage<Void> stage = CompletableFuture.completedFuture(null);
-    for (int index = providers.size() - 1; index >= 0; index--) {
-      ProviderBinding providerBinding = providers.get(index);
-      stage =
-          stage.thenCompose(
-              ignored ->
-                  Objects.requireNonNull(
-                      providerBinding.provider().complete(sessionContext),
-                      "context provider complete stage must not be null"));
-    }
-    return stage;
+    return new ContextProviderPipeline(binding.resolveProviders(sessionContext))
+        .complete(sessionContext);
   }
 
   /**
@@ -455,22 +429,61 @@ public final class AgentEngine {
   }
 
   /**
-   * Builds the model request for a run: provider-contributed context messages come first, in the
-   * order the providers contributed them, followed by the caller's input messages.
+   * Builds the run's first model request from the effective contributions: the deduplicated leading
+   * instruction messages, then the provider-contributed context messages in contribution order,
+   * then the caller's input; the merged model options over the definition defaults; and the
+   * effective tool declarations offered to the model. Every later tool-loop iteration reuses this
+   * request's options and leading instruction and context messages, and the effective tool
+   * declarations, through the run's per-run {@link ToolLoopPolicy}.
    */
   private ModelRequest toModelRequest(
-      AgentBinding binding, AgentRunRequest request, SessionContext sessionContext) {
-    List<Message> messages = new ArrayList<>(sessionContext.contextMessages());
-    messages.addAll(request.messages());
+      RunEffectiveState state, AgentRunRequest request, SessionContext sessionContext) {
+    RunContributionMerger merger = state.merger();
+    List<Message> messages =
+        merger.assembleMessages(sessionContext.contextMessages(), request.messages());
     return ModelRequest.builder()
         .messages(messages)
-        .options(ModelRequestOptions.empty())
+        .options(merger.options())
         .continuationToken(request.options().continuationToken().orElse(null))
         .attributes(sessionContext.attributes())
         .cancellationSignal(request.cancellationSignal())
-        .tools(binding.toolLoop().toolsForIteration(0))
+        .tools(state.toolLoop().toolsForIteration(0))
         .metadata(JsonObject.empty())
         .build();
+  }
+
+  /**
+   * The mutable per-run holder for a run's effective contribution state. It is created with the
+   * agent's definition-only merge so an eager run with no provider still applies the definition's
+   * instructions, tools, and option defaults; when the run has a context gate, {@link
+   * #apply(AgentBinding, List)} recomputes the merge from the accumulated contributions once,
+   * before the first model call. The run's {@link RunPipeline} reads {@link #toolLoop()} through a
+   * supplier, so every tool-loop iteration offers the same effective tool declarations.
+   */
+  private static final class RunEffectiveState {
+
+    private volatile RunContributionMerger merger;
+    private volatile ToolLoopPolicy toolLoop;
+
+    RunEffectiveState(AgentBinding binding, RunContributionMerger merger) {
+      this.merger = merger;
+      this.toolLoop = binding.toolLoop(merger.toolDeclarations());
+    }
+
+    void apply(AgentBinding binding, List<RunContribution> contributions) {
+      RunContributionMerger merged =
+          RunContributionMerger.merge(binding.definition(), contributions);
+      this.merger = merged;
+      this.toolLoop = binding.toolLoop(merged.toolDeclarations());
+    }
+
+    RunContributionMerger merger() {
+      return merger;
+    }
+
+    ToolLoopPolicy toolLoop() {
+      return toolLoop;
+    }
   }
 
   /**

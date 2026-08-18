@@ -98,7 +98,7 @@ public final class RunPipeline implements Flow.Publisher<AgentResponseUpdate> {
   private final Supplier<Flow.Publisher<ModelResponseUpdate>> firstStream;
   private final Supplier<ModelRequest> firstRequest;
   private final Function<ModelRequest, Flow.Publisher<ModelResponseUpdate>> nextStream;
-  private final ToolLoopPolicy policy;
+  private final Supplier<ToolLoopPolicy> policySupplier;
   private final AgentRunRequest request;
   private final ResponseIdentity identity;
   private final RunExecution execution;
@@ -120,17 +120,22 @@ public final class RunPipeline implements Flow.Publisher<AgentResponseUpdate> {
       Supplier<Flow.Publisher<ModelResponseUpdate>> firstStream,
       Supplier<ModelRequest> firstRequest,
       Function<ModelRequest, Flow.Publisher<ModelResponseUpdate>> nextStream,
-      ToolLoopPolicy policy,
+      Supplier<ToolLoopPolicy> policySupplier,
       AgentRunRequest request,
       ResponseIdentity identity,
       RunExecution execution) {
     this.firstStream = Objects.requireNonNull(firstStream, "firstStream must not be null");
     this.firstRequest = Objects.requireNonNull(firstRequest, "firstRequest must not be null");
     this.nextStream = Objects.requireNonNull(nextStream, "nextStream must not be null");
-    this.policy = Objects.requireNonNull(policy, "policy must not be null");
+    this.policySupplier = Objects.requireNonNull(policySupplier, "policySupplier must not be null");
     this.request = Objects.requireNonNull(request, "request must not be null");
     this.identity = Objects.requireNonNull(identity, "identity must not be null");
     this.execution = Objects.requireNonNull(execution, "execution must not be null");
+  }
+
+  private ToolLoopPolicy policy() {
+    return Objects.requireNonNull(
+        policySupplier.get(), "effective tool loop policy must not be null");
   }
 
   /**
@@ -310,6 +315,7 @@ public final class RunPipeline implements Flow.Publisher<AgentResponseUpdate> {
       List<ToolCallContent> calls;
       try {
         response = accumulator.toModelResponse();
+        ToolLoopPolicy policy = policy();
         policy.validateContinuation(response);
         ModelResponse ordinaryResponse = assembleResponse(rawUpdates);
         recordOrdinaryIteration(ordinaryResponse);
@@ -393,7 +399,7 @@ public final class RunPipeline implements Flow.Publisher<AgentResponseUpdate> {
               identity.messageUpdate(List.of(ToolLoopPolicy.toolResultMessage(List.of(result)))));
         }
         ModelRequest next =
-            policy.nextRequest(current, response.messages(), calls, toolResults, index);
+            policy().nextRequest(current, response.messages(), calls, toolResults, index);
         ordinaryMessages.add(toolResults);
         queue.addAll(updates);
         pending.set(new PendingIteration(index + 1, next));

@@ -8,6 +8,7 @@ import io.github.hellices.agentframework.api.session.SessionStateKey;
 import io.github.hellices.agentframework.api.tool.FunctionTool;
 import io.github.hellices.agentframework.api.tool.ToolBinding;
 import io.github.hellices.agentframework.api.tool.ToolDefinition;
+import io.github.hellices.agentframework.engine.internal.context.ProviderBinding;
 import io.github.hellices.agentframework.engine.internal.tool.ToolLoopPolicy;
 import io.github.hellices.agentframework.engine.session.InMemoryHistoryProvider;
 import io.github.hellices.agentframework.spi.session.ContextProvider;
@@ -37,6 +38,7 @@ final class AgentBinding {
 
   private final AgentDefinition definition;
   private final AgentRuntime runtime;
+  private final List<FunctionTool> executableTools;
   private final ToolLoopPolicy toolLoop;
   private final List<ProviderBinding> configuredProviders;
   private final DefaultHistory defaultHistory;
@@ -44,10 +46,11 @@ final class AgentBinding {
   private AgentBinding(AgentDefinition definition, AgentRuntime runtime) {
     this.definition = definition;
     this.runtime = runtime;
+    this.executableTools = executableTools(definition, runtime);
     this.toolLoop =
         new ToolLoopPolicy(
             definition.tools(),
-            executableTools(definition, runtime),
+            this.executableTools,
             definition.defaultRunOptions().maxToolIterations());
     this.configuredProviders = bindContextProviders(runtime.contextProviders());
     this.defaultHistory = bindDefaultHistory(this.configuredProviders);
@@ -86,6 +89,18 @@ final class AgentBinding {
 
   ToolLoopPolicy toolLoop() {
     return toolLoop;
+  }
+
+  /**
+   * Builds the effective per-run tool loop that offers {@code declarations} — the definition's tool
+   * declarations plus the run's contributed declarations — while keeping this agent's executable
+   * bodies unchanged. A contributed declaration therefore carries no local body, so it is offered
+   * to the model but cannot be executed locally (TOOL-006); only definition tools the runtime bound
+   * can run.
+   */
+  ToolLoopPolicy toolLoop(List<ToolDefinition> declarations) {
+    return new ToolLoopPolicy(
+        declarations, executableTools, definition.defaultRunOptions().maxToolIterations());
   }
 
   /**
@@ -230,12 +245,4 @@ final class AgentBinding {
    *     does not load history, which makes an otherwise eligible run a configuration error
    */
   private record DefaultHistory(ProviderBinding binding, boolean namespaceConflict) {}
-
-  /**
-   * A context provider bound to the fixed source id read once when the agent was bound, so a
-   * provider cannot change the session state namespace it owns between runs or hooks. The source id
-   * is the state-key id of a {@link StatefulContextProvider}, or {@code null} for a stateless
-   * provider that owns no namespace.
-   */
-  record ProviderBinding(String sourceId, ContextProvider provider) {}
 }
