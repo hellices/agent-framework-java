@@ -1,8 +1,15 @@
 package io.github.hellices.agentframework.engine;
 
+import io.github.hellices.agentframework.engine.internal.interception.InterceptorRegistry;
 import io.github.hellices.agentframework.engine.internal.session.SessionCoordinator;
+import io.github.hellices.agentframework.spi.interception.AgentExecutionInterceptor;
+import io.github.hellices.agentframework.spi.interception.ModelInvocationInterceptor;
+import io.github.hellices.agentframework.spi.interception.SessionOperationInterceptor;
+import io.github.hellices.agentframework.spi.interception.ToolInvocationInterceptor;
 import io.github.hellices.agentframework.spi.session.SessionStore;
 import io.github.hellices.agentframework.spi.session.StateCodecRegistry;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Objects;
 
 /**
@@ -19,6 +26,10 @@ public final class AgentEngineBuilder {
 
   private SessionStore sessionStore;
   private StateCodecRegistry stateCodecRegistry;
+  private final List<AgentExecutionInterceptor> agentExecutionInterceptors = new ArrayList<>();
+  private final List<ModelInvocationInterceptor> modelInvocationInterceptors = new ArrayList<>();
+  private final List<ToolInvocationInterceptor> toolInvocationInterceptors = new ArrayList<>();
+  private final List<SessionOperationInterceptor> sessionOperationInterceptors = new ArrayList<>();
 
   AgentEngineBuilder() {}
 
@@ -58,6 +69,62 @@ public final class AgentEngineBuilder {
     return this;
   }
 
+  /** Registers one agent-execution interceptor in outer-to-inner declaration order. */
+  public AgentEngineBuilder agentExecutionInterceptor(AgentExecutionInterceptor interceptor) {
+    agentExecutionInterceptors.add(
+        Objects.requireNonNull(interceptor, "agentExecutionInterceptor must not be null"));
+    return this;
+  }
+
+  /** Registers agent-execution interceptors in outer-to-inner declaration order. */
+  public AgentEngineBuilder agentExecutionInterceptors(
+      List<? extends AgentExecutionInterceptor> interceptors) {
+    appendInterceptors(agentExecutionInterceptors, interceptors, "agentExecutionInterceptors");
+    return this;
+  }
+
+  /** Registers one model-invocation interceptor in outer-to-inner declaration order. */
+  public AgentEngineBuilder modelInvocationInterceptor(ModelInvocationInterceptor interceptor) {
+    modelInvocationInterceptors.add(
+        Objects.requireNonNull(interceptor, "modelInvocationInterceptor must not be null"));
+    return this;
+  }
+
+  /** Registers model-invocation interceptors in outer-to-inner declaration order. */
+  public AgentEngineBuilder modelInvocationInterceptors(
+      List<? extends ModelInvocationInterceptor> interceptors) {
+    appendInterceptors(modelInvocationInterceptors, interceptors, "modelInvocationInterceptors");
+    return this;
+  }
+
+  /** Registers one tool-invocation interceptor in outer-to-inner declaration order. */
+  public AgentEngineBuilder toolInvocationInterceptor(ToolInvocationInterceptor interceptor) {
+    toolInvocationInterceptors.add(
+        Objects.requireNonNull(interceptor, "toolInvocationInterceptor must not be null"));
+    return this;
+  }
+
+  /** Registers tool-invocation interceptors in outer-to-inner declaration order. */
+  public AgentEngineBuilder toolInvocationInterceptors(
+      List<? extends ToolInvocationInterceptor> interceptors) {
+    appendInterceptors(toolInvocationInterceptors, interceptors, "toolInvocationInterceptors");
+    return this;
+  }
+
+  /** Registers one session-operation interceptor in outer-to-inner declaration order. */
+  public AgentEngineBuilder sessionOperationInterceptor(SessionOperationInterceptor interceptor) {
+    sessionOperationInterceptors.add(
+        Objects.requireNonNull(interceptor, "sessionOperationInterceptor must not be null"));
+    return this;
+  }
+
+  /** Registers session-operation interceptors in outer-to-inner declaration order. */
+  public AgentEngineBuilder sessionOperationInterceptors(
+      List<? extends SessionOperationInterceptor> interceptors) {
+    appendInterceptors(sessionOperationInterceptors, interceptors, "sessionOperationInterceptors");
+    return this;
+  }
+
   public AgentEngine build() {
     if (sessionStore == null && stateCodecRegistry != null) {
       throw new IllegalStateException("stateCodecRegistry requires a configured sessionStore");
@@ -70,6 +137,21 @@ public final class AgentEngineBuilder {
                 stateCodecRegistry == null
                     ? StateCodecRegistry.builder().build()
                     : stateCodecRegistry);
-    return new AgentEngine(sessionCoordinator);
+    return new AgentEngine(
+        sessionCoordinator,
+        new InterceptorRegistry(
+            List.copyOf(agentExecutionInterceptors),
+            List.copyOf(modelInvocationInterceptors),
+            List.copyOf(toolInvocationInterceptors),
+            List.copyOf(sessionOperationInterceptors)));
+  }
+
+  private static <T> void appendInterceptors(
+      List<T> sink, List<? extends T> interceptors, String label) {
+    List<? extends T> value = Objects.requireNonNull(interceptors, label + " must not be null");
+    for (int index = 0; index < value.size(); index++) {
+      sink.add(
+          Objects.requireNonNull(value.get(index), label + "[" + index + "] must not be null"));
+    }
   }
 }

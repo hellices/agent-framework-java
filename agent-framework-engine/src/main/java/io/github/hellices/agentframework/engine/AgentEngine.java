@@ -14,16 +14,28 @@ import io.github.hellices.agentframework.api.agent.CancellationSignal;
 import io.github.hellices.agentframework.api.agent.RunContribution;
 import io.github.hellices.agentframework.api.message.Message;
 import io.github.hellices.agentframework.api.session.SessionContext;
+import io.github.hellices.agentframework.api.tool.ToolResult;
 import io.github.hellices.agentframework.api.value.JsonObject;
 import io.github.hellices.agentframework.engine.internal.context.ContextProviderPipeline;
 import io.github.hellices.agentframework.engine.internal.context.ProviderBinding;
 import io.github.hellices.agentframework.engine.internal.context.RunContributionMerger;
+import io.github.hellices.agentframework.engine.internal.interception.InterceptorRegistry;
 import io.github.hellices.agentframework.engine.internal.model.ModelResponseMapper;
 import io.github.hellices.agentframework.engine.internal.model.ResponseIdentity;
 import io.github.hellices.agentframework.engine.internal.run.RunExecution;
 import io.github.hellices.agentframework.engine.internal.run.RunPipeline;
 import io.github.hellices.agentframework.engine.internal.session.SessionCoordinator;
 import io.github.hellices.agentframework.engine.internal.tool.ToolLoopPolicy;
+import io.github.hellices.agentframework.spi.interception.AgentExecution;
+import io.github.hellices.agentframework.spi.interception.AgentInvocation;
+import io.github.hellices.agentframework.spi.interception.AgentInvocationChain;
+import io.github.hellices.agentframework.spi.interception.ModelInvocation;
+import io.github.hellices.agentframework.spi.interception.ModelInvocationChain;
+import io.github.hellices.agentframework.spi.interception.SessionInvocation;
+import io.github.hellices.agentframework.spi.interception.SessionInvocationChain;
+import io.github.hellices.agentframework.spi.interception.SessionOperationResult;
+import io.github.hellices.agentframework.spi.interception.ToolInvocation;
+import io.github.hellices.agentframework.spi.interception.ToolInvocationChain;
 import io.github.hellices.agentframework.spi.model.ModelCatalog;
 import io.github.hellices.agentframework.spi.model.ModelClient;
 import io.github.hellices.agentframework.spi.model.ModelRequest;
@@ -58,9 +70,16 @@ import java.util.function.Supplier;
 public final class AgentEngine {
 
   private final SessionCoordinator sessionCoordinator;
+  private final InterceptorRegistry interceptorRegistry;
 
   AgentEngine(SessionCoordinator sessionCoordinator) {
+    this(sessionCoordinator, new InterceptorRegistry(List.of(), List.of(), List.of(), List.of()));
+  }
+
+  AgentEngine(SessionCoordinator sessionCoordinator, InterceptorRegistry interceptorRegistry) {
     this.sessionCoordinator = sessionCoordinator;
+    this.interceptorRegistry =
+        Objects.requireNonNull(interceptorRegistry, "interceptorRegistry must not be null");
   }
 
   public static AgentEngineBuilder builder() {
@@ -110,6 +129,25 @@ public final class AgentEngine {
     Objects.requireNonNull(runtime, "runtime must not be null");
     runtime.validate(definition);
     return new BoundAgent(definition, runtime, this);
+  }
+
+  AgentExecution interceptAgent(AgentInvocation invocation, AgentInvocationChain terminal) {
+    return interceptorRegistry.interceptAgent(invocation, terminal);
+  }
+
+  Flow.Publisher<ModelResponseUpdate> interceptModel(
+      ModelInvocation invocation, ModelInvocationChain terminal) {
+    return interceptorRegistry.interceptModel(invocation, terminal);
+  }
+
+  CompletionStage<ToolResult> interceptTool(
+      ToolInvocation invocation, ToolInvocationChain terminal) {
+    return interceptorRegistry.interceptTool(invocation, terminal);
+  }
+
+  CompletionStage<SessionOperationResult> interceptSession(
+      SessionInvocation invocation, SessionInvocationChain terminal) {
+    return interceptorRegistry.interceptSession(invocation, terminal);
   }
 
   /**
