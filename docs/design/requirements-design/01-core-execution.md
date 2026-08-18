@@ -90,6 +90,10 @@ Agent.runStreaming(request)   -> AgentStreamingRun(updates + final completion + 
 `AgentStreamingRun.updates()` provides a `Flow.Publisher<AgentResponseUpdate>`. The `cancel()` method
 on both handles triggers the same `CancellationSignal` passed to the request.
 
+The two handles are views over one `RunPipeline`: `runStreaming(...)` exposes its cold unicast
+update stream directly, while `run(...)` drains the same pipeline internally and exposes only the
+terminal response.
+
 `AgentRunRequest` is a non-null immutable value.
 
 - normalized message list
@@ -245,8 +249,11 @@ VALIDATE
 
 ## 5. Model port and options
 
-`ModelClient` has only the minimum common functionality. Web search, code interpreter, and provider
-continuation are exposed through typed `ModelCapability<T>` or adapter-specific APIs.
+`ModelClient` has only the minimum common functionality: one `execute(ModelRequest)` call that
+returns a publisher of `ModelResponseUpdate`. A provider that answers in one shot emits one update
+and completes; a native streaming provider emits several under the same contract. Web search, code
+interpreter, and provider continuation are exposed through typed `ModelCapability<T>` or
+adapter-specific APIs.
 
 `ModelOptions` has typed immutable properties.
 

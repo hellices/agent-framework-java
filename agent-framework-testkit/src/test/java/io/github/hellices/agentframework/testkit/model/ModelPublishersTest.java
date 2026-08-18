@@ -117,10 +117,36 @@ class ModelPublishersTest {
   }
 
   @Test
+  void fromStageWaitsForDemandBeforeDeliveringFailure() {
+    RuntimeException failure = new IllegalStateException("stage failed");
+    RecordingSubscriber subscriber = new RecordingSubscriber(0);
+
+    ModelPublishers.fromStage(CompletableFuture.failedFuture(failure), new CancellationSignal())
+        .subscribe(subscriber);
+
+    assertThat(subscriber.signals()).containsExactly("onSubscribe");
+
+    subscriber.subscription().request(1);
+    assertThat(subscriber.signals()).containsExactly("onSubscribe", "onError:" + failure);
+  }
+
+  @Test
   void fromStageUnwrapsCompletionException() {
     RuntimeException cause = new IllegalStateException("cause");
     CompletableFuture<ModelResponseUpdate> stage = new CompletableFuture<>();
     stage.completeExceptionally(new CompletionException(cause));
+    RecordingSubscriber subscriber = new RecordingSubscriber(1);
+
+    ModelPublishers.fromStage(stage, new CancellationSignal()).subscribe(subscriber);
+
+    assertThat(subscriber.errors()).containsExactly(cause);
+  }
+
+  @Test
+  void fromStageUnwrapsExecutionException() {
+    RuntimeException cause = new IllegalStateException("cause");
+    CompletableFuture<ModelResponseUpdate> stage = new CompletableFuture<>();
+    stage.completeExceptionally(new java.util.concurrent.ExecutionException(cause));
     RecordingSubscriber subscriber = new RecordingSubscriber(1);
 
     ModelPublishers.fromStage(stage, new CancellationSignal()).subscribe(subscriber);

@@ -3,6 +3,11 @@
 Calls OpenAI Chat Completions through the framework's neutral `ModelClient` port, over an
 `OpenAIClientAsync` the host builds and owns.
 
+This adapter implements the unified `ModelClient.execute(ModelRequest)` contract as a cold publisher
+that emits exactly one mapped `ModelResponseUpdate` and then completes. Chat Completions native
+streaming is not exposed here yet, so this is a one-update adaptation of the provider's one-shot
+call rather than a native multi-update stream.
+
 > **Community project.** This module is not an official Microsoft or OpenAI product and is not
 > endorsed by either. It publishes under the community-owned group and package
 > `io.github.hellices.agentframework` so it cannot be mistaken for, or collide with, an official
@@ -190,12 +195,12 @@ backoff between attempts. Budget for that product, not for the timeout alone.
 
 Each of these is a fact about the shipped code, not a roadmap promise.
 
-- **Cancellation does not abort the in-flight HTTP request.** Cancelling the run's signal fails the
-  returned stage promptly and removes the listener, but the request already on the wire keeps
-  running, and cancelling the future taken from the returned stage does not change that either —
-  that future is a copy of the outcome, not the call. A timeout is what bounds the abandoned work,
-  per attempt.
-- **No streaming**, and no Responses API, structured output, embeddings, vision, audio,
+- **Cancellation does not abort the in-flight HTTP request.** Cancelling the run's signal settles
+  the adapter's one-update outcome promptly and removes the listener, but the request already on the
+  wire keeps running, and cancelling a future collected from that publisher does not change that
+  either — that future is a copy of the outcome, not the call. A timeout is what bounds the
+  abandoned work, per attempt.
+- **No native provider streaming**, and no Responses API, structured output, embeddings, vision, audio,
   `tool_choice`, or Azure-specific credential and deployment handling.
 - **Per-run `ModelRequestOptions` do not reach a provider yet** (G1). The engine still passes
   `ModelRequestOptions.empty()`, so the builder defaults are the only way to set temperature and
@@ -291,7 +296,7 @@ that claim by running it with nothing exported:
 | `ChatCompletionResponseMapperTest` | choices, text, finish reasons including the deprecated wire value and unknown values, usage, metadata, and the raw handles |
 | `ChatCompletionResponseMapperToolCallTest` | tool-call mapping and every strict-argument failure, the finish-reason-without-a-call rule and its deliberate asymmetry, the rejection of the deprecated `function_call` payload, and that no failure carries model output as a message, a cause, or a suppressed throwable |
 | `OpenAiCallBridgeTest` | the cancellation seam: no dispatch when already cancelled, prompt failure after dispatch, listener removal on every completion path, no completion authority handed to the caller, the original failure instance preserved, and one dispatch with no retry |
-| `OpenAiChatModelClientTest` | the assembled adapter: builder validation, defaults reaching the wire, the request timeout applied per call, mapping failures delivered through the stage rather than thrown, a `null` request thrown at the call site, that the client is borrowed and never closed, and that the supported builder surface stays small |
+| `OpenAiChatModelClientTest` | the assembled adapter: builder validation, defaults reaching the wire, the request timeout applied per call, strict `onSubscribe`/demand ordering for the single mapped update, exact provider failure delivery, cancellation forwarding, mapping failures delivered through the publisher rather than thrown, a `null` request thrown at the call site, that the client is borrowed and never closed, and that the supported builder surface stays small |
 | `OpenAiChatModelClientCancellationTest` | the same cancellation contract observed from the public port, including that a late cancellation cannot overwrite a delivered answer |
 | `OpenAiChatModelClientToolLoopTest` | the adapter and the real `AgentEngine` tool loop agree end to end — tool offered with its schema, called with the arguments the model produced, results echoed as tool messages, loop ended on the model's answer — with no transport of its own |
 

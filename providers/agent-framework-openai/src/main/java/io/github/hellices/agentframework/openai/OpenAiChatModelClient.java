@@ -44,13 +44,13 @@ import java.util.concurrent.Flow;
  * {@link Error}, which is not a request failure and must not be offered to a caller to map or retry
  * as if the provider had answered.
  *
- * <p>Cancelling the run's signal fails the returned stage promptly and removes the listener, but it
- * does not abort the HTTP request already in flight, and neither does cancelling the future taken
- * from the returned stage: that future is a copy of the outcome, not the call. A timeout is what
- * bounds the abandoned work, and {@code requestTimeout} bounds one attempt. Retries are the host's
- * setting on the client it builds ({@code maxRetries}, two by default), not this adapter's: the
- * adapter dispatches one call once, so an abandoned call can run for the timeout times the number
- * of attempts, plus the SDK's backoff between them.
+ * <p>Cancelling the run's signal settles the adapter's one-update outcome promptly and removes the
+ * listener, but it does not abort the HTTP request already in flight, and neither does cancelling a
+ * future collected from that publisher: that future is a copy of the outcome, not the call. A
+ * timeout is what bounds the abandoned work, and {@code requestTimeout} bounds one attempt. Retries
+ * are the host's setting on the client it builds ({@code maxRetries}, two by default), not this
+ * adapter's: the adapter dispatches one call once, so an abandoned call can run for the timeout
+ * times the number of attempts, plus the SDK's backoff between them.
  *
  * <p>Instances are immutable and safe to share once built.
  */

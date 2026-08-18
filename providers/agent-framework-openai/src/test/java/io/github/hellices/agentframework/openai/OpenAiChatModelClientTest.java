@@ -124,6 +124,72 @@ class OpenAiChatModelClientTest {
   }
 
   @Test
+  void publisherWaitsForDemandBeforeDeliveringItsSingleMappedUpdate() {
+    FakeChatCompletionsOperations operations =
+        new FakeChatCompletionsOperations().answering(completion("hello there"));
+    ModelClient client = clientOver(operations, builder -> builder.model("gpt-4.1-mini"));
+    RecordingSubscriber subscriber = new RecordingSubscriber(0);
+
+    client.execute(request("hi")).subscribe(subscriber);
+
+    assertThat(subscriber.signals()).containsExactly("onSubscribe");
+
+    subscriber.subscription().request(1);
+
+    assertThat(subscriber.signals()).containsExactly("onSubscribe", "onNext", "onComplete");
+    assertThat(subscriber.values())
+        .singleElement()
+        .satisfies(
+            update -> {
+              assertThat(update.finishReason())
+                  .isEqualTo(io.github.hellices.agentframework.api.message.FinishReason.STOP);
+              assertThat(update.messages()).hasSize(1);
+              assertThat(update.messages().get(0).role()).isEqualTo(Role.ASSISTANT);
+              assertThat(update.messages().get(0).text()).isEqualTo("hello there");
+              assertThat(update.rawRepresentation()).isInstanceOf(ChatCompletion.class);
+            });
+  }
+
+  @Test
+  void publisherForwardsCancellationThroughTheRequestSignal() {
+    CompletableFuture<ChatCompletion> inFlight = new CompletableFuture<>();
+    FakeChatCompletionsOperations operations =
+        new FakeChatCompletionsOperations().withholding(inFlight);
+    ModelClient client = clientOver(operations, builder -> builder.model("gpt-4.1-mini"));
+    CancellationSignal signal = new CancellationSignal();
+    RecordingSubscriber subscriber = new RecordingSubscriber(0);
+
+    client
+        .execute(
+            ModelRequest.builder()
+                .messages(List.of(new Message(Role.USER, List.of(new TextContent("hi")))))
+                .options(ModelRequestOptions.empty())
+                .cancellationSignal(signal)
+                .build())
+        .subscribe(subscriber);
+    subscriber.subscription().cancel();
+    inFlight.complete(completion("too late"));
+
+    assertThat(signal.isCancelled()).isTrue();
+    assertThat(subscriber.signals()).containsExactly("onSubscribe");
+  }
+
+  @Test
+  void publisherDeliversTheExactProviderFailureInstanceToTheSubscriber() {
+    OpenAIIoException failure = new OpenAIIoException("connection reset");
+    FakeChatCompletionsOperations operations =
+        new FakeChatCompletionsOperations().failingWith(failure);
+    ModelClient client = clientOver(operations, builder -> builder.model("gpt-4.1-mini"));
+    RecordingSubscriber subscriber = new RecordingSubscriber(0);
+
+    client.execute(request("hi")).subscribe(subscriber);
+    subscriber.subscription().request(1);
+
+    assertThat(subscriber.signals()).containsExactly("onSubscribe", "onError:" + failure);
+    assertThat(subscriber.errors()).containsExactly(failure);
+  }
+
+  @Test
   void deliversAMappingFailureThroughTheStageRatherThanThrowing() {
     FakeChatCompletionsOperations operations = new FakeChatCompletionsOperations();
     ModelClient client = clientOver(operations, builder -> builder.model("gpt-4.1-mini"));
@@ -463,6 +529,60 @@ class OpenAiChatModelClientTest {
 
   private static Throwable failureOf(CompletionStage<?> stage) {
     return stage.handle((value, failure) -> failure).toCompletableFuture().join();
+  }
+
+  private static final class RecordingSubscriber implements Flow.Subscriber<ModelResponseUpdate> {
+    private final List<String> signals = new ArrayList<>();
+    private final List<ModelResponseUpdate> values = new ArrayList<>();
+    private final List<Throwable> errors = new ArrayList<>();
+    private final long initialDemand;
+    private Flow.Subscription subscription;
+
+    private RecordingSubscriber(long initialDemand) {
+      this.initialDemand = initialDemand;
+    }
+
+    @Override
+    public void onSubscribe(Flow.Subscription subscription) {
+      this.subscription = subscription;
+      signals.add("onSubscribe");
+      if (initialDemand > 0) {
+        subscription.request(initialDemand);
+      }
+    }
+
+    @Override
+    public void onNext(ModelResponseUpdate item) {
+      values.add(item);
+      signals.add("onNext");
+    }
+
+    @Override
+    public void onError(Throwable throwable) {
+      errors.add(throwable);
+      signals.add("onError:" + throwable);
+    }
+
+    @Override
+    public void onComplete() {
+      signals.add("onComplete");
+    }
+
+    private List<String> signals() {
+      return signals;
+    }
+
+    private List<ModelResponseUpdate> values() {
+      return values;
+    }
+
+    private List<Throwable> errors() {
+      return errors;
+    }
+
+    private Flow.Subscription subscription() {
+      return subscription;
+    }
   }
 
   /**

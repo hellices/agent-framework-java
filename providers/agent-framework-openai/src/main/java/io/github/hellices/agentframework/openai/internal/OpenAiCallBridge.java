@@ -131,7 +131,7 @@ public final class OpenAiCallBridge {
     try {
       dispatched = dispatch.get();
     } catch (RuntimeException failure) {
-      // Request mapping runs inside the supplier, and ModelClient.run must never throw
+      // Request mapping runs inside the supplier, and ModelClient.execute must never throw
       // synchronously: the engine calls it from inside and outside a completion stage, so a throw
       // would surface in two different places depending on the tool loop iteration.
       result.completeExceptionally(failure);

@@ -262,13 +262,18 @@ through the model call port defined by the core.
 
 **Decision.** Both upstreams agree. Without this separation, neither provider replacement nor
 deterministic testing is possible. This port is owned by `agent-framework-api` and implemented by
-provider adapters. The Java public name is `ModelClient` to avoid an import collision with Spring
-AI's `ChatClient`.
+provider adapters. Java collapses ordinary and streaming model execution into the single
+`ModelClient.execute(ModelRequest)` call, which returns a publisher of `ModelResponseUpdate`: a
+one-shot provider emits one update and completes, while a native streaming provider may emit
+several. The Java public name is `ModelClient` to avoid an import collision with Spring AI's
+`ChatClient`.
 
 **Acceptance criteria**
 
 - The core modules depend on no provider SDK.
 - A whole agent run can be tested with a deterministic fake implementation alone.
+- A provider does not split ordinary and streaming calls across separate core interfaces or method
+  names.
 
 **Evidence** [03 Public API and types](../upstream/snapshots/d0a4165f/features/03-model-execution.md)
 

@@ -355,7 +355,7 @@ class OpenAiCallBridgeTest {
   @Test
   void deliversASynchronousDispatchFailureThroughTheStage() {
     // Mapping happens inside the dispatch supplier, so an unmappable request must arrive as a
-    // failed stage rather than as a throw out of ModelClient.run.
+    // failed stage rather than as a throw out of ModelClient.execute.
     CancellationSignal signal = new CancellationSignal();
     IllegalArgumentException failure = new IllegalArgumentException("cannot map");
 
@@ -374,7 +374,7 @@ class OpenAiCallBridgeTest {
   @Test
   void deliversAMissingProviderCallThroughTheStage() {
     // A port that answers with no stage at all would otherwise surface as a null pointer thrown out
-    // of ModelClient.run, which is the one shape this bridge exists to rule out.
+    // of ModelClient.execute, which is the one shape this bridge exists to rule out.
     CancellationSignal signal = new CancellationSignal();
 
     CompletionStage<String> result = OpenAiCallBridge.guard(signal, () -> null);

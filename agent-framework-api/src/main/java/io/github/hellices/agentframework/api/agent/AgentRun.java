@@ -49,7 +49,7 @@ public final class AgentRun {
   }
 
   /**
-   * Builds a run whose whole post-run lifecycle — filling the {@link SessionContext} response slot,
+   * Builds a run whose whole post-run lifecycle — filling the session context response slot,
    * running context providers' {@code afterRun} hooks, and persisting the session — is already
    * owned by the engine that produced {@code response}. The {@link Agent} facade must not re-run
    * its own completion and {@code afterRun} seam on such a run (that would complete the response

@@ -119,6 +119,36 @@ class StandaloneAgentApplicationTest {
   }
 
   @Test
+  void scriptedModelClientRejectsNonPositiveDemandPerTheUnifiedPublisherContract() {
+    ScriptedModelClient client = new ScriptedModelClient(text("pong", null));
+    RecordingSubscriber subscriber = new RecordingSubscriber(0);
+
+    client.execute(request("ping")).subscribe(subscriber);
+    subscriber.subscription().request(0);
+    subscriber.subscription().request(-1);
+
+    assertThat(subscriber.signals())
+        .containsExactly(
+            "onSubscribe",
+            "onError:java.lang.IllegalArgumentException: request must be positive, was 0");
+    assertThat(subscriber.errors()).hasSize(1);
+  }
+
+  @Test
+  void scriptedModelClientReportsScriptExhaustionThroughThePublisher() {
+    ScriptedModelClient client = new ScriptedModelClient();
+    RecordingSubscriber subscriber = new RecordingSubscriber(1);
+
+    client.execute(request("ping")).subscribe(subscriber);
+
+    assertThat(subscriber.signals())
+        .containsExactly(
+            "onSubscribe",
+            "onError:java.lang.IllegalStateException: the sample called the model more times than scripted");
+    assertThat(subscriber.errors()).hasSize(1);
+  }
+
+  @Test
   void runsTheFunctionToolLoopWithTheInjectedClock() {
     // The loop the live milestone is supposed to exercise, proved here with no network: the model
     // asks for the tool, the sample's tool answers from the injected clock, and the second request
@@ -411,6 +441,12 @@ class StandaloneAgentApplicationTest {
         .build();
   }
 
+  private static ModelRequest request(String text) {
+    return ModelRequest.builder()
+        .messages(List.of(new Message(Role.USER, List.of(new TextContent(text)))))
+        .build();
+  }
+
   /** Answers from a script and records what the sample asked for. */
   private static final class ScriptedModelClient implements ModelClient {
 
@@ -426,7 +462,8 @@ class StandaloneAgentApplicationTest {
       requests.add(request);
       ModelResponse answer = answers.poll();
       if (answer == null) {
-        throw new IllegalStateException("the sample called the model more times than scripted");
+        return failingPublisher(
+            new IllegalStateException("the sample called the model more times than scripted"));
       }
       ModelResponseUpdate update =
           ModelResponseUpdate.builder()
@@ -437,30 +474,118 @@ class StandaloneAgentApplicationTest {
               .metadata(answer.metadata())
               .rawRepresentation(answer.rawRepresentation())
               .build();
-      return subscriber ->
-          subscriber.onSubscribe(
-              new Flow.Subscription() {
-                private boolean done;
+      return subscriber -> {
+        if (subscriber == null) {
+          throw new NullPointerException("subscriber must not be null");
+        }
+        subscriber.onSubscribe(
+            new Flow.Subscription() {
+              private boolean done;
 
-                @Override
-                public void request(long n) {
-                  if (done || n <= 0) {
-                    return;
-                  }
-                  done = true;
-                  subscriber.onNext(update);
-                  subscriber.onComplete();
+              @Override
+              public void request(long n) {
+                if (done) {
+                  return;
                 }
+                if (n <= 0) {
+                  done = true;
+                  subscriber.onError(
+                      new IllegalArgumentException("request must be positive, was " + n));
+                  return;
+                }
+                done = true;
+                subscriber.onNext(update);
+                subscriber.onComplete();
+              }
 
-                @Override
-                public void cancel() {
-                  done = true;
+              @Override
+              public void cancel() {
+                done = true;
+              }
+            });
+      };
+    }
+
+    private static Flow.Publisher<ModelResponseUpdate> failingPublisher(RuntimeException failure) {
+      return subscriber -> {
+        if (subscriber == null) {
+          throw new NullPointerException("subscriber must not be null");
+        }
+        subscriber.onSubscribe(
+            new Flow.Subscription() {
+              private boolean done;
+
+              @Override
+              public void request(long n) {
+                if (done) {
+                  return;
                 }
-              });
+                if (n <= 0) {
+                  done = true;
+                  subscriber.onError(
+                      new IllegalArgumentException("request must be positive, was " + n));
+                  return;
+                }
+                done = true;
+                subscriber.onError(failure);
+              }
+
+              @Override
+              public void cancel() {
+                done = true;
+              }
+            });
+      };
     }
 
     List<ModelRequest> requests() {
       return List.copyOf(requests);
+    }
+  }
+
+  private static final class RecordingSubscriber implements Flow.Subscriber<ModelResponseUpdate> {
+    private final List<String> signals = new ArrayList<>();
+    private final List<Throwable> errors = new ArrayList<>();
+    private final long initialDemand;
+    private Flow.Subscription subscription;
+
+    private RecordingSubscriber(long initialDemand) {
+      this.initialDemand = initialDemand;
+    }
+
+    @Override
+    public void onSubscribe(Flow.Subscription subscription) {
+      this.subscription = subscription;
+      signals.add("onSubscribe");
+      if (initialDemand > 0) {
+        subscription.request(initialDemand);
+      }
+    }
+
+    @Override
+    public void onNext(ModelResponseUpdate item) {}
+
+    @Override
+    public void onError(Throwable throwable) {
+      errors.add(throwable);
+      signals.add("onError:" + throwable);
+    }
+
+    @Override
+    public void onComplete() {
+      signals.add("onComplete");
+    }
+
+    private List<String> signals() {
+      return signals;
+    }
+
+    private List<Throwable> errors() {
+      return errors;
+    }
+
+    private Flow.Subscription subscription() {
+      return subscription;
     }
   }
 

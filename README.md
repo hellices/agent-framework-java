@@ -13,8 +13,10 @@ deliverable is an embeddable `AgentEngine`. A host runtime such as Spring Boot k
 lifecycle, execution resources, security, transactions, and observability configuration.
 
 > **Status:** early. Deterministic single-agent execution, typed public-contract policy, the core
-> function-tool loop, session persistence, and one Preview provider adapter (OpenAI Chat
-> Completions) are implemented; streaming for that adapter and host integrations remain in progress.
+> function-tool loop, the unified `ModelClient.execute(ModelRequest)` update contract, cold unicast
+> `Agent.runStreaming(...)` over one shared `RunPipeline`, session persistence, and one Preview
+> provider adapter (OpenAI Chat Completions) are implemented; native provider streaming for that
+> adapter and host integrations remain in progress.
 > See [Current state](#current-state).
 >
 > **API stability:** pre-1.0. Public contracts may evolve between requirement slices while the core
@@ -183,11 +185,17 @@ and a live standalone execution path over a real endpoint.
 - Five published product modules with a compiled and tested surface
 - Executable public-contract policy: only reviewed fixed records remain public and primary API/SPI
   signatures fail if they regress to raw `Map<String, Object>` contracts
+- Unified model execution through `ModelClient.execute(ModelRequest)`: one update publisher for both
+  one-shot and multi-update providers
 - Deterministic `AgentEngine` run and function-tool loops, shared by ordinary and streaming runs
+- Cold unicast `Agent.runStreaming(...)` and ordinary `Agent.run(...)` as two views over one
+  `RunPipeline`
 - Session persistence and restoration: versioned snapshots, in-memory and file session stores, the
   context provider pipeline, and default in-memory chat history
 - OpenAI Chat Completions adapter (Preview) over a borrowed official SDK client, reaching the engine
-  only through the neutral `ModelClient` port, with a deterministic offline test suite
+  only through the neutral `ModelClient` port, adapting Chat Completions to one terminal update
+  because native provider streaming is not implemented there yet, with a deterministic offline test
+  suite
 - Runnable standalone `Agent.run(...)` sample calling a real OpenAI-compatible endpoint through that
   adapter, with one local function tool
 
