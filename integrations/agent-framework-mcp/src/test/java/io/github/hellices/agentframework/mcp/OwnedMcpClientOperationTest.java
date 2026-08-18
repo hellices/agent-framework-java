@@ -3,9 +3,12 @@ package io.github.hellices.agentframework.mcp;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import io.github.hellices.agentframework.api.context.ContextAttributes;
 import io.github.hellices.agentframework.api.tool.FunctionTool;
 import io.github.hellices.agentframework.api.tool.ToolArguments;
 import io.github.hellices.agentframework.api.tool.ToolContext;
+import io.github.hellices.agentframework.api.value.JsonObject;
+import io.github.hellices.agentframework.api.value.JsonValues;
 import io.github.hellices.agentframework.mcp.internal.McpOwnedClientSettings;
 import io.github.hellices.agentframework.mcp.internal.McpToolDiscovery;
 import io.github.hellices.agentframework.mcp.internal.OwnedMcpAsyncOperations;
@@ -188,7 +191,8 @@ class OwnedMcpClientOperationTest {
 
     assertThatThrownBy(
             () ->
-                tool.execute(new ToolArguments(Map.of()), new ToolContext(null, Map.of()))
+                tool.execute(
+                        toolArguments(Map.of()), new ToolContext(null, ContextAttributes.empty()))
                     .toCompletableFuture()
                     .join())
         .rootCause()
@@ -333,5 +337,11 @@ class OwnedMcpClientOperationTest {
   private static McpOwnedClientSettings settings() {
     return new McpOwnedClientSettings(
         new PermissiveJsonSchemaValidator(), Duration.ofSeconds(5), Duration.ofSeconds(5));
+  }
+
+  private static ToolArguments toolArguments(Map<String, ?> values) {
+    JsonObject.Builder builder = JsonObject.builder();
+    values.forEach((key, value) -> builder.put(key, JsonValues.fromJava(value)));
+    return ToolArguments.of(builder.build());
   }
 }

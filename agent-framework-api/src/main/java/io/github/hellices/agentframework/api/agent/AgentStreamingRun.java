@@ -6,6 +6,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.Flow;
@@ -26,18 +27,20 @@ public final class AgentStreamingRun<T> {
   private final CancellationSignal cancellationSignal;
   private final Runnable cancellationAction;
   private final Predicate<Throwable> failureAction;
+  private final boolean engineManaged;
 
   public AgentStreamingRun(
       Flow.Publisher<T> updates,
       CompletionStage<AgentResponse> response,
       CancellationSignal cancellationSignal) {
-    this.updates = Objects.requireNonNull(updates, "updates must not be null");
+    this.updates = singleSubscriber(updates);
     this.response = Objects.requireNonNull(response, "response must not be null");
     this.session = AgentRun.noSession();
     this.cancellationSignal =
         cancellationSignal == null ? new CancellationSignal() : cancellationSignal;
     this.cancellationAction = this.cancellationSignal::cancel;
     this.failureAction = ignored -> false;
+    this.engineManaged = false;
   }
 
   private AgentStreamingRun(
@@ -46,8 +49,9 @@ public final class AgentStreamingRun<T> {
       CompletionStage<Optional<AgentSession>> session,
       CancellationSignal cancellationSignal,
       Runnable cancellationAction,
-      Predicate<Throwable> failureAction) {
-    this.updates = Objects.requireNonNull(updates, "updates must not be null");
+      Predicate<Throwable> failureAction,
+      boolean engineManaged) {
+    this.updates = singleSubscriber(updates);
     this.response = Objects.requireNonNull(response, "response must not be null");
     this.session = Objects.requireNonNull(session, "session must not be null");
     this.cancellationSignal =
@@ -55,6 +59,11 @@ public final class AgentStreamingRun<T> {
     this.cancellationAction =
         Objects.requireNonNull(cancellationAction, "cancellationAction must not be null");
     this.failureAction = Objects.requireNonNull(failureAction, "failureAction must not be null");
+    this.engineManaged = engineManaged;
+  }
+
+  boolean isEngineManaged() {
+    return engineManaged;
   }
 
   public static AgentStreamingRun<AgentResponseUpdate> fromUpdate(AgentResponseUpdate update) {
@@ -78,7 +87,8 @@ public final class AgentStreamingRun<T> {
           signal.cancel();
           publisher.cancel(false);
         },
-        publisher::fail);
+        publisher::fail,
+        false);
   }
 
   public static AgentStreamingRun<AgentResponseUpdate> fromUpdates(
@@ -97,34 +107,47 @@ public final class AgentStreamingRun<T> {
           signal.cancel();
           publisher.cancel(false);
         },
-        publisher::fail);
+        publisher::fail,
+        false);
   }
 
-  public static AgentStreamingRun<AgentResponseUpdate> fromUpdates(
+  /**
+   * Builds a streaming run whose post-stream lifecycle is owned by the engine. Once the update
+   * source reaches {@code onComplete}, the run reconstructs its {@link AgentResponse} from the
+   * buffered updates and hands it to {@code finalizer} — the engine step that completes the run's
+   * {@link io.github.hellices.agentframework.api.session.SessionContext} response slot exactly
+   * once, runs context providers' {@code afterRun} hooks in reverse, and persists the session. The
+   * update publisher only emits {@code onComplete} after {@code finalizer} succeeded, so a
+   * subscriber never sees a normal terminal signal for a run whose providers or save failed; such a
+   * failure is emitted as {@code onError} instead, and both {@link #response()} and {@link
+   * #session()} carry the identical root cause the finalizer reported.
+   */
+  public static AgentStreamingRun<AgentResponseUpdate> engineManaged(
       Flow.Publisher<AgentResponseUpdate> updates,
       CancellationSignal cancellationSignal,
-      Supplier<AgentResponse> emptyResponseSupplier) {
+      Function<AgentResponse, CompletionStage<AgentResponse>> finalizer,
+      Supplier<Optional<AgentSession>> updatedSession) {
     Objects.requireNonNull(updates, "updates must not be null");
+    Function<AgentResponse, CompletionStage<AgentResponse>> finalizeRun =
+        Objects.requireNonNull(finalizer, "finalizer must not be null");
+    Supplier<Optional<AgentSession>> session =
+        Objects.requireNonNull(updatedSession, "updatedSession must not be null");
     CancellationSignal signal =
         cancellationSignal == null ? new CancellationSignal() : cancellationSignal;
     CompletableFuture<AgentResponse> response = new CompletableFuture<>();
-    FinalizingPublisher publisher =
-        new FinalizingPublisher(
-            updates,
-            response,
-            signal,
-            Objects.requireNonNull(
-                emptyResponseSupplier, "emptyResponseSupplier must not be null"));
+    FinalizingPublisher publisher = new FinalizingPublisher(updates, response, signal, finalizeRun);
+    CompletionStage<AgentResponse> responseStage = response.minimalCompletionStage();
     return new AgentStreamingRun<>(
         publisher,
-        response.minimalCompletionStage(),
-        AgentRun.noSession(),
+        responseStage,
+        responseStage.thenApply(ignored -> session.get()),
         signal,
         () -> {
           signal.cancel();
           publisher.cancel(false);
         },
-        publisher::fail);
+        publisher::fail,
+        true);
   }
 
   public Flow.Publisher<T> updates() {
@@ -165,7 +188,8 @@ public final class AgentStreamingRun<T> {
         session,
         cancellationSignal,
         cancellationAction,
-        failureAction);
+        failureAction,
+        engineManaged);
   }
 
   /**
@@ -229,14 +253,24 @@ public final class AgentStreamingRun<T> {
         updatedSession == null ? session : wrapped.thenApply(ignored -> updatedSession.get()),
         cancellationSignal,
         cancellationAction,
-        failureAction);
+        failureAction,
+        engineManaged);
+  }
+
+  @SuppressWarnings("unchecked")
+  private static <T> Flow.Publisher<T> singleSubscriber(Flow.Publisher<T> updates) {
+    Flow.Publisher<T> source = Objects.requireNonNull(updates, "updates must not be null");
+    if (source instanceof SingleSubscriberPublisher<?> singleSubscriberPublisher) {
+      return (Flow.Publisher<T>) singleSubscriberPublisher;
+    }
+    return new SingleSubscriberPublisher<>(source);
   }
 
   private static final class FinalizingPublisher implements Flow.Publisher<AgentResponseUpdate> {
     private final Flow.Publisher<AgentResponseUpdate> source;
     private final CompletableFuture<AgentResponse> response;
     private final CancellationSignal cancellationSignal;
-    private final Supplier<AgentResponse> emptyResponseSupplier;
+    private final Function<AgentResponse, CompletionStage<AgentResponse>> finalizer;
     private final AtomicBoolean subscribed = new AtomicBoolean();
     private final AtomicReference<Flow.Subscription> subscription = new AtomicReference<>();
     private final AtomicReference<StreamState> state = new AtomicReference<>(StreamState.ACTIVE);
@@ -257,11 +291,11 @@ public final class AgentStreamingRun<T> {
         Flow.Publisher<AgentResponseUpdate> source,
         CompletableFuture<AgentResponse> response,
         CancellationSignal cancellationSignal,
-        Supplier<AgentResponse> emptyResponseSupplier) {
+        Function<AgentResponse, CompletionStage<AgentResponse>> finalizer) {
       this.source = source;
       this.response = response;
       this.cancellationSignal = cancellationSignal;
-      this.emptyResponseSupplier = emptyResponseSupplier;
+      this.finalizer = finalizer;
       this.removeCancellationListener.set(cancellationSignal.onCancel(() -> cancel(true)));
     }
 
@@ -386,19 +420,50 @@ public final class AgentStreamingRun<T> {
         signalLock.unlock();
       }
       unregisterCancellationListener();
-      StreamSignal terminalSignal;
+      AgentResponse assembledResponse;
       try {
-        AgentResponse assembledResponse =
-            bufferedUpdates.isEmpty() && emptyResponseSupplier != null
-                ? Objects.requireNonNull(
-                    emptyResponseSupplier.get(), "emptyResponseSupplier must not return null")
-                : AgentResponse.fromUpdates(bufferedUpdates);
-        response.complete(assembledResponse);
-        terminalSignal = CompleteSignal.INSTANCE;
+        assembledResponse = AgentResponse.fromUpdates(bufferedUpdates);
       } catch (RuntimeException failure) {
-        response.completeExceptionally(failure);
-        terminalSignal = new ErrorSignal(failure);
+        completeTerminally(failure);
+        return;
       }
+      if (finalizer == null) {
+        completeTerminally(assembledResponse);
+        return;
+      }
+      // The engine owns the post-stream lifecycle: only once its finalizer (session context
+      // completion, providers' afterRun, and session save) succeeds may the update publisher emit
+      // onComplete. A finalizer failure is surfaced as onError before any onComplete instead.
+      CompletionStage<AgentResponse> finalized;
+      try {
+        finalized =
+            Objects.requireNonNull(
+                finalizer.apply(assembledResponse), "finalizer stage must not be null");
+      } catch (RuntimeException failure) {
+        completeTerminally(failure);
+        return;
+      }
+      finalized.whenComplete(
+          (finalResponse, failure) -> {
+            if (failure == null) {
+              completeTerminally(finalResponse);
+            } else {
+              completeTerminally(unwrap(failure));
+            }
+          });
+    }
+
+    private void completeTerminally(AgentResponse assembledResponse) {
+      response.complete(assembledResponse);
+      enqueueTerminal(CompleteSignal.INSTANCE);
+    }
+
+    private void completeTerminally(Throwable failure) {
+      response.completeExceptionally(failure);
+      enqueueTerminal(new ErrorSignal(failure));
+    }
+
+    private void enqueueTerminal(StreamSignal terminalSignal) {
       signalLock.lock();
       try {
         signals.add(terminalSignal);
@@ -406,6 +471,13 @@ public final class AgentStreamingRun<T> {
         signalLock.unlock();
       }
       drainSignals();
+    }
+
+    private static Throwable unwrap(Throwable failure) {
+      if (failure instanceof CompletionException && failure.getCause() != null) {
+        return failure.getCause();
+      }
+      return failure;
     }
 
     private void unregisterCancellationListener() {
@@ -635,6 +707,26 @@ public final class AgentStreamingRun<T> {
               completed = true;
             }
           });
+    }
+  }
+
+  private static final class SingleSubscriberPublisher<T> implements Flow.Publisher<T> {
+    private final Flow.Publisher<T> source;
+    private final AtomicBoolean subscribed = new AtomicBoolean();
+
+    private SingleSubscriberPublisher(Flow.Publisher<T> source) {
+      this.source = source;
+    }
+
+    @Override
+    public void subscribe(Flow.Subscriber<? super T> subscriber) {
+      Objects.requireNonNull(subscriber, "subscriber must not be null");
+      if (!subscribed.compareAndSet(false, true)) {
+        subscriber.onSubscribe(EmptySubscription.INSTANCE);
+        subscriber.onError(new IllegalStateException("updates can only be consumed once"));
+        return;
+      }
+      source.subscribe(subscriber);
     }
   }
 

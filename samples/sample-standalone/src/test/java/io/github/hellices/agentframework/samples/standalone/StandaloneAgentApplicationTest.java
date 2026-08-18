@@ -3,7 +3,10 @@ package io.github.hellices.agentframework.samples.standalone;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import io.github.hellices.agentframework.api.agent.Agent;
+import io.github.hellices.agentframework.api.agent.AgentFactory;
 import io.github.hellices.agentframework.api.agent.AgentResponse;
+import io.github.hellices.agentframework.api.agent.AgentRunRequest;
+import io.github.hellices.agentframework.api.agent.AgentSession;
 import io.github.hellices.agentframework.api.message.FinishReason;
 import io.github.hellices.agentframework.api.message.Message;
 import io.github.hellices.agentframework.api.message.Role;
@@ -11,9 +14,18 @@ import io.github.hellices.agentframework.api.message.TextContent;
 import io.github.hellices.agentframework.api.message.ToolCallContent;
 import io.github.hellices.agentframework.api.message.ToolResultContent;
 import io.github.hellices.agentframework.api.message.Usage;
+import io.github.hellices.agentframework.api.tool.FunctionTool;
+import io.github.hellices.agentframework.api.tool.ToolDefinition;
+import io.github.hellices.agentframework.api.tool.ToolResult;
+import io.github.hellices.agentframework.api.value.JsonObject;
+import io.github.hellices.agentframework.api.value.JsonValues;
+import io.github.hellices.agentframework.engine.AgentEngine;
+import io.github.hellices.agentframework.engine.session.InMemorySessionStore;
+import io.github.hellices.agentframework.engine.session.JacksonSessionSnapshotCodec;
 import io.github.hellices.agentframework.spi.model.ModelClient;
 import io.github.hellices.agentframework.spi.model.ModelRequest;
 import io.github.hellices.agentframework.spi.model.ModelResponse;
+import io.github.hellices.agentframework.spi.model.ModelResponseUpdate;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
@@ -23,7 +35,7 @@ import java.util.Deque;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionStage;
+import java.util.concurrent.Flow;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -43,6 +55,9 @@ class StandaloneAgentApplicationTest {
   private static final Clock FIXED_CLOCK =
       Clock.fixed(Instant.parse("2026-08-16T00:00:00Z"), ZoneOffset.UTC);
   private static final String FIXED_TIME = "2026-08-16T00:00:00Z";
+  private static final Clock OTHER_CLOCK =
+      Clock.fixed(Instant.parse("2026-08-17T00:00:00Z"), ZoneOffset.UTC);
+  private static final String OTHER_TIME = "2026-08-17T00:00:00Z";
 
   @Test
   void runsWithAnInjectedModelClientAndOffersTheLocalTool() {
@@ -56,6 +71,81 @@ class StandaloneAgentApplicationTest {
     assertThat(modelClient.requests().get(0).tools())
         .singleElement()
         .satisfies(tool -> assertThat(tool.name()).isEqualTo(StandaloneAgentApplication.TOOL_NAME));
+  }
+
+  @Test
+  void oneSharedFactoryBindsTwoDistinctAgentsWhileKeepingSharedSessionServicesUsable() {
+    AgentFactory factory =
+        AgentEngine.builder()
+            .sessionStore(new InMemorySessionStore(new JacksonSessionSnapshotCodec()))
+            .build()
+            .factory();
+    ScriptedModelClient firstModel =
+        new ScriptedModelClient(text("first-one", null), text("first-two", null));
+    ScriptedModelClient secondModel =
+        new ScriptedModelClient(text("second-one", null), text("second-two", null));
+
+    Agent firstAgent = StandaloneAgentApplication.createAgent(factory, firstModel, FIXED_CLOCK);
+    Agent secondAgent =
+        factory
+            .builderWithClient(secondModel)
+            .id("second-agent")
+            .name("Second Agent")
+            .description("Runs through the shared factory with a different tool.")
+            .tools(fixedTextTool("other_clock", OTHER_TIME))
+            .build();
+
+    assertThat(run(firstAgent, "shared-first", "first prompt")).isEqualTo("first-one");
+    assertThat(run(secondAgent, "shared-second", "other prompt")).isEqualTo("second-one");
+    assertThat(run(firstAgent, "shared-first", "follow-up for first")).isEqualTo("first-two");
+    assertThat(run(secondAgent, "shared-second", "follow-up for second")).isEqualTo("second-two");
+
+    assertThat(firstAgent.id()).isEqualTo("standalone-agent");
+    assertThat(secondAgent.id()).isEqualTo("second-agent");
+    assertThat(firstModel.requests().get(0).tools())
+        .extracting(ToolDefinition::name)
+        .containsExactly(StandaloneAgentApplication.TOOL_NAME);
+    assertThat(secondModel.requests().get(0).tools())
+        .extracting(ToolDefinition::name)
+        .containsExactly("other_clock");
+    assertThat(firstModel.requests().get(1).messages())
+        .extracting(Message::text)
+        .containsExactly("first prompt", "first-one", "follow-up for first")
+        .doesNotContain("other prompt", "second-one");
+    assertThat(secondModel.requests().get(1).messages())
+        .extracting(Message::text)
+        .containsExactly("other prompt", "second-one", "follow-up for second")
+        .doesNotContain("first prompt", "first-one");
+  }
+
+  @Test
+  void scriptedModelClientRejectsNonPositiveDemandPerTheUnifiedPublisherContract() {
+    ScriptedModelClient client = new ScriptedModelClient(text("pong", null));
+    RecordingSubscriber subscriber = new RecordingSubscriber(0);
+
+    client.execute(request("ping")).subscribe(subscriber);
+    subscriber.subscription().request(0);
+    subscriber.subscription().request(-1);
+
+    assertThat(subscriber.signals())
+        .containsExactly(
+            "onSubscribe",
+            "onError:java.lang.IllegalArgumentException: request must be positive, was 0");
+    assertThat(subscriber.errors()).hasSize(1);
+  }
+
+  @Test
+  void scriptedModelClientReportsScriptExhaustionThroughThePublisher() {
+    ScriptedModelClient client = new ScriptedModelClient();
+    RecordingSubscriber subscriber = new RecordingSubscriber(1);
+
+    client.execute(request("ping")).subscribe(subscriber);
+
+    assertThat(subscriber.signals())
+        .containsExactly(
+            "onSubscribe",
+            "onError:java.lang.IllegalStateException: the sample called the model more times than scripted");
+    assertThat(subscriber.errors()).hasSize(1);
   }
 
   @Test
@@ -294,31 +384,34 @@ class StandaloneAgentApplicationTest {
   }
 
   private static ModelResponse text(String value, Usage usage) {
-    return new ModelResponse(
-        List.of(new Message(Role.ASSISTANT, List.of(new TextContent(value)))),
-        usage,
-        FinishReason.STOP,
-        Map.of(),
-        null);
+    return ModelResponse.builder()
+        .messages(List.of(new Message(Role.ASSISTANT, List.of(new TextContent(value)))))
+        .usage(usage)
+        .finishReason(FinishReason.STOP)
+        .build();
   }
 
   private static ModelResponse toolCall(String callId, Usage usage) {
-    return new ModelResponse(
-        List.of(
-            new Message(
-                Role.ASSISTANT,
-                List.of(
-                    new ToolCallContent(callId, StandaloneAgentApplication.TOOL_NAME, Map.of())))),
-        usage,
-        FinishReason.TOOL_CALLS,
-        Map.of(),
-        null);
+    return ModelResponse.builder()
+        .messages(
+            List.of(
+                new Message(
+                    Role.ASSISTANT,
+                    List.of(
+                        new ToolCallContent(
+                            callId, StandaloneAgentApplication.TOOL_NAME, JsonObject.empty())))))
+        .usage(usage)
+        .finishReason(FinishReason.TOOL_CALLS)
+        .build();
   }
 
   /** A terminal completion whose assistant message carries no content at all. */
   private static ModelResponse blank(Usage usage) {
-    return new ModelResponse(
-        List.of(new Message(Role.ASSISTANT, List.of())), usage, FinishReason.STOP, Map.of(), null);
+    return ModelResponse.builder()
+        .messages(List.of(new Message(Role.ASSISTANT, List.of())))
+        .usage(usage)
+        .finishReason(FinishReason.STOP)
+        .build();
   }
 
   private static ModelResponse round(Usage usage, String... values) {
@@ -326,21 +419,32 @@ class StandaloneAgentApplicationTest {
     for (String value : values) {
       messages.add(new Message(Role.ASSISTANT, List.of(new TextContent(value))));
     }
-    return new ModelResponse(List.copyOf(messages), usage, FinishReason.STOP, Map.of(), null);
+    return ModelResponse.builder()
+        .messages(List.copyOf(messages))
+        .usage(usage)
+        .finishReason(FinishReason.STOP)
+        .build();
   }
 
   private static ModelResponse toolCallAfterSaying(String preamble, String callId, Usage usage) {
-    return new ModelResponse(
-        List.of(
-            new Message(
-                Role.ASSISTANT,
-                List.of(
-                    new TextContent(preamble),
-                    new ToolCallContent(callId, StandaloneAgentApplication.TOOL_NAME, Map.of())))),
-        usage,
-        FinishReason.TOOL_CALLS,
-        Map.of(),
-        null);
+    return ModelResponse.builder()
+        .messages(
+            List.of(
+                new Message(
+                    Role.ASSISTANT,
+                    List.of(
+                        new TextContent(preamble),
+                        new ToolCallContent(
+                            callId, StandaloneAgentApplication.TOOL_NAME, JsonObject.empty())))))
+        .usage(usage)
+        .finishReason(FinishReason.TOOL_CALLS)
+        .build();
+  }
+
+  private static ModelRequest request(String text) {
+    return ModelRequest.builder()
+        .messages(List.of(new Message(Role.USER, List.of(new TextContent(text)))))
+        .build();
   }
 
   /** Answers from a script and records what the sample asked for. */
@@ -354,17 +458,159 @@ class StandaloneAgentApplicationTest {
     }
 
     @Override
-    public CompletionStage<ModelResponse> run(ModelRequest request) {
+    public Flow.Publisher<ModelResponseUpdate> execute(ModelRequest request) {
       requests.add(request);
       ModelResponse answer = answers.poll();
       if (answer == null) {
-        throw new IllegalStateException("the sample called the model more times than scripted");
+        return failingPublisher(
+            new IllegalStateException("the sample called the model more times than scripted"));
       }
-      return CompletableFuture.completedFuture(answer);
+      ModelResponseUpdate update =
+          ModelResponseUpdate.builder()
+              .messages(answer.messages())
+              .usage(answer.usage())
+              .finishReason(answer.finishReason())
+              .continuationToken(answer.continuationToken())
+              .metadata(answer.metadata())
+              .rawRepresentation(answer.rawRepresentation())
+              .build();
+      return subscriber -> {
+        if (subscriber == null) {
+          throw new NullPointerException("subscriber must not be null");
+        }
+        subscriber.onSubscribe(
+            new Flow.Subscription() {
+              private boolean done;
+
+              @Override
+              public void request(long n) {
+                if (done) {
+                  return;
+                }
+                if (n <= 0) {
+                  done = true;
+                  subscriber.onError(
+                      new IllegalArgumentException("request must be positive, was " + n));
+                  return;
+                }
+                done = true;
+                subscriber.onNext(update);
+                subscriber.onComplete();
+              }
+
+              @Override
+              public void cancel() {
+                done = true;
+              }
+            });
+      };
+    }
+
+    private static Flow.Publisher<ModelResponseUpdate> failingPublisher(RuntimeException failure) {
+      return subscriber -> {
+        if (subscriber == null) {
+          throw new NullPointerException("subscriber must not be null");
+        }
+        subscriber.onSubscribe(
+            new Flow.Subscription() {
+              private boolean done;
+
+              @Override
+              public void request(long n) {
+                if (done) {
+                  return;
+                }
+                if (n <= 0) {
+                  done = true;
+                  subscriber.onError(
+                      new IllegalArgumentException("request must be positive, was " + n));
+                  return;
+                }
+                done = true;
+                subscriber.onError(failure);
+              }
+
+              @Override
+              public void cancel() {
+                done = true;
+              }
+            });
+      };
     }
 
     List<ModelRequest> requests() {
       return List.copyOf(requests);
     }
+  }
+
+  private static final class RecordingSubscriber implements Flow.Subscriber<ModelResponseUpdate> {
+    private final List<String> signals = new ArrayList<>();
+    private final List<Throwable> errors = new ArrayList<>();
+    private final long initialDemand;
+    private Flow.Subscription subscription;
+
+    private RecordingSubscriber(long initialDemand) {
+      this.initialDemand = initialDemand;
+    }
+
+    @Override
+    public void onSubscribe(Flow.Subscription subscription) {
+      this.subscription = subscription;
+      signals.add("onSubscribe");
+      if (initialDemand > 0) {
+        subscription.request(initialDemand);
+      }
+    }
+
+    @Override
+    public void onNext(ModelResponseUpdate item) {}
+
+    @Override
+    public void onError(Throwable throwable) {
+      errors.add(throwable);
+      signals.add("onError:" + throwable);
+    }
+
+    @Override
+    public void onComplete() {
+      signals.add("onComplete");
+    }
+
+    private List<String> signals() {
+      return signals;
+    }
+
+    private List<Throwable> errors() {
+      return errors;
+    }
+
+    private Flow.Subscription subscription() {
+      return subscription;
+    }
+  }
+
+  private static String run(Agent agent, String sessionId, String input) {
+    return agent
+        .run(
+            AgentRunRequest.builder()
+                .session(AgentSession.builder().sessionId(sessionId).build())
+                .messages(Message.normalize(input))
+                .build())
+        .response()
+        .toCompletableFuture()
+        .join()
+        .text();
+  }
+
+  private static FunctionTool fixedTextTool(String name, String value) {
+    return FunctionTool.create(
+        name,
+        "Returns fixed text.",
+        JsonObject.builder()
+            .put("type", JsonValues.fromJava("object"))
+            .put("properties", JsonValues.fromJava(Map.of()))
+            .build(),
+        (arguments, context) ->
+            CompletableFuture.completedFuture(ToolResult.success(new TextContent(value))));
   }
 }

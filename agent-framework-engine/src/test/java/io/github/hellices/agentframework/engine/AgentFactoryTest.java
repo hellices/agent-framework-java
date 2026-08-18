@@ -2,33 +2,54 @@ package io.github.hellices.agentframework.engine;
 
 import static java.util.concurrent.CompletableFuture.completedFuture;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.github.hellices.agentframework.api.agent.Agent;
+import io.github.hellices.agentframework.api.agent.AgentBuilder;
+import io.github.hellices.agentframework.api.agent.AgentDefinition;
 import io.github.hellices.agentframework.api.agent.AgentFactory;
+import io.github.hellices.agentframework.api.agent.AgentRuntime;
 import io.github.hellices.agentframework.api.message.FinishReason;
 import io.github.hellices.agentframework.api.message.Message;
 import io.github.hellices.agentframework.api.message.Role;
 import io.github.hellices.agentframework.api.message.TextContent;
+import io.github.hellices.agentframework.api.message.ToolCallContent;
+import io.github.hellices.agentframework.api.tool.FunctionTool;
+import io.github.hellices.agentframework.api.tool.ToolDefinition;
+import io.github.hellices.agentframework.api.tool.ToolResult;
+import io.github.hellices.agentframework.api.value.JsonObject;
+import io.github.hellices.agentframework.api.value.JsonValues;
 import io.github.hellices.agentframework.spi.model.ModelCatalog;
 import io.github.hellices.agentframework.spi.model.ModelClient;
+import io.github.hellices.agentframework.spi.model.ModelRequest;
 import io.github.hellices.agentframework.spi.model.ModelResponse;
+import io.github.hellices.agentframework.spi.model.ModelResponseUpdate;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.Flow;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 
 class AgentFactoryTest {
 
   @Test
-  void standaloneFactoryBuildsAnAgentFromTheDefaultCatalogModel() {
-    ModelClient client = request -> completedFuture(response("default"));
-    AgentFactory factory =
-        AgentEngine.factory(
-            ModelCatalog.builder()
-                .add("deterministic", client)
-                .defaultModel("deterministic")
-                .build());
+  void factoryBuildsAnAgentFromTheDefaultCatalogModel() {
+    ModelClient client = request -> EngineModels.of(response("default"));
+    AgentEngine engine = AgentEngine.builder().build();
 
-    Agent agent = factory.builder().id("standalone").name("Standalone").build();
+    Agent agent =
+        engine
+            .factory(
+                ModelCatalog.builder()
+                    .add("deterministic", client)
+                    .defaultModel("deterministic")
+                    .build())
+            .builder()
+            .id("standalone")
+            .name("Standalone")
+            .build();
 
     assertThat(agent.id()).isEqualTo("standalone");
     assertThat(agent.run("hello").response().toCompletableFuture().join().text())
@@ -36,13 +57,45 @@ class AgentFactoryTest {
   }
 
   @Test
+  void noArgFactoryBuildsAnAgentFromAnExplicitClientWithoutACatalog() {
+    ModelClient client = request -> EngineModels.of(response("direct"));
+    AgentEngine engine = AgentEngine.builder().build();
+
+    Agent agent =
+        engine.factory().builderWithClient(client).id("direct-agent").name("Direct").build();
+
+    assertThat(agent.id()).isEqualTo("direct-agent");
+    assertThat(agent.run("hi").response().toCompletableFuture().join().text()).isEqualTo("direct");
+  }
+
+  @Test
+  void noArgFactoryDefaultBuilderFailsWithAnActionableMessage() {
+    AgentEngine engine = AgentEngine.builder().build();
+
+    assertThatThrownBy(() -> engine.factory().builder())
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessage(
+            "no default model is configured; configure defaultModel(name) or resolve a named model");
+  }
+
+  @Test
+  void noArgFactoryNamedBuilderFailsWithAnActionableMessage() {
+    AgentEngine engine = AgentEngine.builder().build();
+
+    assertThatThrownBy(() -> engine.factory().builder("gpt"))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessage("unknown model: gpt");
+  }
+
+  @Test
   void factoryCanSelectNamedAndExplicitModels() {
-    ModelClient named = request -> completedFuture(response("named"));
-    ModelClient explicit = request -> completedFuture(response("explicit"));
-    AgentFactory factory = AgentEngine.factory(ModelCatalog.builder().add("named", named).build());
+    ModelClient named = request -> EngineModels.of(response("named"));
+    ModelClient explicit = request -> EngineModels.of(response("explicit"));
+    AgentEngine engine = AgentEngine.builder().build();
 
     assertThat(
-            factory
+            engine
+                .factory(ModelCatalog.builder().add("named", named).build())
                 .builder("named")
                 .build()
                 .run("hi")
@@ -52,7 +105,8 @@ class AgentFactoryTest {
                 .text())
         .isEqualTo("named");
     assertThat(
-            factory
+            engine
+                .factory()
                 .builderWithClient(explicit)
                 .build()
                 .run("hi")
@@ -63,12 +117,159 @@ class AgentFactoryTest {
         .isEqualTo("explicit");
   }
 
+  @Test
+  void factoryHandsOutAFreshBuilderPerCall() {
+    ModelClient client = request -> EngineModels.of(response("shared"));
+    AgentFactory factory = AgentEngine.builder().build().factory();
+
+    AgentBuilder first = factory.builderWithClient(client).id("first");
+    AgentBuilder second = factory.builderWithClient(client).id("second");
+
+    assertThat(first).isNotSameAs(second);
+    assertThat(first.build().id()).isEqualTo("first");
+    assertThat(second.build().id()).isEqualTo("second");
+  }
+
+  @Test
+  void buildDefinitionReturnsDeclarationsWithoutBindingAnAgent() {
+    ModelClient client = request -> EngineModels.of(response("declared"));
+    AgentFactory factory = AgentEngine.builder().build().factory();
+
+    AgentDefinition definition =
+        factory
+            .builderWithClient(client)
+            .id("declared-agent")
+            .name("Declared")
+            .instructions("be concise")
+            .tools(weatherTool())
+            .maxIterations(3)
+            .buildDefinition();
+
+    assertThat(definition.id()).isEqualTo("declared-agent");
+    assertThat(definition.name()).isEqualTo("Declared");
+    assertThat(definition.instructions()).isEqualTo("be concise");
+    assertThat(definition.tools()).extracting(ToolDefinition::name).containsExactly("get_weather");
+    assertThat(definition.defaultRunOptions().maxToolIterations()).isEqualTo(3);
+  }
+
+  @Test
+  void aFunctionToolProducesBothADeclarationAndAnExecutableBinding() {
+    AgentFactory factory = AgentEngine.builder().build().factory();
+
+    Agent agent =
+        factory.builderWithClient(new WeatherThenTextClient()).tools(weatherTool()).build();
+
+    assertThat(agent.run("weather in paris").response().toCompletableFuture().join().text())
+        .isEqualTo("done");
+  }
+
+  @Test
+  void bindPreservesADeclarationOnlyToolFromAManuallyConstructedDefinition() {
+    ModelClient client = request -> EngineModels.of(response("noop"));
+    AgentFactory factory = AgentEngine.builder().build().factory();
+    AgentDefinition definition = AgentDefinition.builder().tool(weatherTool().definition()).build();
+    AgentRuntime runtime = AgentRuntime.builder().modelClient(client).build();
+
+    Agent agent = factory.bind(definition, runtime);
+
+    assertThat(agent.run("hi").response().toCompletableFuture().join().text()).isEqualTo("noop");
+  }
+
+  @Test
+  void instructionsBecomeALeadingSystemMessageInTheModelRequest() {
+    List<ModelRequest> captured = new ArrayList<>();
+    ModelClient client =
+        request -> {
+          captured.add(request);
+          return EngineModels.of(response("answer"));
+        };
+    AgentFactory factory = AgentEngine.builder().build().factory();
+
+    Agent agent =
+        factory.builderWithClient(client).instructions("you are a helpful assistant").build();
+
+    agent.run("hi").response().toCompletableFuture().join();
+
+    assertThat(captured).hasSize(1);
+    Message leading = captured.get(0).messages().get(0);
+    assertThat(leading.role()).isEqualTo(Role.SYSTEM);
+    assertThat(leading.text()).isEqualTo("you are a helpful assistant");
+  }
+
+  @Test
+  void builderWithClientRejectsANullModelClient() {
+    AgentFactory factory = AgentEngine.builder().build().factory();
+    assertThatThrownBy(() -> factory.builderWithClient(null))
+        .isInstanceOf(NullPointerException.class)
+        .hasMessage("modelClient must not be null");
+  }
+
+  @Test
+  void maxIterationsRejectsANonPositiveBudget() {
+    ModelClient client = request -> EngineModels.of(response("x"));
+    AgentFactory factory = AgentEngine.builder().build().factory();
+    assertThatThrownBy(() -> factory.builderWithClient(client).maxIterations(0))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessage("maxIterations must be greater than 0");
+  }
+
+  @Test
+  void toolsRejectsANullEntry() {
+    ModelClient client = request -> EngineModels.of(response("x"));
+    AgentFactory factory = AgentEngine.builder().build().factory();
+    assertThatThrownBy(() -> factory.builderWithClient(client).tools((FunctionTool) null))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessage("tools must not contain null entries");
+  }
+
+  private static final class WeatherThenTextClient implements ModelClient {
+
+    private final AtomicInteger calls = new AtomicInteger();
+
+    @Override
+    public Flow.Publisher<ModelResponseUpdate> execute(ModelRequest request) {
+      if (calls.getAndIncrement() == 0) {
+        return EngineModels.of(
+            ModelResponse.builder()
+                .messages(
+                    List.of(
+                        new Message(
+                            Role.ASSISTANT,
+                            List.of(
+                                new ToolCallContent(
+                                    "call-1",
+                                    "get_weather",
+                                    jsonObject(Map.of("city", "paris")))))))
+                .finishReason(FinishReason.TOOL_CALLS)
+                .build());
+      }
+      return EngineModels.of(response("done"));
+    }
+  }
+
+  private static FunctionTool weatherTool() {
+    Map<String, Object> schema = new LinkedHashMap<>();
+    schema.put("type", "object");
+    schema.put("properties", Map.of("city", Map.of("type", "string")));
+    JsonObject inputSchema = (JsonObject) JsonValues.fromJava(schema);
+    return FunctionTool.create(
+        "get_weather",
+        "Looks up weather",
+        inputSchema,
+        (arguments, context) ->
+            completedFuture(
+                ToolResult.success(
+                    new TextContent("sunny:" + arguments.string("city").orElseThrow()))));
+  }
+
+  private static JsonObject jsonObject(Map<String, Object> values) {
+    return (JsonObject) JsonValues.fromJava(values);
+  }
+
   private static ModelResponse response(String text) {
-    return new ModelResponse(
-        List.of(new Message(Role.ASSISTANT, List.of(new TextContent(text)))),
-        null,
-        FinishReason.STOP,
-        Map.of(),
-        null);
+    return ModelResponse.builder()
+        .messages(List.of(new Message(Role.ASSISTANT, List.of(new TextContent(text)))))
+        .finishReason(FinishReason.STOP)
+        .build();
   }
 }

@@ -12,12 +12,12 @@ import io.github.hellices.agentframework.api.message.Role;
 import io.github.hellices.agentframework.api.message.TextContent;
 import io.github.hellices.agentframework.api.message.ToolCallContent;
 import io.github.hellices.agentframework.api.message.ToolResultContent;
+import io.github.hellices.agentframework.api.value.JsonObject;
 import io.github.hellices.agentframework.spi.model.ModelProviderOption;
 import io.github.hellices.agentframework.spi.model.ModelRequest;
 import io.github.hellices.agentframework.spi.model.ModelRequestOptions;
 import java.time.Duration;
 import java.util.List;
-import java.util.Map;
 import org.junit.jupiter.api.Test;
 
 class ChatCompletionRequestMapperTest {
@@ -97,7 +97,8 @@ class ChatCompletionRequestMapperTest {
   @Test
   void rejectsAToolCallOnANonAssistantMessage() {
     Message message =
-        new Message(Role.USER, List.of(new ToolCallContent("call_1", "lookup", Map.of())));
+        new Message(
+            Role.USER, List.of(new ToolCallContent("call_1", "lookup", JsonObject.empty())));
 
     assertThatThrownBy(() -> mapper.map(request(List.of(message)), DEFAULTS))
         .isInstanceOf(IllegalArgumentException.class)
@@ -139,12 +140,11 @@ class ChatCompletionRequestMapperTest {
 
     ChatCompletionCreateParams params =
         mapper.map(
-            new ModelRequest(
-                List.of(message(Role.USER, "hello")),
-                options,
-                new CancellationSignal(),
-                List.of(),
-                Map.of()),
+            ModelRequest.builder()
+                .messages(List.of(message(Role.USER, "hello")))
+                .options(options)
+                .cancellationSignal(new CancellationSignal())
+                .build(),
             settings);
 
     assertThat(params.temperature()).hasValue(1.5);
@@ -156,22 +156,26 @@ class ChatCompletionRequestMapperTest {
     // AGT-011 says a provider-specific option handed to a provider that does not support it is not
     // silently ignored. This adapter supports none yet, so it says so instead of dropping them.
     ModelRequestOptions options =
-        ModelRequestOptions.builder()
-            .providerOption(ModelProviderOption.of("openai", Map.of("seed", 7)))
-            .build();
+        ModelRequestOptions.builder().providerOption(new UnsupportedOpenAiOption(7)).build();
 
     assertThatThrownBy(
             () ->
                 mapper.map(
-                    new ModelRequest(
-                        List.of(message(Role.USER, "hello")),
-                        options,
-                        new CancellationSignal(),
-                        List.of(),
-                        Map.of()),
+                    ModelRequest.builder()
+                        .messages(List.of(message(Role.USER, "hello")))
+                        .options(options)
+                        .cancellationSignal(new CancellationSignal())
+                        .build(),
                     DEFAULTS))
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessageContaining("openai");
+  }
+
+  private record UnsupportedOpenAiOption(int seed) implements ModelProviderOption {
+    @Override
+    public String providerId() {
+      return "openai";
+    }
   }
 
   @Test
@@ -189,8 +193,11 @@ class ChatCompletionRequestMapperTest {
   }
 
   private static ModelRequest request(List<Message> messages) {
-    return new ModelRequest(
-        messages, ModelRequestOptions.empty(), new CancellationSignal(), List.of(), Map.of());
+    return ModelRequest.builder()
+        .messages(messages)
+        .options(ModelRequestOptions.empty())
+        .cancellationSignal(new CancellationSignal())
+        .build();
   }
 
   /**
@@ -199,7 +206,7 @@ class ChatCompletionRequestMapperTest {
   private static final class SecretContent extends ExtensionContent {
 
     private SecretContent() {
-      super(Map.of(), null);
+      super(JsonObject.empty(), null);
     }
 
     @Override

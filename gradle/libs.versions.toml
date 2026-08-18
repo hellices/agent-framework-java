@@ -8,6 +8,7 @@ jsonSchemaValidator = "3.0.6"
 junit = "6.1.3"
 mcpSdk = "2.0.0"
 openaiJava = "4.51.0"
+opentelemetry = "1.44.1"
 pmd = "7.26.0"
 spotbugsPlugin = "6.5.10"
 spotbugsTool = "4.10.3"
@@ -25,3 +26,6 @@ mcp-bom = { module = "io.modelcontextprotocol.sdk:mcp-bom", version.ref = "mcpSd
 mcp-core = { module = "io.modelcontextprotocol.sdk:mcp-core" }
 networknt-json-schema-validator = { module = "com.networknt:json-schema-validator", version.ref = "jsonSchemaValidator" }
 openai-java = { module = "com.openai:openai-java", version.ref = "openaiJava" }
+opentelemetry-api = { module = "io.opentelemetry:opentelemetry-api", version.ref = "opentelemetry" }
+opentelemetry-bom = { module = "io.opentelemetry:opentelemetry-bom", version.ref = "opentelemetry" }
+opentelemetry-sdk-testing = { module = "io.opentelemetry:opentelemetry-sdk-testing", version.ref = "opentelemetry" }

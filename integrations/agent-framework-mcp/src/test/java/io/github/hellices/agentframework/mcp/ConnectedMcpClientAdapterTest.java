@@ -10,19 +10,30 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.github.hellices.agentframework.api.agent.AgentSession;
 import io.github.hellices.agentframework.api.agent.CancellationSignal;
+import io.github.hellices.agentframework.api.context.ContextAttributes;
+import io.github.hellices.agentframework.api.context.ContextKey;
 import io.github.hellices.agentframework.api.message.Content;
 import io.github.hellices.agentframework.api.message.Message;
 import io.github.hellices.agentframework.api.message.Role;
 import io.github.hellices.agentframework.api.message.TextContent;
 import io.github.hellices.agentframework.api.session.SessionSnapshot;
+import io.github.hellices.agentframework.api.session.SessionState;
+import io.github.hellices.agentframework.api.session.SessionStateKey;
+import io.github.hellices.agentframework.api.session.SessionStateValues;
 import io.github.hellices.agentframework.api.tool.FunctionTool;
 import io.github.hellices.agentframework.api.tool.ToolArguments;
 import io.github.hellices.agentframework.api.tool.ToolContext;
 import io.github.hellices.agentframework.api.tool.ToolResult;
+import io.github.hellices.agentframework.api.value.JsonNull;
+import io.github.hellices.agentframework.api.value.JsonObject;
+import io.github.hellices.agentframework.api.value.JsonString;
+import io.github.hellices.agentframework.api.value.JsonValue;
+import io.github.hellices.agentframework.api.value.JsonValues;
 import io.github.hellices.agentframework.mcp.internal.McpAsyncOperations;
 import io.github.hellices.agentframework.spi.session.StateCodecRegistry;
 import io.modelcontextprotocol.spec.McpSchema;
 import java.lang.reflect.Method;
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -35,6 +46,8 @@ import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 
 class ConnectedMcpClientAdapterTest {
+
+  private static final ContextKey<String> RUN_ID = ContextKey.of("mcp", "runId", String.class);
 
   private static final Map<String, Object> SEARCH_SCHEMA = objectSchema("query", "limit");
 
@@ -173,7 +186,7 @@ class ConnectedMcpClientAdapterTest {
     List<FunctionTool> tools = discover(adapter(operations, options));
 
     assertThat(tools.get(0).definition().name()).isEqualTo("github_search");
-    invoke(tools.get(0), new ToolArguments(Map.of("query", "issues")));
+    invoke(tools.get(0), toolArguments(Map.of("query", "issues")));
     assertThat(operations.lastCallRequest().name()).isEqualTo("search");
   }
 
@@ -214,7 +227,7 @@ class ConnectedMcpClientAdapterTest {
     List<FunctionTool> tools = discover(adapter(operations));
 
     assertThat(tools.get(0).definition().description()).isEqualTo("search description");
-    assertThat(tools.get(0).definition().inputSchema()).isEqualTo(SEARCH_SCHEMA);
+    assertThat(JsonValues.toJava(tools.get(0).definition().inputSchema())).isEqualTo(SEARCH_SCHEMA);
   }
 
   @Test
@@ -312,10 +325,10 @@ class ConnectedMcpClientAdapterTest {
     supplied.put("smuggled", "value");
     supplied.put("limit", 5);
 
-    invoke(singleTool(operations), new ToolArguments(supplied));
+    invoke(singleTool(operations), toolArguments(supplied));
 
     assertThat(operations.lastCallRequest().arguments())
-        .containsExactly(Map.entry("query", "issues"), Map.entry("limit", 5));
+        .containsExactly(Map.entry("query", "issues"), Map.entry("limit", new BigDecimal("5")));
   }
 
   @Test
@@ -329,7 +342,7 @@ class ConnectedMcpClientAdapterTest {
     supplied.put("query", "issues");
     supplied.put("tenant", "acme");
     supplied.put("smuggled", "value");
-    invoke(tool, new ToolArguments(supplied));
+    invoke(tool, toolArguments(supplied));
 
     assertThat(operations.lastCallRequest().arguments())
         .containsExactly(Map.entry("query", "issues"), Map.entry("tenant", "acme"));
@@ -339,7 +352,7 @@ class ConnectedMcpClientAdapterTest {
   void sendsNoRequestMetadataByDefault() {
     FakeMcpAsyncOperations operations = new FakeMcpAsyncOperations();
 
-    invoke(singleTool(operations), new ToolArguments(Map.of("query", "issues")));
+    invoke(singleTool(operations), toolArguments(Map.of("query", "issues")));
 
     assertThat(operations.lastCallRequest().meta()).isNull();
   }
@@ -347,10 +360,11 @@ class ConnectedMcpClientAdapterTest {
   @Test
   void keepsRuntimeContextOutOfArgumentsAndMetadata() {
     FakeMcpAsyncOperations operations = new FakeMcpAsyncOperations();
-    ToolContext context = new ToolContext(null, Map.of("runId", "run-1"));
+    ToolContext context =
+        new ToolContext(null, ContextAttributes.builder().put(RUN_ID, "run-1").build());
 
     singleTool(operations)
-        .execute(new ToolArguments(Map.of("query", "issues")), context)
+        .execute(toolArguments(Map.of("query", "issues")), context)
         .toCompletableFuture()
         .join();
 
@@ -363,13 +377,17 @@ class ConnectedMcpClientAdapterTest {
     FakeMcpAsyncOperations operations = new FakeMcpAsyncOperations();
     McpToolAdapterOptions options =
         McpToolAdapterOptions.builder()
-            .callMetadataProvider(context -> Map.of("runId", context.attributes().get("runId")))
+            .callMetadataProvider(
+                context ->
+                    JsonObject.builder()
+                        .put("runId", JsonString.of(context.attributes().get(RUN_ID).orElseThrow()))
+                        .build())
             .build();
 
     singleTool(operations, options)
         .execute(
-            new ToolArguments(Map.of("query", "issues")),
-            new ToolContext(null, Map.of("runId", "run-1")))
+            toolArguments(Map.of("query", "issues")),
+            new ToolContext(null, ContextAttributes.builder().put(RUN_ID, "run-1").build()))
         .toCompletableFuture()
         .join();
 
@@ -378,16 +396,13 @@ class ConnectedMcpClientAdapterTest {
   }
 
   @Test
-  void copiesProviderMetadataSoLaterMutationCannotReachTheRequest() {
+  void providerMetadataIsAlreadyImmutableAtThePublicBoundary() {
     FakeMcpAsyncOperations operations = new FakeMcpAsyncOperations();
-    Map<String, Object> mutable = new LinkedHashMap<>();
-    mutable.put("traceId", "trace-1");
+    JsonObject metadata = JsonObject.builder().put("traceId", JsonString.of("trace-1")).build();
     McpToolAdapterOptions options =
-        McpToolAdapterOptions.builder().callMetadataProvider(context -> mutable).build();
+        McpToolAdapterOptions.builder().callMetadataProvider(context -> metadata).build();
 
-    invoke(singleTool(operations, options), new ToolArguments(Map.of("query", "issues")));
-    mutable.put("traceId", "mutated");
-    mutable.put("added", "later");
+    invoke(singleTool(operations, options), toolArguments(Map.of("query", "issues")));
 
     assertThat(operations.lastCallRequest().meta())
         .containsExactly(Map.entry("traceId", "trace-1"));
@@ -400,37 +415,29 @@ class ConnectedMcpClientAdapterTest {
         singleTool(
             operations,
             McpToolAdapterOptions.builder().callMetadataProvider(context -> null).build());
-    Map<String, Object> blankKey = new LinkedHashMap<>();
-    blankKey.put("  ", "value");
     FunctionTool blankKeyMetadata =
         singleTool(
             new FakeMcpAsyncOperations(),
-            McpToolAdapterOptions.builder().callMetadataProvider(context -> blankKey).build());
-    Map<String, Object> nullKey = new LinkedHashMap<>();
-    nullKey.put(null, "value");
-    FunctionTool nullKeyMetadata =
-        singleTool(
-            new FakeMcpAsyncOperations(),
-            McpToolAdapterOptions.builder().callMetadataProvider(context -> nullKey).build());
-    Map<String, Object> nullValue = new LinkedHashMap<>();
-    nullValue.put("traceId", null);
+            McpToolAdapterOptions.builder()
+                .callMetadataProvider(
+                    context -> JsonObject.builder().put("  ", JsonString.of("value")).build())
+                .build());
     FunctionTool nullValueMetadata =
         singleTool(
             new FakeMcpAsyncOperations(),
-            McpToolAdapterOptions.builder().callMetadataProvider(context -> nullValue).build());
+            McpToolAdapterOptions.builder()
+                .callMetadataProvider(
+                    context -> JsonObject.builder().put("traceId", JsonNull.instance()).build())
+                .build());
 
-    assertThatThrownBy(() -> invoke(nullMetadata, new ToolArguments(Map.of())))
+    assertThatThrownBy(() -> invoke(nullMetadata, toolArguments(Map.of())))
         .rootCause()
         .isInstanceOf(IllegalStateException.class);
-    assertThatThrownBy(() -> invoke(blankKeyMetadata, new ToolArguments(Map.of())))
+    assertThatThrownBy(() -> invoke(blankKeyMetadata, toolArguments(Map.of())))
         .rootCause()
         .isInstanceOf(IllegalArgumentException.class)
-        .hasMessageContaining("null or blank key");
-    assertThatThrownBy(() -> invoke(nullKeyMetadata, new ToolArguments(Map.of())))
-        .rootCause()
-        .isInstanceOf(IllegalArgumentException.class)
-        .hasMessageContaining("null or blank key");
-    assertThatThrownBy(() -> invoke(nullValueMetadata, new ToolArguments(Map.of())))
+        .hasMessageContaining("blank key");
+    assertThatThrownBy(() -> invoke(nullValueMetadata, toolArguments(Map.of())))
         .rootCause()
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessageContaining("traceId");
@@ -449,7 +456,7 @@ class ConnectedMcpClientAdapterTest {
     FunctionTool tool = singleTool(operations, options);
 
     CompletionStage<ToolResult> execution =
-        tool.execute(new ToolArguments(Map.of()), new ToolContext(null, Map.of()));
+        tool.execute(toolArguments(Map.of()), new ToolContext(null, ContextAttributes.empty()));
 
     assertThat(execution.toCompletableFuture()).isCompletedExceptionally();
     assertThatThrownBy(() -> execution.toCompletableFuture().join())
@@ -464,7 +471,7 @@ class ConnectedMcpClientAdapterTest {
             .answering(
                 callResult(List.of(new McpSchema.TextContent(null, "done", null)), Boolean.FALSE));
 
-    ToolResult result = invoke(singleTool(operations), new ToolArguments(Map.of()));
+    ToolResult result = invoke(singleTool(operations), toolArguments(Map.of()));
 
     assertThat(result.error()).isFalse();
     assertThat(result.content()).singleElement().isInstanceOf(TextContent.class);
@@ -486,13 +493,14 @@ class ConnectedMcpClientAdapterTest {
     FakeMcpAsyncOperations operations =
         new FakeMcpAsyncOperations().answering(callResult(content, null));
 
-    ToolResult result = invoke(singleTool(operations), new ToolArguments(Map.of()));
+    ToolResult result = invoke(singleTool(operations), toolArguments(Map.of()));
 
     assertThat(result.content().stream().map(Content::type))
         .containsExactly("text", "mcp_image", "mcp_audio", "mcp_resource", "mcp_resource_link");
     McpPayloadContent image = (McpPayloadContent) result.content().get(1);
     assertThat(image.payloadType()).isEqualTo("image");
-    assertThat(image.additionalProperties()).containsEntry("mimeType", "image/png");
+    assertThat(image.additionalProperties())
+        .isEqualTo(jsonObject(Map.of("mimeType", "image/png", "data", "aGk=")));
     assertThat(image.rawRepresentation()).isSameAs(content.get(1));
   }
 
@@ -508,11 +516,11 @@ class ConnectedMcpClientAdapterTest {
     FakeMcpAsyncOperations operations =
         new FakeMcpAsyncOperations().answering(callResult(content, null));
 
-    ToolResult result = invoke(singleTool(operations), new ToolArguments(Map.of()));
+    ToolResult result = invoke(singleTool(operations), toolArguments(Map.of()));
 
     assertThat(result.content().stream().map(Content::type))
         .containsExactly("text", "mcp_resource_link");
-    assertThat(result.content().get(1).additionalProperties()).isEmpty();
+    assertThat(result.content().get(1).additionalProperties()).isEqualTo(JsonObject.empty());
     assertThat(result.content().get(1).rawRepresentation()).isSameAs(content.get(1));
   }
 
@@ -526,8 +534,8 @@ class ConnectedMcpClientAdapterTest {
         new FakeMcpAsyncOperations()
             .answering(callResult(List.of(new McpSchema.TextContent(null, "ok", null)), null));
 
-    assertThat(invoke(singleTool(failing), new ToolArguments(Map.of())).error()).isTrue();
-    assertThat(invoke(singleTool(absent), new ToolArguments(Map.of())).error()).isFalse();
+    assertThat(invoke(singleTool(failing), toolArguments(Map.of())).error()).isTrue();
+    assertThat(invoke(singleTool(absent), toolArguments(Map.of())).error()).isFalse();
   }
 
   @Test
@@ -543,7 +551,7 @@ class ConnectedMcpClientAdapterTest {
             Map.of("elapsedMs", 12));
     FakeMcpAsyncOperations operations = new FakeMcpAsyncOperations().answering(result);
 
-    ToolResult mapped = invoke(singleTool(operations), new ToolArguments(Map.of()));
+    ToolResult mapped = invoke(singleTool(operations), toolArguments(Map.of()));
 
     assertThat(mapped.content()).singleElement().isInstanceOf(TextContent.class);
     assertThat(mapped.content().get(0).text()).isEqualTo("done");
@@ -562,14 +570,15 @@ class ConnectedMcpClientAdapterTest {
     McpToolAdapterOptions options =
         McpToolAdapterOptions.builder().includeResultPayload(true).build();
 
-    ToolResult mapped = invoke(singleTool(operations, options), new ToolArguments(Map.of()));
+    ToolResult mapped = invoke(singleTool(operations, options), toolArguments(Map.of()));
 
     assertThat(mapped.content()).hasSize(2);
     McpPayloadContent payload = (McpPayloadContent) mapped.content().get(1);
     assertThat(payload.payloadType()).isEqualTo("result");
     assertThat(payload.additionalProperties())
-        .containsEntry("structuredContent", Map.of("count", 2))
-        .containsEntry("_meta", Map.of("elapsedMs", 12));
+        .isEqualTo(
+            jsonObject(
+                Map.of("structuredContent", Map.of("count", 2), "_meta", Map.of("elapsedMs", 12))));
     assertThatThrownBy(() -> snapshotOf(mapped))
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessageContaining("registered content codec");
@@ -584,13 +593,13 @@ class ConnectedMcpClientAdapterTest {
         new McpSchema.CallToolResult(List.of(), Boolean.FALSE, Map.of("count", 2), null);
     FakeMcpAsyncOperations operations = new FakeMcpAsyncOperations().answering(result);
 
-    ToolResult mapped = invoke(singleTool(operations), new ToolArguments(Map.of()));
+    ToolResult mapped = invoke(singleTool(operations), toolArguments(Map.of()));
 
     assertThat(mapped.content()).hasSize(1);
     McpPayloadContent payload = (McpPayloadContent) mapped.content().get(0);
     assertThat(payload.payloadType()).isEqualTo("result");
     assertThat(payload.additionalProperties())
-        .containsEntry("structuredContent", Map.of("count", 2));
+        .isEqualTo(jsonObject(Map.of("structuredContent", Map.of("count", 2))));
   }
 
   @Test
@@ -601,7 +610,7 @@ class ConnectedMcpClientAdapterTest {
         new McpSchema.CallToolResult(List.of(), Boolean.FALSE, null, Map.of("elapsedMs", 12));
     FakeMcpAsyncOperations operations = new FakeMcpAsyncOperations().answering(result);
 
-    ToolResult mapped = invoke(singleTool(operations), new ToolArguments(Map.of()));
+    ToolResult mapped = invoke(singleTool(operations), toolArguments(Map.of()));
 
     assertThat(mapped.content()).isEmpty();
     assertThatCode(() -> snapshotOf(mapped)).doesNotThrowAnyException();
@@ -614,7 +623,7 @@ class ConnectedMcpClientAdapterTest {
     FakeMcpAsyncOperations operations =
         new FakeMcpAsyncOperations().answering(callResult(content, null));
 
-    ToolResult mapped = invoke(singleTool(operations), new ToolArguments(Map.of()));
+    ToolResult mapped = invoke(singleTool(operations), toolArguments(Map.of()));
 
     assertThat(mapped.content()).singleElement().isInstanceOf(McpPayloadContent.class);
     assertThatThrownBy(() -> snapshotOf(mapped))
@@ -631,10 +640,10 @@ class ConnectedMcpClientAdapterTest {
     FakeMcpAsyncOperations nullEntry =
         new FakeMcpAsyncOperations().answering(callResult(withNull, null));
 
-    assertThatThrownBy(() -> invoke(singleTool(missing), new ToolArguments(Map.of())))
+    assertThatThrownBy(() -> invoke(singleTool(missing), toolArguments(Map.of())))
         .rootCause()
         .isInstanceOf(IllegalStateException.class);
-    assertThatThrownBy(() -> invoke(singleTool(nullEntry), new ToolArguments(Map.of())))
+    assertThatThrownBy(() -> invoke(singleTool(nullEntry), toolArguments(Map.of())))
         .rootCause()
         .isInstanceOf(IllegalStateException.class)
         .hasMessageContaining("null content");
@@ -651,7 +660,7 @@ class ConnectedMcpClientAdapterTest {
     FunctionTool tool = singleTool(operations);
 
     CompletionStage<ToolResult> execution =
-        tool.execute(new ToolArguments(Map.of()), new ToolContext(null, Map.of()));
+        tool.execute(toolArguments(Map.of()), new ToolContext(null, ContextAttributes.empty()));
 
     assertThat(execution.toCompletableFuture()).isCompletedExceptionally();
     assertThatThrownBy(() -> execution.toCompletableFuture().join())
@@ -666,7 +675,7 @@ class ConnectedMcpClientAdapterTest {
     FunctionTool tool = singleTool(operations);
 
     CompletionStage<ToolResult> execution =
-        tool.execute(new ToolArguments(Map.of()), new ToolContext(null, Map.of()));
+        tool.execute(toolArguments(Map.of()), new ToolContext(null, ContextAttributes.empty()));
     assertThat(execution.toCompletableFuture().cancel(true)).isTrue();
 
     assertThat(pending).isCancelled();
@@ -682,7 +691,7 @@ class ConnectedMcpClientAdapterTest {
     CancellationSignal signal = new CancellationSignal();
 
     CompletionStage<ToolResult> execution =
-        tool.execute(new ToolArguments(Map.of()), new ToolContext(signal, Map.of()));
+        tool.execute(toolArguments(Map.of()), new ToolContext(signal, ContextAttributes.empty()));
     signal.cancel();
 
     assertThat(execution.toCompletableFuture()).isCompletedExceptionally();
@@ -698,7 +707,7 @@ class ConnectedMcpClientAdapterTest {
     signal.cancel();
 
     CompletionStage<ToolResult> execution =
-        tool.execute(new ToolArguments(Map.of()), new ToolContext(signal, Map.of()));
+        tool.execute(toolArguments(Map.of()), new ToolContext(signal, ContextAttributes.empty()));
 
     assertThat(execution.toCompletableFuture()).isCompletedExceptionally();
     assertThat(pending).isCancelled();
@@ -714,7 +723,7 @@ class ConnectedMcpClientAdapterTest {
     CancellationSignal signal = new CancellationSignal();
 
     CompletionStage<ToolResult> execution =
-        tool.execute(new ToolArguments(Map.of()), new ToolContext(signal, Map.of()));
+        tool.execute(toolArguments(Map.of()), new ToolContext(signal, ContextAttributes.empty()));
     pending.complete(callResult(List.of(new McpSchema.TextContent(null, "ok", null)), null));
     signal.cancel();
 
@@ -729,7 +738,7 @@ class ConnectedMcpClientAdapterTest {
     FunctionTool tool = singleTool(operations);
 
     CompletionStage<ToolResult> execution =
-        tool.execute(new ToolArguments(Map.of()), new ToolContext(null, Map.of()));
+        tool.execute(toolArguments(Map.of()), new ToolContext(null, ContextAttributes.empty()));
     pending.complete(callResult(List.of(new McpSchema.TextContent(null, "ok", null)), null));
 
     assertThat(execution.toCompletableFuture().cancel(true)).isFalse();
@@ -800,14 +809,53 @@ class ConnectedMcpClientAdapterTest {
   }
 
   private static ToolResult invoke(FunctionTool tool, ToolArguments arguments) {
-    return tool.execute(arguments, new ToolContext(null, Map.of())).toCompletableFuture().join();
+    return tool.execute(arguments, new ToolContext(null, ContextAttributes.empty()))
+        .toCompletableFuture()
+        .join();
   }
 
   private static SessionSnapshot snapshotOf(ToolResult result) {
     AgentSession session =
-        new AgentSession(
-            "session-1", null, Map.of("message", new Message(Role.TOOL, result.content())));
+        session("session-1", null, Map.of("message", new Message(Role.TOOL, result.content())));
     return StateCodecRegistry.builder().build().snapshot(session, 0, Instant.EPOCH);
+  }
+
+  private static ToolArguments toolArguments(Map<String, ?> values) {
+    JsonObject.Builder builder = JsonObject.builder();
+    values.forEach((key, value) -> builder.put(key, JsonValues.fromJava(value)));
+    return ToolArguments.of(builder.build());
+  }
+
+  private static JsonObject jsonObject(Map<String, ?> values) {
+    JsonObject.Builder builder = JsonObject.builder();
+    values.forEach((key, value) -> builder.put(key, JsonValues.fromJava(value)));
+    return builder.build();
+  }
+
+  private static AgentSession session(
+      String sessionId, String serviceSessionId, Map<String, ?> state) {
+    AgentSession.Builder builder =
+        AgentSession.builder().sessionId(sessionId).state(sessionState(state));
+    if (serviceSessionId != null) {
+      builder.serviceSessionId(serviceSessionId);
+    }
+    return builder.build();
+  }
+
+  private static SessionState sessionState(Map<String, ?> state) {
+    SessionState sessionState = SessionState.empty();
+    for (Map.Entry<String, ?> entry : state.entrySet()) {
+      sessionState = put(sessionState, entry.getKey(), entry.getValue());
+    }
+    return sessionState;
+  }
+
+  @SuppressWarnings("unchecked")
+  private static SessionState put(SessionState state, String key, Object value) {
+    if (SessionStateValues.isJsonValueShape(value)) {
+      return state.with(SessionStateKey.of(key, JsonValue.class), JsonValues.fromJava(value));
+    }
+    return state.with((SessionStateKey<Object>) SessionStateKey.of(key, value.getClass()), value);
   }
 
   /** Records every cancellation attempt, including the ones a completed future would ignore. */

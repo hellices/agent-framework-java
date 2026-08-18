@@ -16,6 +16,8 @@ import io.github.hellices.agentframework.api.message.Message;
 import io.github.hellices.agentframework.api.message.Role;
 import io.github.hellices.agentframework.api.message.TextContent;
 import io.github.hellices.agentframework.api.message.ToolCallContent;
+import io.github.hellices.agentframework.api.value.JsonObject;
+import io.github.hellices.agentframework.api.value.JsonValues;
 import io.github.hellices.agentframework.spi.model.ModelRequest;
 import io.github.hellices.agentframework.spi.model.ModelRequestOptions;
 import java.time.Duration;
@@ -61,7 +63,7 @@ class ChatCompletionRequestMapperEchoTest {
         echo(
             sdkMessage,
             new TextContent("  looking it up  "),
-            new ToolCallContent("call_1", "lookup", Map.of("city", "Seoul")));
+            new ToolCallContent("call_1", "lookup", jsonObject(Map.of("city", "Seoul"))));
 
     ChatCompletionCreateParams params = mapper.map(request(assistant), DEFAULTS);
 
@@ -83,7 +85,7 @@ class ChatCompletionRequestMapperEchoTest {
             ChatCompletionsFixture.withToolCalls(
                 null, ChatCompletionsFixture.functionCall("call_1", "lookup", MODEL_ARGUMENTS)),
             new TextContent("checking the weather"),
-            new ToolCallContent("call_1", "lookup", Map.of("city", "Seoul")));
+            new ToolCallContent("call_1", "lookup", jsonObject(Map.of("city", "Seoul"))));
 
     assertThatThrownBy(() -> mapper.map(request(assistant), DEFAULTS))
         .isInstanceOf(IllegalArgumentException.class)
@@ -111,7 +113,7 @@ class ChatCompletionRequestMapperEchoTest {
             ChatCompletionsFixture.withToolCalls(
                 "the original answer",
                 ChatCompletionsFixture.functionCall("call_1", "lookup", MODEL_ARGUMENTS)),
-            new ToolCallContent("call_1", "lookup", Map.of("city", "Seoul")));
+            new ToolCallContent("call_1", "lookup", jsonObject(Map.of("city", "Seoul"))));
 
     assertThatThrownBy(() -> mapper.map(request(assistant), DEFAULTS))
         .isInstanceOf(IllegalArgumentException.class)
@@ -124,8 +126,8 @@ class ChatCompletionRequestMapperEchoTest {
         echo(
             ChatCompletionsFixture.withToolCalls(
                 null, ChatCompletionsFixture.functionCall("call_1", "lookup", MODEL_ARGUMENTS)),
-            new ToolCallContent("call_1", "lookup", Map.of("city", "Seoul")),
-            new ToolCallContent("call_2", "lookup", Map.of("city", "Busan")));
+            new ToolCallContent("call_1", "lookup", jsonObject(Map.of("city", "Seoul"))),
+            new ToolCallContent("call_2", "lookup", jsonObject(Map.of("city", "Busan"))));
 
     assertThatThrownBy(() -> mapper.map(request(assistant), DEFAULTS))
         .isInstanceOf(IllegalArgumentException.class)
@@ -142,7 +144,7 @@ class ChatCompletionRequestMapperEchoTest {
                 null,
                 ChatCompletionsFixture.functionCall("call_1", "lookup", MODEL_ARGUMENTS),
                 ChatCompletionsFixture.functionCall("call_2", "lookup", "{\"city\": \"Busan\"}")),
-            new ToolCallContent("call_1", "lookup", Map.of("city", "Seoul")));
+            new ToolCallContent("call_1", "lookup", jsonObject(Map.of("city", "Seoul"))));
 
     assertThatThrownBy(() -> mapper.map(request(assistant), DEFAULTS))
         .isInstanceOf(IllegalArgumentException.class)
@@ -158,8 +160,8 @@ class ChatCompletionRequestMapperEchoTest {
                 null,
                 ChatCompletionsFixture.functionCall("call_1", "lookup", MODEL_ARGUMENTS),
                 ChatCompletionsFixture.functionCall("call_2", "lookup", "{\"city\": \"Busan\"}")),
-            new ToolCallContent("call_2", "lookup", Map.of("city", "Busan")),
-            new ToolCallContent("call_1", "lookup", Map.of("city", "Seoul")));
+            new ToolCallContent("call_2", "lookup", jsonObject(Map.of("city", "Busan"))),
+            new ToolCallContent("call_1", "lookup", jsonObject(Map.of("city", "Seoul"))));
 
     assertThatThrownBy(() -> mapper.map(request(assistant), DEFAULTS))
         .isInstanceOf(IllegalArgumentException.class)
@@ -174,7 +176,7 @@ class ChatCompletionRequestMapperEchoTest {
         echo(
             ChatCompletionsFixture.withToolCalls(
                 null, ChatCompletionsFixture.functionCall("call_1", "lookup", MODEL_ARGUMENTS)),
-            new ToolCallContent("call_9", "lookup", Map.of("city", "Seoul")));
+            new ToolCallContent("call_9", "lookup", jsonObject(Map.of("city", "Seoul"))));
 
     assertThatThrownBy(() -> mapper.map(request(assistant), DEFAULTS))
         .isInstanceOf(IllegalArgumentException.class)
@@ -187,7 +189,7 @@ class ChatCompletionRequestMapperEchoTest {
         echo(
             ChatCompletionsFixture.withToolCalls(
                 null, ChatCompletionsFixture.functionCall("call_1", "lookup", MODEL_ARGUMENTS)),
-            new ToolCallContent("call_1", "forecast", Map.of("city", "Seoul")));
+            new ToolCallContent("call_1", "forecast", jsonObject(Map.of("city", "Seoul"))));
 
     assertThatThrownBy(() -> mapper.map(request(assistant), DEFAULTS))
         .isInstanceOf(IllegalArgumentException.class)
@@ -202,7 +204,7 @@ class ChatCompletionRequestMapperEchoTest {
         echo(
             ChatCompletionsFixture.withToolCalls(
                 null, ChatCompletionsFixture.functionCall("call_1", "lookup", MODEL_ARGUMENTS)),
-            new ToolCallContent("call_1", "lookup", Map.of("city", "Busan")));
+            new ToolCallContent("call_1", "lookup", jsonObject(Map.of("city", "Busan"))));
 
     Throwable failure = catchThrowable(() -> mapper.map(request(assistant), DEFAULTS));
 
@@ -214,12 +216,34 @@ class ChatCompletionRequestMapperEchoTest {
   }
 
   @Test
+  void refusesAnEchoWhoseToolCallArgumentsWereReordered() {
+    Message assistant =
+        echo(
+            ChatCompletionsFixture.withToolCalls(
+                null,
+                ChatCompletionsFixture.functionCall(
+                    "call_1", "lookup", "{\"city\":\"Seoul\",\"unit\":\"celsius\"}")),
+            new ToolCallContent(
+                "call_1",
+                "lookup",
+                JsonObject.builder()
+                    .put("unit", JsonValues.fromJava("celsius"))
+                    .put("city", JsonValues.fromJava("Seoul"))
+                    .build()));
+
+    assertThatThrownBy(() -> mapper.map(request(assistant), DEFAULTS))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessage(EDITED_ECHO);
+  }
+
+  @Test
   void refusesAnEchoWhoseArgumentsGainedAKey() {
     Message assistant =
         echo(
             ChatCompletionsFixture.withToolCalls(
                 null, ChatCompletionsFixture.functionCall("call_1", "lookup", MODEL_ARGUMENTS)),
-            new ToolCallContent("call_1", "lookup", Map.of("city", "Seoul", "unit", "celsius")));
+            new ToolCallContent(
+                "call_1", "lookup", jsonObject(Map.of("city", "Seoul", "unit", "celsius"))));
 
     assertThatThrownBy(() -> mapper.map(request(assistant), DEFAULTS))
         .isInstanceOf(IllegalArgumentException.class)
@@ -235,7 +259,7 @@ class ChatCompletionRequestMapperEchoTest {
         echo(
             ChatCompletionsFixture.withToolCalls(
                 "   ", ChatCompletionsFixture.functionCall("call_1", "lookup", MODEL_ARGUMENTS)),
-            new ToolCallContent("call_1", "lookup", Map.of("city", "Seoul")));
+            new ToolCallContent("call_1", "lookup", jsonObject(Map.of("city", "Seoul"))));
 
     ChatCompletionCreateParams params = mapper.map(request(assistant), DEFAULTS);
 
@@ -271,7 +295,7 @@ class ChatCompletionRequestMapperEchoTest {
                 null,
                 ChatCompletionsFixture.functionCall(
                     "call_1", "lookup", "{\"city\": \"Seoul\", \"city\": \"Seoul\"}")),
-            new ToolCallContent("call_1", "lookup", Map.of("city", "Seoul")));
+            new ToolCallContent("call_1", "lookup", jsonObject(Map.of("city", "Seoul"))));
 
     Throwable failure = catchThrowable(() -> mapper.map(request(assistant), DEFAULTS));
 
@@ -297,7 +321,7 @@ class ChatCompletionRequestMapperEchoTest {
                 null,
                 ChatCompletionsFixture.functionCall(
                     "call_1", "lookup", "{\"city\": \"Seoul\"} patient_record_id")),
-            new ToolCallContent("call_1", "lookup", Map.of("city", "Seoul")));
+            new ToolCallContent("call_1", "lookup", jsonObject(Map.of("city", "Seoul"))));
 
     Throwable failure = catchThrowable(() -> mapper.map(request(assistant), DEFAULTS));
 
@@ -364,7 +388,7 @@ class ChatCompletionRequestMapperEchoTest {
         echo(
             ChatCompletionsFixture.withToolCalls(
                 null, ChatCompletionsFixture.functionCall("call_1", "now", "")),
-            new ToolCallContent("call_1", "now", Map.of()));
+            new ToolCallContent("call_1", "now", JsonObject.empty()));
 
     ChatCompletionCreateParams params = mapper.map(request(assistant), DEFAULTS);
 
@@ -383,15 +407,18 @@ class ChatCompletionRequestMapperEchoTest {
   }
 
   private static Message echo(ChatCompletionMessage sdkMessage, Content... content) {
-    return new Message(Role.ASSISTANT, List.of(content), null, Map.of(), sdkMessage);
+    return new Message(Role.ASSISTANT, List.of(content), null, JsonObject.empty(), sdkMessage);
   }
 
   private static ModelRequest request(Message message) {
-    return new ModelRequest(
-        List.of(message),
-        ModelRequestOptions.empty(),
-        new CancellationSignal(),
-        List.of(),
-        Map.of());
+    return ModelRequest.builder()
+        .messages(List.of(message))
+        .options(ModelRequestOptions.empty())
+        .cancellationSignal(new CancellationSignal())
+        .build();
+  }
+
+  private static JsonObject jsonObject(Map<String, Object> values) {
+    return values.isEmpty() ? JsonObject.empty() : (JsonObject) JsonValues.fromJava(values);
   }
 }

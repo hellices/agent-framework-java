@@ -3,14 +3,19 @@ package io.github.hellices.agentframework.mcp;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import io.github.hellices.agentframework.api.context.ContextAttributes;
+import io.github.hellices.agentframework.api.context.ContextKey;
 import io.github.hellices.agentframework.api.tool.ToolContext;
+import io.github.hellices.agentframework.api.value.JsonObject;
+import io.github.hellices.agentframework.api.value.JsonString;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
-import java.util.Map;
 import org.junit.jupiter.api.Test;
 
 class McpToolAdapterOptionsTest {
+
+  private static final ContextKey<String> RUN_ID = ContextKey.of("mcp", "runId", String.class);
 
   @Test
   void defaultsCarryNoPrefixNoExtrasAndEmptyMetadata() {
@@ -18,8 +23,12 @@ class McpToolAdapterOptionsTest {
 
     assertThat(options.localNamePrefix()).isEmpty();
     assertThat(options.additionalArgumentNames()).isEmpty();
-    assertThat(options.callMetadataProvider().metadata(new ToolContext(null, Map.of("runId", "r"))))
-        .isEmpty();
+    assertThat(
+            options
+                .callMetadataProvider()
+                .metadata(
+                    new ToolContext(null, ContextAttributes.builder().put(RUN_ID, "r").build())))
+        .isEqualTo(JsonObject.empty());
     assertThat(options.includeResultPayload()).isFalse();
     assertThat(options.maxDiscoveryPages()).isEqualTo(256);
   }
@@ -30,15 +39,19 @@ class McpToolAdapterOptionsTest {
         McpToolAdapterOptions.builder()
             .localNamePrefix("github_")
             .additionalArgumentNames(List.of("tenant", "region"))
-            .callMetadataProvider(context -> Map.of("traceId", "t"))
+            .callMetadataProvider(
+                context -> JsonObject.builder().put("traceId", JsonString.of("t")).build())
             .includeResultPayload(true)
             .maxDiscoveryPages(8)
             .build();
 
     assertThat(options.localNamePrefix()).isEqualTo("github_");
     assertThat(options.additionalArgumentNames()).containsExactlyInAnyOrder("tenant", "region");
-    assertThat(options.callMetadataProvider().metadata(new ToolContext(null, Map.of())))
-        .containsEntry("traceId", "t");
+    assertThat(
+            options
+                .callMetadataProvider()
+                .metadata(new ToolContext(null, ContextAttributes.empty())))
+        .isEqualTo(JsonObject.builder().put("traceId", JsonString.of("t")).build());
     assertThat(options.includeResultPayload()).isTrue();
     assertThat(options.maxDiscoveryPages()).isEqualTo(8);
   }

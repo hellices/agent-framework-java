@@ -12,13 +12,15 @@ import io.github.hellices.agentframework.api.message.Message;
 import io.github.hellices.agentframework.api.message.Role;
 import io.github.hellices.agentframework.api.message.TextContent;
 import io.github.hellices.agentframework.api.message.Usage;
+import io.github.hellices.agentframework.api.value.JsonNumber;
+import io.github.hellices.agentframework.api.value.JsonObject;
+import io.github.hellices.agentframework.api.value.JsonString;
 import io.github.hellices.agentframework.spi.model.ModelRequest;
 import io.github.hellices.agentframework.spi.model.ModelRequestOptions;
 import io.github.hellices.agentframework.spi.model.ModelResponse;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -133,9 +135,12 @@ class ChatCompletionResponseMapperTest {
     ModelResponse response = mapper.map(completion);
 
     assertThat(response.metadata())
-        .containsEntry("openai.response.id", "chatcmpl-test")
-        .containsEntry("openai.response.model", "gpt-4.1-mini")
-        .containsEntry("openai.response.created", 1_700_000_000L);
+        .isEqualTo(
+            JsonObject.builder()
+                .put("openai.response.id", JsonString.of("chatcmpl-test"))
+                .put("openai.response.model", JsonString.of("gpt-4.1-mini"))
+                .put("openai.response.created", JsonNumber.of(1_700_000_000L))
+                .build());
     assertThat(response.rawRepresentation()).isSameAs(completion);
   }
 
@@ -186,7 +191,8 @@ class ChatCompletionResponseMapperTest {
     assertThat(response.messages()).isEmpty();
     assertThat(response.finishReason()).isEqualTo(FinishReason.LENGTH);
     assertThat(response.usage()).isEqualTo(new Usage(9L, 0L, 9L));
-    assertThat(response.metadata()).containsEntry("openai.response.id", "chatcmpl-test");
+    assertThat(response.metadata().values())
+        .containsEntry("openai.response.id", JsonString.of("chatcmpl-test"));
     assertThat(response.rawRepresentation()).isSameAs(completion);
   }
 
@@ -220,7 +226,10 @@ class ChatCompletionResponseMapperTest {
   }
 
   private static ModelRequest request(List<Message> messages) {
-    return new ModelRequest(
-        messages, ModelRequestOptions.empty(), new CancellationSignal(), List.of(), Map.of());
+    return ModelRequest.builder()
+        .messages(messages)
+        .options(ModelRequestOptions.empty())
+        .cancellationSignal(new CancellationSignal())
+        .build();
   }
 }

@@ -1,39 +1,48 @@
 package io.github.hellices.agentframework.api.agent;
 
+import io.github.hellices.agentframework.api.context.ContextAttributes;
 import io.github.hellices.agentframework.spi.model.ModelClient;
 import io.github.hellices.agentframework.spi.model.ModelClientFactory;
-import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 
 public final class AgentRunOptions {
 
-  private final Map<String, Object> attributes;
+  /** The default tool loop iteration budget when a caller sets none. */
+  public static final int DEFAULT_MAX_TOOL_ITERATIONS = 5;
+
+  private final ContextAttributes attributes;
   private final ModelClientFactory modelClientFactory;
   private final String continuationToken;
+  private final int maxToolIterations;
 
   public AgentRunOptions() {
-    this(Map.of(), null, null);
+    this(ContextAttributes.empty(), null, null, DEFAULT_MAX_TOOL_ITERATIONS);
   }
 
-  public AgentRunOptions(Map<String, Object> attributes) {
-    this(attributes, null, null);
+  public AgentRunOptions(ContextAttributes attributes) {
+    this(attributes, null, null, DEFAULT_MAX_TOOL_ITERATIONS);
   }
 
   private AgentRunOptions(
-      Map<String, Object> attributes,
+      ContextAttributes attributes,
       ModelClientFactory modelClientFactory,
-      String continuationToken) {
-    this.attributes = attributes == null ? Map.of() : Map.copyOf(attributes);
+      String continuationToken,
+      int maxToolIterations) {
+    this.attributes = attributes == null ? ContextAttributes.empty() : attributes;
     this.modelClientFactory = modelClientFactory;
     this.continuationToken = continuationToken;
+    if (maxToolIterations < 1) {
+      throw new IllegalArgumentException("maxToolIterations must be greater than 0");
+    }
+    this.maxToolIterations = maxToolIterations;
   }
 
   public static Builder builder() {
     return new Builder();
   }
 
-  public Map<String, Object> attributes() {
+  public ContextAttributes attributes() {
     return attributes;
   }
 
@@ -43,6 +52,10 @@ public final class AgentRunOptions {
 
   public Optional<String> continuationToken() {
     return Optional.ofNullable(continuationToken);
+  }
+
+  public int maxToolIterations() {
+    return maxToolIterations;
   }
 
   public ModelClient resolveModelClient(ModelClient defaultClient) {
@@ -58,14 +71,15 @@ public final class AgentRunOptions {
   }
 
   public static final class Builder {
-    private Map<String, Object> attributes = Map.of();
+    private ContextAttributes attributes = ContextAttributes.empty();
     private ModelClientFactory modelClientFactory;
     private String continuationToken;
+    private int maxToolIterations = DEFAULT_MAX_TOOL_ITERATIONS;
 
     private Builder() {}
 
-    public Builder attributes(Map<String, Object> attributes) {
-      this.attributes = attributes == null ? Map.of() : Map.copyOf(attributes);
+    public Builder attributes(ContextAttributes attributes) {
+      this.attributes = attributes == null ? ContextAttributes.empty() : attributes;
       return this;
     }
 
@@ -83,8 +97,17 @@ public final class AgentRunOptions {
       return this;
     }
 
+    public Builder maxToolIterations(int maxToolIterations) {
+      if (maxToolIterations < 1) {
+        throw new IllegalArgumentException("maxToolIterations must be greater than 0");
+      }
+      this.maxToolIterations = maxToolIterations;
+      return this;
+    }
+
     public AgentRunOptions build() {
-      return new AgentRunOptions(attributes, modelClientFactory, continuationToken);
+      return new AgentRunOptions(
+          attributes, modelClientFactory, continuationToken, maxToolIterations);
     }
   }
 }

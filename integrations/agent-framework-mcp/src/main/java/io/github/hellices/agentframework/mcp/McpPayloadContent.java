@@ -1,7 +1,7 @@
 package io.github.hellices.agentframework.mcp;
 
 import io.github.hellices.agentframework.api.message.ExtensionContent;
-import java.util.Map;
+import io.github.hellices.agentframework.api.value.JsonObject;
 
 /**
  * Tool result content produced by an MCP server that the core content model does not describe.
@@ -32,7 +32,7 @@ public final class McpPayloadContent extends ExtensionContent {
    * @throws IllegalArgumentException if the payload type is {@code null} or blank
    */
   public McpPayloadContent(
-      String payloadType, Map<String, Object> additionalProperties, Object rawRepresentation) {
+      String payloadType, JsonObject additionalProperties, Object rawRepresentation) {
     super(additionalProperties, rawRepresentation);
     if (payloadType == null || payloadType.isBlank()) {
       throw new IllegalArgumentException("payloadType must not be null or blank");

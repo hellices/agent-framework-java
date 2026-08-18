@@ -3,6 +3,8 @@ package io.github.hellices.agentframework.mcp.internal;
 import io.github.hellices.agentframework.api.message.Content;
 import io.github.hellices.agentframework.api.message.TextContent;
 import io.github.hellices.agentframework.api.tool.ToolResult;
+import io.github.hellices.agentframework.api.value.JsonObject;
+import io.github.hellices.agentframework.api.value.JsonValues;
 import io.github.hellices.agentframework.mcp.McpPayloadContent;
 import io.github.hellices.agentframework.mcp.McpToolAdapterOptions;
 import io.modelcontextprotocol.spec.McpSchema;
@@ -91,7 +93,7 @@ public final class McpResultMapper {
     Map<String, Object> properties = new LinkedHashMap<>();
     putMeta(properties, item.meta());
     if (item instanceof McpSchema.TextContent text) {
-      return new TextContent(text.text(), properties, text);
+      return new TextContent(text.text(), jsonObject(properties), text);
     }
     if (item instanceof McpSchema.ImageContent image) {
       properties.put("mimeType", image.mimeType());
@@ -108,7 +110,7 @@ public final class McpResultMapper {
       putIfPresent(properties, "mimeType", link.mimeType());
       putIfPresent(properties, "size", link.size());
     }
-    return new McpPayloadContent(item.type(), properties, item);
+    return new McpPayloadContent(item.type(), jsonObject(properties), item);
   }
 
   private static Content resultPayload(McpSchema.CallToolResult result) {
@@ -117,7 +119,7 @@ public final class McpResultMapper {
     putMeta(properties, result.meta());
     return properties.isEmpty()
         ? null
-        : new McpPayloadContent(RESULT_PAYLOAD_TYPE, properties, result);
+        : new McpPayloadContent(RESULT_PAYLOAD_TYPE, jsonObject(properties), result);
   }
 
   private static void putMeta(Map<String, Object> properties, Map<String, Object> meta) {
@@ -134,5 +136,11 @@ public final class McpResultMapper {
     if (value != null) {
       properties.put(key, value);
     }
+  }
+
+  private static JsonObject jsonObject(Map<String, Object> properties) {
+    return properties.isEmpty()
+        ? JsonObject.empty()
+        : (JsonObject) JsonValues.fromJava(Collections.unmodifiableMap(properties));
   }
 }

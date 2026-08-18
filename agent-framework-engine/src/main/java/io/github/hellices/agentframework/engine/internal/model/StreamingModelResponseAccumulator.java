@@ -2,11 +2,11 @@ package io.github.hellices.agentframework.engine.internal.model;
 
 import io.github.hellices.agentframework.api.agent.AgentResponse;
 import io.github.hellices.agentframework.api.agent.AgentResponseUpdate;
+import io.github.hellices.agentframework.api.value.JsonObject;
 import io.github.hellices.agentframework.spi.model.ModelResponse;
 import io.github.hellices.agentframework.spi.model.ModelResponseUpdate;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
 
 /**
@@ -76,18 +76,7 @@ public final class StreamingModelResponseAccumulator {
     if (update.additionalProperties().isEmpty()) {
       return update;
     }
-    return new AgentResponseUpdate(
-        update.agentId(),
-        update.responseId(),
-        update.messageId(),
-        update.authorName(),
-        update.createdAt(),
-        update.finishReason(),
-        update.continuationToken(),
-        update.messages(),
-        update.usage(),
-        Map.of(),
-        update.rawRepresentation());
+    return update.toBuilder().additionalProperties(JsonObject.empty()).build();
   }
 
   /** Whether this model call has emitted no update yet. */
@@ -107,12 +96,13 @@ public final class StreamingModelResponseAccumulator {
       throw new IllegalStateException("model stream completed without any update");
     }
     AgentResponse response = AgentResponse.fromUpdates(updates);
-    return new ModelResponse(
-        response.messages(),
-        response.usage(),
-        response.finishReason(),
-        response.continuationToken(),
-        response.additionalProperties(),
-        response.rawRepresentation());
+    return ModelResponse.builder()
+        .messages(response.messages())
+        .usage(response.usage())
+        .finishReason(response.finishReason())
+        .continuationToken(response.continuationToken())
+        .metadata(response.additionalProperties())
+        .rawRepresentation(response.rawRepresentation())
+        .build();
   }
 }

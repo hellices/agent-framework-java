@@ -1,8 +1,7 @@
 package io.github.hellices.agentframework.api.agent;
 
+import io.github.hellices.agentframework.api.context.ContextAttributes;
 import io.github.hellices.agentframework.api.session.SessionContext;
-import java.util.List;
-import java.util.Map;
 import java.util.Objects;
 
 /**
@@ -12,45 +11,104 @@ import java.util.Objects;
  * session replaces the session on {@link #sessionContext()} instead, because {@link SessionContext}
  * is the single per-run object every hook and every state view already shares. The consistency
  * invariant below is therefore a construction-time check, not a lifetime one: after a run hydrated
- * its context, {@code sessionContext().session()} is the run's effective session and this record's
- * {@code session} component still reports what the request asked for.
+ * its context, {@code sessionContext().session()} is the run's effective session and this value's
+ * {@code session} field still reports what the request asked for.
  */
-public record AgentRunContext(
-    Agent agent,
-    AgentSession session,
-    Map<String, Object> attributes,
-    SessionContext sessionContext) {
+public final class AgentRunContext {
 
-  public AgentRunContext {
-    Objects.requireNonNull(agent, "agent must not be null");
-    attributes = attributes == null ? Map.of() : Map.copyOf(attributes);
-    Objects.requireNonNull(sessionContext, "sessionContext must not be null");
+  private final Agent agent;
+  private final AgentSession session;
+  private final ContextAttributes attributes;
+  private final SessionContext sessionContext;
+
+  private AgentRunContext(Builder builder) {
+    this.agent = Objects.requireNonNull(builder.agent, "agent must not be null");
+    this.session = builder.session;
+    this.attributes = builder.attributes == null ? ContextAttributes.empty() : builder.attributes;
+    this.sessionContext =
+        Objects.requireNonNull(builder.sessionContext, "sessionContext must not be null");
     if (!Objects.equals(session, sessionContext.session())) {
       throw new IllegalArgumentException("session must match sessionContext.session()");
     }
   }
 
-  /**
-   * Binary/source-compatibility constructor preserved for callers compiled against the earlier
-   * 3-argument signature (before {@code sessionContext} became a record component). It delegates to
-   * the canonical 4-argument constructor with a fresh {@link SessionContext} built from {@code
-   * session} and {@code attributes}, so the session-consistency invariant enforced above still
-   * applies.
-   *
-   * <p>Limitations: because the legacy signature carries no message list, the resulting {@code
-   * SessionContext} always has empty {@link SessionContext#inputMessages()} and empty {@link
-   * SessionContext#contextMessages()}; {@code sessionContext.metadata()} mirrors the normalized
-   * {@code attributes}; and the cancellation signal is a brand-new {@link CancellationSignal},
-   * using {@code SessionContext}'s fresh-null normalization (see the canonical {@code
-   * SessionContext} constructor) rather than sharing one with any other run. Prefer the canonical
-   * 4-argument constructor, which lets {@link Agent} share a single {@code SessionContext} between
-   * the run context and its completion callback.
-   *
-   * @deprecated Use the 4-argument constructor instead. Retained only for binary/source
-   *     compatibility with code compiled against the earlier 3-argument signature.
-   */
-  @Deprecated(forRemoval = true)
-  public AgentRunContext(Agent agent, AgentSession session, Map<String, Object> attributes) {
-    this(agent, session, attributes, new SessionContext(session, List.of(), attributes, null));
+  public static Builder builder() {
+    return new Builder();
+  }
+
+  public Agent agent() {
+    return agent;
+  }
+
+  public AgentSession session() {
+    return session;
+  }
+
+  public ContextAttributes attributes() {
+    return attributes;
+  }
+
+  public SessionContext sessionContext() {
+    return sessionContext;
+  }
+
+  public Builder toBuilder() {
+    return new Builder()
+        .agent(agent)
+        .session(session)
+        .attributes(attributes)
+        .sessionContext(sessionContext);
+  }
+
+  @Override
+  public boolean equals(Object other) {
+    if (this == other) {
+      return true;
+    }
+    if (!(other instanceof AgentRunContext that)) {
+      return false;
+    }
+    return Objects.equals(agent, that.agent)
+        && Objects.equals(session, that.session)
+        && attributes.equals(that.attributes)
+        && Objects.equals(sessionContext, that.sessionContext);
+  }
+
+  @Override
+  public int hashCode() {
+    return Objects.hash(agent, session, attributes, sessionContext);
+  }
+
+  public static final class Builder {
+    private Agent agent;
+    private AgentSession session;
+    private ContextAttributes attributes = ContextAttributes.empty();
+    private SessionContext sessionContext;
+
+    private Builder() {}
+
+    public Builder agent(Agent agent) {
+      this.agent = agent;
+      return this;
+    }
+
+    public Builder session(AgentSession session) {
+      this.session = session;
+      return this;
+    }
+
+    public Builder attributes(ContextAttributes attributes) {
+      this.attributes = attributes == null ? ContextAttributes.empty() : attributes;
+      return this;
+    }
+
+    public Builder sessionContext(SessionContext sessionContext) {
+      this.sessionContext = sessionContext;
+      return this;
+    }
+
+    public AgentRunContext build() {
+      return new AgentRunContext(this);
+    }
   }
 }

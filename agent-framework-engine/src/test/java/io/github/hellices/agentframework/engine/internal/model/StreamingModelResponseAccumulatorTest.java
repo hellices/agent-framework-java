@@ -10,6 +10,8 @@ import io.github.hellices.agentframework.api.message.Role;
 import io.github.hellices.agentframework.api.message.TextContent;
 import io.github.hellices.agentframework.api.message.ToolCallContent;
 import io.github.hellices.agentframework.api.message.Usage;
+import io.github.hellices.agentframework.api.value.JsonObject;
+import io.github.hellices.agentframework.api.value.JsonValues;
 import io.github.hellices.agentframework.spi.model.ModelResponse;
 import io.github.hellices.agentframework.spi.model.ModelResponseUpdate;
 import java.time.Instant;
@@ -27,16 +29,18 @@ class StreamingModelResponseAccumulatorTest {
     StreamingModelResponseAccumulator accumulator = new StreamingModelResponseAccumulator(IDENTITY);
 
     accumulator.record(
-        new ModelResponseUpdate(
+        modelUpdate(
             List.of(message(new TextContent("looking it up"))),
-            new Usage(3, 0, 3, Map.of()),
+            new Usage(3, 0, 3, JsonObject.empty()),
             FinishReason.TOOL_CALLS,
             Map.of(),
             null));
     accumulator.record(
-        new ModelResponseUpdate(
-            List.of(message(new ToolCallContent("call-1", "weather", Map.of("city", "Seoul")))),
-            new Usage(0, 4, 4, Map.of()),
+        modelUpdate(
+            List.of(
+                message(
+                    new ToolCallContent("call-1", "weather", jsonObject(Map.of("city", "Seoul"))))),
+            new Usage(0, 4, 4, JsonObject.empty()),
             FinishReason.TOOL_CALLS,
             Map.of(),
             null));
@@ -44,7 +48,7 @@ class StreamingModelResponseAccumulatorTest {
     ModelResponse response = accumulator.toModelResponse();
 
     assertThat(response.finishReason()).isEqualTo(FinishReason.TOOL_CALLS);
-    assertThat(response.usage()).isEqualTo(new Usage(3, 4, 7, Map.of()));
+    assertThat(response.usage()).isEqualTo(new Usage(3, 4, 7, JsonObject.empty()));
     assertThat(response.messages()).hasSize(1);
     assertThat(response.messages().get(0).content())
         .extracting(content -> content instanceof ToolCallContent call ? call.name() : "text")
@@ -65,18 +69,15 @@ class StreamingModelResponseAccumulatorTest {
   void anUpdateOfAnotherResponseIsRejectedWhereItIsRecorded() {
     StreamingModelResponseAccumulator accumulator = new StreamingModelResponseAccumulator(IDENTITY);
     AgentResponseUpdate foreign =
-        new AgentResponseUpdate(
-            "agent-1",
-            "response-2",
-            null,
-            "agent",
-            IDENTITY.createdAt(),
-            FinishReason.STOP,
-            null,
-            List.of(message(new TextContent("elsewhere"))),
-            null,
-            Map.of(),
-            null);
+        AgentResponseUpdate.builder()
+            .agentId("agent-1")
+            .responseId("response-2")
+            .authorName("agent")
+            .createdAt(IDENTITY.createdAt())
+            .finishReason(FinishReason.STOP)
+            .messages(List.of(message(new TextContent("elsewhere"))))
+            .additionalProperties(JsonObject.empty())
+            .build();
 
     assertThatThrownBy(() -> accumulator.record(foreign))
         .isInstanceOf(IllegalStateException.class)
@@ -98,7 +99,7 @@ class StreamingModelResponseAccumulatorTest {
 
     AgentResponseUpdate mapped =
         accumulator.record(
-            new ModelResponseUpdate(
+            modelUpdate(
                 List.of(message(new TextContent("hi"))),
                 null,
                 FinishReason.STOP,
@@ -111,9 +112,9 @@ class StreamingModelResponseAccumulatorTest {
     assertThat(mapped.createdAt()).isEqualTo(IDENTITY.createdAt());
     assertThat(mapped.finishReason()).isEqualTo(FinishReason.STOP);
     assertThat(mapped.rawRepresentation()).isEqualTo("raw");
-    assertThat(mapped.additionalProperties()).isEmpty();
+    assertThat(mapped.additionalProperties()).isEqualTo(JsonObject.empty());
     assertThat(accumulator.toModelResponse().metadata())
-        .containsExactly(Map.entry("provider", "fake"));
+        .isEqualTo(jsonObject(Map.of("provider", "fake")));
   }
 
   @Test
@@ -121,14 +122,14 @@ class StreamingModelResponseAccumulatorTest {
     StreamingModelResponseAccumulator accumulator = new StreamingModelResponseAccumulator(IDENTITY);
 
     accumulator.record(
-        new ModelResponseUpdate(
+        modelUpdate(
             List.of(message(new TextContent("hi"))),
             null,
             FinishReason.STOP,
             Map.of("shared", "first", "only-first", 1),
             null));
     accumulator.record(
-        new ModelResponseUpdate(
+        modelUpdate(
             List.of(message(new TextContent(" there"))),
             null,
             FinishReason.STOP,
@@ -136,12 +137,12 @@ class StreamingModelResponseAccumulatorTest {
             null));
 
     assertThat(accumulator.toModelResponse().metadata())
-        .isEqualTo(Map.of("shared", "second", "only-first", 1));
+        .isEqualTo(jsonObject(Map.of("shared", "second", "only-first", 1)));
   }
 
   @Test
   void aSynthesisedMetadataUpdateReportsMetadataAndNothingElse() {
-    AgentResponseUpdate update = IDENTITY.metadataUpdate(Map.of("provider", "fake"));
+    AgentResponseUpdate update = IDENTITY.metadataUpdate(jsonObject(Map.of("provider", "fake")));
 
     assertThat(update.agentId()).isEqualTo("agent-1");
     assertThat(update.responseId()).isEqualTo("response-1");
@@ -151,7 +152,7 @@ class StreamingModelResponseAccumulatorTest {
     assertThat(update.continuationToken()).isNull();
     assertThat(update.usage()).isNull();
     assertThat(update.rawRepresentation()).isNull();
-    assertThat(update.additionalProperties()).containsExactly(Map.entry("provider", "fake"));
+    assertThat(update.additionalProperties()).isEqualTo(jsonObject(Map.of("provider", "fake")));
   }
 
   @Test
@@ -165,11 +166,30 @@ class StreamingModelResponseAccumulatorTest {
     assertThat(update.finishReason()).isNull();
     assertThat(update.continuationToken()).isNull();
     assertThat(update.usage()).isNull();
-    assertThat(update.additionalProperties()).isEmpty();
+    assertThat(update.additionalProperties()).isEqualTo(JsonObject.empty());
     assertThat(update.rawRepresentation()).isNull();
   }
 
   private static Message message(io.github.hellices.agentframework.api.message.Content content) {
     return new Message(Role.ASSISTANT, List.of(content));
+  }
+
+  private static ModelResponseUpdate modelUpdate(
+      List<Message> messages,
+      Usage usage,
+      FinishReason finishReason,
+      Map<String, Object> metadata,
+      Object rawRepresentation) {
+    return ModelResponseUpdate.builder()
+        .messages(messages)
+        .usage(usage)
+        .finishReason(finishReason)
+        .metadata(jsonObject(metadata))
+        .rawRepresentation(rawRepresentation)
+        .build();
+  }
+
+  private static JsonObject jsonObject(Map<String, Object> values) {
+    return values.isEmpty() ? JsonObject.empty() : (JsonObject) JsonValues.fromJava(values);
   }
 }

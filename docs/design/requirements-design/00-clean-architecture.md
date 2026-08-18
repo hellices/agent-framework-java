@@ -52,9 +52,9 @@ General developers use the `AgentFactory`, `AgentBuilder`, `Agent`, `AgentRun`, 
 - interceptor invocation
 - stream finalization
 
-Public entry points are limited to `AgentEngine` and its builder/factory. The state machine
-implementation resides in `io.github.hellices.agentframework.engine.internal.*` so adapters cannot
-reference it.
+Public composition entry points are `AgentEngine`, `AgentFactory`, and the bound `Agent` instances
+they produce. The state machine implementation resides in
+`io.github.hellices.agentframework.engine.internal.*` so adapters cannot reference it.
 
 ### 2.3 Optional application subsystems
 
@@ -77,9 +77,10 @@ session ports, and tool/content contracts.
 An adapter implements an outbound port or converts an inbound protocol to a public use case.
 Adapters neither duplicate the engine state machine nor take ownership of the tool loop.
 
-Integration is not endpoint-first. Internal framework users inject `AgentEngine` and `Agent` as
-container-native components without going through an endpoint. Only applications that actually
-expose a wire protocol such as Responses, A2A, or AG-UI add its separate opt-in module.
+Integration is not endpoint-first. Internal framework users inject `AgentFactory` and `Agent` as
+container-native components without going through an endpoint, while `AgentEngine` remains available
+for advanced composition. Only applications that actually expose a wire protocol such as Responses,
+A2A, or AG-UI add its separate opt-in module.
 
 ## 3. Dependency rules
 
@@ -109,8 +110,9 @@ Prohibited:
 
 - Default to immutable final classes and defensive copies.
 - Provide a builder and `toBuilder()` for requests/options with many optional fields.
-- Use records only for values with fixed components, such as IDs, closed snapshots, and stable
-  events.
+- Use records only for explicitly reviewed fixed values. In the current public surface that means
+  `Usage` and `MessageAttribution`; session, tool, request, response, and option values stay final
+  classes so later slices can add fields without breaking callers.
 - Copy collections on construction and return unmodifiable views.
 - Public parameters are non-null; represent an absent return value as `Optional<T>`.
 
@@ -213,6 +215,9 @@ extension contract.
 | telemetry provider/exporter | host bootstrap | emits only semantic events |
 | request security context | host binder | passes only validated user/session context |
 | engine | application scope | created and closed by the host |
+| factory | application scope | reuses one engine and creates a fresh builder per call |
+| builder | call scope | thread-confined assembly of one definition/runtime pair |
+| bound agent | host/application bean scope | immutable definition/runtime binding over the shared engine |
 | run/session context | run/session scope | no global static state |
 
 ## 7. Serialization and native image
@@ -235,6 +240,10 @@ extension contract.
 
 Exact natural language and exact tool-call ordering are not long-term contracts. Only observable
 semantics such as event ordering, state transitions, budgets, and result shapes are fixed.
+
+The architecture policy includes an executable public-contract check: only the reviewed fixed-value
+records above may remain public, and primary API/SPI signatures fail if they expose raw
+`Map<String, Object>` instead of typed values or `JsonObject`.
 
 ## 9. First vertical slice
 

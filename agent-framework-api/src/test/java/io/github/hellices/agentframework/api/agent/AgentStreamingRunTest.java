@@ -8,9 +8,9 @@ import io.github.hellices.agentframework.api.message.FinishReason;
 import io.github.hellices.agentframework.api.message.Message;
 import io.github.hellices.agentframework.api.message.Role;
 import io.github.hellices.agentframework.api.message.TextContent;
+import io.github.hellices.agentframework.api.value.JsonObject;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
@@ -18,10 +18,91 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Flow;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 
 class AgentStreamingRunTest {
+
+  @Test
+  void constructionAndObservationDoNotSubscribeTheSource() {
+    CountingPublisher<AgentResponseUpdate> source =
+        new CountingPublisher<>(List.of(update("message-1", "value")));
+    AgentStreamingRun<AgentResponseUpdate> run =
+        new AgentStreamingRun<>(
+            source, new CompletableFuture<AgentResponse>().minimalCompletionStage(), null);
+
+    AgentStreamingRun<String> mapped = run.mapUpdates(AgentResponseUpdate::text);
+    assertThat(run.response()).isNotNull();
+    assertThat(run.session()).isNotNull();
+    assertThat(mapped.response()).isNotNull();
+    assertThat(mapped.session()).isNotNull();
+
+    assertThat(source.subscriptionCount()).isZero();
+  }
+
+  @Test
+  void firstUpdateSubscriberStartsTheSourceExactlyOnce() {
+    CountingPublisher<AgentResponseUpdate> source =
+        new CountingPublisher<>(List.of(update("message-1", "value")));
+    AgentStreamingRun<AgentResponseUpdate> run =
+        new AgentStreamingRun<>(
+            source, new CompletableFuture<AgentResponse>().minimalCompletionStage(), null);
+
+    assertThat(source.subscriptionCount()).isZero();
+
+    assertThat(consume(run.updates()))
+        .singleElement()
+        .extracting(AgentResponseUpdate::text)
+        .isEqualTo("value");
+    assertThat(source.subscriptionCount()).isEqualTo(1);
+  }
+
+  @Test
+  void secondMappedSubscriberIsRejectedAfterOriginalConsumptionWithoutResubscribingTheSource() {
+    CountingPublisher<AgentResponseUpdate> source =
+        new CountingPublisher<>(List.of(update("message-1", "value")));
+    AgentStreamingRun<AgentResponseUpdate> run =
+        new AgentStreamingRun<>(
+            source, new CompletableFuture<AgentResponse>().minimalCompletionStage(), null);
+
+    consume(run.updates());
+
+    FailedSubscription failed =
+        subscribeExpectingFailure(run.mapUpdates(AgentResponseUpdate::text).updates());
+
+    assertThat(failed.signals()).containsExactly("onSubscribe", "onError");
+    assertThat(failed.failure())
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessage("updates can only be consumed once");
+    assertThatCode(
+            () -> {
+              failed.subscription().request(1);
+              failed.subscription().cancel();
+            })
+        .doesNotThrowAnyException();
+    assertThat(source.subscriptionCount()).isEqualTo(1);
+  }
+
+  @Test
+  void secondOriginalSubscriberIsRejectedAfterMappedConsumptionWithoutResubscribingTheSource() {
+    CountingPublisher<AgentResponseUpdate> source =
+        new CountingPublisher<>(List.of(update("message-1", "value")));
+    AgentStreamingRun<AgentResponseUpdate> run =
+        new AgentStreamingRun<>(
+            source, new CompletableFuture<AgentResponse>().minimalCompletionStage(), null);
+
+    assertThat(consume(run.mapUpdates(AgentResponseUpdate::text).updates()))
+        .containsExactly("value");
+
+    FailedSubscription failed = subscribeExpectingFailure(run.updates());
+
+    assertThat(failed.signals()).containsExactly("onSubscribe", "onError");
+    assertThat(failed.failure())
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessage("updates can only be consumed once");
+    assertThat(source.subscriptionCount()).isEqualTo(1);
+  }
 
   @Test
   void consumingUpdatesCompletesTheReconstructedResponse() {
@@ -670,17 +751,15 @@ class AgentStreamingRunTest {
   }
 
   private static AgentResponseUpdate update(String messageId, String text) {
-    return new AgentResponseUpdate(
-        "agent-1",
-        "response-1",
-        messageId,
-        "assistant",
-        null,
-        FinishReason.STOP,
-        List.of(new Message(Role.ASSISTANT, List.of(new TextContent(text)))),
-        null,
-        Map.of(),
-        null);
+    return AgentResponseUpdate.builder()
+        .agentId("agent-1")
+        .responseId("response-1")
+        .messageId(messageId)
+        .authorName("assistant")
+        .finishReason(FinishReason.STOP)
+        .messages(List.of(new Message(Role.ASSISTANT, List.of(new TextContent(text)))))
+        .additionalProperties(JsonObject.empty())
+        .build();
   }
 
   private static <T> List<T> consume(Flow.Publisher<T> publisher) {
@@ -711,6 +790,40 @@ class AgentStreamingRunTest {
     completion.join();
     return values;
   }
+
+  private static <T> FailedSubscription subscribeExpectingFailure(Flow.Publisher<T> publisher) {
+    List<String> signals = new ArrayList<>();
+    AtomicReference<Flow.Subscription> subscription = new AtomicReference<>();
+    AtomicReference<Throwable> failure = new AtomicReference<>();
+    publisher.subscribe(
+        new Flow.Subscriber<>() {
+          @Override
+          public void onSubscribe(Flow.Subscription value) {
+            subscription.set(value);
+            signals.add("onSubscribe");
+          }
+
+          @Override
+          public void onNext(T item) {
+            signals.add("onNext");
+          }
+
+          @Override
+          public void onError(Throwable throwable) {
+            failure.set(throwable);
+            signals.add("onError");
+          }
+
+          @Override
+          public void onComplete() {
+            signals.add("onComplete");
+          }
+        });
+    return new FailedSubscription(signals, subscription.get(), failure.get());
+  }
+
+  private record FailedSubscription(
+      List<String> signals, Flow.Subscription subscription, Throwable failure) {}
 
   private static final class IterablePublisher<T> implements Flow.Publisher<T> {
     private final List<T> values;
@@ -748,6 +861,25 @@ class AgentStreamingRunTest {
               cancelled = true;
             }
           });
+    }
+  }
+
+  private static final class CountingPublisher<T> implements Flow.Publisher<T> {
+    private final IterablePublisher<T> delegate;
+    private final AtomicInteger subscriptions = new AtomicInteger();
+
+    private CountingPublisher(List<T> values) {
+      this.delegate = new IterablePublisher<>(values);
+    }
+
+    @Override
+    public void subscribe(Flow.Subscriber<? super T> subscriber) {
+      subscriptions.incrementAndGet();
+      delegate.subscribe(subscriber);
+    }
+
+    private int subscriptionCount() {
+      return subscriptions.get();
     }
   }
 }

@@ -1,9 +1,11 @@
 package io.github.hellices.agentframework.engine.internal.tool;
 
 import io.github.hellices.agentframework.api.agent.AgentRunRequest;
+import io.github.hellices.agentframework.api.context.ContextAttributes;
 import io.github.hellices.agentframework.api.message.Content;
 import io.github.hellices.agentframework.api.message.Message;
 import io.github.hellices.agentframework.api.message.Role;
+import io.github.hellices.agentframework.api.message.TextContent;
 import io.github.hellices.agentframework.api.message.ToolCallContent;
 import io.github.hellices.agentframework.api.message.ToolResultContent;
 import io.github.hellices.agentframework.api.tool.FunctionTool;
@@ -11,6 +13,7 @@ import io.github.hellices.agentframework.api.tool.ToolArguments;
 import io.github.hellices.agentframework.api.tool.ToolContext;
 import io.github.hellices.agentframework.api.tool.ToolDefinition;
 import io.github.hellices.agentframework.api.tool.ToolResult;
+import io.github.hellices.agentframework.api.value.JsonObject;
 import io.github.hellices.agentframework.spi.model.ModelRequest;
 import io.github.hellices.agentframework.spi.model.ModelResponse;
 import java.util.ArrayList;
@@ -45,11 +48,18 @@ public final class ToolLoopPolicy {
   private final int maxIterations;
 
   /**
-   * @param tools the agent's function tools, indexed by name; a duplicate name is rejected here
-   *     rather than silently shadowing a tool at call time
+   * @param definitions every tool the agent declares, in declaration order; all of them are offered
+   *     to the model (TOOL-006) even when no local body is bound to them
+   * @param tools the agent's executable function tools, indexed by name; a duplicate name is
+   *     rejected here rather than silently shadowing a tool at call time. A declaration without a
+   *     matching executable tool is declaration-only: it is offered to the model but cannot be run
+   *     locally, so {@link #canExecuteAll(List)} refuses to execute a batch that invokes it.
    * @param maxIterations the agent's iteration budget, counting model calls
    */
-  public ToolLoopPolicy(List<FunctionTool> tools, int maxIterations) {
+  public ToolLoopPolicy(
+      List<ToolDefinition> definitions, List<FunctionTool> tools, int maxIterations) {
+    this.definitions =
+        List.copyOf(Objects.requireNonNull(definitions, "definitions must not be null"));
     Map<String, FunctionTool> indexed = new LinkedHashMap<>();
     for (FunctionTool tool : Objects.requireNonNull(tools, "tools must not be null")) {
       String toolName = tool.definition().name();
@@ -58,15 +68,86 @@ public final class ToolLoopPolicy {
       }
     }
     this.tools = Map.copyOf(indexed);
-    List<ToolDefinition> resolved = new ArrayList<>();
-    indexed.values().forEach(tool -> resolved.add(tool.definition()));
-    this.definitions = List.copyOf(resolved);
     this.maxIterations = maxIterations;
   }
 
-  /** Whether this agent can execute tools at all. */
+  /**
+   * Whether this agent offers any tool to the model at all.
+   *
+   * <p>Measured over declarations rather than executable bodies, so an agent that declares only
+   * declaration-only tools still runs the tool loop: the model is offered those tools, and a call
+   * to one of them is detected and ends the run rather than being silently ignored.
+   */
   public boolean hasTools() {
-    return !tools.isEmpty();
+    return !definitions.isEmpty();
+  }
+
+  /**
+   * Whether every call in {@code calls} has a local body this policy can run.
+   *
+   * <p>True only when each call names an executable tool. A declaration-only call — a call to a
+   * tool that is declared and offered to the model but has no bound body — makes this false, which
+   * is how both loops decide to end the run with the model's response instead of fabricating a
+   * result for a tool the Java core does not implement (TOOL-006).
+   */
+  public boolean canExecuteAll(List<ToolCallContent> calls) {
+    for (ToolCallContent call : calls) {
+      if (!tools.containsKey(call.name())) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /**
+   * Whether every call in {@code calls} names a declared tool — one this agent offered to the
+   * model.
+   *
+   * <p>This is what separates a declaration-only call, which the model was invited to make and
+   * which ends the run without local execution (TOOL-006), from a call to a tool that was never
+   * declared and so never offered — the latter always fails the whole batch through {@link
+   * #requireAllDeclared(List)} before either kind of call is acted on.
+   */
+  public boolean declaresAll(List<ToolCallContent> calls) {
+    for (ToolCallContent call : calls) {
+      if (!isDeclared(call.name())) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /**
+   * Fails the run before anything in {@code calls} executes, is planned for approval, or is
+   * persisted, when any call names a tool this agent never declared to the model (CR-1).
+   *
+   * <p>A batch's calls are never acted on one at a time in isolation: a batch that mixes an
+   * executable call with an undeclared one must fail as a whole, before the executable call's body
+   * runs and before an approval-required sibling is ever queued, so a malformed model response
+   * cannot let one of its own calls bypass the same gate its siblings would otherwise face. This is
+   * checked ahead of both {@link #canExecuteAll} and {@link #declaresAll} deciding the batch's
+   * route — including the approval-planning route — rather than being left to {@link
+   * #executeToolCalls}, whose per-call, in-order execution would otherwise run every executable
+   * call ahead of the undeclared one it eventually fails on.
+   *
+   * @throws IllegalStateException naming the first undeclared call, in the model's own order, when
+   *     {@link #declaresAll(List)} is false for {@code calls}
+   */
+  public void requireAllDeclared(List<ToolCallContent> calls) {
+    for (ToolCallContent call : calls) {
+      if (!isDeclared(call.name())) {
+        throw new IllegalStateException("unknown tool call: " + call.name());
+      }
+    }
+  }
+
+  private boolean isDeclared(String name) {
+    for (ToolDefinition definition : definitions) {
+      if (definition.name().equals(name)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /**
@@ -142,19 +223,81 @@ public final class ToolLoopPolicy {
               + fragment.name()
               + "'");
     }
-    Map<String, Object> arguments = new LinkedHashMap<>(accumulated.arguments());
-    arguments.putAll(fragment.arguments());
-    Map<String, Object> additionalProperties =
-        new LinkedHashMap<>(accumulated.additionalProperties());
-    additionalProperties.putAll(fragment.additionalProperties());
     return new ToolCallContent(
         accumulated.callId(),
         accumulated.name(),
-        arguments,
-        additionalProperties,
+        mergeObjects(accumulated.arguments(), fragment.arguments()),
+        mergeObjects(accumulated.additionalProperties(), fragment.additionalProperties()),
         fragment.rawRepresentation() == null
             ? accumulated.rawRepresentation()
             : fragment.rawRepresentation());
+  }
+
+  /**
+   * How one bound tool call is actually run. The default runs the tool handler directly; the engine
+   * supplies an implementation that routes each executed bound call through the tool interceptor
+   * seam, so a chain observes or replaces exactly the calls this policy would have run.
+   */
+  @FunctionalInterface
+  public interface BoundToolInvoker {
+    CompletionStage<ToolResult> invoke(
+        FunctionTool tool, ToolCallContent call, ToolContext context);
+  }
+
+  private static final BoundToolInvoker DIRECT_INVOKER =
+      (tool, call, context) -> tool.execute(ToolArguments.of(call.arguments()), context);
+
+  /**
+   * The exact tool-result text a denied call is answered with (TOOL-018).
+   *
+   * <p>The wording is fixed rather than derived from the tool or the caller's denial, so a model
+   * sees the same refusal for every denied call and a caller can assert on it.
+   */
+  public static final String APPROVAL_DENIED_ERROR =
+      "Error: Tool call invocation was rejected by user.";
+
+  /**
+   * One tool call together with the approval decision it carries into execution.
+   *
+   * <p>Pairing the decision with the call rather than filtering the denied calls out is what keeps
+   * a denial visible to the model: a denied call still produces a result, in its original position,
+   * without its tool body ever being looked up or run.
+   */
+  public static final class DecidedCall {
+
+    private final ToolCallContent call;
+    private final boolean approved;
+
+    public DecidedCall(ToolCallContent call, boolean approved) {
+      this.call = immutableCopy(Objects.requireNonNull(call, "call must not be null"));
+      this.approved = approved;
+    }
+
+    private static ToolCallContent immutableCopy(ToolCallContent call) {
+      return new ToolCallContent(
+          call.callId(),
+          call.name(),
+          call.arguments(),
+          call.additionalProperties(),
+          call.rawRepresentation());
+    }
+
+    public ToolCallContent call() {
+      return immutableCopy(call);
+    }
+
+    public boolean approved() {
+      return approved;
+    }
+  }
+
+  /**
+   * Executes {@code calls} one after another and completes with their results in call order,
+   * running each bound call directly.
+   */
+  public CompletionStage<List<Content>> executeToolCalls(
+      List<ToolCallContent> calls, AgentRunRequest request) {
+    return executeToolCalls(calls, request, DIRECT_INVOKER);
   }
 
   /**
@@ -162,16 +305,68 @@ public final class ToolLoopPolicy {
    *
    * <p>Sequential execution is what makes the result order a property of the request rather than of
    * how fast each handler happens to complete, and it lets a cancellation observed between two
-   * calls stop the remaining ones.
+   * calls stop the remaining ones. Each bound call is run through {@code invoker}, so the engine
+   * can route exactly the calls that are actually executed through the tool interceptor seam
+   * without this policy owning the seam or its state.
    */
   public CompletionStage<List<Content>> executeToolCalls(
-      List<ToolCallContent> calls, AgentRunRequest request) {
-    return executeToolCalls(calls, request, 0, List.of());
+      List<ToolCallContent> calls, AgentRunRequest request, BoundToolInvoker invoker) {
+    return executeToolCalls(
+        calls, request, Objects.requireNonNull(invoker, "invoker must not be null"), 0, List.of());
+  }
+
+  /**
+   * Executes {@code decidedCalls} one after another, running the approved calls and answering the
+   * denied ones with the stable {@link #APPROVAL_DENIED_ERROR} result (TOOL-018).
+   */
+  public CompletionStage<List<Content>> executeDecidedToolCalls(
+      List<DecidedCall> decidedCalls, AgentRunRequest request, BoundToolInvoker invoker) {
+    return executeDecided(
+        List.copyOf(decidedCalls),
+        request,
+        Objects.requireNonNull(invoker, "invoker must not be null"),
+        0,
+        List.of());
+  }
+
+  private CompletionStage<List<Content>> executeDecided(
+      List<DecidedCall> decidedCalls,
+      AgentRunRequest request,
+      BoundToolInvoker invoker,
+      int index,
+      List<Content> accumulatedResults) {
+    if (index >= decidedCalls.size()) {
+      return CompletableFuture.completedFuture(accumulatedResults);
+    }
+    if (request.cancellationSignal().isCancelled()) {
+      throw new CancellationException("run was cancelled");
+    }
+    DecidedCall decided = decidedCalls.get(index);
+    ToolCallContent call = decided.call();
+    if (!decided.approved()) {
+      List<Content> nextResults = new ArrayList<>(accumulatedResults);
+      nextResults.add(
+          new ToolResultContent(
+              call.callId(),
+              call.name(),
+              List.of(new TextContent(APPROVAL_DENIED_ERROR)),
+              /* error= */ true));
+      return executeDecided(decidedCalls, request, invoker, index + 1, List.copyOf(nextResults));
+    }
+    return executeCall(call, request, invoker)
+        .thenCompose(
+            result -> {
+              List<Content> nextResults = new ArrayList<>(accumulatedResults);
+              nextResults.add(result);
+              return executeDecided(
+                  decidedCalls, request, invoker, index + 1, List.copyOf(nextResults));
+            });
   }
 
   private CompletionStage<List<Content>> executeToolCalls(
       List<ToolCallContent> calls,
       AgentRunRequest request,
+      BoundToolInvoker invoker,
       int index,
       List<Content> accumulatedResults) {
     if (index >= calls.size()) {
@@ -181,28 +376,55 @@ public final class ToolLoopPolicy {
       throw new CancellationException("run was cancelled");
     }
     ToolCallContent call = calls.get(index);
+    return executeCall(call, request, invoker)
+        .thenCompose(
+            result -> {
+              List<Content> nextResults = new ArrayList<>(accumulatedResults);
+              nextResults.add(result);
+              return executeToolCalls(calls, request, invoker, index + 1, List.copyOf(nextResults));
+            });
+  }
+
+  private CompletionStage<ToolResultContent> executeCall(
+      ToolCallContent call, AgentRunRequest request, BoundToolInvoker invoker) {
     FunctionTool tool = tools.get(call.name());
     if (tool == null) {
       throw new IllegalStateException("unknown tool call: " + call.name());
     }
     CompletionStage<ToolResult> resultStage =
         Objects.requireNonNull(
-            tool.execute(
-                new ToolArguments(call.arguments()),
-                new ToolContext(request.cancellationSignal(), request.attributes())),
+            invoker.invoke(
+                tool,
+                call,
+                new ToolContext(request.cancellationSignal(), effectiveAttributes(request))),
             "tool handler response stage must not be null");
-    return resultStage.thenCompose(
-        result -> {
-          List<Content> nextResults = new ArrayList<>(accumulatedResults);
-          nextResults.add(
-              new ToolResultContent(call.callId(), call.name(), result.content(), result.error()));
-          return executeToolCalls(calls, request, index + 1, List.copyOf(nextResults));
-        });
+    return resultStage.thenApply(
+        result ->
+            new ToolResultContent(call.callId(), call.name(), result.content(), result.error()));
   }
 
   /** The single tool message one round of tool results is reported to the model as. */
   public static Message toolResultMessage(List<Content> results) {
     return new Message(Role.TOOL, results);
+  }
+
+  private static ContextAttributes effectiveAttributes(AgentRunRequest request) {
+    return request.options().attributes().merge(request.attributes());
+  }
+
+  private static JsonObject mergeObjects(JsonObject accumulated, JsonObject fragment) {
+    if (accumulated.isEmpty()) {
+      return fragment;
+    }
+    if (fragment.isEmpty()) {
+      return accumulated;
+    }
+    Map<String, io.github.hellices.agentframework.api.value.JsonValue> merged =
+        new LinkedHashMap<>(accumulated.values());
+    fragment.values().forEach(merged::put);
+    JsonObject.Builder builder = JsonObject.builder();
+    merged.forEach(builder::put);
+    return builder.build();
   }
 
   /**
@@ -228,12 +450,7 @@ public final class ToolLoopPolicy {
     List<Message> messages = new ArrayList<>(current.messages());
     messages.addAll(echoedMessages(responseMessages, executedCalls));
     messages.add(toolResultMessage);
-    return new ModelRequest(
-        messages,
-        current.options(),
-        current.cancellationSignal(),
-        toolsForIteration(iteration + 1),
-        current.metadata());
+    return current.toBuilder().messages(messages).tools(toolsForIteration(iteration + 1)).build();
   }
 
   /**

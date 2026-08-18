@@ -10,12 +10,12 @@ public final class ModelRequestOptions {
 
   private final Double temperature;
   private final Integer maxOutputTokens;
-  private final Map<String, Map<String, Object>> providerOptions;
+  private final Map<Class<? extends ModelProviderOption>, ModelProviderOption> providerOptions;
 
   private ModelRequestOptions(
       Double temperature,
       Integer maxOutputTokens,
-      Map<String, Map<String, Object>> providerOptions) {
+      Map<Class<? extends ModelProviderOption>, ModelProviderOption> providerOptions) {
     this.temperature = temperature;
     this.maxOutputTokens = maxOutputTokens;
     this.providerOptions = providerOptions;
@@ -29,26 +29,6 @@ public final class ModelRequestOptions {
     return builder().build();
   }
 
-  public static ModelRequestOptions fromLegacyOptions(Map<String, Object> legacyOptions) {
-    if (legacyOptions == null || legacyOptions.isEmpty()) {
-      return empty();
-    }
-    Builder builder = builder();
-    Map<String, Object> legacyProviderOptions = new LinkedHashMap<>(legacyOptions);
-    Object temperature = legacyProviderOptions.remove("temperature");
-    if (temperature instanceof Number number) {
-      builder.temperature(number.doubleValue());
-    }
-    Object maxOutputTokens = legacyProviderOptions.remove("maxOutputTokens");
-    if (maxOutputTokens instanceof Number number) {
-      builder.maxOutputTokens(number.intValue());
-    }
-    if (!legacyProviderOptions.isEmpty()) {
-      builder.providerOption(ModelProviderOption.of("legacy", legacyProviderOptions));
-    }
-    return builder.build();
-  }
-
   public Optional<Double> temperature() {
     return Optional.ofNullable(temperature);
   }
@@ -57,13 +37,16 @@ public final class ModelRequestOptions {
     return maxOutputTokens == null ? OptionalInt.empty() : OptionalInt.of(maxOutputTokens);
   }
 
-  public Optional<Map<String, Object>> providerOption(String providerId) {
-    Objects.requireNonNull(providerId, "providerId must not be null");
-    Map<String, Object> values = providerOptions.get(providerId);
-    return values == null ? Optional.empty() : Optional.of(Map.copyOf(values));
+  public <T extends ModelProviderOption> Optional<T> providerOption(Class<T> optionType) {
+    Objects.requireNonNull(optionType, "optionType must not be null");
+    ModelProviderOption option = providerOptions.get(optionType);
+    if (option == null) {
+      return Optional.empty();
+    }
+    return Optional.of(optionType.cast(option));
   }
 
-  public Map<String, Map<String, Object>> providerOptions() {
+  public Map<Class<? extends ModelProviderOption>, ModelProviderOption> providerOptions() {
     return immutableProviderOptions(providerOptions);
   }
 
@@ -72,16 +55,9 @@ public final class ModelRequestOptions {
     Double mergedTemperature = override.temperature != null ? override.temperature : temperature;
     Integer mergedMaxTokens =
         override.maxOutputTokens != null ? override.maxOutputTokens : maxOutputTokens;
-    Map<String, Map<String, Object>> mergedProviderOptions = new LinkedHashMap<>(providerOptions);
-    for (Map.Entry<String, Map<String, Object>> entry : override.providerOptions.entrySet()) {
-      Map<String, Object> mergedValues = new LinkedHashMap<>();
-      Map<String, Object> existingValues = mergedProviderOptions.get(entry.getKey());
-      if (existingValues != null) {
-        mergedValues.putAll(existingValues);
-      }
-      mergedValues.putAll(entry.getValue());
-      mergedProviderOptions.put(entry.getKey(), Map.copyOf(mergedValues));
-    }
+    Map<Class<? extends ModelProviderOption>, ModelProviderOption> mergedProviderOptions =
+        new LinkedHashMap<>(providerOptions);
+    mergedProviderOptions.putAll(override.providerOptions);
     return new ModelRequestOptions(
         mergedTemperature, mergedMaxTokens, immutableProviderOptions(mergedProviderOptions));
   }
@@ -89,7 +65,8 @@ public final class ModelRequestOptions {
   public static final class Builder {
     private Double temperature;
     private Integer maxOutputTokens;
-    private final Map<String, Map<String, Object>> providerOptions = new LinkedHashMap<>();
+    private final Map<Class<? extends ModelProviderOption>, ModelProviderOption> providerOptions =
+        new LinkedHashMap<>();
 
     private Builder() {}
 
@@ -111,7 +88,17 @@ public final class ModelRequestOptions {
 
     public Builder providerOption(ModelProviderOption option) {
       Objects.requireNonNull(option, "option must not be null");
-      providerOptions.put(option.providerId(), option.values());
+      String providerId = option.providerId();
+      Objects.requireNonNull(providerId, "providerId must not be null");
+      if (providerId.isBlank()) {
+        throw new IllegalArgumentException("providerId must not be blank");
+      }
+      Class<? extends ModelProviderOption> optionType = option.getClass();
+      if (providerOptions.containsKey(optionType)) {
+        throw new IllegalArgumentException(
+            "provider option type already configured: " + optionType.getName());
+      }
+      providerOptions.put(optionType, option);
       return this;
     }
 
@@ -121,12 +108,38 @@ public final class ModelRequestOptions {
     }
   }
 
-  private static Map<String, Map<String, Object>> immutableProviderOptions(
-      Map<String, Map<String, Object>> source) {
-    Map<String, Map<String, Object>> normalized = new LinkedHashMap<>();
-    for (Map.Entry<String, Map<String, Object>> entry : source.entrySet()) {
-      normalized.put(entry.getKey(), Map.copyOf(entry.getValue()));
+  @Override
+  public boolean equals(Object other) {
+    if (this == other) {
+      return true;
     }
-    return Map.copyOf(normalized);
+    if (!(other instanceof ModelRequestOptions that)) {
+      return false;
+    }
+    return Objects.equals(temperature, that.temperature)
+        && Objects.equals(maxOutputTokens, that.maxOutputTokens)
+        && providerOptions.equals(that.providerOptions);
+  }
+
+  @Override
+  public int hashCode() {
+    return Objects.hash(temperature, maxOutputTokens, providerOptions);
+  }
+
+  @Override
+  public String toString() {
+    return "ModelRequestOptions[temperature="
+        + temperature
+        + ", maxOutputTokens="
+        + maxOutputTokens
+        + ", providerOptions="
+        + providerOptions
+        + "]";
+  }
+
+  private static Map<Class<? extends ModelProviderOption>, ModelProviderOption>
+      immutableProviderOptions(
+          Map<Class<? extends ModelProviderOption>, ModelProviderOption> source) {
+    return Map.copyOf(source);
   }
 }

@@ -11,7 +11,16 @@ import io.github.hellices.agentframework.api.message.TextContent;
 import io.github.hellices.agentframework.api.message.ToolCallContent;
 import io.github.hellices.agentframework.api.session.MessageHistory;
 import io.github.hellices.agentframework.api.session.SessionSnapshot;
+import io.github.hellices.agentframework.api.session.SessionState;
 import io.github.hellices.agentframework.api.session.SessionStateEntry;
+import io.github.hellices.agentframework.api.session.SessionStateKey;
+import io.github.hellices.agentframework.api.session.SessionStateValues;
+import io.github.hellices.agentframework.api.value.JsonNull;
+import io.github.hellices.agentframework.api.value.JsonNumber;
+import io.github.hellices.agentframework.api.value.JsonObject;
+import io.github.hellices.agentframework.api.value.JsonString;
+import io.github.hellices.agentframework.api.value.JsonValue;
+import io.github.hellices.agentframework.api.value.JsonValues;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.LinkedHashMap;
@@ -27,7 +36,7 @@ class StateCodecRegistryTest {
     StateCodecRegistry registry =
         StateCodecRegistry.builder().register(new PreferenceCodec()).build();
     AgentSession session =
-        new AgentSession("session-1", "service-1", Map.of("preferences", new Preference("dark")));
+        session("session-1", "service-1", Map.of("preferences", new Preference("dark")));
 
     SessionSnapshot snapshot = registry.snapshot(session, 3, Instant.parse("2026-08-15T00:00:00Z"));
     AgentSession restored = registry.restore(snapshot);
@@ -35,7 +44,8 @@ class StateCodecRegistryTest {
     assertThat(snapshot.type()).isEqualTo("session");
     assertThat(snapshot.version()).isEqualTo("1.0");
     assertThat(snapshot.state().get("preferences").typeId()).isEqualTo("test.preference");
-    assertThat(restored.state()).containsEntry("preferences", new Preference("dark"));
+    assertThat(restored.state().get(SessionStateKey.of("preferences", Preference.class)))
+        .contains(new Preference("dark"));
   }
 
   @Test
@@ -46,25 +56,22 @@ class StateCodecRegistryTest {
             Role.USER,
             List.of(new TextContent("hello")),
             new MessageAttribution("memory", "source-1", "origin-1"),
-            Map.of("retries", 1, "ratio", 0.5),
+            jsonObject(Map.of("retries", 1, "ratio", 0.5)),
             new Object());
     SessionSnapshot snapshot =
-        registry.snapshot(
-            new AgentSession("session-1", null, Map.of("message", message)), 0, Instant.EPOCH);
+        registry.snapshot(session("session-1", null, Map.of("message", message)), 0, Instant.EPOCH);
 
     AgentSession restored = registry.restore(snapshot);
 
-    assertThat(restored.state().get("message"))
-        .isInstanceOfSatisfying(
-            Message.class,
+    assertThat(restored.state().get(SessionStateKey.of("message", Message.class)))
+        .hasValueSatisfying(
             value -> {
               assertThat(value.role()).isEqualTo(Role.USER);
               assertThat(value.text()).isEqualTo("hello");
               assertThat(value.attribution())
                   .isEqualTo(new MessageAttribution("memory", "source-1", "origin-1"));
               assertThat(value.additionalProperties())
-                  .containsEntry("retries", 1L)
-                  .containsEntry("ratio", new BigDecimal("0.5"));
+                  .isEqualTo(jsonObject(Map.of("retries", 1L, "ratio", new BigDecimal("0.5"))));
               assertThat(value.rawRepresentation()).isNull();
             });
   }
@@ -78,21 +85,90 @@ class StateCodecRegistryTest {
     Message message =
         new Message(
             Role.ASSISTANT,
-            List.of(new TextContent(""), new ToolCallContent("call-1", "search", arguments)));
+            List.of(
+                new TextContent(""),
+                new ToolCallContent("call-1", "search", jsonObject(arguments))));
 
     AgentSession restored =
         registry.restore(
             registry.snapshot(
-                new AgentSession("session-1", null, Map.of("message", message)), 0, Instant.EPOCH));
+                session("session-1", null, Map.of("message", message)), 0, Instant.EPOCH));
 
-    assertThat(restored.state().get("message"))
-        .isInstanceOfSatisfying(
-            Message.class,
+    assertThat(restored.state().get(SessionStateKey.of("message", Message.class)))
+        .hasValueSatisfying(
             value -> {
               assertThat(((TextContent) value.content().get(0)).value()).isEmpty();
               assertThat(((ToolCallContent) value.content().get(1)).arguments())
-                  .containsEntry("filter", null);
+                  .isEqualTo(
+                      JsonObject.builder()
+                          .put("query", JsonString.of("x"))
+                          .put("filter", JsonNull.instance())
+                          .build());
             });
+  }
+
+  @Test
+  void frameworkMessageCodecPreservesContentAdditionalProperties() {
+    StateCodecRegistry registry = StateCodecRegistry.builder().build();
+    Message message =
+        new Message(
+            Role.ASSISTANT,
+            List.of(new TextContent("hi", jsonObject(Map.of("lang", "ko")), new Object())));
+
+    AgentSession restored =
+        registry.restore(
+            registry.snapshot(
+                session("session-1", null, Map.of("message", message)), 0, Instant.EPOCH));
+
+    assertThat(restored.state().get(SessionStateKey.of("message", Message.class)))
+        .hasValueSatisfying(
+            value ->
+                assertThat(((TextContent) value.content().get(0)).additionalProperties())
+                    .isEqualTo(jsonObject(Map.of("lang", "ko"))));
+  }
+
+  @Test
+  void frameworkMessageCodecPreservesToolArgumentOrder() {
+    StateCodecRegistry registry = StateCodecRegistry.builder().build();
+    JsonObject arguments =
+        JsonObject.builder()
+            .put("days", JsonNumber.of(3))
+            .put("city", JsonString.of("Seoul"))
+            .build();
+    Message message =
+        new Message(Role.ASSISTANT, List.of(new ToolCallContent("call-1", "forecast", arguments)));
+
+    AgentSession restored =
+        registry.restore(
+            registry.snapshot(
+                session("session-1", null, Map.of("message", message)), 0, Instant.EPOCH));
+
+    assertThat(restored.state().get(SessionStateKey.of("message", Message.class)))
+        .hasValueSatisfying(
+            value ->
+                assertThat(((ToolCallContent) value.content().get(0)).arguments().values().keySet())
+                    .containsExactly("days", "city"));
+  }
+
+  @Test
+  void jsonValueStateCodecPreservesObjectOrder() {
+    StateCodecRegistry registry = StateCodecRegistry.builder().build();
+    JsonObject value =
+        JsonObject.builder()
+            .put("days", JsonNumber.of(3))
+            .put("city", JsonString.of("Seoul"))
+            .build();
+
+    AgentSession restored =
+        registry.restore(
+            registry.snapshot(
+                session("session-1", null, Map.of("value", value)), 0, Instant.EPOCH));
+
+    assertThat(restored.state().get(SessionStateKey.of("value", JsonValue.class)))
+        .hasValueSatisfying(
+            restoredValue ->
+                assertThat(((JsonObject) restoredValue).values().keySet())
+                    .containsExactly("days", "city"));
   }
 
   @Test
@@ -105,26 +181,25 @@ class StateCodecRegistryTest {
                     Role.USER,
                     List.of(new TextContent("hello")),
                     new MessageAttribution("memory", "source-1", "origin-1"),
-                    Map.of("retries", 1),
+                    jsonObject(Map.of("retries", 1)),
                     new Object()),
                 new Message(Role.ASSISTANT, List.of(new TextContent("hi")))));
     SessionSnapshot snapshot =
         registry.snapshot(
-            new AgentSession("session-1", null, Map.of("in_memory", history)), 0, Instant.EPOCH);
+            session("session-1", null, Map.of("in_memory", history)), 0, Instant.EPOCH);
 
     AgentSession restored = registry.restore(snapshot);
 
     assertThat(snapshot.state().get("in_memory").typeId()).isEqualTo("core.message_history");
     assertThat(snapshot.state().get("in_memory").codecVersion()).isEqualTo(1);
-    assertThat(restored.state().get("in_memory"))
-        .isInstanceOfSatisfying(
-            MessageHistory.class,
+    assertThat(restored.state().get(SessionStateKey.of("in_memory", MessageHistory.class)))
+        .hasValueSatisfying(
             value -> {
               assertThat(value.messages()).extracting(Message::text).containsExactly("hello", "hi");
               assertThat(value.messages().get(0).attribution())
                   .isEqualTo(new MessageAttribution("memory", "source-1", "origin-1"));
               assertThat(value.messages().get(0).additionalProperties())
-                  .containsEntry("retries", 1L);
+                  .isEqualTo(jsonObject(Map.of("retries", 1L)));
               assertThat(value.messages().get(0).rawRepresentation()).isNull();
             });
   }
@@ -136,11 +211,12 @@ class StateCodecRegistryTest {
     AgentSession restored =
         registry.restore(
             registry.snapshot(
-                new AgentSession("session-1", null, Map.of("in_memory", MessageHistory.empty())),
+                session("session-1", null, Map.of("in_memory", MessageHistory.empty())),
                 0,
                 Instant.EPOCH));
 
-    assertThat(restored.state().get("in_memory")).isEqualTo(MessageHistory.empty());
+    assertThat(restored.state().get(SessionStateKey.of("in_memory", MessageHistory.class)))
+        .contains(MessageHistory.empty());
   }
 
   @Test
@@ -148,7 +224,7 @@ class StateCodecRegistryTest {
     StateCodecRegistry registry = StateCodecRegistry.builder().build();
     Map<String, Object> state =
         Map.of("in_memory", List.of(new Message(Role.USER, List.of(new TextContent("hello")))));
-    AgentSession session = new AgentSession("session-1", null, state);
+    AgentSession session = session("session-1", null, state);
 
     assertThatThrownBy(() -> registry.snapshot(session, 0, Instant.EPOCH))
         .isInstanceOf(IllegalArgumentException.class)
@@ -187,15 +263,32 @@ class StateCodecRegistryTest {
   }
 
   @Test
+  void snapshotAndRestorePreserveTheDeclaredStateKeyType() {
+    SessionStateKey<Marker> key = SessionStateKey.of("memory", Marker.class);
+    StateCodecRegistry registry =
+        StateCodecRegistry.builder()
+            .register(new MarkerCodec())
+            .register(new MarkerValueCodec())
+            .build();
+    AgentSession session =
+        AgentSession.builder()
+            .sessionId("session-1")
+            .state(SessionState.empty().with(key, new MarkerValue("dark")))
+            .build();
+
+    AgentSession restored = registry.restore(registry.snapshot(session, 0, Instant.EPOCH));
+
+    assertThat(restored.state().get(key)).contains(new MarkerValue("dark"));
+  }
+
+  @Test
   void unregisteredAndNonJsonSafeStateFailBeforeSnapshotCreation() {
     StateCodecRegistry registry = StateCodecRegistry.builder().build();
 
     assertThatThrownBy(
             () ->
                 registry.snapshot(
-                    new AgentSession("session-1", null, Map.of("unknown", new Object())),
-                    0,
-                    Instant.EPOCH))
+                    session("session-1", null, Map.of("unknown", new Object())), 0, Instant.EPOCH))
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessage("unregistered session state type for source 'unknown': java.lang.Object");
 
@@ -204,7 +297,7 @@ class StateCodecRegistryTest {
     assertThatThrownBy(
             () ->
                 invalidRegistry.snapshot(
-                    new AgentSession("session-1", null, Map.of("invalid", new NonFiniteValue())),
+                    session("session-1", null, Map.of("invalid", new NonFiniteValue())),
                     0,
                     Instant.EPOCH))
         .isInstanceOf(IllegalArgumentException.class)
@@ -218,7 +311,7 @@ class StateCodecRegistryTest {
   }
 
   @Test
-  void ambiguousAssignableCodecsAreRejected() {
+  void snapshotRequiresACodecForTheDeclaredStateKeyType() {
     StateCodecRegistry registry =
         StateCodecRegistry.builder()
             .register(new FirstMarkerCodec())
@@ -228,11 +321,11 @@ class StateCodecRegistryTest {
     assertThatThrownBy(
             () ->
                 registry.snapshot(
-                    new AgentSession("session-1", null, Map.of("value", new BothMarkers())),
+                    session("session-1", null, Map.of("value", new BothMarkers())),
                     0,
                     Instant.EPOCH))
         .isInstanceOf(IllegalArgumentException.class)
-        .hasMessageContaining("ambiguous session state codecs");
+        .hasMessageContaining("unregistered session state type for source 'value'");
   }
 
   @Test
@@ -265,6 +358,36 @@ class StateCodecRegistryTest {
         .hasMessage("snapshot type must be session");
   }
 
+  private static AgentSession session(
+      String sessionId, String serviceSessionId, Map<String, ?> state) {
+    AgentSession.Builder builder =
+        AgentSession.builder().sessionId(sessionId).state(sessionState(state));
+    if (serviceSessionId != null) {
+      builder.serviceSessionId(serviceSessionId);
+    }
+    return builder.build();
+  }
+
+  private static SessionState sessionState(Map<String, ?> state) {
+    SessionState sessionState = SessionState.empty();
+    for (Map.Entry<String, ?> entry : state.entrySet()) {
+      sessionState = put(sessionState, entry.getKey(), entry.getValue());
+    }
+    return sessionState;
+  }
+
+  @SuppressWarnings("unchecked")
+  private static SessionState put(SessionState state, String key, Object value) {
+    if (SessionStateValues.isJsonValueShape(value)) {
+      return state.with(SessionStateKey.of(key, JsonValue.class), JsonValues.fromJava(value));
+    }
+    return state.with((SessionStateKey<Object>) SessionStateKey.of(key, value.getClass()), value);
+  }
+
+  private static JsonObject jsonObject(Map<String, ?> values) {
+    return values.isEmpty() ? JsonObject.empty() : (JsonObject) JsonValues.fromJava(values);
+  }
+
   private record Preference(String theme) {}
 
   private record NonFiniteValue() {}
@@ -273,7 +396,11 @@ class StateCodecRegistryTest {
 
   private interface SecondMarker {}
 
+  private interface Marker {}
+
   private static final class BothMarkers implements FirstMarker, SecondMarker {}
+
+  private record MarkerValue(String value) implements Marker {}
 
   private static final class PreferenceCodec implements StateCodec<Preference> {
     @Override
@@ -434,6 +561,60 @@ class StateCodecRegistryTest {
     @Override
     public SecondMarker decode(Object payload) {
       return new BothMarkers();
+    }
+  }
+
+  private static final class MarkerCodec implements StateCodec<Marker> {
+    @Override
+    public String typeId() {
+      return "test.marker";
+    }
+
+    @Override
+    public int version() {
+      return 1;
+    }
+
+    @Override
+    public Class<Marker> javaType() {
+      return Marker.class;
+    }
+
+    @Override
+    public Object encode(Marker value) {
+      return Map.of("value", ((MarkerValue) value).value());
+    }
+
+    @Override
+    public Marker decode(Object payload) {
+      return new MarkerValue((String) ((Map<?, ?>) payload).get("value"));
+    }
+  }
+
+  private static final class MarkerValueCodec implements StateCodec<MarkerValue> {
+    @Override
+    public String typeId() {
+      return "test.marker-value";
+    }
+
+    @Override
+    public int version() {
+      return 1;
+    }
+
+    @Override
+    public Class<MarkerValue> javaType() {
+      return MarkerValue.class;
+    }
+
+    @Override
+    public Object encode(MarkerValue value) {
+      return Map.of("value", value.value());
+    }
+
+    @Override
+    public MarkerValue decode(Object payload) {
+      return new MarkerValue((String) ((Map<?, ?>) payload).get("value"));
     }
   }
 }

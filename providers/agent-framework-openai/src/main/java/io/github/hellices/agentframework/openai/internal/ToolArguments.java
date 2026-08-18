@@ -6,9 +6,15 @@ import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.json.JsonMapper;
-import java.util.Collections;
-import java.util.LinkedHashMap;
-import java.util.Map;
+import io.github.hellices.agentframework.api.value.JsonArray;
+import io.github.hellices.agentframework.api.value.JsonBoolean;
+import io.github.hellices.agentframework.api.value.JsonNull;
+import io.github.hellices.agentframework.api.value.JsonNumber;
+import io.github.hellices.agentframework.api.value.JsonObject;
+import io.github.hellices.agentframework.api.value.JsonString;
+import io.github.hellices.agentframework.api.value.JsonValue;
+import io.github.hellices.agentframework.api.value.JsonValues;
+import java.util.ArrayList;
 import java.util.Optional;
 
 /**
@@ -66,9 +72,9 @@ final class ToolArguments {
    * @return the arguments in wire order, or empty when the string is not exactly one JSON object
    *     with unique keys
    */
-  Optional<Map<String, Object>> read(String arguments) {
+  Optional<JsonObject> read(String arguments) {
     if (arguments.isEmpty()) {
-      return Optional.of(Map.of());
+      return Optional.of(JsonObject.empty());
     }
     JsonNode parsed;
     try {
@@ -80,17 +86,7 @@ final class ToolArguments {
     if (!parsed.isObject()) {
       return Optional.empty();
     }
-    Map<String, Object> values = new LinkedHashMap<>();
-    parsed
-        .properties()
-        .forEach(
-            entry -> values.put(entry.getKey(), json.convertValue(entry.getValue(), Object.class)));
-    // Collections.unmodifiableMap, never Map.copyOf. A JSON null argument value converts to a Java
-    // null, and Map.copyOf rejects it with a bare NullPointerException that names neither the tool
-    // nor the key. {"unit":null} is an ordinary thing for a model to send about an optional
-    // parameter, and dropping or refusing the key would change what the model said.
-    // ToolCallContent copies this into a LinkedHashMap, which keeps the null.
-    return Optional.of(Collections.unmodifiableMap(values));
+    return Optional.of(toJsonObject(parsed));
   }
 
   /**
@@ -99,14 +95,44 @@ final class ToolArguments {
    * @param arguments the arguments to write, never {@code null}
    * @return the arguments string, or empty when a value has no serialiser
    */
-  Optional<String> write(Map<String, Object> arguments) {
+  Optional<String> write(JsonObject arguments) {
     try {
-      return Optional.of(json.writeValueAsString(arguments));
+      return Optional.of(json.writeValueAsString(JsonValues.toJava(arguments)));
     } catch (JsonProcessingException failure) {
       // Deliberately dropped rather than rethrown or attached: Jackson appends the failing key to
       // its own message ("through reference chain: ...[\"<key>\"]") and an argument key is part of
       // the arguments. See this class's Javadoc.
       return Optional.empty();
     }
+  }
+
+  private static JsonObject toJsonObject(JsonNode node) {
+    JsonObject.Builder builder = JsonObject.builder();
+    node.properties().forEach(entry -> builder.put(entry.getKey(), toJsonValue(entry.getValue())));
+    return builder.build();
+  }
+
+  private static JsonValue toJsonValue(JsonNode node) {
+    if (node.isObject()) {
+      return toJsonObject(node);
+    }
+    if (node.isArray()) {
+      ArrayList<JsonValue> values = new ArrayList<>();
+      node.elements().forEachRemaining(element -> values.add(toJsonValue(element)));
+      return JsonArray.of(values);
+    }
+    if (node.isNull()) {
+      return JsonNull.instance();
+    }
+    if (node.isBoolean()) {
+      return JsonBoolean.of(node.booleanValue());
+    }
+    if (node.isTextual()) {
+      return JsonString.of(node.textValue());
+    }
+    if (node.isNumber()) {
+      return JsonNumber.of(node.numberValue());
+    }
+    throw new IllegalArgumentException("unsupported json node type: " + node.getNodeType());
   }
 }

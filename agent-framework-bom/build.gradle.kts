@@ -14,6 +14,7 @@ dependencies {
         api(project(":agent-framework-engine"))
         api(project(":agent-framework-testkit"))
         api(project(":integrations:agent-framework-mcp"))
+        api(project(":integrations:agent-framework-otel"))
         api(project(":providers:agent-framework-openai"))
     }
 }

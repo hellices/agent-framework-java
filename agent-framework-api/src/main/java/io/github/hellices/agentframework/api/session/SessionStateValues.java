@@ -1,12 +1,15 @@
 package io.github.hellices.agentframework.api.session;
 
+import io.github.hellices.agentframework.api.value.JsonValue;
+import io.github.hellices.agentframework.api.value.JsonValues;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.TreeMap;
+import java.util.Objects;
 
 public final class SessionStateValues {
 
@@ -15,6 +18,43 @@ public final class SessionStateValues {
   private static final int MAX_NESTING_DEPTH = 64;
 
   private SessionStateValues() {}
+
+  public static boolean isJsonValueShape(Object value) {
+    try {
+      JsonValues.fromJava(value);
+      return true;
+    } catch (IllegalArgumentException failure) {
+      return false;
+    }
+  }
+
+  public static <T> T normalizeValue(SessionStateKey<T> key, T value) {
+    Objects.requireNonNull(key, "key must not be null");
+    T normalized = Objects.requireNonNull(value, "value must not be null");
+    if (!key.type().isInstance(normalized)) {
+      throw new IllegalArgumentException(
+          "value for " + key.id() + " must be an instance of " + key.type().getName());
+    }
+    if (normalized instanceof JsonValue jsonValue) {
+      if (!JsonValue.class.equals(key.type())) {
+        throw new IllegalArgumentException(
+            "session state value for "
+                + key.id()
+                + " must use JsonValue rather than "
+                + key.type().getName());
+      }
+      JsonValues.requireDepthLimit(jsonValue);
+      return normalized;
+    }
+    if (isJsonValueShape(normalized)) {
+      throw new IllegalArgumentException(
+          "session state value for "
+              + key.id()
+              + " must use JsonValue rather than "
+              + key.type().getName());
+    }
+    return normalized;
+  }
 
   public static Object immutableCopy(Object value) {
     return immutableCopy(value, 0);
@@ -67,7 +107,7 @@ public final class SessionStateValues {
           "state payload contains unsupported number type: " + number.getClass().getName());
     }
     if (value instanceof Map<?, ?> map) {
-      Map<String, Object> copy = new TreeMap<>();
+      Map<String, Object> copy = new LinkedHashMap<>();
       for (Map.Entry<?, ?> entry : map.entrySet()) {
         if (!(entry.getKey() instanceof String key)) {
           throw new IllegalArgumentException("state payload map keys must be strings");

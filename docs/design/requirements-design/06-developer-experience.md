@@ -65,6 +65,7 @@ public interface AgentFactory {
     AgentBuilder builder();
     AgentBuilder builder(String modelName);
     AgentBuilder builderWithClient(ModelClient model);
+    Agent bind(AgentDefinition definition, AgentRuntime runtime);
 }
 ```
 
@@ -74,6 +75,21 @@ public interface AgentFactory {
 - create the factory even when multiple named models exist; only a `builder()` call without a
   default fails explicitly, while `builder(name)` selects the corresponding model
 - builders are thread-confined and build results are immutable
+- `AgentBuilder.buildDefinition()` returns the declarative `AgentDefinition` (id, name, description,
+  instructions, tool declarations, and `defaultRunOptions` including `maxToolIterations`) without a
+  runtime binding; `build()` derives the `AgentRuntime` (model client, tool bindings, context
+  providers) and binds it to the shared engine. Context providers and executable tool bindings live
+  only in the runtime.
+- `bind(definition, runtime)` binds an externally constructed definition; declaration-only tools on
+  a manually built `AgentDefinition` are preserved
+
+Compose the shared engine once and reuse it. `AgentEngine.builder().build()` configures only session
+services; `engine.factory(catalog)` binds a model catalog, and `engine.factory()` provides the
+explicit-client path over an empty catalog for `builderWithClient(model)`.
+
+One application-scoped factory can bind many immutable agents. Each built `Agent` may have its own
+id, instructions, model client, and tool bindings, while session services and later engine-wide
+policies remain shared through the single engine behind that factory.
 
 ## 4. Plain Java / standalone
 
@@ -126,8 +142,8 @@ implementation("org.springframework.ai:spring-ai-starter-model-openai")
 ```
 
 When Spring AI provides exactly one model bean, the auto-configuration included by the starter
-creates `AgentEngine`, `AgentFactory`, and a default `Agent` bean. The default path requires no
-application `@Configuration` or `@Bean Agent`.
+creates one shared `AgentEngine`, one shared `AgentFactory`, and a default `Agent` bean. The
+default path requires no application `@Configuration` or `@Bean Agent`.
 
 ```yaml
 agent:
@@ -154,7 +170,8 @@ final class SupportService {
 ```
 
 Define an Agent bean only when multiple Agents, per-Agent tools/models/instructions, or a custom
-session policy are required.
+session policy are required; those agent beans still share the same singleton `AgentEngine` and
+`AgentFactory`.
 
 ```java
 @Bean

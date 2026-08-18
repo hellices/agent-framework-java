@@ -3,6 +3,7 @@ package io.github.hellices.agentframework.api.session;
 import io.github.hellices.agentframework.api.agent.AgentResponse;
 import io.github.hellices.agentframework.api.agent.AgentSession;
 import io.github.hellices.agentframework.api.agent.CancellationSignal;
+import io.github.hellices.agentframework.api.context.ContextAttributes;
 import io.github.hellices.agentframework.api.message.Message;
 import io.github.hellices.agentframework.api.message.MessageAttribution;
 import io.github.hellices.agentframework.spi.session.ProviderSessionState;
@@ -24,10 +25,10 @@ import java.util.Set;
  * request's cancellation signal, and a set-once response slot that is only filled on successful
  * terminal completion.
  *
- * <p>It also owns the source-bound {@link ProviderSessionState} views used by the context provider
- * pipeline (SES-012). Views are created lazily per {@code sourceId} from {@link
- * AgentSession#state()} and memoized for the lifetime of the run, so a provider's {@code beforeRun}
- * and {@code afterRun} hooks observe one state view, and two runs of the same provider instance
+ * <p>It also owns the key-bound {@link ProviderSessionState} views used by the context provider
+ * pipeline (SES-012). Views are created lazily per {@link SessionStateKey} from {@link
+ * AgentSession#state()} and memoized for the lifetime of the run, so a provider's {@code prepare}
+ * and {@code complete} hooks observe one state view, and two runs of the same provider instance
  * over two sessions can never share one.
  *
  * <p>Every context message is recorded together with the provider that contributed it, so {@link
@@ -53,8 +54,8 @@ public final class SessionContext {
 
   private final List<Message> inputMessages;
   private final List<ContextMessageContribution> contextContributions = new ArrayList<>();
-  private final Map<String, ProviderState> providerStates = new LinkedHashMap<>();
-  private final Map<String, Object> metadata;
+  private final Map<String, ProviderState<?>> providerStates = new LinkedHashMap<>();
+  private final ContextAttributes attributes;
   private final CancellationSignal cancellationSignal;
   private AgentSession session;
   private SessionSnapshotMetadata snapshotMetadata;
@@ -64,7 +65,7 @@ public final class SessionContext {
   public SessionContext(
       AgentSession session,
       List<? extends Message> inputMessages,
-      Map<String, Object> metadata,
+      ContextAttributes attributes,
       CancellationSignal cancellationSignal) {
     this.session = session;
     List<Message> normalizedInputMessages = new ArrayList<>();
@@ -75,7 +76,7 @@ public final class SessionContext {
       }
     }
     this.inputMessages = List.copyOf(normalizedInputMessages);
-    this.metadata = metadata == null ? Map.of() : Map.copyOf(metadata);
+    this.attributes = attributes == null ? ContextAttributes.empty() : attributes;
     this.cancellationSignal =
         cancellationSignal == null ? new CancellationSignal() : cancellationSignal;
   }
@@ -99,9 +100,9 @@ public final class SessionContext {
    * snapshot for a different session is rejected instead of silently redirecting the run; a
    * caller-declared service conversation handle is never replaced or dropped, so a run bound to a
    * provider-side conversation cannot be silently turned into a locally stored one; hydration
-   * happens at most once; and it is refused once any {@link #providerState(String)} view exists,
-   * because a view already reflects the pre-hydration state and swapping the session underneath it
-   * would make a provider observe state that was never persisted for it.
+   * happens at most once; and it is refused once any {@link #providerState(SessionStateKey)} view
+   * exists, because a view already reflects the pre-hydration state and swapping the session
+   * underneath it would make a provider observe state that was never persisted for it.
    *
    * <p>The service handle is reconciled rather than overwritten. A request that declares no handle
    * accepts whichever handle the snapshot carries, because the store is the authority for a session
@@ -132,11 +133,11 @@ public final class SessionContext {
     if (!session.sessionId().equals(restored.sessionId())) {
       throw new IllegalArgumentException("hydrated session id must be " + session.sessionId());
     }
-    String requestedServiceSessionId = session.serviceSessionId();
-    if (requestedServiceSessionId != null
+    Optional<String> requestedServiceSessionId = session.serviceSessionId();
+    if (requestedServiceSessionId.isPresent()
         && !requestedServiceSessionId.equals(restored.serviceSessionId())) {
       throw new IllegalArgumentException(
-          "hydrated service session id must be " + requestedServiceSessionId);
+          "hydrated service session id must be " + requestedServiceSessionId.orElseThrow());
     }
     session = restored;
     snapshotMetadata = metadata;
@@ -157,11 +158,11 @@ public final class SessionContext {
    *
    * <p>This is framework lifecycle plumbing invoked once by the engine after it binds the run's
    * context providers. Without it, a provider that reaches a sibling namespace through {@link
-   * #providerState(String)} — which this class documents as reachable plumbing rather than an
-   * isolation boundary — would have that write persisted under the sibling's name, so a namespace
-   * nobody owns in this run could overwrite the state of a provider that is configured elsewhere.
-   * Restricting write-back keeps the durable session a function of the providers the run actually
-   * ran.
+   * #providerState(SessionStateKey)} — which this class documents as reachable plumbing rather than
+   * an isolation boundary — would have that write persisted under the sibling's name, so a
+   * namespace nobody owns in this run could overwrite the state of a provider that is configured
+   * elsewhere. Restricting write-back keeps the durable session a function of the providers the run
+   * actually ran.
    *
    * <p>Namespaces outside the allow-list are dropped from the update entirely: neither a value set
    * on them nor a clear of them changes what a later save writes, so stored state for an unbound
@@ -255,9 +256,11 @@ public final class SessionContext {
 
   /**
    * Appends provider-contributed context messages attributed to {@code sourceId}, in order. This is
-   * the seam a {@link io.github.hellices.agentframework.spi.session.ContextProvider} uses from its
-   * {@code beforeRun} hook; the engine places the accumulated context messages before the caller's
-   * input in the model request, preserving provider declaration order.
+   * the seam the engine uses to fold a stateful {@link
+   * io.github.hellices.agentframework.spi.session.StatefulContextProvider}'s prepared {@link
+   * io.github.hellices.agentframework.api.agent.RunContribution} into the run under that provider's
+   * state-key id; the engine places the accumulated context messages before the caller's input in
+   * the model request, preserving provider declaration order.
    *
    * <p>A message that already carries a {@link MessageAttribution} with a non-blank source id keeps
    * it, so a provider can preserve cross-session provenance for memory it retrieved elsewhere. A
@@ -297,13 +300,13 @@ public final class SessionContext {
   }
 
   /**
-   * Returns the source-bound session state view for {@code sourceId}, creating it on first use from
-   * {@code session().state().get(sourceId)} and memoizing it for the rest of this run.
+   * Returns the key-bound session state view for {@code key}, creating it on first use from {@code
+   * session().state().get(key)} and memoizing it for the rest of this run.
    *
    * <p>This is framework lifecycle plumbing, not a provider-facing API: the engine resolves one
    * view per configured provider and passes it to that provider's hooks, which is the only way a
-   * provider is meant to reach session state. The returned view is bound to one namespace and
-   * exposes no operation that names another namespace or the parent state map.
+   * provider is meant to reach session state. The returned view is bound to one typed key and
+   * exposes no operation that names another key or the parent state map.
    *
    * <p>This method is not an isolation boundary. It is public because the engine lives in another
    * module, and this class deliberately also exposes {@link #session()}, whose {@code state()} map
@@ -317,22 +320,46 @@ public final class SessionContext {
    * still reads and writes normally for the rest of the run, but nothing it holds reaches {@link
    * #updatedSession()}, so it cannot outlive the run it was created in.
    *
-   * @param sourceId the provider's fixed session-state namespace key; must not be blank
-   * @throws IllegalArgumentException if {@code sourceId} is blank
-   * @throws NullPointerException if {@code sourceId} is {@code null}
+   * <p>A view is memoized by the key's id, so a second request with the same id must use a key of
+   * the same declared type: two providers sharing an id but disagreeing on the state type is a
+   * configuration error the engine rejects at bind time, and reaching one here is rejected too
+   * rather than silently reinterpreting the stored value.
+   *
+   * @param key the provider's fixed, typed session-state key; must not be {@code null}
+   * @param <S> the declared state type of the returned view
+   * @throws NullPointerException if {@code key} is {@code null}
+   * @throws IllegalArgumentException if a view for the same id but a different type already exists
    */
-  public synchronized ProviderSessionState providerState(String sourceId) {
-    String normalizedSourceId = normalizeSourceId(sourceId);
-    AgentSession current = session;
-    return providerStates.computeIfAbsent(
-        normalizedSourceId,
-        key -> new ProviderState(key, current == null ? null : current.state().get(key)));
+  public synchronized <S> ProviderSessionState<S> providerState(SessionStateKey<S> key) {
+    Objects.requireNonNull(key, "key must not be null");
+    ProviderState<?> existing = providerStates.get(key.id());
+    if (existing != null) {
+      if (!existing.key().equals(key)) {
+        throw new IllegalArgumentException(
+            "session state key collision for "
+                + key.id()
+                + ": "
+                + existing.key().type().getName()
+                + " vs "
+                + key.type().getName());
+      }
+      return capture(existing);
+    }
+    S current = session == null ? null : session.state().get(key).orElse(null);
+    ProviderState<S> view = new ProviderState<>(key, current);
+    providerStates.put(key.id(), view);
+    return view;
+  }
+
+  @SuppressWarnings("unchecked")
+  private static <S> ProviderState<S> capture(ProviderState<?> view) {
+    return (ProviderState<S>) view;
   }
 
   /**
    * Returns an immutable {@link AgentSession} carrying this run's provider state, for a later
    * persistence step to save. The original session is never mutated: every namespace touched
-   * through {@link #providerState(String)} and allowed by {@link
+   * through {@link #providerState(SessionStateKey)} and allowed by {@link
    * #restrictPersistedSources(Collection)} is written back, a cleared namespace is removed, and
    * every other session state entry is preserved as it was.
    *
@@ -341,7 +368,7 @@ public final class SessionContext {
    * protect a provider's state object from being mutated in place. A provider that mutates a value
    * it already stored changes what the original session observes too, and the change is visible
    * before any persistence step runs. Providers therefore replace their value through {@link
-   * ProviderSessionState#set(Object)} with a new object, or keep only immutable values, rather than
+   * ProviderSessionState#set} with a new object, or keep only immutable values, rather than
    * mutating a stored value in place.
    *
    * @return the updated session, or empty for a sessionless run
@@ -356,20 +383,19 @@ public final class SessionContext {
             && Collections.disjoint(providerStates.keySet(), allowedSourceIds))) {
       return Optional.of(session);
     }
-    Map<String, Object> updatedState = new LinkedHashMap<>(session.state());
-    providerStates.forEach(
-        (sourceId, state) -> {
-          if (allowedSourceIds != null && !allowedSourceIds.contains(sourceId)) {
-            return;
-          }
-          Optional<Object> value = state.value();
-          if (value.isPresent()) {
-            updatedState.put(sourceId, value.get());
-          } else {
-            updatedState.remove(sourceId);
-          }
-        });
-    return Optional.of(session.withState(Map.copyOf(updatedState)));
+    SessionState updatedState = session.state();
+    for (Map.Entry<String, ProviderState<?>> providerState : providerStates.entrySet()) {
+      String sourceId = providerState.getKey();
+      if (allowedSourceIds != null && !allowedSourceIds.contains(sourceId)) {
+        continue;
+      }
+      updatedState = updatedState.withoutId(sourceId);
+      Optional<SessionState.Entry<?>> entry = providerState.getValue().entry();
+      if (entry.isPresent()) {
+        updatedState = updatedState.withEntry(entry.get());
+      }
+    }
+    return Optional.of(session.toBuilder().state(updatedState).build());
   }
 
   private Message attribute(Message message, String sourceId) {
@@ -403,13 +429,13 @@ public final class SessionContext {
     return sourceId;
   }
 
-  public Map<String, Object> metadata() {
-    return metadata;
+  public ContextAttributes metadata() {
+    return attributes;
   }
 
   /** Returns the run request attributes exposed as session context metadata. */
-  public Map<String, Object> attributes() {
-    return metadata;
+  public ContextAttributes attributes() {
+    return attributes;
   }
 
   public CancellationSignal cancellationSignal() {
@@ -426,8 +452,8 @@ public final class SessionContext {
    * plumbing (see {@code Agent#completionAction}); it is not part of the provider or application
    * contract and must not be called from a {@link
    * io.github.hellices.agentframework.spi.session.ContextProvider} hook. It is public only because
-   * the run plumbing and this type live in different modules; like {@link #providerState(String)}
-   * it is a visibility compromise, not a capability boundary.
+   * the run plumbing and this type live in different modules; like {@link
+   * #providerState(SessionStateKey)} it is a visibility compromise, not a capability boundary.
    *
    * <p>The slot can only be filled once: any second invocation, whether with the same or a
    * different value, is rejected because the response is set-once for the lifetime of this context.
@@ -445,51 +471,42 @@ public final class SessionContext {
   }
 
   /**
-   * The one-namespace state view handed to a provider. It holds only its own source id and value,
-   * so the view itself offers no operation that names the parent session state map or a sibling
-   * provider's namespace.
+   * The one-key state view handed to a provider. It holds only its own typed key and value, so the
+   * view itself offers no operation that names the parent session state map or a sibling provider's
+   * namespace, and every value it reads or writes is the key's declared type.
    */
-  private static final class ProviderState implements ProviderSessionState {
+  private static final class ProviderState<S> implements ProviderSessionState<S> {
 
-    private final String sourceId;
-    private Object value;
+    private final SessionStateKey<S> key;
+    private S value;
 
-    private ProviderState(String sourceId, Object value) {
-      this.sourceId = sourceId;
+    private ProviderState(SessionStateKey<S> key, S value) {
+      this.key = key;
       this.value = value;
     }
 
     @Override
-    public String sourceId() {
-      return sourceId;
+    public SessionStateKey<S> key() {
+      return key;
     }
 
     @Override
-    public synchronized Optional<Object> value() {
+    public synchronized Optional<S> value() {
       return Optional.ofNullable(value);
     }
 
     @Override
-    public synchronized <T> Optional<T> value(Class<T> type) {
-      Objects.requireNonNull(type, "type must not be null");
-      if (value == null) {
-        return Optional.empty();
-      }
-      if (!type.isInstance(value)) {
-        throw new IllegalStateException(
-            "provider state for source '" + sourceId + "' is not a " + type.getName());
-      }
-      return Optional.of(type.cast(value));
-    }
-
-    @Override
-    public synchronized void set(Object newValue) {
-      value = Objects.requireNonNull(newValue, "value must not be null");
+    public synchronized void set(S newValue) {
+      this.value = Objects.requireNonNull(newValue, "value must not be null");
     }
 
     @Override
     public synchronized void clear() {
-      value = null;
+      this.value = null;
+    }
+
+    private synchronized Optional<SessionState.Entry<?>> entry() {
+      return value == null ? Optional.empty() : Optional.of(SessionState.entry(key, value));
     }
   }
 }

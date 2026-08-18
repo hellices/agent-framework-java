@@ -195,7 +195,7 @@ public final class JacksonSessionSnapshotCodec implements SessionSnapshotCodec {
       encoded.put("kind", "array");
       encoded.put("value", list.stream().map(item -> wireValue(item, depth + 1)).toList());
     } else if (value instanceof Map<?, ?> map) {
-      Map<String, Object> object = new java.util.TreeMap<>();
+      Map<String, Object> object = new LinkedHashMap<>();
       map.forEach(
           (key, item) -> {
             if (!(key instanceof String text)) {
@@ -251,7 +251,7 @@ public final class JacksonSessionSnapshotCodec implements SessionSnapshotCodec {
     if (node == null || !node.isObject()) {
       throw new SessionSnapshotSchemaException("object payload must contain an object");
     }
-    Map<String, Object> values = new java.util.TreeMap<>();
+    Map<String, Object> values = new LinkedHashMap<>();
     node.properties()
         .forEach(entry -> values.put(entry.getKey(), logicalValue(entry.getValue(), depth + 1)));
     return java.util.Collections.unmodifiableMap(values);

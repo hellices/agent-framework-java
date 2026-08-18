@@ -13,6 +13,7 @@ public final class AgentRun {
   private final CompletionStage<Optional<AgentSession>> session;
   private final CancellationSignal cancellationSignal;
   private final Runnable cancellationAction;
+  private final boolean engineManaged;
 
   public AgentRun(AgentResponse response) {
     this(
@@ -29,19 +30,50 @@ public final class AgentRun {
     this.response = CancellationAwareResponse.wrap(source, this.cancellationSignal);
     this.session = noSession();
     this.cancellationAction = this.cancellationSignal::cancel;
+    this.engineManaged = false;
   }
 
   private AgentRun(
       CompletionStage<AgentResponse> response,
       CompletionStage<Optional<AgentSession>> session,
       CancellationSignal cancellationSignal,
-      Runnable cancellationAction) {
+      Runnable cancellationAction,
+      boolean engineManaged) {
     this.response = Objects.requireNonNull(response, "response must not be null");
     this.session = Objects.requireNonNull(session, "session must not be null");
     this.cancellationSignal =
         Objects.requireNonNull(cancellationSignal, "cancellationSignal must not be null");
     this.cancellationAction =
         Objects.requireNonNull(cancellationAction, "cancellationAction must not be null");
+    this.engineManaged = engineManaged;
+  }
+
+  /**
+   * Builds a run whose whole post-run lifecycle — filling the session context response slot,
+   * running context providers' {@code afterRun} hooks, and persisting the session — is already
+   * owned by the engine that produced {@code response}. The {@link Agent} facade must not re-run
+   * its own completion and {@code afterRun} seam on such a run (that would complete the response
+   * slot twice); it returns the run unchanged. The {@link #session()} stage is read from {@code
+   * response}, so it reports exactly the session the engine durably wrote and fails identically
+   * when the engine's lifecycle failed.
+   */
+  public static AgentRun engineManaged(
+      CompletionStage<AgentResponse> response,
+      CancellationSignal cancellationSignal,
+      Supplier<Optional<AgentSession>> updatedSession) {
+    CompletionStage<AgentResponse> source =
+        Objects.requireNonNull(response, "response must not be null");
+    Supplier<Optional<AgentSession>> session =
+        Objects.requireNonNull(updatedSession, "updatedSession must not be null");
+    CancellationSignal signal =
+        cancellationSignal == null ? new CancellationSignal() : cancellationSignal;
+    CompletionStage<AgentResponse> wrapped = CancellationAwareResponse.wrap(source, signal);
+    return new AgentRun(
+        wrapped, wrapped.thenApply(ignored -> session.get()), signal, signal::cancel, true);
+  }
+
+  boolean isEngineManaged() {
+    return engineManaged;
   }
 
   public CompletionStage<AgentResponse> response() {
@@ -129,7 +161,8 @@ public final class AgentRun {
         wrapped,
         updatedSession == null ? session : wrapped.thenApply(ignored -> updatedSession.get()),
         cancellationSignal,
-        cancellationAction);
+        cancellationAction,
+        engineManaged);
   }
 
   static CompletionStage<Optional<AgentSession>> noSession() {

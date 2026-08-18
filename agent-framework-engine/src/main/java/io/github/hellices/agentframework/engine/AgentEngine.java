@@ -1,48 +1,60 @@
 package io.github.hellices.agentframework.engine;
 
 import io.github.hellices.agentframework.api.agent.Agent;
+import io.github.hellices.agentframework.api.agent.AgentDefinition;
 import io.github.hellices.agentframework.api.agent.AgentFactory;
 import io.github.hellices.agentframework.api.agent.AgentResponse;
 import io.github.hellices.agentframework.api.agent.AgentResponseUpdate;
 import io.github.hellices.agentframework.api.agent.AgentRun;
 import io.github.hellices.agentframework.api.agent.AgentRunContext;
 import io.github.hellices.agentframework.api.agent.AgentRunRequest;
-import io.github.hellices.agentframework.api.agent.AgentSession;
+import io.github.hellices.agentframework.api.agent.AgentRuntime;
 import io.github.hellices.agentframework.api.agent.AgentStreamingRun;
 import io.github.hellices.agentframework.api.agent.CancellationSignal;
+import io.github.hellices.agentframework.api.agent.RunContribution;
 import io.github.hellices.agentframework.api.message.Message;
-import io.github.hellices.agentframework.api.message.ToolCallContent;
-import io.github.hellices.agentframework.api.message.Usage;
 import io.github.hellices.agentframework.api.session.SessionContext;
-import io.github.hellices.agentframework.api.tool.FunctionTool;
+import io.github.hellices.agentframework.api.tool.ToolApprovalSettings;
+import io.github.hellices.agentframework.api.tool.ToolResult;
+import io.github.hellices.agentframework.api.value.JsonObject;
+import io.github.hellices.agentframework.engine.internal.context.ContextProviderPipeline;
+import io.github.hellices.agentframework.engine.internal.context.ProviderBinding;
+import io.github.hellices.agentframework.engine.internal.context.RunContributionMerger;
+import io.github.hellices.agentframework.engine.internal.interception.InterceptorRegistry;
 import io.github.hellices.agentframework.engine.internal.model.ModelResponseMapper;
 import io.github.hellices.agentframework.engine.internal.model.ResponseIdentity;
+import io.github.hellices.agentframework.engine.internal.run.RunExecution;
+import io.github.hellices.agentframework.engine.internal.run.RunPhase;
+import io.github.hellices.agentframework.engine.internal.run.RunPipeline;
+import io.github.hellices.agentframework.engine.internal.run.RunState;
 import io.github.hellices.agentframework.engine.internal.session.SessionCoordinator;
-import io.github.hellices.agentframework.engine.internal.tool.StreamingToolLoopPublisher;
+import io.github.hellices.agentframework.engine.internal.tool.ToolApprovalCoordinator;
+import io.github.hellices.agentframework.engine.internal.tool.ToolApprovalQueueState;
 import io.github.hellices.agentframework.engine.internal.tool.ToolLoopPolicy;
-import io.github.hellices.agentframework.engine.session.InMemoryHistoryProvider;
-import io.github.hellices.agentframework.spi.model.ContinuationModelClient;
+import io.github.hellices.agentframework.spi.interception.AgentExecution;
+import io.github.hellices.agentframework.spi.interception.AgentInvocation;
+import io.github.hellices.agentframework.spi.interception.AgentInvocationChain;
+import io.github.hellices.agentframework.spi.interception.ModelInvocation;
+import io.github.hellices.agentframework.spi.interception.ModelInvocationChain;
+import io.github.hellices.agentframework.spi.interception.SessionInvocation;
+import io.github.hellices.agentframework.spi.interception.SessionInvocationChain;
+import io.github.hellices.agentframework.spi.interception.SessionOperationResult;
+import io.github.hellices.agentframework.spi.interception.ToolInvocation;
+import io.github.hellices.agentframework.spi.interception.ToolInvocationChain;
 import io.github.hellices.agentframework.spi.model.ModelCatalog;
 import io.github.hellices.agentframework.spi.model.ModelClient;
 import io.github.hellices.agentframework.spi.model.ModelRequest;
-import io.github.hellices.agentframework.spi.model.ModelRequestOptions;
 import io.github.hellices.agentframework.spi.model.ModelResponse;
 import io.github.hellices.agentframework.spi.model.ModelResponseUpdate;
-import io.github.hellices.agentframework.spi.model.StreamingContinuationModelClient;
-import io.github.hellices.agentframework.spi.model.StreamingModelClient;
-import io.github.hellices.agentframework.spi.session.ContextProvider;
-import io.github.hellices.agentframework.spi.session.HistoryPolicy;
-import io.github.hellices.agentframework.spi.session.HistoryProvider;
-import io.github.hellices.agentframework.spi.session.ProviderSessionState;
+import io.github.hellices.agentframework.spi.telemetry.TelemetryAttributes;
+import io.github.hellices.agentframework.spi.telemetry.TelemetryOperation;
+import io.github.hellices.agentframework.spi.telemetry.TelemetryOperationKind;
+import io.github.hellices.agentframework.spi.telemetry.TelemetrySink;
+import io.github.hellices.agentframework.spi.telemetry.TelemetryStart;
 import java.time.Instant;
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
-import java.util.Optional;
-import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
@@ -53,142 +65,108 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 import java.util.function.Supplier;
 
-public final class AgentEngine extends Agent {
+/**
+ * The embeddable, model-independent execution engine. It owns only the services an agent's runs
+ * share — session coordination — and holds no per-agent identity, model client, tool set, or
+ * provider list, so one immutable engine is safe to share across every agent and every concurrent
+ * run.
+ *
+ * <p>An agent is produced by {@link #bind(AgentDefinition, AgentRuntime)}: the declarative {@link
+ * AgentDefinition} and the runnable {@link AgentRuntime} become an immutable {@link AgentBinding}
+ * that a {@link BoundAgent} carries back into this engine's execution hooks. Because the engine is
+ * stateless per agent, the same run, streaming, tool-loop, and session behaviour applies regardless
+ * of which agent a binding describes.
+ */
+public final class AgentEngine {
 
-  private final ModelClient modelClient;
-  private final ToolLoopPolicy toolLoop;
-  private final List<ProviderBinding> configuredProviders;
-  private final DefaultHistory defaultHistory;
   private final SessionCoordinator sessionCoordinator;
+  private final InterceptorRegistry interceptorRegistry;
+  private final TelemetrySink telemetrySink;
+
+  AgentEngine(SessionCoordinator sessionCoordinator) {
+    this(sessionCoordinator, new InterceptorRegistry(List.of(), List.of(), List.of(), List.of()));
+  }
+
+  AgentEngine(SessionCoordinator sessionCoordinator, InterceptorRegistry interceptorRegistry) {
+    this(sessionCoordinator, interceptorRegistry, TelemetrySink.noOp());
+  }
 
   AgentEngine(
-      String id,
-      String name,
-      String description,
-      ModelClient modelClient,
-      List<FunctionTool> tools,
-      List<ContextProvider> contextProviders,
       SessionCoordinator sessionCoordinator,
-      int maxIterations) {
-    super(id, name, description);
-    this.modelClient = Objects.requireNonNull(modelClient, "modelClient must not be null");
-    this.toolLoop = new ToolLoopPolicy(tools, maxIterations);
-    this.configuredProviders = bindContextProviders(contextProviders);
-    this.defaultHistory = bindDefaultHistory(this.configuredProviders);
+      InterceptorRegistry interceptorRegistry,
+      TelemetrySink telemetrySink) {
     this.sessionCoordinator = sessionCoordinator;
+    this.interceptorRegistry =
+        Objects.requireNonNull(interceptorRegistry, "interceptorRegistry must not be null");
+    this.telemetrySink = Objects.requireNonNull(telemetrySink, "telemetrySink must not be null");
+  }
+
+  public static AgentEngineBuilder builder() {
+    return new AgentEngineBuilder();
   }
 
   /**
-   * Reads every provider's {@code sourceId} exactly once, so the session state namespace a provider
-   * owns is fixed for this agent's lifetime and cannot drift between runs, and rejects a blank or
-   * duplicated namespace before any run can mix two providers' state.
+   * Composes this model-independent engine with a {@link ModelCatalog} into an {@link AgentFactory}
+   * that binds agents to this engine, so one shared engine can produce many agents that differ only
+   * in their declaration and runtime.
+   *
+   * @param catalog the catalog a produced builder resolves default and named models from
+   * @return a factory that binds every agent it produces to this engine
    */
-  private static List<ProviderBinding> bindContextProviders(List<ContextProvider> providers) {
-    List<ProviderBinding> bindings = new ArrayList<>();
-    Set<String> sourceIds = new LinkedHashSet<>();
-    for (ContextProvider provider : providers) {
-      String sourceId = provider.sourceId();
-      if (sourceId == null || sourceId.isBlank()) {
-        throw new IllegalArgumentException("context provider sourceId must not be blank");
-      }
-      if (!sourceIds.add(sourceId)) {
-        throw new IllegalArgumentException("duplicate context provider sourceId: " + sourceId);
-      }
-      bindings.add(new ProviderBinding(sourceId, provider));
-    }
-    return List.copyOf(bindings);
+  public AgentFactory factory(ModelCatalog catalog) {
+    return new CatalogAgentFactory(this, catalog);
   }
 
   /**
-   * Decides once, when the agent is built, whether this agent owns a default in-memory chat history
-   * (SES-014).
+   * Returns an {@link AgentFactory} over this engine with no model catalog, for direct-client
+   * assembly: {@code factory().builderWithClient(client)} produces an agent from a supplied {@link
+   * ModelClient} without manufacturing a synthetic one-entry catalog first.
    *
-   * <p>A configured {@link HistoryProvider} that loads messages already answers "what did we say
-   * before?" for every run, so injecting a second history on top of it would replay the same
-   * conversation twice into one model request. A history provider that only records — an audit or
-   * evaluation sink with {@code loadMessages(false)} — answers nothing, so it does not suppress the
-   * default: without it a session would silently lose multi-turn behaviour.
+   * <p>The factory carries an empty catalog, so the catalog-backed routes still fail with their
+   * usual actionable messages: {@link AgentFactory#builder()} reports that no default model is
+   * configured, and {@link AgentFactory#builder(String)} reports the named model is unknown. Reach
+   * for {@link #factory(ModelCatalog)} when default or named model selection is needed.
    *
-   * <p>The namespace is always {@link InMemoryHistoryProvider#DEFAULT_SOURCE_ID}. Deriving it from
-   * the configuration instead — picking the first free {@code in_memory-N} — would make a stored
-   * conversation unreadable the moment a provider is added on that name: the run would load nothing
-   * and append into a second namespace while the durable conversation stayed orphaned under the
-   * first. A stable namespace makes the collision a configuration error instead, reported by {@link
-   * #resolveProviders(SessionContext)} for the runs that would actually need the default.
-   *
-   * @return the binding to append for eligible runs, or a conflicting or suppressed marker
+   * @return a factory that binds every agent it produces to this engine
    */
-  private static DefaultHistory bindDefaultHistory(List<ProviderBinding> configured) {
-    for (ProviderBinding binding : configured) {
-      if (binding.provider() instanceof HistoryProvider history
-          && history.policy().loadMessages()) {
-        return new DefaultHistory(null, false);
-      }
-    }
-    for (ProviderBinding binding : configured) {
-      if (InMemoryHistoryProvider.DEFAULT_SOURCE_ID.equals(binding.sourceId())) {
-        return new DefaultHistory(null, true);
-      }
-    }
-    return new DefaultHistory(
-        new ProviderBinding(
-            InMemoryHistoryProvider.DEFAULT_SOURCE_ID,
-            new InMemoryHistoryProvider(
-                InMemoryHistoryProvider.DEFAULT_SOURCE_ID, HistoryPolicy.defaults())),
-        false);
+  public AgentFactory factory() {
+    return factory(ModelCatalog.builder().build());
   }
 
   /**
-   * The agent's build-time answer to "does this agent have a default in-memory chat history, and
-   * can it use its namespace?".
+   * Binds this model-independent engine to a concrete agent by pairing a declarative {@link
+   * AgentDefinition} with a runnable {@link AgentRuntime}, validating the runtime against the
+   * definition before returning so no agent exists whose bound handlers do not match its declared
+   * tools.
    *
-   * @param binding the provider to append for eligible runs, or {@code null} when a configured
-   *     load-enabled history provider already covers history or the namespace is taken
-   * @param namespaceConflict whether the default namespace is owned by a configured provider that
-   *     does not load history, which makes an otherwise eligible run a configuration error
+   * @param definition the agent's declarative identity, tools, and default run options
+   * @param runtime the agent's model client, tool handlers, and context providers
+   * @return an {@link Agent} that delegates its execution hooks to this engine
    */
-  private record DefaultHistory(ProviderBinding binding, boolean namespaceConflict) {}
+  public Agent bind(AgentDefinition definition, AgentRuntime runtime) {
+    Objects.requireNonNull(definition, "definition must not be null");
+    Objects.requireNonNull(runtime, "runtime must not be null");
+    runtime.validate(definition);
+    return new BoundAgent(definition, runtime, this);
+  }
 
-  /**
-   * Resolves the provider list for one run: the configured providers, plus the default in-memory
-   * history when this run is eligible for it (SES-014).
-   *
-   * <p>A run is eligible only when it has a session to keep history in and the effective session is
-   * not service-managed. A sessionless run has nowhere to store the conversation, and a run whose
-   * session carries a {@code serviceSessionId} has the conversation kept by the model service, so
-   * in both cases injecting a history would either lose it or duplicate it.
-   *
-   * <p>An eligible run whose default namespace is owned by a configured provider fails here, before
-   * the model is called and before anything is saved, rather than quietly moving the default
-   * elsewhere: the alternative orphans whatever conversation is already stored under that name. The
-   * failure is scoped to the runs that need the default, so a sessionless or service-managed run of
-   * the same agent is unaffected.
-   *
-   * <p>The decision reads the run's effective session, which is the stored one once the coordinator
-   * hydrated the context. Because hydration happens before this is ever called and is set-once, and
-   * because the configured list and the default binding are both fixed at build time, this function
-   * returns the same list — the same provider instances in the same order — for the before-run and
-   * after-run hooks of one run.
-   */
-  private List<ProviderBinding> resolveProviders(SessionContext sessionContext) {
-    AgentSession session = sessionContext.session();
-    if (session == null || session.serviceSessionId() != null) {
-      return configuredProviders;
-    }
-    if (defaultHistory.namespaceConflict()) {
-      throw new IllegalStateException(
-          "context provider sourceId '"
-              + InMemoryHistoryProvider.DEFAULT_SOURCE_ID
-              + "' is reserved for the default in-memory chat history of a session run; "
-              + "configure a load-enabled HistoryProvider or a different sourceId");
-    }
-    if (defaultHistory.binding() == null) {
-      return configuredProviders;
-    }
-    List<ProviderBinding> resolved = new ArrayList<>(configuredProviders.size() + 1);
-    resolved.addAll(configuredProviders);
-    resolved.add(defaultHistory.binding());
-    return List.copyOf(resolved);
+  AgentExecution interceptAgent(AgentInvocation invocation, AgentInvocationChain terminal) {
+    return interceptorRegistry.interceptAgent(invocation, terminal);
+  }
+
+  Flow.Publisher<ModelResponseUpdate> interceptModel(
+      ModelInvocation invocation, ModelInvocationChain terminal) {
+    return interceptorRegistry.interceptModel(invocation, terminal);
+  }
+
+  CompletionStage<ToolResult> interceptTool(
+      ToolInvocation invocation, ToolInvocationChain terminal) {
+    return interceptorRegistry.interceptTool(invocation, terminal);
+  }
+
+  CompletionStage<SessionOperationResult> interceptSession(
+      SessionInvocation invocation, SessionInvocationChain terminal) {
+    return interceptorRegistry.interceptSession(invocation, terminal);
   }
 
   /**
@@ -196,26 +174,28 @@ public final class AgentEngine extends Agent {
    * later save may write back.
    *
    * <p>Restricting write-back here is what keeps the durable session a function of the providers
-   * the run actually ran: {@code SessionContext#providerState(String)} is reachable plumbing rather
-   * than an isolation boundary, so without this a provider reaching a sibling namespace would have
-   * that write persisted under a name nobody owned in this run.
+   * the run actually ran: {@code SessionContext#providerState(SessionStateKey)} is reachable
+   * plumbing rather than an isolation boundary, so without this a provider reaching a sibling
+   * namespace would have that write persisted under a name nobody owned in this run. Only stateful
+   * providers own a namespace; a stateless provider reserves nothing and contributes no id here.
    */
-  private List<ProviderBinding> bindRun(SessionContext sessionContext) {
-    List<ProviderBinding> resolved = resolveProviders(sessionContext);
+  private List<ProviderBinding> bindRun(AgentBinding binding, SessionContext sessionContext) {
+    List<ProviderBinding> resolved = binding.resolveProviders(sessionContext);
     List<String> sourceIds = new ArrayList<>(resolved.size());
-    for (ProviderBinding binding : resolved) {
-      sourceIds.add(binding.sourceId());
+    for (ProviderBinding providerBinding : resolved) {
+      String sourceId = providerBinding.sourceId();
+      if (sourceId != null) {
+        sourceIds.add(sourceId);
+      }
+    }
+    if (binding.runtime().toolApproval().isPresent()) {
+      // The approval queue is engine-owned rather than provider-owned, so no provider contributes
+      // its namespace here; without adding it the run's own pending approvals would be dropped from
+      // the session it hands back.
+      sourceIds.add(ToolApprovalQueueState.STATE_ID);
     }
     sessionContext.restrictPersistedSources(sourceIds);
     return resolved;
-  }
-
-  public static AgentEngineBuilder builder() {
-    return new AgentEngineBuilder();
-  }
-
-  public static AgentFactory factory(ModelCatalog catalog) {
-    return new CatalogAgentFactory(catalog);
   }
 
   /**
@@ -239,63 +219,209 @@ public final class AgentEngine extends Agent {
    * alone: making it depend on whether the store or a hook happened to complete before the check
    * would make the same code throw synchronously or asynchronously from one run to the next.
    */
-  @Override
-  protected AgentRun runInternal(AgentRunContext context, AgentRunRequest request) {
+  AgentRun runInternal(AgentBinding binding, AgentRunContext context, AgentRunRequest request) {
+    ResponseIdentity identity =
+        new ResponseIdentity(
+            binding.id(), UUID.randomUUID().toString(), binding.name(), Instant.now());
+    SessionContext sessionContext = context.sessionContext();
+    AgentPipelineHandle handle = interceptRun(binding, context, request, identity);
+    if (handle.failed()) {
+      return AgentRun.engineManaged(
+          failedStage(handle.failure()),
+          request.cancellationSignal(),
+          sessionContext::updatedSession);
+    }
+    return AgentRun.engineManaged(
+        finalizeOrdinary(binding, sessionContext, identity, handle),
+        request.cancellationSignal(),
+        sessionContext::updatedSession);
+  }
+
+  /**
+   * Derives an ordinary run's response and drives its post-run lifecycle, from whichever source the
+   * agent seam left canonical.
+   *
+   * <p>A pass-through run reads the pipeline's boundary-preserving terminal response, exactly as it
+   * did before the seam existed: an internal subscriber drives every model and tool iteration to
+   * completion while the caller waits only for that assembled response. A run whose agent
+   * interceptor replaced or mapped the execution's updates instead reconstructs its response from
+   * those transformed updates — the same updates a streaming caller would see — so the
+   * transformation is the sole source of the final response for both run shapes. A short-circuited
+   * run reconstructs from the interceptor's updates too, then finalizes without any pipeline,
+   * provider, or store work.
+   */
+  private CompletionStage<AgentResponse> finalizeOrdinary(
+      AgentBinding binding,
+      SessionContext sessionContext,
+      ResponseIdentity identity,
+      AgentPipelineHandle handle) {
+    RunPipeline pipeline = handle.pipeline();
+    if (pipeline != null && !handle.transformed()) {
+      RunExecution execution = pipeline.execution();
+      CompletionStage<ModelResponse> terminal = pipeline.terminalResponse();
+      pipeline.subscribe(new DrainingSubscriber());
+      return terminal
+          .thenApply(
+              model ->
+                  ModelResponseMapper.toAgentResponse(
+                      identity.agentId(),
+                      identity.responseId(),
+                      identity.authorName(),
+                      identity.createdAt(),
+                      ResponseIdentity.terminalMessageId(model.messages()),
+                      model))
+          .thenCompose(
+              agentResponse ->
+                  completeRun(
+                      binding, sessionContext, execution, agentResponse, pipeline.agentRunOp()));
+    }
+    CompletionStage<AgentResponse> reconstructed = collectUpdates(handle.execution().updates());
+    if (pipeline != null) {
+      RunExecution execution = pipeline.execution();
+      return reconstructed.thenCompose(
+          agentResponse ->
+              completeRun(
+                  binding, sessionContext, execution, agentResponse, pipeline.agentRunOp()));
+    }
+    return reconstructed.thenCompose(
+        agentResponse -> finalizeShortCircuit(sessionContext, agentResponse));
+  }
+
+  /**
+   * Builds the one update-oriented pipeline a run executes, whichever way it is consumed. The first
+   * model call is decided here so that a run without an asynchronous gate keeps failing
+   * synchronously when its client throws or returns {@code null}, exactly as it did before the
+   * context provider pipeline existed; with a gate the first call is deferred until the session was
+   * loaded and every {@code beforeRun} hook completed, so the same failures are instead reported on
+   * the run's terminal signal. The run's explicit state machine is advanced through the phases the
+   * engine owns — validation, session load and context preparation — before the pipeline takes it
+   * from the first model request through response finalisation.
+   */
+  private RunPipeline buildPipeline(
+      AgentBinding binding,
+      AgentRunContext context,
+      AgentRunRequest request,
+      ResponseIdentity identity) {
+    ToolLoopPolicy toolLoop = binding.toolLoop();
     if (toolLoop.hasTools() && request.options().continuationToken().isPresent()) {
       throw new UnsupportedOperationException("continuation tool execution is not supported");
     }
-    ModelClient selectedClient = request.options().resolveModelClient(modelClient);
-    Function<ModelRequest, CompletionStage<ModelResponse>> modelInvoker =
-        resolveModelInvoker(selectedClient, request);
+    ModelClient selectedClient = request.options().resolveModelClient(binding.modelClient());
     SessionContext sessionContext = context.sessionContext();
-    String responseId = UUID.randomUUID().toString();
-    Instant createdAt = Instant.now();
-    Supplier<CompletionStage<ToolLoopResult>> toolLoop =
-        () ->
-            runToolLoop(
-                selectedClient,
-                modelInvoker,
-                toModelRequest(request, sessionContext),
-                request,
-                0,
-                List.of(),
-                null);
-    CompletionStage<Void> gate = runGate(sessionContext, request.cancellationSignal());
-    CompletionStage<ToolLoopResult> toolLoopResult =
-        gate == null
-            ? toolLoop.get()
-            : gate.thenCompose(
-                ignored -> {
-                  // The gate makes the first model call asynchronous, so the run can be cancelled
-                  // while the store or a hook is still pending. Re-checking here keeps the ordinary
-                  // path aligned with the streaming one: once the caller observed cancellation, no
-                  // model request is issued when the gate finally completes.
-                  if (request.cancellationSignal().isCancelled()) {
-                    throw new CancellationException("run was cancelled");
-                  }
-                  return toolLoop.get();
-                });
-    CompletionStage<AgentResponse> response =
-        toolLoopResult.thenApply(
-            result -> {
-              if (request.cancellationSignal().isCancelled()) {
-                throw new CancellationException("run was cancelled");
-              }
-              ModelResponse terminal = result.terminalResponse();
-              return ModelResponseMapper.toAgentResponse(
-                  id(),
-                  responseId,
-                  name(),
-                  createdAt,
-                  new ModelResponse(
-                      result.messages(),
-                      result.usage(),
-                      terminal.finishReason(),
-                      terminal.continuationToken(),
-                      terminal.metadata(),
-                      terminal.rawRepresentation()));
-            });
-    return new AgentRun(response, request.cancellationSignal());
+    ToolApprovalSettings approvalSettings = binding.runtime().toolApproval().orElse(null);
+    if (approvalSettings != null && sessionContext.session() == null) {
+      // A pending approval outlives the run that surfaced it, so there has to be somewhere to keep
+      // it. Failing here rather than at the first approval keeps the failure a property of the
+      // configuration and makes it identical for an ordinary and a streaming run (TOOL-020).
+      throw new IllegalStateException("tool approval requires a session");
+    }
+    AtomicReference<TelemetryOperation> agentRunOpRef =
+        new AtomicReference<>(
+            telemetrySink.start(
+                TelemetryStart.builder(TelemetryOperationKind.AGENT_RUN, "agent.run")
+                    .attribute(TelemetryAttributes.AGENT_ID, binding.id())
+                    .attribute(
+                        TelemetryAttributes.AGENT_NAME,
+                        binding.definition().name() != null ? binding.definition().name() : "")
+                    .build()));
+    try {
+      String modelAgentId = binding.id();
+      String modelSessionId =
+          sessionContext.session() == null ? null : sessionContext.session().sessionId();
+      Function<ModelRequest, Flow.Publisher<ModelResponseUpdate>> invoker =
+          modelRequest ->
+              interceptModel(
+                  ModelInvocation.builder()
+                      .agentId(modelAgentId)
+                      .sessionId(modelSessionId)
+                      .request(modelRequest)
+                      .build(),
+                  modelInvocation ->
+                      Objects.requireNonNull(
+                          selectedClient.execute(modelInvocation.request()),
+                          "model client update publisher must not be null"));
+      ToolLoopPolicy.BoundToolInvoker toolInvoker =
+          (tool, call, toolContext) ->
+              interceptTool(
+                  ToolInvocation.builder()
+                      .toolCall(call)
+                      .toolDefinition(tool.definition())
+                      .context(toolContext)
+                      .build(),
+                  toolInvocation ->
+                      tool.execute(toolInvocation.arguments(), toolInvocation.context()));
+      RunExecution execution =
+          RunExecution.create(request, binding.definition(), binding.runtime());
+      RunEffectiveState state =
+          new RunEffectiveState(
+              binding, RunContributionMerger.merge(binding.definition(), List.of()));
+      CompletionStage<Void> gate =
+          runGateWithTelemetry(
+              binding, sessionContext, request.cancellationSignal(), state, agentRunOpRef.get());
+      AtomicReference<ModelRequest> firstRequest = new AtomicReference<>();
+      Function<List<Message>, Flow.Publisher<ModelResponseUpdate>> firstStream =
+          appendedMessages -> {
+            ModelRequest modelRequest =
+                toModelRequest(state, request, sessionContext, appendedMessages);
+            firstRequest.set(modelRequest);
+            return Objects.requireNonNull(
+                invoker.apply(modelRequest), "model client update publisher must not be null");
+          };
+      if (approvalSettings == null) {
+        Flow.Publisher<ModelResponseUpdate> modelUpdates =
+            gate == null
+                ? firstStream.apply(List.of())
+                : deferUntil(
+                    gate,
+                    request.cancellationSignal(),
+                    () -> {
+                      if (request.cancellationSignal().isCancelled()) {
+                        throw new CancellationException("run was cancelled");
+                      }
+                      return firstStream.apply(List.of());
+                    });
+        return new RunPipeline(
+            appendedMessages -> modelUpdates,
+            firstRequest::get,
+            invoker,
+            state::toolLoop,
+            toolInvoker,
+            request,
+            identity,
+            execution,
+            null,
+            null,
+            telemetrySink,
+            agentRunOpRef.get());
+      }
+      // An approving run never starts its first model call eagerly: the pending queue has to be
+      // resolved against the loaded session first, and a resolved approval may put tool results
+      // into
+      // that very first request. The pipeline therefore waits on the same gate itself instead of
+      // the
+      // model publisher being deferred behind it.
+      return new RunPipeline(
+          appendedMessages -> {
+            if (request.cancellationSignal().isCancelled()) {
+              throw new CancellationException("run was cancelled");
+            }
+            return firstStream.apply(appendedMessages);
+          },
+          firstRequest::get,
+          invoker,
+          state::toolLoop,
+          toolInvoker,
+          request,
+          identity,
+          execution,
+          new ToolApprovalCoordinator(approvalSettings, sessionContext, request),
+          gate == null ? CompletableFuture.completedFuture(null) : gate,
+          telemetrySink,
+          agentRunOpRef.get());
+    } catch (RuntimeException e) {
+      agentRunOpRef.get().fail(e);
+      throw e;
+    }
   }
 
   /**
@@ -313,19 +439,45 @@ public final class AgentEngine extends Agent {
    * touches no store reaches that branch — see {@link #runInternal} for what that means for a run
    * that carries a session.
    */
-  private CompletionStage<Void> runGate(
-      SessionContext sessionContext, CancellationSignal cancellationSignal) {
+  private CompletionStage<Void> runGateWithTelemetry(
+      AgentBinding binding,
+      SessionContext sessionContext,
+      CancellationSignal cancellationSignal,
+      RunEffectiveState state,
+      TelemetryOperation agentRunOp) {
     if (sessionCoordinator != null && sessionContext.session() != null) {
+      String sessionId = sessionContext.session().sessionId();
+      AtomicReference<TelemetryOperation> loadOpRef =
+          new AtomicReference<>(
+              agentRunOp.startChild(
+                  TelemetryStart.builder(TelemetryOperationKind.SESSION_OPERATION, "session.load")
+                      .attribute(TelemetryAttributes.SESSION_OPERATION, "load")
+                      .attribute(TelemetryAttributes.SESSION_ID, sessionId)
+                      .build()));
       return sessionCoordinator
           .load(sessionContext)
+          .whenComplete(
+              (v, err) -> {
+                if (err == null) {
+                  loadOpRef.get().close();
+                } else {
+                  loadOpRef.get().fail(unwrap(err));
+                }
+              })
           .thenCompose(
-              ignored -> beforeRun(bindRun(sessionContext), sessionContext, cancellationSignal));
+              ignored ->
+                  prepareRun(
+                      binding,
+                      bindRun(binding, sessionContext),
+                      sessionContext,
+                      cancellationSignal,
+                      state));
     }
-    List<ProviderBinding> resolved = bindRun(sessionContext);
+    List<ProviderBinding> resolved = bindRun(binding, sessionContext);
     if (resolved.isEmpty()) {
       return null;
     }
-    return beforeRun(resolved, sessionContext, cancellationSignal);
+    return prepareRun(binding, resolved, sessionContext, cancellationSignal, state);
   }
 
   /**
@@ -335,129 +487,401 @@ public final class AgentEngine extends Agent {
    * as it did before the context provider pipeline existed. With a gate the first model call must
    * happen after the session was loaded and every {@code beforeRun} hook completed, so publisher
    * creation is deferred and the same failures are instead delivered to the update subscriber as a
-   * terminal {@code onError}, which the run's response stage reports. Failures that do not depend
-   * on the gate (a continuation token combined with tools, a client lacking the streaming or
-   * streaming-continuation capability) stay synchronous in both shapes. Which shape applies follows
-   * the same rule {@link #runInternal} documents: a run that carries a session always has a gate.
+   * terminal {@code onError}, which the run's response stage reports. The only failure that does
+   * not depend on the gate — a continuation token combined with tools — stays synchronous in both
+   * shapes. Which shape applies follows the same rule {@link #runInternal} documents: a run that
+   * carries a session always has a gate.
    *
-   * <p>A run with tools streams through {@link StreamingToolLoopPublisher}, which turns the same
-   * tool loop the ordinary run executes into one update stream: every model call's updates are
-   * forwarded live, each tool result is reported as an update the engine synthesised, and the whole
-   * loop assembles into one response carrying the content, order, tool results, usage and terminal
-   * outcome of an equivalent ordinary run (TOOL-015). What that response does not reproduce is the
-   * message boundaries an ordinary client returned, because a streamed response is reconstructed by
-   * {@link AgentResponse#fromUpdates} — see {@link StreamingToolLoopPublisher} for why inventing a
-   * message identity would be worse. A run without tools keeps mapping the single model stream
-   * directly, so nothing about it changed.
+   * <p>A run streams through the shared {@link RunPipeline}, which turns the same tool loop the
+   * ordinary run executes into one update stream: every model call's updates are forwarded live,
+   * each tool result is reported as an update the engine synthesised, and the whole loop assembles
+   * into one response carrying the content, order, tool results, usage and terminal outcome of an
+   * equivalent ordinary run (TOOL-015). What that response does not reproduce is the message
+   * boundaries an ordinary client returned, because a streamed response is reconstructed by {@link
+   * AgentResponse#fromUpdates} — see {@link RunPipeline} for why inventing a message identity would
+   * be worse. A run without tools follows the same pipeline, so an unknown tool call fails it as it
+   * does an ordinary run rather than being forwarded unexecuted.
    */
-  @Override
-  protected AgentStreamingRun<AgentResponseUpdate> runStreamingInternal(
-      AgentRunContext context, AgentRunRequest request) {
-    if (toolLoop.hasTools() && request.options().continuationToken().isPresent()) {
-      throw new UnsupportedOperationException("continuation tool execution is not supported");
-    }
-    ModelClient selectedClient = request.options().resolveModelClient(modelClient);
-    Function<ModelRequest, Flow.Publisher<ModelResponseUpdate>> streamingInvoker =
-        resolveStreamingInvoker(selectedClient, request);
-    SessionContext sessionContext = context.sessionContext();
+  AgentStreamingRun<AgentResponseUpdate> runStreamingInternal(
+      AgentBinding binding, AgentRunContext context, AgentRunRequest request) {
     ResponseIdentity identity =
-        new ResponseIdentity(id(), UUID.randomUUID().toString(), name(), Instant.now());
-    CompletionStage<Void> gate = runGate(sessionContext, request.cancellationSignal());
-    AtomicReference<ModelRequest> firstRequest = new AtomicReference<>();
-    Supplier<Flow.Publisher<ModelResponseUpdate>> firstStream =
-        () -> {
-          ModelRequest modelRequest = toModelRequest(request, sessionContext);
-          firstRequest.set(modelRequest);
-          return Objects.requireNonNull(
-              streamingInvoker.apply(modelRequest),
-              "model client update publisher must not be null");
-        };
-    Flow.Publisher<ModelResponseUpdate> modelUpdates =
-        gate == null
-            ? firstStream.get()
-            : deferUntil(
-                gate,
-                request.cancellationSignal(),
-                () -> {
-                  if (request.cancellationSignal().isCancelled()) {
-                    throw new CancellationException("run was cancelled");
-                  }
-                  return firstStream.get();
-                });
-    Flow.Publisher<AgentResponseUpdate> agentUpdates =
-        toolLoop.hasTools()
-            ? new StreamingToolLoopPublisher(
-                () -> modelUpdates,
-                firstRequest::get,
-                streamingInvoker,
-                toolLoop,
-                request,
-                identity)
-            : subscriber ->
-                modelUpdates.subscribe(
-                    new MappingSubscriber(
-                        subscriber,
-                        identity.agentId(),
-                        identity.responseId(),
-                        identity.authorName(),
-                        identity.createdAt()));
-    return AgentStreamingRun.fromUpdates(
-        agentUpdates,
+        new ResponseIdentity(
+            binding.id(), UUID.randomUUID().toString(), binding.name(), Instant.now());
+    SessionContext sessionContext = context.sessionContext();
+    AgentPipelineHandle handle = interceptRun(binding, context, request, identity);
+    if (handle.failed()) {
+      return AgentStreamingRun.engineManaged(
+          failingPublisher(handle.failure()),
+          request.cancellationSignal(),
+          response -> failedStage(handle.failure()),
+          sessionContext::updatedSession);
+    }
+    if (handle.pipeline() != null) {
+      RunExecution execution = handle.pipeline().execution();
+      return AgentStreamingRun.engineManaged(
+          handle.execution().updates(),
+          request.cancellationSignal(),
+          response ->
+              completeRun(
+                  binding,
+                  sessionContext,
+                  execution,
+                  response,
+                  handle.pipeline() != null ? handle.pipeline().agentRunOp() : null),
+          sessionContext::updatedSession);
+    }
+    return AgentStreamingRun.engineManaged(
+        handle.execution().updates(),
         request.cancellationSignal(),
-        () ->
-            new AgentResponse(
-                identity.agentId(),
-                identity.responseId(),
-                null,
-                identity.authorName(),
-                identity.createdAt(),
-                null,
-                List.of(),
-                null,
-                Map.of(),
-                null));
+        response -> finalizeShortCircuit(sessionContext, response),
+        sessionContext::updatedSession);
   }
 
   /**
-   * Composes every resolved provider's {@code beforeRun} hook in declaration order, before the
-   * run's first model call. Each hook receives the run's single {@link SessionContext} and the
-   * state view bound to its own source id. A hook that fails, returns {@code null}, or is reached
-   * after the run was cancelled fails the composed stage, so no later hook and no model call runs.
+   * Wraps the pre-finalization {@link AgentExecution} the agent seam produces around a run's
+   * pipeline, so the four interceptor families see a run once each in the right place. The chain's
+   * terminal lazily builds the run's {@link RunPipeline} exactly when a chain proceeds to it, so an
+   * interceptor that short-circuits performs no model, session, or tool work: no pipeline is built,
+   * and the returned handle carries only the canonical updates the interceptor chose. A synchronous
+   * failure the pipeline build raises stays synchronous — preserving the eager run's failure shape
+   * — while a failure an interceptor raises, a {@code null} it returns, or a cancellation signal it
+   * swaps is routed to the run's own response or update failure channel with its exact root cause.
    */
-  private CompletionStage<Void> beforeRun(
+  private AgentPipelineHandle interceptRun(
+      AgentBinding binding,
+      AgentRunContext context,
+      AgentRunRequest request,
+      ResponseIdentity identity) {
+    AgentInvocation invocation =
+        AgentInvocation.builder().agentDefinition(binding.definition()).request(request).build();
+    AtomicReference<RunPipeline> pipelineRef = new AtomicReference<>();
+    AtomicReference<AgentExecution> terminalRef = new AtomicReference<>();
+    AgentInvocationChain terminal =
+        proceeding -> {
+          try {
+            RunPipeline pipeline = buildPipeline(binding, context, request, identity);
+            pipelineRef.set(pipeline);
+            AgentExecution built =
+                AgentExecution.fromUpdates(pipeline, request.cancellationSignal());
+            terminalRef.set(built);
+            return built;
+          } catch (RuntimeException failure) {
+            throw new PipelineBuildException(failure);
+          }
+        };
+    AgentExecution execution;
+    try {
+      execution = interceptAgent(invocation, terminal);
+    } catch (PipelineBuildException failure) {
+      // A pipeline-build failure keeps failing the caller synchronously, exactly as an eager run
+      // did before the seam existed; only interceptor-raised failures are routed asynchronously.
+      throw failure.cause();
+    } catch (RuntimeException failure) {
+      return AgentPipelineHandle.failed(failure);
+    }
+    if (!execution.cancellationSignal().equals(request.cancellationSignal())) {
+      // The seam must hand back the run's own signal (CancellationSignal has identity equality), so
+      // a cancellation reaches the stream the run subscribes to. A swapped signal fails explicitly
+      // here, before any subscription, rather than leaking a run that cannot be cancelled.
+      return AgentPipelineHandle.failed(
+          new IllegalStateException(
+              "agent execution cancellationSignal must be the run's cancellation signal"));
+    }
+    RunPipeline pipeline = pipelineRef.get();
+    // An interceptor that replaces or maps the execution hands back a different value than the
+    // terminal built (AgentExecution has identity equality), so its transformed updates — not the
+    // pipeline's raw response — become the sole source of the run's final response, for the
+    // ordinary
+    // run as much as the streaming one. A pass-through interceptor returns the terminal's own
+    // execution unchanged, so an ordinary run keeps its boundary-preserving terminal response.
+    boolean transformed = pipeline != null && !execution.equals(terminalRef.get());
+    return AgentPipelineHandle.of(execution, pipeline, transformed);
+  }
+
+  /**
+   * Subscribes to a short-circuited execution's canonical updates and reconstructs the run's final
+   * response from them, the same way a streamed run's finalizer does, so a short-circuit and a
+   * normal run derive their response from the same update contract.
+   */
+  private static CompletionStage<AgentResponse> collectUpdates(
+      Flow.Publisher<AgentResponseUpdate> updates) {
+    CompletableFuture<AgentResponse> outcome = new CompletableFuture<>();
+    updates.subscribe(
+        new Flow.Subscriber<>() {
+          private final List<AgentResponseUpdate> buffered = new ArrayList<>();
+
+          @Override
+          public void onSubscribe(Flow.Subscription subscription) {
+            subscription.request(Long.MAX_VALUE);
+          }
+
+          @Override
+          public void onNext(AgentResponseUpdate item) {
+            buffered.add(Objects.requireNonNull(item, "agent response update must not be null"));
+          }
+
+          @Override
+          public void onError(Throwable throwable) {
+            outcome.completeExceptionally(unwrap(throwable));
+          }
+
+          @Override
+          public void onComplete() {
+            try {
+              outcome.complete(AgentResponse.fromUpdates(List.copyOf(buffered)));
+            } catch (RuntimeException failure) {
+              outcome.completeExceptionally(failure);
+            }
+          }
+        });
+    return outcome.minimalCompletionStage();
+  }
+
+  /**
+   * Completes the lifecycle of a short-circuited run: it fills the run's response slot once from
+   * the canonical updates the interceptor returned and completes with the run's input session. A
+   * pre-finalization short-circuit performed no session load and resolved no context provider, so
+   * it runs neither the provider {@code afterRun} hooks nor a session save — persisting here would
+   * overwrite a stored session it never read, regressing its revision. A run that built its
+   * pipeline uses {@link #completeRun} instead, which owns the full provider and persistence
+   * lifecycle.
+   */
+  private CompletionStage<AgentResponse> finalizeShortCircuit(
+      SessionContext sessionContext, AgentResponse response) {
+    CompletableFuture<AgentResponse> outcome = new CompletableFuture<>();
+    try {
+      sessionContext.complete(response);
+    } catch (RuntimeException immediate) {
+      outcome.completeExceptionally(immediate);
+      return outcome.minimalCompletionStage();
+    }
+    outcome.complete(response);
+    return outcome.minimalCompletionStage();
+  }
+
+  private static <T> CompletionStage<T> failedStage(Throwable failure) {
+    CompletableFuture<T> outcome = new CompletableFuture<>();
+    outcome.completeExceptionally(failure);
+    return outcome.minimalCompletionStage();
+  }
+
+  private static Flow.Publisher<AgentResponseUpdate> failingPublisher(Throwable failure) {
+    return subscriber -> {
+      Objects.requireNonNull(subscriber, "subscriber must not be null");
+      subscriber.onSubscribe(EmptySubscription.INSTANCE);
+      subscriber.onError(failure);
+    };
+  }
+
+  /**
+   * Marks a failure raised while the agent seam's terminal builds the run's pipeline, so the run
+   * can keep failing the caller synchronously for a pipeline-build failure while routing an
+   * interceptor-raised failure to the run's own response or update channel.
+   */
+  private static final class PipelineBuildException extends RuntimeException {
+
+    private static final long serialVersionUID = 1L;
+
+    private final transient RuntimeException cause;
+
+    PipelineBuildException(RuntimeException cause) {
+      super(cause);
+      this.cause = cause;
+    }
+
+    RuntimeException cause() {
+      return cause;
+    }
+  }
+
+  /**
+   * The outcome of running the agent interceptor seam once for a run: either a routed failure, a
+   * built pipeline with its execution, or a short-circuited execution carrying only canonical
+   * updates (its pipeline is {@code null}).
+   */
+  private static final class AgentPipelineHandle {
+
+    private final AgentExecution execution;
+    private final RunPipeline pipeline;
+    private final boolean transformed;
+    private final RuntimeException failure;
+
+    private AgentPipelineHandle(
+        AgentExecution execution,
+        RunPipeline pipeline,
+        boolean transformed,
+        RuntimeException failure) {
+      this.execution = execution;
+      this.pipeline = pipeline;
+      this.transformed = transformed;
+      this.failure = failure;
+    }
+
+    static AgentPipelineHandle of(
+        AgentExecution execution, RunPipeline pipeline, boolean transformed) {
+      return new AgentPipelineHandle(
+          Objects.requireNonNull(execution, "execution must not be null"),
+          pipeline,
+          transformed,
+          null);
+    }
+
+    static AgentPipelineHandle failed(RuntimeException failure) {
+      return new AgentPipelineHandle(
+          null, null, false, Objects.requireNonNull(failure, "failure must not be null"));
+    }
+
+    boolean failed() {
+      return failure != null;
+    }
+
+    RuntimeException failure() {
+      return failure;
+    }
+
+    AgentExecution execution() {
+      return execution;
+    }
+
+    RunPipeline pipeline() {
+      return pipeline;
+    }
+
+    /**
+     * Whether an interceptor replaced or mapped the execution's updates, so its transformed updates
+     * are the sole source of the run's final response even on the ordinary path.
+     */
+    boolean transformed() {
+      return transformed;
+    }
+  }
+
+  /**
+   * Composes the run's context providers into their {@code prepare} hooks and folds the resulting
+   * contributions into the run's effective request. The {@link ContextProviderPipeline} runs every
+   * hook in declaration order — checking cancellation before each, folding each contribution's
+   * messages into the run's context with provider attribution, and failing the composed stage on
+   * any hook failure, {@code null} stage, {@code null} contribution, or cancellation observed
+   * before a hook — so no later hook or model call runs. The accumulated contributions are then
+   * merged with the agent's declaration, once, into the effective instructions, tools, and options
+   * the run's first model call is built from; a contributed tool name that duplicates an earlier
+   * declaration fails here, before the model is called.
+   */
+  private CompletionStage<Void> prepareRun(
+      AgentBinding binding,
       List<ProviderBinding> providers,
       SessionContext sessionContext,
-      CancellationSignal cancellationSignal) {
-    CompletionStage<Void> stage = CompletableFuture.completedFuture(null);
-    for (ProviderBinding binding : providers) {
-      stage =
-          stage.thenCompose(
-              ignored -> {
-                if (cancellationSignal.isCancelled()) {
-                  throw new CancellationException("run was cancelled");
-                }
-                return Objects.requireNonNull(
-                    binding.provider().beforeRun(sessionContext, binding.state(sessionContext)),
-                    "context provider before-run stage must not be null");
-              });
-    }
-    return stage;
+      CancellationSignal cancellationSignal,
+      RunEffectiveState state) {
+    return new ContextProviderPipeline(providers)
+        .prepare(sessionContext, cancellationSignal)
+        .thenAccept(contributions -> state.apply(binding, contributions));
   }
 
   /**
-   * Composes every resolved provider's {@code afterRun} hook in reverse declaration order, then
-   * saves the session this run produced. The framework calls this only after the run's terminal
-   * response completed successfully and the {@link SessionContext} response slot was filled, so a
-   * hook observes the same context its {@code beforeRun} opened, plus the final response. A hook
-   * failure fails the run and stops the remaining (earlier-declared) hooks, and the save is reached
-   * only once every hook succeeded, so a run that fails anywhere leaves the stored session
-   * untouched.
+   * Owns the entire post-run lifecycle of an engine (bound-agent) run, in the one order every run
+   * observes:
    *
-   * <p>The provider list is recomputed rather than carried from the start of the run, because
-   * {@code Agent} hands this seam nothing but the context. That is safe precisely because
-   * resolution is a pure function of the agent's build-time configuration and the run's set-once
-   * effective session: this recomputation yields the same bindings, in the same order, that {@code
-   * beforeRun} used.
+   * <ol>
+   *   <li>the run's state machine enters context completion, then the run's {@link SessionContext}
+   *       response slot is filled exactly once with the reconstructed response;
+   *   <li>every resolved context provider's {@code afterRun} hook runs in reverse declaration
+   *       order, each observing the same context its {@code beforeRun} opened plus the final
+   *       response;
+   *   <li>the state machine enters session persistence and the session this run produced is saved;
+   *   <li>on success the run terminalises successfully — detaching its cancellation listener — and
+   *       the returned stage completes with the response, which is what lets the ordinary response
+   *       stage complete and the streaming update publisher emit {@code onComplete}.
+   * </ol>
+   *
+   * <p>Any provider-completion or save failure terminalises the run exceptionally with the raw
+   * unwrapped cause and completes the returned stage exceptionally with that identical cause, so
+   * the ordinary and streaming response and session stages all fail with the exact same root cause,
+   * and a streaming subscriber sees {@code onError} — never {@code onComplete} — for such a run.
+   * Because this method owns the lifecycle, the {@link Agent} facade must not re-run its completion
+   * action or {@code afterRun} seam for the engine-managed run it returns.
+   */
+  private CompletionStage<AgentResponse> completeRun(
+      AgentBinding binding,
+      SessionContext sessionContext,
+      RunExecution execution,
+      AgentResponse response,
+      TelemetryOperation agentRunOp) {
+    CompletableFuture<AgentResponse> outcome = new CompletableFuture<>();
+    RunState runState = execution.state();
+    if (!runState.isTerminal() && runState.phase() != RunPhase.FINALIZE_RESPONSE) {
+      // The interceptor proceeded, so the pipeline was built and its execution started at VALIDATE,
+      // but the updates it returned never consumed that pipeline: the run reached no response and
+      // its state machine never advanced to FINALIZE_RESPONSE. Fail with an explicit seam-contract
+      // diagnostic rather than leaking the internal phase-transition message, identically for the
+      // ordinary and streaming shapes. This runs before any context completion, provider hook, or
+      // session save, so the run fails closed and persists nothing.
+      RuntimeException misuse =
+          new IllegalStateException(
+              "an agent interceptor that proceeds must return updates that consume the proceeded"
+                  + " execution; a replacement that abandons it must short-circuit without"
+                  + " proceeding");
+      execution.terminateExceptionally(misuse);
+      if (agentRunOp != null) {
+        agentRunOp.fail(misuse);
+      }
+      outcome.completeExceptionally(misuse);
+      return outcome.minimalCompletionStage();
+    }
+    try {
+      execution.enterContextCompletion();
+      sessionContext.complete(response);
+    } catch (RuntimeException immediate) {
+      execution.terminateExceptionally(immediate);
+      if (agentRunOp != null) {
+        agentRunOp.fail(immediate);
+      }
+      outcome.completeExceptionally(immediate);
+      return outcome.minimalCompletionStage();
+    }
+    runProviderAfterRun(binding, sessionContext)
+        .thenCompose(
+            ignored -> {
+              execution.enterSessionPersistence();
+              return saveSession(sessionContext, agentRunOp);
+            })
+        .whenComplete(
+            (ignored, failure) -> {
+              if (failure == null) {
+                execution.terminateSuccessfully();
+                if (agentRunOp != null) {
+                  agentRunOp.close();
+                }
+                outcome.complete(response);
+              } else {
+                Throwable cause = unwrap(failure);
+                execution.terminateExceptionally(cause);
+                if (agentRunOp != null) {
+                  agentRunOp.fail(cause);
+                }
+                outcome.completeExceptionally(cause);
+              }
+            });
+    return outcome.minimalCompletionStage();
+  }
+
+  /**
+   * Composes every resolved provider's {@code complete} hook in reverse declaration order. The
+   * providers are the same ones {@code prepare} used, because resolution is a pure function of the
+   * agent's bind-time configuration and the run's set-once effective session. A stateful provider
+   * resolves its own key-bound state view through the default {@code complete} bridge. A hook
+   * failure fails the composed stage and stops the remaining (earlier-declared) hooks, so a run
+   * that fails anywhere never reaches the save and leaves the stored session untouched.
+   */
+  private CompletionStage<Void> runProviderAfterRun(
+      AgentBinding binding, SessionContext sessionContext) {
+    return new ContextProviderPipeline(binding.resolveProviders(sessionContext))
+        .complete(sessionContext);
+  }
+
+  /**
+   * Saves the session this run produced, or completes without a write when the run carries no
+   * session or the engine has no store.
    *
    * <p>A run with a session and a configured store saves even when it owns no session state
    * namespace at all — a service-managed conversation with no configured provider, for example. The
@@ -466,177 +890,127 @@ public final class AgentEngine extends Agent {
    * from "stored with no local state" and would accept any service handle for it. The cost is one
    * revision and one write per run of such a session.
    */
-  @Override
-  protected CompletionStage<Void> afterRun(SessionContext sessionContext) {
-    List<ProviderBinding> providers = resolveProviders(sessionContext);
-    CompletionStage<Void> stage = CompletableFuture.completedFuture(null);
-    for (int index = providers.size() - 1; index >= 0; index--) {
-      ProviderBinding binding = providers.get(index);
-      stage =
-          stage.thenCompose(
-              ignored ->
-                  Objects.requireNonNull(
-                      binding.provider().afterRun(sessionContext, binding.state(sessionContext)),
-                      "context provider after-run stage must not be null"));
-    }
+  private CompletionStage<Void> saveSession(
+      SessionContext sessionContext, TelemetryOperation agentRunOp) {
     if (sessionCoordinator == null || sessionContext.session() == null) {
-      return stage;
+      return CompletableFuture.completedFuture(null);
     }
-    return stage.thenCompose(ignored -> sessionCoordinator.save(sessionContext));
-  }
-
-  /**
-   * Builds the model request for a run: provider-contributed context messages come first, in the
-   * order the providers contributed them, followed by the caller's input messages.
-   */
-  private ModelRequest toModelRequest(AgentRunRequest request, SessionContext sessionContext) {
-    List<Message> messages = new ArrayList<>(sessionContext.contextMessages());
-    messages.addAll(request.messages());
-    return new ModelRequest(
-        messages,
-        ModelRequestOptions.empty(),
-        request.cancellationSignal(),
-        toolLoop.toolsForIteration(0),
-        request.attributes());
-  }
-
-  private CompletionStage<ToolLoopResult> runToolLoop(
-      ModelClient client,
-      Function<ModelRequest, CompletionStage<ModelResponse>> modelInvoker,
-      ModelRequest modelRequest,
-      AgentRunRequest request,
-      int iteration,
-      List<Message> accumulatedMessages,
-      Usage accumulatedUsage) {
-    CompletionStage<ModelResponse> responseStage =
-        iteration == 0 ? modelInvoker.apply(modelRequest) : client.run(modelRequest);
-    return Objects.requireNonNull(responseStage, "model client response stage must not be null")
-        .thenCompose(
-            response -> {
-              toolLoop.validateContinuation(response);
-              List<Message> outputMessages = new ArrayList<>(accumulatedMessages);
-              outputMessages.addAll(response.messages());
-              Usage usage = combineUsage(accumulatedUsage, response.usage());
-              List<ToolCallContent> calls = ToolLoopPolicy.toolCalls(response);
-              if (calls.isEmpty()) {
-                return CompletableFuture.completedFuture(
-                    new ToolLoopResult(response, List.copyOf(outputMessages), usage));
+    String sessionId = sessionContext.session().sessionId();
+    AtomicReference<TelemetryOperation> saveOpRef =
+        new AtomicReference<>(
+            agentRunOp.startChild(
+                TelemetryStart.builder(TelemetryOperationKind.SESSION_OPERATION, "session.save")
+                    .attribute(TelemetryAttributes.SESSION_OPERATION, "save")
+                    .attribute(TelemetryAttributes.SESSION_ID, sessionId)
+                    .build()));
+    return sessionCoordinator
+        .save(sessionContext)
+        .whenComplete(
+            (v, err) -> {
+              if (err == null) {
+                saveOpRef.get().close();
+              } else {
+                saveOpRef.get().fail(unwrap(err));
               }
-              if (request.cancellationSignal().isCancelled()) {
-                throw new CancellationException("run was cancelled");
-              }
-              toolLoop.requireIterationBudget(iteration);
-              return toolLoop
-                  .executeToolCalls(calls, request)
-                  .thenCompose(
-                      results -> {
-                        Message toolResultMessage = ToolLoopPolicy.toolResultMessage(results);
-                        ModelRequest nextRequest =
-                            toolLoop.nextRequest(
-                                modelRequest,
-                                response.messages(),
-                                calls,
-                                toolResultMessage,
-                                iteration);
-                        outputMessages.add(toolResultMessage);
-                        return runToolLoop(
-                            client,
-                            modelInvoker,
-                            nextRequest,
-                            request,
-                            iteration + 1,
-                            List.copyOf(outputMessages),
-                            usage);
-                      });
             });
   }
 
-  private static Usage combineUsage(Usage accumulated, Usage update) {
-    if (accumulated == null) {
-      return update;
-    }
-    if (update == null) {
-      return accumulated;
-    }
-    Map<String, Object> additionalProperties =
-        new LinkedHashMap<>(accumulated.additionalProperties());
-    update
-        .additionalProperties()
-        .forEach(
-            (key, value) ->
-                additionalProperties.merge(key, value, AgentEngine::combineUsageProperty));
-    return new Usage(
-        Math.addExact(accumulated.inputTokens(), update.inputTokens()),
-        Math.addExact(accumulated.outputTokens(), update.outputTokens()),
-        Math.addExact(accumulated.totalTokens(), update.totalTokens()),
-        additionalProperties);
-  }
-
-  private static Object combineUsageProperty(Object accumulated, Object update) {
-    if (isIntegralNumber(accumulated) && isIntegralNumber(update)) {
-      return Math.addExact(((Number) accumulated).longValue(), ((Number) update).longValue());
-    }
-    if (accumulated instanceof Number left && update instanceof Number right) {
-      return left.doubleValue() + right.doubleValue();
-    }
-    return update;
-  }
-
-  private static boolean isIntegralNumber(Object value) {
-    return value instanceof Byte
-        || value instanceof Short
-        || value instanceof Integer
-        || value instanceof Long;
-  }
-
-  private record ToolLoopResult(
-      ModelResponse terminalResponse, List<Message> messages, Usage usage) {}
-
   /**
-   * A context provider bound to the fixed source id read once when the agent was built, so a
-   * provider cannot change the session state namespace it owns between runs or hooks.
+   * Builds the run's first model request from the effective contributions: the deduplicated leading
+   * instruction messages, then the provider-contributed context messages in contribution order,
+   * then the caller's input, then {@code appendedMessages}; the merged model options over the
+   * definition defaults; and the effective tool declarations offered to the model. Every later
+   * tool-loop iteration reuses this request's options and leading instruction and context messages,
+   * and the effective tool declarations, through the run's per-run {@link ToolLoopPolicy}.
+   *
+   * <p>{@code appendedMessages} is where a run resuming a fully resolved approval queue places the
+   * results {@link ToolLoopPolicy#executeDecidedToolCalls} already produced for those calls, so the
+   * first model request of the resumed run carries them after the caller's own resume-turn input
+   * rather than losing them to a second, redundant model call.
    */
-  private record ProviderBinding(String sourceId, ContextProvider provider) {
-
-    private ProviderSessionState state(SessionContext sessionContext) {
-      return sessionContext.providerState(sourceId);
-    }
+  private ModelRequest toModelRequest(
+      RunEffectiveState state,
+      AgentRunRequest request,
+      SessionContext sessionContext,
+      List<Message> appendedMessages) {
+    RunContributionMerger merger = state.merger();
+    List<Message> messages =
+        new ArrayList<>(
+            merger.assembleMessages(sessionContext.contextMessages(), request.messages()));
+    messages.addAll(appendedMessages);
+    return ModelRequest.builder()
+        .messages(messages)
+        .options(merger.options())
+        .continuationToken(request.options().continuationToken().orElse(null))
+        .attributes(sessionContext.attributes())
+        .cancellationSignal(request.cancellationSignal())
+        .tools(state.toolLoop().toolsForIteration(0))
+        .metadata(JsonObject.empty())
+        .build();
   }
 
   /**
-   * Resolves how the first model call of this run is made, without making it. Capability mismatches
-   * (a continuation token for a client that cannot resume) still fail synchronously from {@code
-   * run}, while the call itself happens only after every {@code beforeRun} hook completed.
+   * The mutable per-run holder for a run's effective contribution state. It is created with the
+   * agent's definition-only merge so an eager run with no provider still applies the definition's
+   * instructions, tools, and option defaults; when the run has a context gate, {@link
+   * #apply(AgentBinding, List)} recomputes the merge from the accumulated contributions once,
+   * before the first model call. The run's {@link RunPipeline} reads {@link #toolLoop()} through a
+   * supplier, so every tool-loop iteration offers the same effective tool declarations.
    */
-  private static Function<ModelRequest, CompletionStage<ModelResponse>> resolveModelInvoker(
-      ModelClient client, AgentRunRequest request) {
-    Optional<String> continuationToken = request.options().continuationToken();
-    if (continuationToken.isEmpty()) {
-      return client::run;
+  private static final class RunEffectiveState {
+
+    private volatile RunContributionMerger merger;
+    private volatile ToolLoopPolicy toolLoop;
+
+    RunEffectiveState(AgentBinding binding, RunContributionMerger merger) {
+      this.merger = merger;
+      this.toolLoop = binding.toolLoop(merger.toolDeclarations());
     }
-    if (!(client instanceof ContinuationModelClient continuationClient)) {
-      throw new UnsupportedOperationException("model client does not support continuation");
+
+    void apply(AgentBinding binding, List<RunContribution> contributions) {
+      RunContributionMerger merged =
+          RunContributionMerger.merge(binding.definition(), contributions);
+      this.merger = merged;
+      this.toolLoop = binding.toolLoop(merged.toolDeclarations());
     }
-    String token = continuationToken.get();
-    return modelRequest -> continuationClient.resume(modelRequest, token);
+
+    RunContributionMerger merger() {
+      return merger;
+    }
+
+    ToolLoopPolicy toolLoop() {
+      return toolLoop;
+    }
   }
 
-  /** The streaming counterpart of {@link #resolveModelInvoker}. */
-  private static Function<ModelRequest, Flow.Publisher<ModelResponseUpdate>>
-      resolveStreamingInvoker(ModelClient client, AgentRunRequest request) {
-    Optional<String> continuationToken = request.options().continuationToken();
-    if (continuationToken.isEmpty()) {
-      if (!(client instanceof StreamingModelClient streamingClient)) {
-        throw new UnsupportedOperationException("model client does not support streaming");
-      }
-      return streamingClient::runStreaming;
+  /**
+   * The subscriber an ordinary run installs to drive its pipeline to completion. It requests every
+   * update and discards them: the run's response is read from {@link
+   * RunPipeline#terminalResponse()} instead, so the loop's live updates have somewhere to go while
+   * the ordinary caller waits only for the assembled response. Terminal signals are ignored here
+   * because the terminal response stage already carries the run's success or failure.
+   */
+  private static final class DrainingSubscriber implements Flow.Subscriber<AgentResponseUpdate> {
+
+    @Override
+    public void onSubscribe(Flow.Subscription subscription) {
+      subscription.request(Long.MAX_VALUE);
     }
-    if (!(client instanceof StreamingContinuationModelClient continuationClient)) {
-      throw new UnsupportedOperationException(
-          "model client does not support streaming continuation");
+
+    @Override
+    public void onNext(AgentResponseUpdate item) {
+      // The ordinary run observes the assembled terminal response, not the individual updates.
     }
-    String token = continuationToken.get();
-    return modelRequest -> continuationClient.resumeStreaming(modelRequest, token);
+
+    @Override
+    public void onError(Throwable throwable) {
+      // The terminal response stage carries the failure the ordinary caller observes.
+    }
+
+    @Override
+    public void onComplete() {
+      // The terminal response stage carries the success the ordinary caller observes.
+    }
   }
 
   /**
@@ -713,49 +1087,6 @@ public final class AgentEngine extends Agent {
     @Override
     public void cancel() {
       // A stream that failed before it started has nothing left to cancel.
-    }
-  }
-
-  private static final class MappingSubscriber implements Flow.Subscriber<ModelResponseUpdate> {
-    private final Flow.Subscriber<? super AgentResponseUpdate> downstream;
-    private final String agentId;
-    private final String responseId;
-    private final String authorName;
-    private final Instant createdAt;
-
-    private MappingSubscriber(
-        Flow.Subscriber<? super AgentResponseUpdate> downstream,
-        String agentId,
-        String responseId,
-        String authorName,
-        Instant createdAt) {
-      this.downstream = downstream;
-      this.agentId = agentId;
-      this.responseId = responseId;
-      this.authorName = authorName;
-      this.createdAt = createdAt;
-    }
-
-    @Override
-    public void onSubscribe(Flow.Subscription subscription) {
-      downstream.onSubscribe(subscription);
-    }
-
-    @Override
-    public void onNext(ModelResponseUpdate item) {
-      downstream.onNext(
-          ModelResponseMapper.toAgentResponseUpdate(
-              agentId, responseId, authorName, createdAt, item));
-    }
-
-    @Override
-    public void onError(Throwable throwable) {
-      downstream.onError(throwable);
-    }
-
-    @Override
-    public void onComplete() {
-      downstream.onComplete();
     }
   }
 }

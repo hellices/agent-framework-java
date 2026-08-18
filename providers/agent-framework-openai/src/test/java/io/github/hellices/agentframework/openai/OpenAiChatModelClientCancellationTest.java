@@ -13,12 +13,13 @@ import io.github.hellices.agentframework.spi.model.ModelClient;
 import io.github.hellices.agentframework.spi.model.ModelRequest;
 import io.github.hellices.agentframework.spi.model.ModelRequestOptions;
 import io.github.hellices.agentframework.spi.model.ModelResponse;
+import io.github.hellices.agentframework.spi.model.ModelResponseUpdate;
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Flow;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import org.junit.jupiter.api.Test;
@@ -50,7 +51,7 @@ class OpenAiChatModelClientCancellationTest {
     CancellationSignal signal = new CancellationSignal();
     signal.cancel();
 
-    CompletionStage<ModelResponse> stage = client.run(request(signal));
+    CompletionStage<ModelResponse> stage = invoke(client, request(signal));
 
     // The message is the half that distinguishes this path. Without the pre-dispatch short-circuit
     // the run would still fail with a CancellationException and would still never reach the
@@ -77,7 +78,7 @@ class OpenAiChatModelClientCancellationTest {
     ModelClient client = client(operations);
     CancellationSignal signal = new CancellationSignal();
 
-    CompletionStage<ModelResponse> stage = client.run(request(signal));
+    CompletionStage<ModelResponse> stage = invoke(client, request(signal));
     assertThat(operations.invocations()).isEqualTo(1);
     signal.cancel();
 
@@ -105,7 +106,7 @@ class OpenAiChatModelClientCancellationTest {
     ModelClient client = client(operations);
     CancellationSignal signal = new CancellationSignal();
 
-    CompletionStage<ModelResponse> stage = client.run(request(signal));
+    CompletionStage<ModelResponse> stage = invoke(client, request(signal));
     inFlight.complete(completion("finished"));
     ModelResponse response = boundedOutcomeOf(stage);
     signal.cancel();
@@ -124,7 +125,7 @@ class OpenAiChatModelClientCancellationTest {
     ModelClient client = client(operations);
     CancellationSignal signal = new CancellationSignal();
 
-    CompletionStage<ModelResponse> stage = client.run(request(signal));
+    CompletionStage<ModelResponse> stage = invoke(client, request(signal));
     signal.cancel();
     inFlight.complete(completion("too late"));
 
@@ -154,7 +155,7 @@ class OpenAiChatModelClientCancellationTest {
     ModelClient client = client(operations);
     CancellationSignal signal = new CancellationSignal();
 
-    CompletionStage<ModelResponse> stage = client.run(request(signal));
+    CompletionStage<ModelResponse> stage = invoke(client, request(signal));
     signal.cancel();
     inFlight.completeExceptionally(new IllegalStateException("provider failed after the cancel"));
 
@@ -177,13 +178,48 @@ class OpenAiChatModelClientCancellationTest {
     return OpenAiChatModelClient.builder().operations(operations).model("gpt-4.1-mini").build();
   }
 
+  /** Collects the adapter's single-update publisher into the response stage the tests assert on. */
+  private static CompletionStage<ModelResponse> invoke(ModelClient client, ModelRequest request) {
+    CompletableFuture<ModelResponse> future = new CompletableFuture<>();
+    client
+        .execute(request)
+        .subscribe(
+            new Flow.Subscriber<ModelResponseUpdate>() {
+              @Override
+              public void onSubscribe(Flow.Subscription subscription) {
+                subscription.request(Long.MAX_VALUE);
+              }
+
+              @Override
+              public void onNext(ModelResponseUpdate update) {
+                future.complete(
+                    ModelResponse.builder()
+                        .messages(update.messages())
+                        .usage(update.usage())
+                        .finishReason(update.finishReason())
+                        .continuationToken(update.continuationToken())
+                        .metadata(update.metadata())
+                        .rawRepresentation(update.rawRepresentation())
+                        .build());
+              }
+
+              @Override
+              public void onError(Throwable throwable) {
+                future.completeExceptionally(throwable);
+              }
+
+              @Override
+              public void onComplete() {}
+            });
+    return future.minimalCompletionStage();
+  }
+
   private static ModelRequest request(CancellationSignal signal) {
-    return new ModelRequest(
-        List.of(new Message(Role.USER, List.of(new TextContent("hi")))),
-        ModelRequestOptions.empty(),
-        signal,
-        List.of(),
-        Map.of());
+    return ModelRequest.builder()
+        .messages(List.of(new Message(Role.USER, List.of(new TextContent("hi")))))
+        .options(ModelRequestOptions.empty())
+        .cancellationSignal(signal)
+        .build();
   }
 
   private static ChatCompletion completion(String text) {

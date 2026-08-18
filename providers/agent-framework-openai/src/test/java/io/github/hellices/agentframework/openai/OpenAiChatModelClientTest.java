@@ -20,6 +20,7 @@ import io.github.hellices.agentframework.spi.model.ModelClient;
 import io.github.hellices.agentframework.spi.model.ModelRequest;
 import io.github.hellices.agentframework.spi.model.ModelRequestOptions;
 import io.github.hellices.agentframework.spi.model.ModelResponse;
+import io.github.hellices.agentframework.spi.model.ModelResponseUpdate;
 import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
@@ -28,11 +29,11 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.Flow;
 import java.util.function.UnaryOperator;
 import org.junit.jupiter.api.Test;
 
@@ -44,7 +45,7 @@ class OpenAiChatModelClientTest {
         new FakeChatCompletionsOperations().answering(completion("hello there"));
     ModelClient client = clientOver(operations, builder -> builder.model("gpt-4.1-mini"));
 
-    ModelResponse response = client.run(request("hi")).toCompletableFuture().join();
+    ModelResponse response = invoke(client, request("hi")).toCompletableFuture().join();
 
     assertThat(operations.requests().get(0).model().asString()).isEqualTo("gpt-4.1-mini");
     assertThat(operations.requests().get(0).messages().get(0).asUser().content().asText())
@@ -72,8 +73,8 @@ class OpenAiChatModelClientTest {
             operations,
             builder -> builder.model("gpt-4.1-mini").requestTimeout(Duration.ofSeconds(45)));
 
-    client.run(request("hi")).toCompletableFuture().join();
-    client.run(request("again")).toCompletableFuture().join();
+    invoke(client, request("hi")).toCompletableFuture().join();
+    invoke(client, request("again")).toCompletableFuture().join();
 
     assertThat(operations.requestOptions())
         .allSatisfy(
@@ -87,7 +88,7 @@ class OpenAiChatModelClientTest {
         new FakeChatCompletionsOperations().answering(completion("hi"));
     ModelClient client = clientOver(operations, builder -> builder.model("gpt-4.1-mini"));
 
-    client.run(request("hi")).toCompletableFuture().join();
+    invoke(client, request("hi")).toCompletableFuture().join();
 
     assertThat(operations.requestOptions().get(0).getTimeout().request())
         .isEqualTo(Duration.ofSeconds(60));
@@ -104,7 +105,7 @@ class OpenAiChatModelClientTest {
             operations,
             builder -> builder.model("gpt-4.1-mini").temperature(0.25).maxOutputTokens(128));
 
-    client.run(request("hi")).toCompletableFuture().join();
+    invoke(client, request("hi")).toCompletableFuture().join();
 
     assertThat(operations.requests().get(0).temperature()).hasValue(0.25);
     assertThat(operations.requests().get(0).maxCompletionTokens()).hasValue(128L);
@@ -117,9 +118,75 @@ class OpenAiChatModelClientTest {
         new FakeChatCompletionsOperations().failingWith(failure);
     ModelClient client = clientOver(operations, builder -> builder.model("gpt-4.1-mini"));
 
-    assertThatThrownBy(() -> client.run(request("hi")).toCompletableFuture().join())
+    assertThatThrownBy(() -> invoke(client, request("hi")).toCompletableFuture().join())
         .isInstanceOf(CompletionException.class)
         .satisfies(thrown -> assertThat(thrown.getCause()).isSameAs(failure));
+  }
+
+  @Test
+  void publisherWaitsForDemandBeforeDeliveringItsSingleMappedUpdate() {
+    FakeChatCompletionsOperations operations =
+        new FakeChatCompletionsOperations().answering(completion("hello there"));
+    ModelClient client = clientOver(operations, builder -> builder.model("gpt-4.1-mini"));
+    RecordingSubscriber subscriber = new RecordingSubscriber(0);
+
+    client.execute(request("hi")).subscribe(subscriber);
+
+    assertThat(subscriber.signals()).containsExactly("onSubscribe");
+
+    subscriber.subscription().request(1);
+
+    assertThat(subscriber.signals()).containsExactly("onSubscribe", "onNext", "onComplete");
+    assertThat(subscriber.values())
+        .singleElement()
+        .satisfies(
+            update -> {
+              assertThat(update.finishReason())
+                  .isEqualTo(io.github.hellices.agentframework.api.message.FinishReason.STOP);
+              assertThat(update.messages()).hasSize(1);
+              assertThat(update.messages().get(0).role()).isEqualTo(Role.ASSISTANT);
+              assertThat(update.messages().get(0).text()).isEqualTo("hello there");
+              assertThat(update.rawRepresentation()).isInstanceOf(ChatCompletion.class);
+            });
+  }
+
+  @Test
+  void publisherForwardsCancellationThroughTheRequestSignal() {
+    CompletableFuture<ChatCompletion> inFlight = new CompletableFuture<>();
+    FakeChatCompletionsOperations operations =
+        new FakeChatCompletionsOperations().withholding(inFlight);
+    ModelClient client = clientOver(operations, builder -> builder.model("gpt-4.1-mini"));
+    CancellationSignal signal = new CancellationSignal();
+    RecordingSubscriber subscriber = new RecordingSubscriber(0);
+
+    client
+        .execute(
+            ModelRequest.builder()
+                .messages(List.of(new Message(Role.USER, List.of(new TextContent("hi")))))
+                .options(ModelRequestOptions.empty())
+                .cancellationSignal(signal)
+                .build())
+        .subscribe(subscriber);
+    subscriber.subscription().cancel();
+    inFlight.complete(completion("too late"));
+
+    assertThat(signal.isCancelled()).isTrue();
+    assertThat(subscriber.signals()).containsExactly("onSubscribe");
+  }
+
+  @Test
+  void publisherDeliversTheExactProviderFailureInstanceToTheSubscriber() {
+    OpenAIIoException failure = new OpenAIIoException("connection reset");
+    FakeChatCompletionsOperations operations =
+        new FakeChatCompletionsOperations().failingWith(failure);
+    ModelClient client = clientOver(operations, builder -> builder.model("gpt-4.1-mini"));
+    RecordingSubscriber subscriber = new RecordingSubscriber(0);
+
+    client.execute(request("hi")).subscribe(subscriber);
+    subscriber.subscription().request(1);
+
+    assertThat(subscriber.signals()).containsExactly("onSubscribe", "onError:" + failure);
+    assertThat(subscriber.errors()).containsExactly(failure);
   }
 
   @Test
@@ -127,14 +194,13 @@ class OpenAiChatModelClientTest {
     FakeChatCompletionsOperations operations = new FakeChatCompletionsOperations();
     ModelClient client = clientOver(operations, builder -> builder.model("gpt-4.1-mini"));
     ModelRequest unmappable =
-        new ModelRequest(
-            List.of(new Message(Role.of("auditor"), List.of(new TextContent("hi")))),
-            ModelRequestOptions.empty(),
-            new CancellationSignal(),
-            List.of(),
-            Map.of());
+        ModelRequest.builder()
+            .messages(List.of(new Message(Role.of("auditor"), List.of(new TextContent("hi")))))
+            .options(ModelRequestOptions.empty())
+            .cancellationSignal(new CancellationSignal())
+            .build();
 
-    var stage = client.run(unmappable).toCompletableFuture();
+    var stage = invoke(client, unmappable).toCompletableFuture();
 
     assertThat(operations.invocations()).isZero();
     assertThatThrownBy(stage::join)
@@ -151,9 +217,9 @@ class OpenAiChatModelClientTest {
     ModelClient client = clientOver(operations, builder -> builder.model("gpt-4.1-mini"));
 
     var emptyToolTurn =
-        client.run(historyOf(new Message(Role.TOOL, List.of()))).toCompletableFuture();
+        invoke(client, historyOf(new Message(Role.TOOL, List.of()))).toCompletableFuture();
     var emptyAssistantTurn =
-        client.run(historyOf(new Message(Role.ASSISTANT, List.of()))).toCompletableFuture();
+        invoke(client, historyOf(new Message(Role.ASSISTANT, List.of()))).toCompletableFuture();
 
     assertThat(operations.invocations()).isZero();
     assertThatThrownBy(emptyToolTurn::join)
@@ -172,7 +238,7 @@ class OpenAiChatModelClientTest {
     FakeChatCompletionsOperations operations = new FakeChatCompletionsOperations();
     ModelClient client = clientOver(operations, builder -> builder.model("gpt-4.1-mini"));
 
-    var stage = client.run(historyOf()).toCompletableFuture();
+    var stage = invoke(client, historyOf()).toCompletableFuture();
 
     assertThat(operations.invocations()).isZero();
     assertThatThrownBy(stage::join)
@@ -191,7 +257,7 @@ class OpenAiChatModelClientTest {
     FakeChatCompletionsOperations operations = new FakeChatCompletionsOperations();
     ModelClient client = clientOver(operations, builder -> builder.model("gpt-4.1-mini"));
 
-    assertThatThrownBy(() -> client.run(null))
+    assertThatThrownBy(() -> invoke(client, null))
         .isInstanceOf(NullPointerException.class)
         .hasMessage("request must not be null");
     assertThat(operations.invocations()).isZero();
@@ -207,13 +273,13 @@ class OpenAiChatModelClientTest {
     signal.cancel();
 
     CompletionStage<ModelResponse> run =
-        client.run(
-            new ModelRequest(
-                List.of(new Message(Role.USER, List.of(new TextContent("hi")))),
-                ModelRequestOptions.empty(),
-                signal,
-                List.of(),
-                Map.of()));
+        invoke(
+            client,
+            ModelRequest.builder()
+                .messages(List.of(new Message(Role.USER, List.of(new TextContent("hi")))))
+                .options(ModelRequestOptions.empty())
+                .cancellationSignal(signal)
+                .build());
 
     assertThat(operations.invocations()).isZero();
     assertThat(OpenAiCallBridge.unwrap(failureOf(run)))
@@ -230,7 +296,7 @@ class OpenAiChatModelClientTest {
         new FakeChatCompletionsOperations().withholding(inFlight);
     ModelClient client = clientOver(operations, builder -> builder.model("gpt-4.1-mini"));
 
-    CompletionStage<ModelResponse> run = client.run(request("hi"));
+    CompletionStage<ModelResponse> run = invoke(client, request("hi"));
     CompletableFuture<ModelResponse> caller = run.toCompletableFuture();
     assertThat(caller.complete(null)).isTrue();
 
@@ -329,8 +395,8 @@ class OpenAiChatModelClientTest {
 
     assertThat(recorder.calls()).isEmpty();
 
-    ModelResponse first = client.run(request("hi")).toCompletableFuture().join();
-    ModelResponse second = client.run(request("again")).toCompletableFuture().join();
+    ModelResponse first = invoke(client, request("hi")).toCompletableFuture().join();
+    ModelResponse second = invoke(client, request("again")).toCompletableFuture().join();
 
     assertThat(first.messages().get(0).text()).isEqualTo("hello there");
     assertThat(second.messages().get(0).text()).isEqualTo("hello there");
@@ -401,13 +467,48 @@ class OpenAiChatModelClientTest {
     return historyOf(new Message(Role.USER, List.of(new TextContent(text))));
   }
 
+  /** Collects the adapter's single-update publisher into the response stage the tests assert on. */
+  private static CompletionStage<ModelResponse> invoke(ModelClient client, ModelRequest request) {
+    CompletableFuture<ModelResponse> future = new CompletableFuture<>();
+    client
+        .execute(request)
+        .subscribe(
+            new Flow.Subscriber<ModelResponseUpdate>() {
+              @Override
+              public void onSubscribe(Flow.Subscription subscription) {
+                subscription.request(Long.MAX_VALUE);
+              }
+
+              @Override
+              public void onNext(ModelResponseUpdate update) {
+                future.complete(
+                    ModelResponse.builder()
+                        .messages(update.messages())
+                        .usage(update.usage())
+                        .finishReason(update.finishReason())
+                        .continuationToken(update.continuationToken())
+                        .metadata(update.metadata())
+                        .rawRepresentation(update.rawRepresentation())
+                        .build());
+              }
+
+              @Override
+              public void onError(Throwable throwable) {
+                future.completeExceptionally(throwable);
+              }
+
+              @Override
+              public void onComplete() {}
+            });
+    return future.minimalCompletionStage();
+  }
+
   private static ModelRequest historyOf(Message... messages) {
-    return new ModelRequest(
-        List.of(messages),
-        ModelRequestOptions.empty(),
-        new CancellationSignal(),
-        List.of(),
-        Map.of());
+    return ModelRequest.builder()
+        .messages(List.of(messages))
+        .options(ModelRequestOptions.empty())
+        .cancellationSignal(new CancellationSignal())
+        .build();
   }
 
   private static ModelClient clientOver(
@@ -428,6 +529,60 @@ class OpenAiChatModelClientTest {
 
   private static Throwable failureOf(CompletionStage<?> stage) {
     return stage.handle((value, failure) -> failure).toCompletableFuture().join();
+  }
+
+  private static final class RecordingSubscriber implements Flow.Subscriber<ModelResponseUpdate> {
+    private final List<String> signals = new ArrayList<>();
+    private final List<ModelResponseUpdate> values = new ArrayList<>();
+    private final List<Throwable> errors = new ArrayList<>();
+    private final long initialDemand;
+    private Flow.Subscription subscription;
+
+    private RecordingSubscriber(long initialDemand) {
+      this.initialDemand = initialDemand;
+    }
+
+    @Override
+    public void onSubscribe(Flow.Subscription subscription) {
+      this.subscription = subscription;
+      signals.add("onSubscribe");
+      if (initialDemand > 0) {
+        subscription.request(initialDemand);
+      }
+    }
+
+    @Override
+    public void onNext(ModelResponseUpdate item) {
+      values.add(item);
+      signals.add("onNext");
+    }
+
+    @Override
+    public void onError(Throwable throwable) {
+      errors.add(throwable);
+      signals.add("onError:" + throwable);
+    }
+
+    @Override
+    public void onComplete() {
+      signals.add("onComplete");
+    }
+
+    private List<String> signals() {
+      return signals;
+    }
+
+    private List<ModelResponseUpdate> values() {
+      return values;
+    }
+
+    private List<Throwable> errors() {
+      return errors;
+    }
+
+    private Flow.Subscription subscription() {
+      return subscription;
+    }
   }
 
   /**

@@ -6,11 +6,22 @@ import io.github.hellices.agentframework.api.message.Message;
 import io.github.hellices.agentframework.api.message.MessageAttribution;
 import io.github.hellices.agentframework.api.message.Role;
 import io.github.hellices.agentframework.api.message.TextContent;
+import io.github.hellices.agentframework.api.message.ToolApprovalRequestContent;
+import io.github.hellices.agentframework.api.message.ToolApprovalResponseContent;
 import io.github.hellices.agentframework.api.message.ToolCallContent;
 import io.github.hellices.agentframework.api.message.ToolResultContent;
 import io.github.hellices.agentframework.api.session.MessageHistory;
 import io.github.hellices.agentframework.api.session.SessionSnapshot;
+import io.github.hellices.agentframework.api.session.SessionState;
 import io.github.hellices.agentframework.api.session.SessionStateEntry;
+import io.github.hellices.agentframework.api.session.SessionStateKey;
+import io.github.hellices.agentframework.api.value.JsonArray;
+import io.github.hellices.agentframework.api.value.JsonNull;
+import io.github.hellices.agentframework.api.value.JsonObject;
+import io.github.hellices.agentframework.api.value.JsonValue;
+import io.github.hellices.agentframework.api.value.JsonValues;
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -20,6 +31,10 @@ import java.util.Map;
 import java.util.Objects;
 
 public final class StateCodecRegistry {
+
+  private static final Field SESSION_STATE_ENTRIES_FIELD = sessionStateEntriesField();
+  private static final Method SESSION_STATE_ENTRY_KEY_METHOD = sessionStateEntryMethod("key");
+  private static final Method SESSION_STATE_ENTRY_VALUE_METHOD = sessionStateEntryMethod("value");
 
   private final Map<String, StateCodec<?>> byTypeId;
   private final Map<Class<?>, StateCodec<?>> byJavaType;
@@ -31,25 +46,28 @@ public final class StateCodecRegistry {
   }
 
   public static Builder builder() {
-    return new Builder().register(new MessageStateCodec()).register(new MessageHistoryStateCodec());
+    return new Builder()
+        .register(new JsonValueStateCodec())
+        .register(new MessageStateCodec())
+        .register(new MessageHistoryStateCodec());
   }
 
   public SessionSnapshot snapshot(AgentSession session, long revision, Instant createdAt) {
     Objects.requireNonNull(session, "session must not be null");
     Map<String, SessionStateEntry> entries = new LinkedHashMap<>();
-    session
-        .state()
-        .forEach(
-            (key, value) -> {
-              StateCodec<Object> codec = codecForValue(key, value);
-              entries.put(
-                  key, new SessionStateEntry(codec.typeId(), codec.version(), codec.encode(value)));
-            });
+    for (RawSessionStateEntry rawEntry : rawEntries(session.state())) {
+      SessionStateKey<Object> key = rawEntry.key();
+      StateCodec<Object> codec = codecForKey(key);
+      entries.put(
+          key.id(),
+          new SessionStateEntry(
+              codec.typeId(), codec.version(), codec.encode(key.type().cast(rawEntry.value()))));
+    }
     return new SessionSnapshot(
         "session",
         "1.0",
         session.sessionId(),
-        session.serviceSessionId(),
+        session.serviceSessionId().orElse(null),
         revision,
         createdAt,
         entries);
@@ -63,34 +81,33 @@ public final class StateCodecRegistry {
     if (!"1.0".equals(snapshot.version())) {
       throw new IllegalArgumentException("snapshot version must be 1.0");
     }
-    Map<String, Object> state = new LinkedHashMap<>();
-    snapshot
-        .state()
-        .forEach(
-            (key, entry) -> {
-              StateCodec<?> codec = byTypeId.get(entry.typeId());
-              if (codec == null) {
-                throw new IllegalArgumentException(
-                    "unregistered session state type id: " + entry.typeId());
-              }
-              if (entry.codecVersion() != codec.version()) {
-                throw new IllegalArgumentException(
-                    "unsupported codec version for "
-                        + entry.typeId()
-                        + ": "
-                        + entry.codecVersion());
-              }
-              try {
-                state.put(key, codec.decode(entry.payload()));
-              } catch (SessionStateDecodingException failure) {
-                throw failure;
-              } catch (RuntimeException failure) {
-                throw new SessionStateDecodingException(
-                    "failed to decode session state key " + key + " with type " + entry.typeId(),
-                    failure);
-              }
-            });
-    return new AgentSession(snapshot.sessionId(), snapshot.serviceSessionId(), state);
+    SessionState state = SessionState.empty();
+    for (Map.Entry<String, SessionStateEntry> stateEntry : snapshot.state().entrySet()) {
+      String key = stateEntry.getKey();
+      SessionStateEntry entry = stateEntry.getValue();
+      StateCodec<?> codec = byTypeId.get(entry.typeId());
+      if (codec == null) {
+        throw new IllegalArgumentException("unregistered session state type id: " + entry.typeId());
+      }
+      if (entry.codecVersion() != codec.version()) {
+        throw new IllegalArgumentException(
+            "unsupported codec version for " + entry.typeId() + ": " + entry.codecVersion());
+      }
+      try {
+        state = restoreState(state, key, codec, entry.payload());
+      } catch (SessionStateDecodingException failure) {
+        throw failure;
+      } catch (RuntimeException failure) {
+        throw new SessionStateDecodingException(
+            "failed to decode session state key " + key + " with type " + entry.typeId(), failure);
+      }
+    }
+    AgentSession.Builder builder =
+        AgentSession.builder().sessionId(snapshot.sessionId()).state(state);
+    if (snapshot.serviceSessionId() != null) {
+      builder.serviceSessionId(snapshot.serviceSessionId());
+    }
+    return builder.build();
   }
 
   /**
@@ -100,31 +117,62 @@ public final class StateCodecRegistry {
    * component wrote it.
    */
   @SuppressWarnings("unchecked")
-  private StateCodec<Object> codecForValue(String key, Object value) {
-    Objects.requireNonNull(value, "session state values must not be null");
-    StateCodec<?> exact = byJavaType.get(value.getClass());
+  private StateCodec<Object> codecForKey(SessionStateKey<?> key) {
+    StateCodec<?> exact = byJavaType.get(key.type());
     if (exact != null) {
       return (StateCodec<Object>) exact;
     }
-    StateCodec<?> assignable = null;
-    for (StateCodec<?> codec : byJavaType.values()) {
-      if (codec.javaType().isInstance(value)) {
-        if (assignable != null) {
-          throw new IllegalArgumentException(
-              "ambiguous session state codecs for source '"
-                  + key
-                  + "': "
-                  + value.getClass().getName());
-        }
-        assignable = codec;
-      }
-    }
-    if (assignable != null) {
-      return (StateCodec<Object>) assignable;
-    }
     throw new IllegalArgumentException(
-        "unregistered session state type for source '" + key + "': " + value.getClass().getName());
+        "unregistered session state type for source '" + key.id() + "': " + key.type().getName());
   }
+
+  @SuppressWarnings("unchecked")
+  private static <T> SessionState restoreState(
+      SessionState state, String key, StateCodec<?> codec, Object payload) {
+    StateCodec<T> typedCodec = (StateCodec<T>) codec;
+    T decoded = typedCodec.decode(payload);
+    return state.with(SessionStateKey.of(key, typedCodec.javaType()), decoded);
+  }
+
+  @SuppressWarnings("unchecked")
+  private static List<RawSessionStateEntry> rawEntries(SessionState state) {
+    try {
+      Map<String, ?> entries = (Map<String, ?>) SESSION_STATE_ENTRIES_FIELD.get(state);
+      List<RawSessionStateEntry> rawEntries = new ArrayList<>(entries.size());
+      for (Object entry : entries.values()) {
+        rawEntries.add(
+            new RawSessionStateEntry(
+                (SessionStateKey<Object>) SESSION_STATE_ENTRY_KEY_METHOD.invoke(entry),
+                SESSION_STATE_ENTRY_VALUE_METHOD.invoke(entry)));
+      }
+      return rawEntries;
+    } catch (ReflectiveOperationException failure) {
+      throw new IllegalStateException("failed to inspect session state entries", failure);
+    }
+  }
+
+  private static Field sessionStateEntriesField() {
+    try {
+      Field field = SessionState.class.getDeclaredField("entries");
+      field.setAccessible(true);
+      return field;
+    } catch (ReflectiveOperationException failure) {
+      throw new ExceptionInInitializerError(failure);
+    }
+  }
+
+  private static Method sessionStateEntryMethod(String name) {
+    try {
+      Class<?> entryType = Class.forName(SessionState.class.getName() + "$Entry");
+      Method method = entryType.getDeclaredMethod(name);
+      method.setAccessible(true);
+      return method;
+    } catch (ReflectiveOperationException failure) {
+      throw new ExceptionInInitializerError(failure);
+    }
+  }
+
+  private record RawSessionStateEntry(SessionStateKey<Object> key, Object value) {}
 
   public static final class Builder {
     private final Map<String, StateCodec<?>> byTypeId = new LinkedHashMap<>();
@@ -162,10 +210,10 @@ public final class StateCodecRegistry {
    * Encodes a whole conversation history as an array of the framework message payload, so the
    * durable form of a history is exactly the durable form of its messages and the two stay in step.
    *
-   * <p>It is keyed on {@link MessageHistory} rather than on {@code List}, so the exact-class lookup
-   * resolves it with no ambiguity: a codec registered for {@code List} would claim every
-   * list-shaped state value in every namespace and would make the assignable-codec fallback
-   * ambiguous as soon as a second collection-shaped state type were registered.
+   * <p>It is keyed on {@link MessageHistory} rather than on {@code List}, so the declared session
+   * state key type resolves it unambiguously. A codec registered for {@code List} would not be used
+   * for a {@code MessageHistory} slot because persistence follows the declared key type, not the
+   * value's collection shape.
    */
   private static final class MessageHistoryStateCodec implements StateCodec<MessageHistory> {
 
@@ -208,6 +256,61 @@ public final class StateCodecRegistry {
     }
   }
 
+  private static final class JsonValueStateCodec implements StateCodec<JsonValue> {
+
+    @Override
+    public String typeId() {
+      return "core.json";
+    }
+
+    @Override
+    public int version() {
+      return 1;
+    }
+
+    @Override
+    public Class<JsonValue> javaType() {
+      return JsonValue.class;
+    }
+
+    @Override
+    public Object encode(JsonValue value) {
+      return JsonValues.toJava(value);
+    }
+
+    @Override
+    public JsonValue decode(Object payload) {
+      return decodeJsonValue(payload);
+    }
+
+    private static JsonValue decodeJsonValue(Object value) {
+      if (value == null) {
+        return JsonNull.instance();
+      }
+      if (value instanceof JsonValue jsonValue) {
+        return jsonValue;
+      }
+      if (value instanceof Map<?, ?> map) {
+        JsonObject.Builder builder = JsonObject.builder();
+        for (Map.Entry<?, ?> entry : map.entrySet()) {
+          if (!(entry.getKey() instanceof String key)) {
+            throw new IllegalArgumentException("json value map keys must be strings");
+          }
+          builder.put(key, decodeJsonValue(entry.getValue()));
+        }
+        return builder.build();
+      }
+      if (value instanceof List<?> list) {
+        List<JsonValue> items = new ArrayList<>();
+        for (Object item : list) {
+          items.add(decodeJsonValue(item));
+        }
+        return JsonArray.of(items);
+      }
+      return JsonValues.fromJava(value);
+    }
+  }
+
   private static final class MessageStateCodec implements StateCodec<Message> {
 
     @Override
@@ -241,7 +344,7 @@ public final class StateCodecRegistry {
                 "originSessionId",
                 value.attribution().originSessionId()));
       }
-      encoded.put("additionalProperties", value.additionalProperties());
+      encoded.put("additionalProperties", encodeJsonObject(value.additionalProperties()));
       return encoded;
     }
 
@@ -266,25 +369,34 @@ public final class StateCodecRegistry {
           Role.of(requireString(encoded, "role")),
           content,
           attribution,
-          castMap(encoded.get("additionalProperties")),
+          castObject(encoded.get("additionalProperties"), "additional properties"),
           null);
     }
 
     private Object encodeContent(Content content) {
       Map<String, Object> encoded = new LinkedHashMap<>();
       encoded.put("type", content.type());
-      encoded.put("additionalProperties", content.additionalProperties());
+      encoded.put("additionalProperties", encodeJsonObject(content.additionalProperties()));
       if (content instanceof TextContent text) {
         encoded.put("text", text.value());
       } else if (content instanceof ToolCallContent call) {
         encoded.put("callId", call.callId());
         encoded.put("name", call.name());
-        encoded.put("arguments", call.arguments());
+        encoded.put("arguments", encodeJsonObject(call.arguments()));
       } else if (content instanceof ToolResultContent result) {
         encoded.put("callId", result.callId());
         encoded.put("name", result.name());
         encoded.put("content", result.content().stream().map(this::encodeContent).toList());
         encoded.put("error", result.error());
+      } else if (content instanceof ToolApprovalRequestContent request) {
+        encoded.put("requestId", request.requestId());
+        encoded.put("toolCallId", request.toolCallId());
+        encoded.put("toolName", request.toolName());
+        encoded.put("arguments", encodeJsonObject(request.arguments()));
+        request.hostBoundary().ifPresent(host -> encoded.put("hostBoundary", host));
+      } else if (content instanceof ToolApprovalResponseContent response) {
+        encoded.put("requestId", response.requestId());
+        encoded.put("approved", response.approved());
       } else {
         throw new IllegalArgumentException(
             "unsupported framework message content type: "
@@ -295,16 +407,37 @@ public final class StateCodecRegistry {
       return encoded;
     }
 
+    private static Object encodeJsonObject(JsonObject value) {
+      Map<String, Object> encoded = new LinkedHashMap<>();
+      value.values().forEach((name, item) -> encoded.put(name, encodeJsonValue(item)));
+      return encoded;
+    }
+
+    private static Object encodeJsonValue(JsonValue value) {
+      if (value instanceof JsonObject jsonObject) {
+        return encodeJsonObject(jsonObject);
+      }
+      if (value instanceof JsonArray jsonArray) {
+        List<Object> encoded = new ArrayList<>();
+        for (JsonValue item : jsonArray.values()) {
+          encoded.add(encodeJsonValue(item));
+        }
+        return encoded;
+      }
+      return JsonValues.toJava(value);
+    }
+
     private Content decodeContent(Map<?, ?> encoded) {
       String type = requireString(encoded, "type");
-      Map<String, Object> additionalProperties = castMap(encoded.get("additionalProperties"));
+      JsonObject additionalProperties =
+          castObject(encoded.get("additionalProperties"), "additional properties");
       return switch (type) {
         case "text" -> new TextContent(requireText(encoded, "text"), additionalProperties, null);
         case "tool_call" ->
             new ToolCallContent(
                 requireString(encoded, "callId"),
                 requireString(encoded, "name"),
-                castNullableMap(encoded.get("arguments"), "tool arguments"),
+                castObject(encoded.get("arguments"), "tool arguments"),
                 additionalProperties,
                 null);
         case "tool_result" -> {
@@ -320,43 +453,64 @@ public final class StateCodecRegistry {
               additionalProperties,
               null);
         }
+        case "tool_approval_request" ->
+            new ToolApprovalRequestContent(
+                requireString(encoded, "requestId"),
+                requireString(encoded, "toolCallId"),
+                requireString(encoded, "toolName"),
+                castObject(encoded.get("arguments"), "tool arguments"),
+                nullableString(encoded, "hostBoundary"),
+                additionalProperties,
+                null);
+        case "tool_approval_response" ->
+            new ToolApprovalResponseContent(
+                requireString(encoded, "requestId"),
+                requireBoolean(encoded, "approved"),
+                additionalProperties,
+                null);
         default -> throw new IllegalArgumentException("unsupported message content type: " + type);
       };
     }
 
-    private static Map<String, Object> castMap(Object value) {
+    private static JsonObject castObject(Object value, String label) {
       if (value == null) {
-        return Map.of();
+        return JsonObject.empty();
       }
-      Map<?, ?> source = requireMap(value, "additional properties");
-      Map<String, Object> copy = new LinkedHashMap<>();
-      source.forEach(
-          (key, item) -> {
-            if (!(key instanceof String text)) {
-              throw new IllegalArgumentException("additional property keys must be strings");
-            }
-            if (item == null) {
-              throw new IllegalArgumentException("additional property values must not be null");
-            }
-            copy.put(text, item);
-          });
-      return Map.copyOf(copy);
+      if (value instanceof JsonObject jsonObject) {
+        return jsonObject;
+      }
+      JsonValue jsonValue = decodeJsonValue(value, label);
+      if (jsonValue instanceof JsonObject jsonObject) {
+        return jsonObject;
+      }
+      throw new IllegalArgumentException(label + " must be an object");
     }
 
-    private static Map<String, Object> castNullableMap(Object value, String label) {
+    private static JsonValue decodeJsonValue(Object value, String label) {
       if (value == null) {
-        return Map.of();
+        return JsonNull.instance();
       }
-      Map<?, ?> source = requireMap(value, label);
-      Map<String, Object> copy = new LinkedHashMap<>();
-      source.forEach(
-          (key, item) -> {
-            if (!(key instanceof String text)) {
-              throw new IllegalArgumentException(label + " keys must be strings");
-            }
-            copy.put(text, item);
-          });
-      return java.util.Collections.unmodifiableMap(copy);
+      if (value instanceof JsonValue jsonValue) {
+        return jsonValue;
+      }
+      if (value instanceof Map<?, ?> map) {
+        JsonObject.Builder builder = JsonObject.builder();
+        for (Map.Entry<?, ?> entry : map.entrySet()) {
+          if (!(entry.getKey() instanceof String key)) {
+            throw new IllegalArgumentException(label + " map keys must be strings");
+          }
+          builder.put(key, decodeJsonValue(entry.getValue(), label + " entry"));
+        }
+        return builder.build();
+      }
+      if (value instanceof List<?> list) {
+        List<JsonValue> items = new ArrayList<>();
+        for (Object item : list) {
+          items.add(decodeJsonValue(item, label + " item"));
+        }
+        return JsonArray.of(items);
+      }
+      return JsonValues.fromJava(value);
     }
 
     private static Map<?, ?> requireMap(Object value, String label) {

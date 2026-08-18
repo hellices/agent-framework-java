@@ -1,5 +1,6 @@
 package io.github.hellices.agentframework.engine.internal.tool;
 
+import static java.util.concurrent.CompletableFuture.completedFuture;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -10,6 +11,11 @@ import io.github.hellices.agentframework.api.message.Role;
 import io.github.hellices.agentframework.api.message.TextContent;
 import io.github.hellices.agentframework.api.message.ToolCallContent;
 import io.github.hellices.agentframework.api.message.ToolResultContent;
+import io.github.hellices.agentframework.api.tool.FunctionTool;
+import io.github.hellices.agentframework.api.tool.ToolDefinition;
+import io.github.hellices.agentframework.api.tool.ToolResult;
+import io.github.hellices.agentframework.api.value.JsonObject;
+import io.github.hellices.agentframework.api.value.JsonValues;
 import io.github.hellices.agentframework.spi.model.ModelRequest;
 import io.github.hellices.agentframework.spi.model.ModelResponse;
 import java.util.ArrayList;
@@ -28,24 +34,26 @@ class ToolLoopPolicyTest {
   void fragmentsOfOneCallIdBecomeOneCallWithMergedArguments() {
     ModelResponse response =
         response(
-            new ToolCallContent("call-1", "weather", Map.of("city", "Seo", "unit", "c")),
-            new ToolCallContent("call-1", "weather", Map.of("city", "Seoul")));
+            new ToolCallContent(
+                "call-1", "weather", jsonObject(Map.of("city", "Seo", "unit", "c"))),
+            new ToolCallContent("call-1", "weather", jsonObject(Map.of("city", "Seoul"))));
 
     List<ToolCallContent> calls = ToolLoopPolicy.toolCalls(response);
 
     assertThat(calls).hasSize(1);
     assertThat(calls.get(0).callId()).isEqualTo("call-1");
     assertThat(calls.get(0).name()).isEqualTo("weather");
-    assertThat(calls.get(0).arguments()).isEqualTo(Map.of("city", "Seoul", "unit", "c"));
+    assertThat(calls.get(0).arguments())
+        .isEqualTo(jsonObject(Map.of("city", "Seoul", "unit", "c")));
   }
 
   @Test
   void mergedCallsKeepTheOrderTheirFirstFragmentArrivedIn() {
     ModelResponse response =
         response(
-            new ToolCallContent("call-2", "second", Map.of()),
-            new ToolCallContent("call-1", "first", Map.of()),
-            new ToolCallContent("call-2", "second", Map.of("done", true)));
+            new ToolCallContent("call-2", "second", JsonObject.empty()),
+            new ToolCallContent("call-1", "first", JsonObject.empty()),
+            new ToolCallContent("call-2", "second", jsonObject(Map.of("done", true))));
 
     assertThat(ToolLoopPolicy.toolCalls(response))
         .extracting(ToolCallContent::callId)
@@ -57,15 +65,24 @@ class ToolLoopPolicyTest {
     ModelResponse response =
         response(
             new ToolCallContent(
-                "call-1", "weather", Map.of(), Map.of("index", 0, "shared", "first"), "raw-first"),
+                "call-1",
+                "weather",
+                JsonObject.empty(),
+                jsonObject(Map.of("index", 0, "shared", "first")),
+                "raw-first"),
             new ToolCallContent(
-                "call-1", "weather", Map.of(), Map.of("shared", "second"), "raw-second"),
-            new ToolCallContent("call-1", "weather", Map.of(), Map.of("last", true), null));
+                "call-1",
+                "weather",
+                JsonObject.empty(),
+                jsonObject(Map.of("shared", "second")),
+                "raw-second"),
+            new ToolCallContent(
+                "call-1", "weather", JsonObject.empty(), jsonObject(Map.of("last", true)), null));
 
     ToolCallContent merged = ToolLoopPolicy.toolCalls(response).get(0);
 
     assertThat(merged.additionalProperties())
-        .isEqualTo(Map.of("index", 0, "shared", "second", "last", true));
+        .isEqualTo(jsonObject(Map.of("index", 0, "shared", "second", "last", true)));
     assertThat(merged.rawRepresentation()).isEqualTo("raw-second");
   }
 
@@ -73,8 +90,8 @@ class ToolLoopPolicyTest {
   void aCallIdReportedWithTwoToolNamesIsRejected() {
     ModelResponse response =
         response(
-            new ToolCallContent("call-1", "weather", Map.of()),
-            new ToolCallContent("call-1", "forecast", Map.of()));
+            new ToolCallContent("call-1", "weather", JsonObject.empty()),
+            new ToolCallContent("call-1", "forecast", JsonObject.empty()));
 
     assertThatThrownBy(() -> ToolLoopPolicy.toolCalls(response))
         .isInstanceOf(IllegalStateException.class)
@@ -94,15 +111,18 @@ class ToolLoopPolicyTest {
                 Role.ASSISTANT,
                 List.of(
                     new TextContent("checking"),
-                    new ToolCallContent("call-1", "weather", Map.of("city", "Seo", "unit", "c")))),
+                    new ToolCallContent(
+                        "call-1", "weather", jsonObject(Map.of("city", "Seo", "unit", "c"))))),
             new Message(
                 Role.ASSISTANT,
-                List.of(new ToolCallContent("call-1", "weather", Map.of("city", "Seoul")))));
+                List.of(
+                    new ToolCallContent(
+                        "call-1", "weather", jsonObject(Map.of("city", "Seoul"))))));
     List<ToolCallContent> calls = ToolLoopPolicy.toolCalls(response(responseMessages));
     Message results = ToolLoopPolicy.toolResultMessage(List.of(result("call-1", "weather")));
 
     ModelRequest next =
-        new ToolLoopPolicy(List.of(), 4)
+        new ToolLoopPolicy(List.of(), List.of(), 4)
             .nextRequest(request(), responseMessages, calls, results, 0);
 
     assertThat(next.messages()).hasSize(3);
@@ -112,7 +132,8 @@ class ToolLoopPolicyTest {
         .satisfies(
             call -> {
               assertThat(call.callId()).isEqualTo("call-1");
-              assertThat(call.arguments()).isEqualTo(Map.of("city", "Seoul", "unit", "c"));
+              assertThat(call.arguments())
+                  .isEqualTo(jsonObject(Map.of("city", "Seoul", "unit", "c")));
             });
     assertThat(toolResultsOf(next)).extracting(ToolResultContent::callId).containsExactly("call-1");
   }
@@ -125,15 +146,18 @@ class ToolLoopPolicyTest {
             text,
             new Message(
                 Role.ASSISTANT,
-                List.of(new ToolCallContent("call-1", "weather", Map.of("city", "Seo")))),
+                List.of(
+                    new ToolCallContent("call-1", "weather", jsonObject(Map.of("city", "Seo"))))),
             new Message(
                 Role.ASSISTANT,
-                List.of(new ToolCallContent("call-1", "weather", Map.of("city", "Seoul")))));
+                List.of(
+                    new ToolCallContent(
+                        "call-1", "weather", jsonObject(Map.of("city", "Seoul"))))));
     List<ToolCallContent> calls = ToolLoopPolicy.toolCalls(response(responseMessages));
     Message results = ToolLoopPolicy.toolResultMessage(List.of(result("call-1", "weather")));
 
     ModelRequest next =
-        new ToolLoopPolicy(List.of(), 4)
+        new ToolLoopPolicy(List.of(), List.of(), 4)
             .nextRequest(request(), responseMessages, calls, results, 0);
 
     assertThat(next.messages()).hasSize(4);
@@ -148,8 +172,8 @@ class ToolLoopPolicyTest {
             Role.ASSISTANT,
             List.of(
                 new TextContent("checking"),
-                new ToolCallContent("call-1", "weather", Map.of("city", "Seoul")),
-                new ToolCallContent("call-2", "forecast", Map.of("city", "Seoul"))));
+                new ToolCallContent("call-1", "weather", jsonObject(Map.of("city", "Seoul"))),
+                new ToolCallContent("call-2", "forecast", jsonObject(Map.of("city", "Seoul")))));
     List<Message> responseMessages = List.of(assistant);
     List<ToolCallContent> calls = ToolLoopPolicy.toolCalls(response(responseMessages));
     Message results =
@@ -157,20 +181,51 @@ class ToolLoopPolicyTest {
             List.of(result("call-1", "weather"), result("call-2", "forecast")));
 
     ModelRequest next =
-        new ToolLoopPolicy(List.of(), 4)
+        new ToolLoopPolicy(List.of(), List.of(), 4)
             .nextRequest(request(), responseMessages, calls, results, 0);
 
     assertThat(next.messages()).element(1).isSameAs(assistant);
     assertThat(next.messages()).last().isSameAs(results);
   }
 
+  @Test
+  void everyDeclarationIsOfferedToTheModelIncludingDeclarationOnlyOnes() {
+    ToolDefinition weather = ToolDefinition.builder().name("weather").build();
+    ToolDefinition forecast = ToolDefinition.builder().name("forecast").build();
+    ToolLoopPolicy policy =
+        new ToolLoopPolicy(List.of(weather, forecast), List.of(boundTool("weather")), 4);
+
+    assertThat(policy.hasTools()).isTrue();
+    assertThat(policy.toolsForIteration(0)).containsExactly(weather, forecast);
+  }
+
+  @Test
+  void canExecuteAllIsTrueOnlyWhenEveryCallHasABoundBody() {
+    ToolDefinition weather = ToolDefinition.builder().name("weather").build();
+    ToolDefinition forecast = ToolDefinition.builder().name("forecast").build();
+    ToolLoopPolicy policy =
+        new ToolLoopPolicy(List.of(weather, forecast), List.of(boundTool("weather")), 4);
+    ToolCallContent boundCall = new ToolCallContent("call-1", "weather", JsonObject.empty());
+    ToolCallContent declarationOnlyCall =
+        new ToolCallContent("call-2", "forecast", JsonObject.empty());
+
+    assertThat(policy.canExecuteAll(List.of(boundCall))).isTrue();
+    assertThat(policy.canExecuteAll(List.of(declarationOnlyCall))).isFalse();
+    assertThat(policy.canExecuteAll(List.of(boundCall, declarationOnlyCall))).isFalse();
+  }
+
+  private static FunctionTool boundTool(String name) {
+    return FunctionTool.create(
+        name,
+        name,
+        JsonObject.empty(),
+        (arguments, context) -> completedFuture(ToolResult.success(new TextContent("ok"))));
+  }
+
   private static ModelRequest request() {
-    return new ModelRequest(
-        List.of(new Message(Role.USER, List.of(new TextContent("weather?")))),
-        null,
-        null,
-        List.of(),
-        Map.of());
+    return ModelRequest.builder()
+        .messages(List.of(new Message(Role.USER, List.of(new TextContent("weather?")))))
+        .build();
   }
 
   private static ToolResultContent result(String callId, String name) {
@@ -198,15 +253,17 @@ class ToolLoopPolicyTest {
   }
 
   private static ModelResponse response(List<Message> messages) {
-    return new ModelResponse(messages, null, FinishReason.TOOL_CALLS, Map.of(), null);
+    return ModelResponse.builder().messages(messages).finishReason(FinishReason.TOOL_CALLS).build();
   }
 
   private static ModelResponse response(Content... content) {
-    return new ModelResponse(
-        List.of(new Message(Role.ASSISTANT, List.of(content))),
-        null,
-        FinishReason.TOOL_CALLS,
-        Map.of(),
-        null);
+    return ModelResponse.builder()
+        .messages(List.of(new Message(Role.ASSISTANT, List.of(content))))
+        .finishReason(FinishReason.TOOL_CALLS)
+        .build();
+  }
+
+  private static JsonObject jsonObject(Map<String, ?> values) {
+    return values.isEmpty() ? JsonObject.empty() : (JsonObject) JsonValues.fromJava(values);
   }
 }

@@ -11,6 +11,7 @@ import com.openai.models.chat.completions.ChatCompletionMessageFunctionToolCall;
 import com.openai.models.chat.completions.ChatCompletionMessageParam;
 import com.openai.models.chat.completions.ChatCompletionMessageToolCall;
 import com.openai.models.completions.CompletionUsage;
+import io.github.hellices.agentframework.api.agent.Agent;
 import io.github.hellices.agentframework.api.agent.AgentResponse;
 import io.github.hellices.agentframework.api.message.Content;
 import io.github.hellices.agentframework.api.message.FinishReason;
@@ -21,7 +22,10 @@ import io.github.hellices.agentframework.api.message.ToolCallContent;
 import io.github.hellices.agentframework.api.message.Usage;
 import io.github.hellices.agentframework.api.tool.FunctionTool;
 import io.github.hellices.agentframework.api.tool.ToolResult;
+import io.github.hellices.agentframework.api.value.JsonObject;
+import io.github.hellices.agentframework.api.value.JsonValues;
 import io.github.hellices.agentframework.engine.AgentEngine;
+import io.github.hellices.agentframework.spi.model.ModelCatalog;
 import io.github.hellices.agentframework.spi.model.ModelClient;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -157,14 +161,14 @@ class OpenAiChatModelClientToolLoopTest {
             call -> {
               assertThat(call.callId()).isEqualTo(CALL_ID);
               assertThat(call.name()).isEqualTo(TOOL_NAME);
-              assertThat(call.arguments()).isEqualTo(Map.of("city", "Seoul"));
+              assertThat(argumentsAsMap(call.arguments())).isEqualTo(Map.of("city", "Seoul"));
             });
   }
 
   @Test
   void needsNoTransportOfItsOwnToRunTheWholeLoop() {
     FakeChatCompletionsOperations operations = scriptedProvider();
-    AgentEngine engine = engineOver(operations, new ArrayList<>());
+    Agent engine = engineOver(operations, new ArrayList<>());
 
     CompletableFuture<AgentResponse> response =
         engine.run(USER_INPUT).response().toCompletableFuture();
@@ -180,7 +184,7 @@ class OpenAiChatModelClientToolLoopTest {
   private static Loop runLoop() throws InterruptedException, ExecutionException, TimeoutException {
     FakeChatCompletionsOperations operations = scriptedProvider();
     List<Map<String, Object>> executedArguments = new ArrayList<>();
-    AgentEngine engine = engineOver(operations, executedArguments);
+    Agent engine = engineOver(operations, executedArguments);
 
     AgentResponse response =
         engine
@@ -205,7 +209,7 @@ class OpenAiChatModelClientToolLoopTest {
    *
    * @param executedArguments collects what each call handed the tool, in call order
    */
-  private static AgentEngine engineOver(
+  private static Agent engineOver(
       FakeChatCompletionsOperations operations, List<Map<String, Object>> executedArguments) {
     ModelClient client =
         OpenAiChatModelClient.builder().operations(operations).model(MODEL).build();
@@ -215,18 +219,29 @@ class OpenAiChatModelClientToolLoopTest {
             TOOL_DESCRIPTION,
             weatherSchema(),
             (arguments, context) -> {
-              executedArguments.add(arguments.values());
+              executedArguments.add(argumentsAsMap(arguments.values()));
+              String city = arguments.string("city").orElseThrow();
               return CompletableFuture.completedFuture(
-                  ToolResult.success(new TextContent("sunny:" + arguments.get("city"))));
+                  ToolResult.success(new TextContent("sunny:" + city)));
             });
-    return AgentEngine.builder().modelClient(client).tools(weather).build();
+    return AgentEngine.builder()
+        .build()
+        .factory(ModelCatalog.builder().build())
+        .builderWithClient(client)
+        .tools(weather)
+        .build();
   }
 
-  private static Map<String, Object> weatherSchema() {
+  private static JsonObject weatherSchema() {
     Map<String, Object> schema = new LinkedHashMap<>();
     schema.put("type", "object");
     schema.put("properties", Map.of("city", Map.of("type", "string")));
-    return schema;
+    return (JsonObject) JsonValues.fromJava(schema);
+  }
+
+  @SuppressWarnings("unchecked")
+  private static Map<String, Object> argumentsAsMap(JsonObject arguments) {
+    return (Map<String, Object>) JsonValues.toJava(arguments);
   }
 
   private static List<ToolCallContent> toolCallsOf(AgentResponse response) {

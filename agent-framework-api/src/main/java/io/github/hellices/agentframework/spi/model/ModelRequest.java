@@ -1,58 +1,76 @@
 package io.github.hellices.agentframework.spi.model;
 
 import io.github.hellices.agentframework.api.agent.CancellationSignal;
+import io.github.hellices.agentframework.api.context.ContextAttributes;
 import io.github.hellices.agentframework.api.message.Message;
 import io.github.hellices.agentframework.api.tool.ToolDefinition;
+import io.github.hellices.agentframework.api.value.JsonObject;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
 
-public record ModelRequest(
-    List<Message> messages,
-    ModelRequestOptions options,
-    CancellationSignal cancellationSignal,
-    List<ToolDefinition> tools,
-    Map<String, Object> metadata) {
+public final class ModelRequest {
 
-  public ModelRequest {
-    messages = messages == null ? List.of() : List.copyOf(messages);
-    options = options == null ? ModelRequestOptions.empty() : options;
-    cancellationSignal = cancellationSignal == null ? new CancellationSignal() : cancellationSignal;
-    List<ToolDefinition> normalizedTools = new ArrayList<>();
-    if (tools != null) {
-      for (ToolDefinition tool : tools) {
-        normalizedTools.add(Objects.requireNonNull(tool, "tools must not contain null entries"));
-      }
-    }
-    tools = List.copyOf(normalizedTools);
-    metadata = metadata == null ? Map.of() : Map.copyOf(metadata);
-    for (Message message : messages) {
-      Objects.requireNonNull(message, "messages must not contain null entries");
-    }
+  private final List<Message> messages;
+  private final ModelRequestOptions options;
+  private final String continuationToken;
+  private final ContextAttributes attributes;
+  private final CancellationSignal cancellationSignal;
+  private final List<ToolDefinition> tools;
+  private final JsonObject metadata;
+
+  private ModelRequest(Builder builder) {
+    this.messages = immutableMessages(builder.messages);
+    this.options = builder.options == null ? ModelRequestOptions.empty() : builder.options;
+    this.continuationToken = builder.continuationToken;
+    this.attributes = builder.attributes == null ? ContextAttributes.empty() : builder.attributes;
+    this.cancellationSignal =
+        builder.cancellationSignal == null ? new CancellationSignal() : builder.cancellationSignal;
+    this.tools = immutableTools(builder.tools);
+    this.metadata = builder.metadata == null ? JsonObject.empty() : builder.metadata;
   }
 
-  public ModelRequest(
-      List<Message> messages, ModelRequestOptions options, Map<String, Object> metadata) {
-    this(messages, options, new CancellationSignal(), List.of(), metadata);
+  public static Builder builder() {
+    return new Builder();
   }
 
-  public ModelRequest(
-      List<Message> messages,
-      ModelRequestOptions options,
-      CancellationSignal cancellationSignal,
-      Map<String, Object> metadata) {
-    this(messages, options, cancellationSignal, List.of(), metadata);
+  public List<Message> messages() {
+    return List.copyOf(messages);
   }
 
-  public static ModelRequest fromLegacyOptions(
-      List<Message> messages, Map<String, Object> legacyOptions, Map<String, Object> metadata) {
-    return new ModelRequest(
-        messages,
-        ModelRequestOptions.fromLegacyOptions(legacyOptions),
-        new CancellationSignal(),
-        List.of(),
-        metadata);
+  public ModelRequestOptions options() {
+    return options;
+  }
+
+  public String continuationToken() {
+    return continuationToken;
+  }
+
+  public ContextAttributes attributes() {
+    return attributes;
+  }
+
+  public CancellationSignal cancellationSignal() {
+    return cancellationSignal;
+  }
+
+  public List<ToolDefinition> tools() {
+    return List.copyOf(tools);
+  }
+
+  public JsonObject metadata() {
+    return metadata;
+  }
+
+  public Builder toBuilder() {
+    return new Builder()
+        .messages(messages)
+        .options(options)
+        .continuationToken(continuationToken)
+        .attributes(attributes)
+        .cancellationSignal(cancellationSignal)
+        .tools(tools)
+        .metadata(metadata);
   }
 
   @Override
@@ -65,12 +83,88 @@ public record ModelRequest(
     }
     return messages.equals(that.messages)
         && options.equals(that.options)
+        && Objects.equals(continuationToken, that.continuationToken)
+        && attributes.equals(that.attributes)
         && tools.equals(that.tools)
         && metadata.equals(that.metadata);
   }
 
   @Override
   public int hashCode() {
-    return Objects.hash(messages, options, tools, metadata);
+    return Objects.hash(messages, options, continuationToken, attributes, tools, metadata);
+  }
+
+  public static final class Builder {
+    private List<? extends Message> messages = List.of();
+    private ModelRequestOptions options = ModelRequestOptions.empty();
+    private String continuationToken;
+    private ContextAttributes attributes = ContextAttributes.empty();
+    private CancellationSignal cancellationSignal = new CancellationSignal();
+    private List<? extends ToolDefinition> tools = List.of();
+    private JsonObject metadata = JsonObject.empty();
+
+    private Builder() {}
+
+    public Builder messages(List<? extends Message> messages) {
+      this.messages = messages == null ? List.of() : messages;
+      return this;
+    }
+
+    public Builder options(ModelRequestOptions options) {
+      this.options = options == null ? ModelRequestOptions.empty() : options;
+      return this;
+    }
+
+    public Builder continuationToken(String continuationToken) {
+      this.continuationToken = continuationToken;
+      return this;
+    }
+
+    public Builder attributes(ContextAttributes attributes) {
+      this.attributes = attributes == null ? ContextAttributes.empty() : attributes;
+      return this;
+    }
+
+    public Builder cancellationSignal(CancellationSignal cancellationSignal) {
+      this.cancellationSignal =
+          cancellationSignal == null ? new CancellationSignal() : cancellationSignal;
+      return this;
+    }
+
+    public Builder tools(List<? extends ToolDefinition> tools) {
+      this.tools = tools == null ? List.of() : tools;
+      return this;
+    }
+
+    public Builder metadata(JsonObject metadata) {
+      this.metadata = metadata == null ? JsonObject.empty() : metadata;
+      return this;
+    }
+
+    public ModelRequest build() {
+      return new ModelRequest(this);
+    }
+  }
+
+  private static List<Message> immutableMessages(List<? extends Message> source) {
+    if (source == null) {
+      return List.of();
+    }
+    List<Message> normalized = new ArrayList<>(source.size());
+    for (Message message : source) {
+      normalized.add(Objects.requireNonNull(message, "messages must not contain null entries"));
+    }
+    return List.copyOf(normalized);
+  }
+
+  private static List<ToolDefinition> immutableTools(List<? extends ToolDefinition> source) {
+    if (source == null) {
+      return List.of();
+    }
+    List<ToolDefinition> normalized = new ArrayList<>(source.size());
+    for (ToolDefinition tool : source) {
+      normalized.add(Objects.requireNonNull(tool, "tools must not contain null entries"));
+    }
+    return List.copyOf(normalized);
   }
 }

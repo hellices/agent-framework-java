@@ -3,11 +3,19 @@ package io.github.hellices.agentframework.api.agent;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import io.github.hellices.agentframework.api.context.ContextAttributes;
+import io.github.hellices.agentframework.api.context.ContextKey;
 import io.github.hellices.agentframework.api.message.FinishReason;
 import io.github.hellices.agentframework.api.message.Message;
 import io.github.hellices.agentframework.api.message.Role;
 import io.github.hellices.agentframework.api.message.TextContent;
 import io.github.hellices.agentframework.api.session.SessionContext;
+import io.github.hellices.agentframework.api.session.SessionState;
+import io.github.hellices.agentframework.api.session.SessionStateKey;
+import io.github.hellices.agentframework.api.session.SessionStateValues;
+import io.github.hellices.agentframework.api.value.JsonObject;
+import io.github.hellices.agentframework.api.value.JsonValue;
+import io.github.hellices.agentframework.api.value.JsonValues;
 import java.lang.reflect.Modifier;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -25,6 +33,9 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 
 class AgentLifecycleTest {
+
+  private static final ContextKey<String> TRACE_ID =
+      ContextKey.of("agent", "traceId", String.class);
 
   @Test
   void cancellationSignalTracksState() {
@@ -58,12 +69,12 @@ class AgentLifecycleTest {
     CompatibilityCheckingAgent agent = new CompatibilityCheckingAgent("test-agent");
 
     AgentRunRequest request =
-        new AgentRunRequest(
+        request(
             Message.normalize("hi"),
-            new AgentSession("session-1", "service-1", Map.of()),
+            session("session-1", "service-1", Map.of()),
             new AgentRunOptions(),
             new CancellationSignal(),
-            Map.of());
+            ContextAttributes.empty());
 
     assertThatThrownBy(() -> agent.run(request))
         .isInstanceOf(IllegalArgumentException.class)
@@ -77,12 +88,12 @@ class AgentLifecycleTest {
     CompatibilityCheckingAgent agent = new CompatibilityCheckingAgent("test-agent");
 
     AgentRunRequest request =
-        new AgentRunRequest(
+        request(
             Message.normalize("hi"),
-            new AgentSession("session-1", "service-1", Map.of()),
+            session("session-1", "service-1", Map.of()),
             new AgentRunOptions(),
             new CancellationSignal(),
-            Map.of());
+            ContextAttributes.empty());
 
     assertThatThrownBy(() -> agent.runStreaming(request))
         .isInstanceOf(IllegalArgumentException.class)
@@ -119,21 +130,48 @@ class AgentLifecycleTest {
   @Test
   void runBuildsExplicitRunContextWithoutGlobalState() {
     ContextCapturingAgent agent = new ContextCapturingAgent("ctx-agent");
-    AgentSession session = new AgentSession("session-42", "service-42", Map.of());
+    AgentSession session = session("session-42", "service-42", Map.of());
     AgentRunRequest request =
-        new AgentRunRequest(
+        request(
             Message.normalize("hello"),
             session,
             new AgentRunOptions(),
             new CancellationSignal(),
-            Map.of("traceId", "trace-42"));
+            ContextAttributes.builder().put(TRACE_ID, "trace-42").build());
 
     agent.run(request);
 
     assertThat(agent.lastContext).isNotNull();
     assertThat(agent.lastContext.agent()).isEqualTo(agent);
     assertThat(agent.lastContext.session()).isEqualTo(session);
-    assertThat(agent.lastContext.attributes()).containsEntry("traceId", "trace-42");
+    assertThat(agent.lastContext.attributes().get(TRACE_ID)).contains("trace-42");
+  }
+
+  @Test
+  void runMergesOptionAttributesIntoAgentAndSessionContextsWithRequestOverrides() {
+    ContextCapturingAgent agent = new ContextCapturingAgent("ctx-agent");
+    AgentSession session = session("session-42", "service-42", Map.of());
+    ContextKey<String> tenant = ContextKey.of("agent", "tenant", String.class);
+    ContextKey<String> region = ContextKey.of("agent", "region", String.class);
+    ContextAttributes optionAttributes =
+        ContextAttributes.builder().put(tenant, "from-options").put(region, "westus").build();
+    ContextAttributes requestAttributes =
+        ContextAttributes.builder().put(tenant, "from-request").build();
+    AgentRunRequest request =
+        request(
+            Message.normalize("hello"),
+            session,
+            AgentRunOptions.builder().attributes(optionAttributes).build(),
+            new CancellationSignal(),
+            requestAttributes);
+
+    agent.run(request);
+
+    assertThat(agent.lastContext.attributes().get(tenant)).contains("from-request");
+    assertThat(agent.lastContext.attributes().get(region)).contains("westus");
+    assertThat(agent.lastContext.sessionContext().attributes().get(tenant))
+        .contains("from-request");
+    assertThat(agent.lastContext.sessionContext().attributes().get(region)).contains("westus");
   }
 
   @Test
@@ -147,21 +185,21 @@ class AgentLifecycleTest {
   @Test
   void runContextIsPreservedWhenRunExecutesOnAnotherThread() {
     ContextCapturingAgent agent = new ContextCapturingAgent("ctx-agent");
-    AgentSession session = new AgentSession("session-42", "service-42", Map.of());
+    AgentSession session = session("session-42", "service-42", Map.of());
     AgentRunRequest request =
-        new AgentRunRequest(
+        request(
             Message.normalize("hello"),
             session,
             new AgentRunOptions(),
             new CancellationSignal(),
-            Map.of("traceId", "trace-42"));
+            ContextAttributes.builder().put(TRACE_ID, "trace-42").build());
 
     CompletableFuture.runAsync(() -> agent.run(request)).join();
 
     assertThat(agent.lastContext).isNotNull();
     assertThat(agent.lastContext.agent()).isEqualTo(agent);
     assertThat(agent.lastContext.session()).isEqualTo(session);
-    assertThat(agent.lastContext.attributes()).containsEntry("traceId", "trace-42");
+    assertThat(agent.lastContext.attributes().get(TRACE_ID)).contains("trace-42");
   }
 
   @Test
@@ -169,8 +207,12 @@ class AgentLifecycleTest {
     TestAgent agent = new TestAgent("test-agent");
     CancellationSignal signal = new CancellationSignal();
     AgentRunRequest request =
-        new AgentRunRequest(
-            Message.normalize("hello"), null, new AgentRunOptions(), signal, Map.of());
+        request(
+            Message.normalize("hello"),
+            null,
+            new AgentRunOptions(),
+            signal,
+            ContextAttributes.empty());
 
     agent.runStreaming(request).cancel();
 
@@ -182,8 +224,12 @@ class AgentLifecycleTest {
     TestAgent agent = new TestAgent("test-agent");
     CancellationSignal signal = new CancellationSignal();
     AgentRunRequest request =
-        new AgentRunRequest(
-            Message.normalize("hello"), null, new AgentRunOptions(), signal, Map.of());
+        request(
+            Message.normalize("hello"),
+            null,
+            new AgentRunOptions(),
+            signal,
+            ContextAttributes.empty());
 
     agent.run(request).cancel();
 
@@ -208,21 +254,21 @@ class AgentLifecycleTest {
   @Test
   void sessionContextCopiesInputMessagesSessionAndMetadata() {
     SessionContextCapturingAgent agent = new SessionContextCapturingAgent("ctx-agent");
-    AgentSession session = new AgentSession("session-42", "service-42", Map.of());
+    AgentSession session = session("session-42", "service-42", Map.of());
     AgentRunRequest request =
-        new AgentRunRequest(
+        request(
             Message.normalize("hello"),
             session,
             new AgentRunOptions(),
             new CancellationSignal(),
-            Map.of("traceId", "trace-42"));
+            ContextAttributes.builder().put(TRACE_ID, "trace-42").build());
 
     agent.run(request);
 
     SessionContext sessionContext = agent.contexts.get(0);
     assertThat(sessionContext.session()).isEqualTo(session);
     assertThat(sessionContext.inputMessages()).isEqualTo(request.messages());
-    assertThat(sessionContext.metadata()).containsEntry("traceId", "trace-42");
+    assertThat(sessionContext.metadata().get(TRACE_ID)).contains("trace-42");
     assertThat(sessionContext.contextMessages()).isEmpty();
     assertThat(sessionContext.cancellationSignal()).isEqualTo(request.cancellationSignal());
   }
@@ -363,17 +409,13 @@ class AgentLifecycleTest {
   void streamingWithCompletionResponseCannotCompleteBeforeCompletionActionFinishes()
       throws Exception {
     AgentResponseUpdate update =
-        new AgentResponseUpdate(
+        responseUpdate(
             "manual-agent",
             "response-1",
             "message-1",
             "manual-agent",
-            null,
             FinishReason.STOP,
-            List.of(new Message(Role.ASSISTANT, List.of(new TextContent("ok")))),
-            null,
-            Map.of(),
-            null);
+            List.of(new Message(Role.ASSISTANT, List.of(new TextContent("ok")))));
     AgentStreamingRun<AgentResponseUpdate> run = AgentStreamingRun.fromUpdate(update);
     CountDownLatch actionStarted = new CountDownLatch(1);
     CountDownLatch releaseAction = new CountDownLatch(1);
@@ -422,6 +464,33 @@ class AgentLifecycleTest {
 
     assertThat(agent.afterRunInvocations).isEqualTo(1);
     assertThat(agent.afterRunSawResponse).isSameAs(response);
+  }
+
+  @Test
+  void customAgentRunsAreNotEngineManagedAndKeepTheFacadeLifecycleExactlyOnce() {
+    AfterRunSeamAgent agent = new AfterRunSeamAgent("custom-agent");
+
+    AgentRun run = agent.run("hello");
+
+    // A custom subclass that does not opt into engine-managed completion keeps the facade
+    // lifecycle: the framework fills the response slot and runs the afterRun seam exactly once.
+    assertThat(run.isEngineManaged()).isFalse();
+    AgentResponse response = run.response().toCompletableFuture().join();
+    assertThat(agent.afterRunInvocations).isEqualTo(1);
+    assertThat(agent.contexts.get(0).response()).contains(response);
+  }
+
+  @Test
+  void customStreamingRunsAreNotEngineManagedAndKeepTheFacadeLifecycleExactlyOnce() {
+    AfterRunSeamAgent agent = new AfterRunSeamAgent("custom-agent");
+
+    AgentStreamingRun<AgentResponseUpdate> run = agent.runStreaming("hello");
+
+    assertThat(run.isEngineManaged()).isFalse();
+    consume(run.updates());
+    AgentResponse response = run.response().toCompletableFuture().join();
+    assertThat(agent.afterRunInvocations).isEqualTo(1);
+    assertThat(agent.contexts.get(0).response()).contains(response);
   }
 
   @Test
@@ -582,17 +651,13 @@ class AgentLifecycleTest {
     AgentRun run = new AgentRun(sampleResponse("agent-1"));
     AgentStreamingRun<AgentResponseUpdate> streamingRun =
         AgentStreamingRun.fromUpdate(
-            new AgentResponseUpdate(
+            responseUpdate(
                 "agent-1",
                 "response-1",
                 "message-1",
                 "agent-1",
-                null,
                 FinishReason.STOP,
-                List.of(new Message(Role.ASSISTANT, List.of(new TextContent("ok")))),
-                null,
-                Map.of(),
-                null));
+                List.of(new Message(Role.ASSISTANT, List.of(new TextContent("ok"))))));
 
     assertThat(run.session().toCompletableFuture().join()).isEmpty();
     assertThat(streamingRun.session().toCompletableFuture().join()).isEmpty();
@@ -614,17 +679,17 @@ class AgentLifecycleTest {
 
     AgentRun run =
         agent.run(
-            new AgentRunRequest(
+            request(
                 Message.normalize("hello"),
-                new AgentSession("session-1", null, Map.of()),
+                session("session-1", null, Map.of()),
                 new AgentRunOptions(),
                 new CancellationSignal(),
-                Map.of()));
+                ContextAttributes.empty()));
     AgentSession updated = run.session().toCompletableFuture().join().orElseThrow();
 
     assertThat(agent.afterRunInvocations).isEqualTo(1);
     assertThat(updated.sessionId()).isEqualTo("session-1");
-    assertThat(updated.state()).containsEntry("seam", "written");
+    assertThat(updated.state()).isEqualTo(sessionState(Map.of("seam", "written")));
   }
 
   @Test
@@ -633,18 +698,18 @@ class AgentLifecycleTest {
 
     AgentStreamingRun<AgentResponseUpdate> run =
         agent.runStreaming(
-            new AgentRunRequest(
+            request(
                 Message.normalize("hello"),
-                new AgentSession("session-1", null, Map.of()),
+                session("session-1", null, Map.of()),
                 new AgentRunOptions(),
                 new CancellationSignal(),
-                Map.of()));
+                ContextAttributes.empty()));
     assertThat(run.session().toCompletableFuture().isDone()).isFalse();
     consume(run.updates());
     AgentSession updated = run.session().toCompletableFuture().join().orElseThrow();
 
     assertThat(agent.afterRunInvocations).isEqualTo(1);
-    assertThat(updated.state()).containsEntry("seam", "written");
+    assertThat(updated.state()).isEqualTo(sessionState(Map.of("seam", "written")));
   }
 
   @Test
@@ -653,12 +718,12 @@ class AgentLifecycleTest {
 
     AgentRun run =
         agent.run(
-            new AgentRunRequest(
+            request(
                 Message.normalize("hello"),
-                new AgentSession("session-1", null, Map.of()),
+                session("session-1", null, Map.of()),
                 new AgentRunOptions(),
                 new CancellationSignal(),
-                Map.of()));
+                ContextAttributes.empty()));
 
     assertThatThrownBy(() -> run.session().toCompletableFuture().join())
         .hasCauseInstanceOf(IllegalStateException.class)
@@ -673,12 +738,12 @@ class AgentLifecycleTest {
 
     AgentRun run =
         agent.run(
-            new AgentRunRequest(
+            request(
                 Message.normalize("hello"),
-                new AgentSession("session-1", null, Map.of()),
+                session("session-1", null, Map.of()),
                 new AgentRunOptions(),
                 new CancellationSignal(),
-                Map.of()));
+                ContextAttributes.empty()));
     run.cancel();
 
     assertThatThrownBy(() -> run.session().toCompletableFuture().join())
@@ -691,17 +756,17 @@ class AgentLifecycleTest {
 
     AgentStreamingRun<AgentResponseUpdate> run =
         agent.runStreaming(
-            new AgentRunRequest(
+            request(
                 Message.normalize("hello"),
-                new AgentSession("session-1", null, Map.of()),
+                session("session-1", null, Map.of()),
                 new AgentRunOptions(),
                 new CancellationSignal(),
-                Map.of()));
+                ContextAttributes.empty()));
     AgentStreamingRun<String> mapped = run.mapUpdates(update -> "mapped");
     consume(mapped.updates());
 
     assertThat(mapped.session().toCompletableFuture().join().orElseThrow().state())
-        .containsEntry("seam", "written");
+        .isEqualTo(sessionState(Map.of("seam", "written")));
   }
 
   private static void awaitLatch(CountDownLatch latch) {
@@ -713,18 +778,91 @@ class AgentLifecycleTest {
     }
   }
 
+  private static AgentRunRequest request(
+      List<? extends Message> messages,
+      AgentSession session,
+      AgentRunOptions options,
+      CancellationSignal cancellationSignal,
+      ContextAttributes attributes) {
+    return AgentRunRequest.builder()
+        .messages(messages)
+        .session(session)
+        .options(options)
+        .cancellationSignal(cancellationSignal)
+        .attributes(attributes)
+        .build();
+  }
+
+  private static AgentResponse response(
+      String agentId,
+      String responseId,
+      String messageId,
+      String authorName,
+      FinishReason finishReason,
+      List<? extends Message> messages) {
+    return AgentResponse.builder()
+        .agentId(agentId)
+        .responseId(responseId)
+        .messageId(messageId)
+        .authorName(authorName)
+        .finishReason(finishReason)
+        .messages(messages)
+        .additionalProperties(JsonObject.empty())
+        .build();
+  }
+
+  private static AgentResponseUpdate responseUpdate(
+      String agentId,
+      String responseId,
+      String messageId,
+      String authorName,
+      FinishReason finishReason,
+      List<? extends Message> messages) {
+    return AgentResponseUpdate.builder()
+        .agentId(agentId)
+        .responseId(responseId)
+        .messageId(messageId)
+        .authorName(authorName)
+        .finishReason(finishReason)
+        .messages(messages)
+        .additionalProperties(JsonObject.empty())
+        .build();
+  }
+
   private static AgentResponse sampleResponse(String agentId) {
-    return new AgentResponse(
+    return response(
         agentId,
         "response-1",
         "message-1",
         agentId,
-        null,
         FinishReason.STOP,
-        List.of(new Message(Role.ASSISTANT, List.of(new TextContent("ok")))),
-        null,
-        Map.of(),
-        null);
+        List.of(new Message(Role.ASSISTANT, List.of(new TextContent("ok")))));
+  }
+
+  private static AgentSession session(
+      String sessionId, String serviceSessionId, Map<String, ?> state) {
+    AgentSession.Builder builder =
+        AgentSession.builder().sessionId(sessionId).state(sessionState(state));
+    if (serviceSessionId != null) {
+      builder.serviceSessionId(serviceSessionId);
+    }
+    return builder.build();
+  }
+
+  private static SessionState sessionState(Map<String, ?> state) {
+    SessionState sessionState = SessionState.empty();
+    for (Map.Entry<String, ?> entry : state.entrySet()) {
+      sessionState = put(sessionState, entry.getKey(), entry.getValue());
+    }
+    return sessionState;
+  }
+
+  @SuppressWarnings("unchecked")
+  private static SessionState put(SessionState state, String key, Object value) {
+    if (SessionStateValues.isJsonValueShape(value)) {
+      return state.with(SessionStateKey.of(key, JsonValue.class), JsonValues.fromJava(value));
+    }
+    return state.with((SessionStateKey<Object>) SessionStateKey.of(key, value.getClass()), value);
   }
 
   @Test
@@ -764,17 +902,13 @@ class AgentLifecycleTest {
     protected AgentRun runInternal(AgentRunContext context, AgentRunRequest request) {
       return new AgentRun(
           CompletableFuture.completedFuture(
-              new AgentResponse(
+              response(
                   id(),
                   "response-1",
                   "message-1",
                   name(),
-                  null,
                   io.github.hellices.agentframework.api.message.FinishReason.STOP,
-                  List.of(new Message(Role.ASSISTANT, List.of(new TextContent("ok")))),
-                  null,
-                  Map.of(),
-                  null)),
+                  List.of(new Message(Role.ASSISTANT, List.of(new TextContent("ok")))))),
           request.cancellationSignal());
     }
 
@@ -782,17 +916,13 @@ class AgentLifecycleTest {
     protected AgentStreamingRun<AgentResponseUpdate> runStreamingInternal(
         AgentRunContext context, AgentRunRequest request) {
       return AgentStreamingRun.fromUpdate(
-          new AgentResponseUpdate(
+          responseUpdate(
               id(),
               "response-1",
               "message-1",
               name(),
-              null,
               io.github.hellices.agentframework.api.message.FinishReason.STOP,
-              List.of(new Message(Role.ASSISTANT, List.of(new TextContent("ok")))),
-              null,
-              Map.of(),
-              null),
+              List.of(new Message(Role.ASSISTANT, List.of(new TextContent("ok"))))),
           request.cancellationSignal());
     }
   }
@@ -977,7 +1107,9 @@ class AgentLifecycleTest {
 
     @Override
     protected CompletionStage<Void> afterRun(SessionContext sessionContext) {
-      sessionContext.providerState("seam").set("written");
+      sessionContext
+          .providerState(SessionStateKey.of("seam", JsonValue.class))
+          .set(JsonValues.fromJava("written"));
       return super.afterRun(sessionContext);
     }
   }

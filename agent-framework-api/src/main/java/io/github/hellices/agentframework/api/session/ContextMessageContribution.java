@@ -16,24 +16,31 @@ import java.util.Objects;
  * framework observed — which configured provider called {@link
  * SessionContext#addContextMessages(String, java.util.List)} — so a filter keyed on it cannot be
  * spoofed by a sibling provider or by content restored from another session.
- *
- * @param sourceId the contributing provider's source id, or {@code null} when the messages were
- *     added through {@link SessionContext#addContextMessages(java.util.List)}, which carries no
- *     contributing provider and is therefore an external, unspecified source
- * @param message the contributed message, exactly as it was appended to the run's context
  */
-public record ContextMessageContribution(String sourceId, Message message) {
+public final class ContextMessageContribution {
+
+  private final String sourceId;
+  private final Message message;
 
   /**
    * @throws IllegalArgumentException if {@code sourceId} is non-null and blank, because a blank
    *     source id carries no provenance and would silently match nothing
    * @throws NullPointerException if {@code message} is {@code null}
    */
-  public ContextMessageContribution {
+  public ContextMessageContribution(String sourceId, Message message) {
     if (sourceId != null && sourceId.isBlank()) {
       throw new IllegalArgumentException("sourceId must not be blank");
     }
-    Objects.requireNonNull(message, "message must not be null");
+    this.sourceId = sourceId;
+    this.message = Objects.requireNonNull(message, "message must not be null");
+  }
+
+  public String sourceId() {
+    return sourceId;
+  }
+
+  public Message message() {
+    return message;
   }
 
   /**
@@ -42,5 +49,22 @@ public record ContextMessageContribution(String sourceId, Message message) {
    */
   public boolean contributedBy(String candidateSourceId) {
     return sourceId != null && sourceId.equals(candidateSourceId);
+  }
+
+  @Override
+  public boolean equals(Object other) {
+    return other instanceof ContextMessageContribution that
+        && Objects.equals(sourceId, that.sourceId)
+        && message.equals(that.message);
+  }
+
+  @Override
+  public int hashCode() {
+    return Objects.hash(sourceId, message);
+  }
+
+  @Override
+  public String toString() {
+    return "ContextMessageContribution[sourceId=" + sourceId + ", message=" + message + "]";
   }
 }

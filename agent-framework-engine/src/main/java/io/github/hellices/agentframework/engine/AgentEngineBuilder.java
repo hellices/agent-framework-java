@@ -1,97 +1,47 @@
 package io.github.hellices.agentframework.engine;
 
-import io.github.hellices.agentframework.api.agent.AgentBuilder;
-import io.github.hellices.agentframework.api.tool.FunctionTool;
+import io.github.hellices.agentframework.engine.internal.interception.InterceptorRegistry;
 import io.github.hellices.agentframework.engine.internal.session.SessionCoordinator;
-import io.github.hellices.agentframework.spi.model.ModelClient;
-import io.github.hellices.agentframework.spi.session.ContextProvider;
+import io.github.hellices.agentframework.engine.internal.tool.ToolApprovalQueueStateCodec;
+import io.github.hellices.agentframework.spi.interception.AgentExecutionInterceptor;
+import io.github.hellices.agentframework.spi.interception.ModelInvocationInterceptor;
+import io.github.hellices.agentframework.spi.interception.SessionOperationInterceptor;
+import io.github.hellices.agentframework.spi.interception.ToolInvocationInterceptor;
 import io.github.hellices.agentframework.spi.session.SessionStore;
 import io.github.hellices.agentframework.spi.session.StateCodecRegistry;
+import io.github.hellices.agentframework.spi.telemetry.TelemetrySink;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 
-public final class AgentEngineBuilder implements AgentBuilder {
+/**
+ * Assembles a shared, model-independent {@link AgentEngine} from the services an agent's runs
+ * share.
+ *
+ * <p>The engine owns no per-agent identity, model client, tool set, or provider list, so this
+ * builder configures only the session services those runs coordinate through — the durable {@link
+ * SessionStore} and the {@link StateCodecRegistry} that snapshots its state. Per-agent wiring is
+ * supplied later, when an {@code AgentFactory} or {@link AgentEngine#bind} binds a declaration and
+ * runtime to the built engine.
+ */
+public final class AgentEngineBuilder {
 
-  private String id;
-  private String name;
-  private String description;
-  private ModelClient modelClient;
-  private final List<FunctionTool> tools = new ArrayList<>();
-  private final List<ContextProvider> contextProviders = new ArrayList<>();
   private SessionStore sessionStore;
   private StateCodecRegistry stateCodecRegistry;
-  private int maxIterations = 5;
+  private TelemetrySink telemetrySink;
+  private final List<AgentExecutionInterceptor> agentExecutionInterceptors = new ArrayList<>();
+  private final List<ModelInvocationInterceptor> modelInvocationInterceptors = new ArrayList<>();
+  private final List<ToolInvocationInterceptor> toolInvocationInterceptors = new ArrayList<>();
+  private final List<SessionOperationInterceptor> sessionOperationInterceptors = new ArrayList<>();
 
   AgentEngineBuilder() {}
 
-  @Override
-  public AgentEngineBuilder id(String id) {
-    this.id = id;
-    return this;
-  }
-
-  @Override
-  public AgentEngineBuilder name(String name) {
-    this.name = name;
-    return this;
-  }
-
-  @Override
-  public AgentEngineBuilder description(String description) {
-    this.description = description;
-    return this;
-  }
-
-  public AgentEngineBuilder modelClient(ModelClient modelClient) {
-    this.modelClient = modelClient;
-    return this;
-  }
-
-  @Override
-  public AgentEngineBuilder tools(FunctionTool... tools) {
-    if (tools != null) {
-      for (FunctionTool tool : tools) {
-        if (tool == null) {
-          throw new IllegalArgumentException("tools must not contain null entries");
-        }
-        this.tools.add(tool);
-      }
-    }
-    return this;
-  }
-
   /**
-   * Configures the context providers that participate in every run of the built agent, in
-   * declaration order: {@code beforeRun} hooks run in this order before the first model call, and
-   * {@code afterRun} hooks run in reverse order after a successful run.
+   * Configures the durable session store an agent bound to the built engine loads from before a run
+   * with a session and saves to after that run succeeded (SES-003, SES-014).
    *
-   * <p>Each provider's {@link ContextProvider#sourceId()} is read once when the agent is built and
-   * fixes the session state namespace it owns for the agent's lifetime. A blank source id or a
-   * source id shared by two providers is rejected at build time, because both would let one
-   * provider silently read or overwrite another provider's state.
-   *
-   * @param providers the providers to add, in order; may be {@code null}
-   * @throws IllegalArgumentException if {@code providers} contains a {@code null} entry
-   */
-  public AgentEngineBuilder contextProviders(ContextProvider... providers) {
-    if (providers != null) {
-      for (ContextProvider provider : providers) {
-        if (provider == null) {
-          throw new IllegalArgumentException("contextProviders must not contain null entries");
-        }
-        this.contextProviders.add(provider);
-      }
-    }
-    return this;
-  }
-
-  /**
-   * Configures the durable session store the built agent loads from before a run with a session and
-   * saves to after that run succeeded (SES-003, SES-014).
-   *
-   * <p>Without a store the built agent performs no session I/O at all and a run's state lives only
-   * in the session object the caller passes in and reads back. With a store configured, a run that
+   * <p>Without a store the engine performs no session I/O at all and a run's state lives only in
+   * the session object the caller passes in and reads back. With a store configured, a run that
    * carries a session loads it before binding its context providers, and the stored session — not
    * the one on the request — is what the run's providers observe.
    *
@@ -107,10 +57,13 @@ public final class AgentEngineBuilder implements AgentBuilder {
    * Configures the state codec registry used to snapshot and restore session state for the
    * configured {@link #sessionStore(SessionStore)}.
    *
-   * <p>It is optional: an agent with a store and no registry uses {@code
-   * StateCodecRegistry.builder().build()}, which carries only the framework's built-in state types.
-   * A registry without a store is rejected at build time rather than silently ignored, because it
-   * can only mean the caller expected persistence that would never happen.
+   * <p>It is optional: an engine with a store and no registry uses the engine's own default
+   * registry, which extends {@code StateCodecRegistry.builder()} with the engine-owned tool
+   * approval queue codec so approval state (TOOL-020) persists without extra caller wiring. A
+   * caller-supplied registry is used exactly as given, so a custom registry built independently of
+   * the engine must register that codec itself to persist approval state. A registry without a
+   * store is rejected at build time rather than silently ignored, because it can only mean the
+   * caller expected persistence that would never happen.
    *
    * @param stateCodecRegistry the registry owning every persistable state type; must not be {@code
    *     null}
@@ -122,39 +75,119 @@ public final class AgentEngineBuilder implements AgentBuilder {
     return this;
   }
 
-  @Override
-  public AgentEngineBuilder maxIterations(int maxIterations) {
-    if (maxIterations < 1) {
-      throw new IllegalArgumentException("maxIterations must be greater than 0");
-    }
-    this.maxIterations = maxIterations;
+  /** Registers one agent-execution interceptor in outer-to-inner declaration order. */
+  public AgentEngineBuilder agentExecutionInterceptor(AgentExecutionInterceptor interceptor) {
+    agentExecutionInterceptors.add(
+        Objects.requireNonNull(interceptor, "agentExecutionInterceptor must not be null"));
     return this;
   }
 
-  @Override
+  /** Registers agent-execution interceptors in outer-to-inner declaration order. */
+  public AgentEngineBuilder agentExecutionInterceptors(
+      List<? extends AgentExecutionInterceptor> interceptors) {
+    agentExecutionInterceptors.addAll(
+        validatedSnapshot(interceptors, "agentExecutionInterceptors"));
+    return this;
+  }
+
+  /** Registers one model-invocation interceptor in outer-to-inner declaration order. */
+  public AgentEngineBuilder modelInvocationInterceptor(ModelInvocationInterceptor interceptor) {
+    modelInvocationInterceptors.add(
+        Objects.requireNonNull(interceptor, "modelInvocationInterceptor must not be null"));
+    return this;
+  }
+
+  /** Registers model-invocation interceptors in outer-to-inner declaration order. */
+  public AgentEngineBuilder modelInvocationInterceptors(
+      List<? extends ModelInvocationInterceptor> interceptors) {
+    modelInvocationInterceptors.addAll(
+        validatedSnapshot(interceptors, "modelInvocationInterceptors"));
+    return this;
+  }
+
+  /** Registers one tool-invocation interceptor in outer-to-inner declaration order. */
+  public AgentEngineBuilder toolInvocationInterceptor(ToolInvocationInterceptor interceptor) {
+    toolInvocationInterceptors.add(
+        Objects.requireNonNull(interceptor, "toolInvocationInterceptor must not be null"));
+    return this;
+  }
+
+  /** Registers tool-invocation interceptors in outer-to-inner declaration order. */
+  public AgentEngineBuilder toolInvocationInterceptors(
+      List<? extends ToolInvocationInterceptor> interceptors) {
+    toolInvocationInterceptors.addAll(
+        validatedSnapshot(interceptors, "toolInvocationInterceptors"));
+    return this;
+  }
+
+  /** Registers one session-operation interceptor in outer-to-inner declaration order. */
+  public AgentEngineBuilder sessionOperationInterceptor(SessionOperationInterceptor interceptor) {
+    sessionOperationInterceptors.add(
+        Objects.requireNonNull(interceptor, "sessionOperationInterceptor must not be null"));
+    return this;
+  }
+
+  /** Registers session-operation interceptors in outer-to-inner declaration order. */
+  public AgentEngineBuilder sessionOperationInterceptors(
+      List<? extends SessionOperationInterceptor> interceptors) {
+    sessionOperationInterceptors.addAll(
+        validatedSnapshot(interceptors, "sessionOperationInterceptors"));
+    return this;
+  }
+
+  /**
+   * Sets the framework-neutral telemetry sink that observes agent runs, model calls, tool calls,
+   * and session operations.
+   *
+   * <p>The engine uses {@link TelemetrySink#noOp()} when this method is not called. Sensitive data
+   * — prompt bodies, model output, tool arguments, tool results, credentials, and personal traces —
+   * are never passed to the sink.
+   *
+   * @param telemetrySink the sink to use; must not be null
+   */
+  public AgentEngineBuilder telemetrySink(TelemetrySink telemetrySink) {
+    this.telemetrySink = Objects.requireNonNull(telemetrySink, "telemetrySink must not be null");
+    return this;
+  }
+
   public AgentEngine build() {
-    if (modelClient == null) {
-      throw new IllegalStateException("modelClient must be configured");
-    }
     if (sessionStore == null && stateCodecRegistry != null) {
       throw new IllegalStateException("stateCodecRegistry requires a configured sessionStore");
     }
+    InterceptorRegistry interceptorRegistry =
+        new InterceptorRegistry(
+            List.copyOf(agentExecutionInterceptors),
+            List.copyOf(modelInvocationInterceptors),
+            List.copyOf(toolInvocationInterceptors),
+            List.copyOf(sessionOperationInterceptors));
     SessionCoordinator sessionCoordinator =
         sessionStore == null
             ? null
             : new SessionCoordinator(
                 sessionStore,
-                stateCodecRegistry == null
-                    ? StateCodecRegistry.builder().build()
-                    : stateCodecRegistry);
-    return new AgentEngine(
-        id,
-        name,
-        description,
-        modelClient,
-        tools,
-        contextProviders,
-        sessionCoordinator,
-        maxIterations);
+                stateCodecRegistry == null ? defaultStateCodecRegistry() : stateCodecRegistry,
+                interceptorRegistry::interceptSession);
+    TelemetrySink effectiveSink = telemetrySink != null ? telemetrySink : TelemetrySink.noOp();
+    return new AgentEngine(sessionCoordinator, interceptorRegistry, effectiveSink);
+  }
+
+  /**
+   * The registry an engine uses when the caller configures a {@link #sessionStore(SessionStore)}
+   * but no {@link #stateCodecRegistry(StateCodecRegistry)}: the framework's own default plus the
+   * engine-owned {@link ToolApprovalQueueStateCodec}, registered explicitly under its reserved type
+   * id rather than through class names or native serialization.
+   */
+  private static StateCodecRegistry defaultStateCodecRegistry() {
+    return StateCodecRegistry.builder().register(new ToolApprovalQueueStateCodec()).build();
+  }
+
+  private static <T> List<T> validatedSnapshot(List<? extends T> interceptors, String label) {
+    List<? extends T> value = Objects.requireNonNull(interceptors, label + " must not be null");
+    List<T> snapshot = new ArrayList<>(value.size());
+    for (int index = 0; index < value.size(); index++) {
+      snapshot.add(
+          Objects.requireNonNull(value.get(index), label + "[" + index + "] must not be null"));
+    }
+    return List.copyOf(snapshot);
   }
 }

@@ -12,9 +12,12 @@ This project does not build an application server or a dependency injection cont
 deliverable is an embeddable `AgentEngine`. A host runtime such as Spring Boot keeps owning object
 lifecycle, execution resources, security, transactions, and observability configuration.
 
-> **Status:** early. Deterministic single-agent execution, the core function-tool loop, session
-> persistence, and one Preview provider adapter (OpenAI Chat Completions) are implemented; streaming
-> for that adapter and host integrations remain in progress. See [Current state](#current-state).
+> **Status:** early. Deterministic single-agent execution, typed public-contract policy, the core
+> function-tool loop, the unified `ModelClient.execute(ModelRequest)` update contract, cold unicast
+> `Agent.runStreaming(...)` over one shared `RunPipeline`, session persistence, and one Preview
+> provider adapter (OpenAI Chat Completions) are implemented; native provider streaming for that
+> adapter and host integrations remain in progress.
+> See [Current state](#current-state).
 >
 > **API stability:** pre-1.0. Public contracts may evolve between requirement slices while the core
 > execution semantics are being established.
@@ -101,10 +104,12 @@ Module rules are defined in [module composition](docs/design/module-composition.
 
 ## Run a standalone agent
 
-The standalone sample assembles an `Agent` over the OpenAI Chat Completions adapter and calls
+The standalone sample assembles an application-scoped `AgentFactory` over the reusable
+`AgentEngine`, then binds an `Agent` over the OpenAI Chat Completions adapter and calls
 `agent.run(...)` against a real endpoint, with no server, dependency-injection container, or global
-registry. It needs a credential, because a sample that answered without one would teach that a call
-succeeded when it never happened.
+registry. The same factory can bind multiple agents with different ids, model clients, and local
+tools while sharing the engine's session services. It needs a credential, because a sample that
+answered without one would teach that a call succeeded when it never happened.
 
 | Variable | Required | Default |
 | --- | --- | --- |
@@ -178,11 +183,19 @@ and a live standalone execution path over a real endpoint.
 - CI on the `arc-java-build` ARC scale set with a fork-safe verification path
 - 244 requirements derived from a pinned upstream snapshot
 - Five published product modules with a compiled and tested surface
+- Executable public-contract policy: only reviewed fixed records remain public and primary API/SPI
+  signatures fail if they regress to raw `Map<String, Object>` contracts
+- Unified model execution through `ModelClient.execute(ModelRequest)`: one update publisher for both
+  one-shot and multi-update providers
 - Deterministic `AgentEngine` run and function-tool loops, shared by ordinary and streaming runs
+- Cold unicast `Agent.runStreaming(...)` and ordinary `Agent.run(...)` as two views over one
+  `RunPipeline`
 - Session persistence and restoration: versioned snapshots, in-memory and file session stores, the
   context provider pipeline, and default in-memory chat history
 - OpenAI Chat Completions adapter (Preview) over a borrowed official SDK client, reaching the engine
-  only through the neutral `ModelClient` port, with a deterministic offline test suite
+  only through the neutral `ModelClient` port, adapting Chat Completions to one terminal update
+  because native provider streaming is not implemented there yet, with a deterministic offline test
+  suite
 - Runnable standalone `Agent.run(...)` sample calling a real OpenAI-compatible endpoint through that
   adapter, with one local function tool
 

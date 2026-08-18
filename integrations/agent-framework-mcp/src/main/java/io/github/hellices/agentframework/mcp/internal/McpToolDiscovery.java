@@ -1,6 +1,9 @@
 package io.github.hellices.agentframework.mcp.internal;
 
 import io.github.hellices.agentframework.api.tool.FunctionTool;
+import io.github.hellices.agentframework.api.value.JsonObject;
+import io.github.hellices.agentframework.api.value.JsonValue;
+import io.github.hellices.agentframework.api.value.JsonValues;
 import io.github.hellices.agentframework.mcp.McpToolAdapterOptions;
 import io.modelcontextprotocol.spec.McpSchema;
 import java.util.ArrayList;
@@ -294,10 +297,15 @@ public final class McpToolDiscovery {
     if (remoteName == null || remoteName.isBlank()) {
       throw new IllegalStateException("MCP tools/list published a tool without a name");
     }
-    Map<String, Object> inputSchema = remoteTool.inputSchema();
-    if (inputSchema == null) {
+    Map<String, Object> publishedSchema = remoteTool.inputSchema();
+    if (publishedSchema == null) {
       throw new IllegalStateException(
           "MCP tools/list published tool '" + remoteName + "' without an input schema");
+    }
+    JsonValue normalizedSchema = JsonValues.fromJava(publishedSchema);
+    if (!(normalizedSchema instanceof JsonObject inputSchema)) {
+      throw new IllegalStateException(
+          "MCP tools/list published tool '" + remoteName + "' with a non-object input schema");
     }
     String localName = normalizedPrefix + normalize(remoteName);
     String previousRemoteName = localNames.put(localName, remoteName);

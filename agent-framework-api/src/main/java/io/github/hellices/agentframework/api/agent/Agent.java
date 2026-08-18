@@ -1,5 +1,6 @@
 package io.github.hellices.agentframework.api.agent;
 
+import io.github.hellices.agentframework.api.context.ContextAttributes;
 import io.github.hellices.agentframework.api.session.SessionContext;
 import java.util.Objects;
 import java.util.UUID;
@@ -46,11 +47,20 @@ public abstract class Agent {
     if (session != null) {
       validateSessionCompatibility(session);
     }
-    SessionContext sessionContext = newSessionContext(normalizedRequest);
+    ContextAttributes effectiveAttributes = effectiveAttributes(normalizedRequest);
+    SessionContext sessionContext = newSessionContext(normalizedRequest, effectiveAttributes);
     AgentRun run =
         runInternal(
-            new AgentRunContext(this, session, normalizedRequest.attributes(), sessionContext),
+            AgentRunContext.builder()
+                .agent(this)
+                .session(session)
+                .attributes(effectiveAttributes)
+                .sessionContext(sessionContext)
+                .build(),
             normalizedRequest);
+    if (run.isEngineManaged()) {
+      return run;
+    }
     AgentRun completed = run.withCompletion(completionAction(sessionContext));
     return completed.withResponse(
         afterRunStage(sessionContext, completed.response()), sessionContext::updatedSession);
@@ -67,11 +77,20 @@ public abstract class Agent {
     if (session != null) {
       validateSessionCompatibility(session);
     }
-    SessionContext sessionContext = newSessionContext(normalizedRequest);
+    ContextAttributes effectiveAttributes = effectiveAttributes(normalizedRequest);
+    SessionContext sessionContext = newSessionContext(normalizedRequest, effectiveAttributes);
     AgentStreamingRun<AgentResponseUpdate> run =
         runStreamingInternal(
-            new AgentRunContext(this, session, normalizedRequest.attributes(), sessionContext),
+            AgentRunContext.builder()
+                .agent(this)
+                .session(session)
+                .attributes(effectiveAttributes)
+                .sessionContext(sessionContext)
+                .build(),
             normalizedRequest);
+    if (run.isEngineManaged()) {
+      return run;
+    }
     AgentStreamingRun<AgentResponseUpdate> completed =
         run.withCompletion(completionAction(sessionContext));
     return completed.withResponse(
@@ -100,6 +119,11 @@ public abstract class Agent {
    * performed for it. A stage returned here that fails, or a {@code null} stage, fails the run
    * rather than being swallowed.
    *
+   * <p>This facade seam drives the lifecycle for custom {@code Agent} subclasses only. A run an
+   * engine already finalised (see {@link AgentRun#engineManaged}) owns its own completion, {@code
+   * afterRun}, and session save, so the facade returns it untouched and never invokes this seam for
+   * it — the engine would otherwise complete the response slot twice.
+   *
    * <p>Because this seam is the last lifecycle step, it is also the fence for {@link
    * AgentRun#session()}: the session that stage publishes is read only after this seam succeeded,
    * so an implementation that persists the session here (the engine's session save) publishes only
@@ -121,9 +145,14 @@ public abstract class Agent {
     return CompletableFuture.completedFuture(null);
   }
 
-  private static SessionContext newSessionContext(AgentRunRequest request) {
+  private static SessionContext newSessionContext(
+      AgentRunRequest request, ContextAttributes effectiveAttributes) {
     return new SessionContext(
-        request.session(), request.messages(), request.attributes(), request.cancellationSignal());
+        request.session(), request.messages(), effectiveAttributes, request.cancellationSignal());
+  }
+
+  private static ContextAttributes effectiveAttributes(AgentRunRequest request) {
+    return request.options().attributes().merge(request.attributes());
   }
 
   /**

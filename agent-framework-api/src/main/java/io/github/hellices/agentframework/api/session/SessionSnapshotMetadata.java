@@ -11,17 +11,42 @@ import java.util.Objects;
  * keyed by run, because {@code Agent}'s after-run hook only receives the context: keeping the
  * metadata on the context is what lets the load and the save of one run agree without the engine
  * holding per-run mutable state.
- *
- * @param revision the revision of the snapshot this run was restored from; never negative
- * @param createdAt the instant the stored session was first written; carried forward by every later
- *     save so the creation time of a session is not rewritten on every run
  */
-public record SessionSnapshotMetadata(long revision, Instant createdAt) {
+public final class SessionSnapshotMetadata {
 
-  public SessionSnapshotMetadata {
+  private final long revision;
+  private final Instant createdAt;
+
+  public SessionSnapshotMetadata(long revision, Instant createdAt) {
     if (revision < 0) {
       throw new IllegalArgumentException("revision must not be negative");
     }
-    createdAt = Objects.requireNonNull(createdAt, "createdAt must not be null");
+    this.revision = revision;
+    this.createdAt = Objects.requireNonNull(createdAt, "createdAt must not be null");
+  }
+
+  public long revision() {
+    return revision;
+  }
+
+  public Instant createdAt() {
+    return createdAt;
+  }
+
+  @Override
+  public boolean equals(Object other) {
+    return other instanceof SessionSnapshotMetadata that
+        && revision == that.revision
+        && createdAt.equals(that.createdAt);
+  }
+
+  @Override
+  public int hashCode() {
+    return Objects.hash(revision, createdAt);
+  }
+
+  @Override
+  public String toString() {
+    return "SessionSnapshotMetadata[revision=" + revision + ", createdAt=" + createdAt + "]";
   }
 }

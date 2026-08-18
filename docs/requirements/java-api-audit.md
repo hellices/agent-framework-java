@@ -53,7 +53,9 @@ settle them.
 ### Public type forms
 
 - Use a final class with a builder for evolvable request and option types.
-- Limit records to stable snapshots, events, and identifiers.
+- Limit records to explicitly reviewed fixed values. The executable public-contract policy currently
+  allows only `Usage` and `MessageAttribution`; session, tool, request, response, and option values
+  remain final classes so new fields can be added compatibly.
 - Use open interfaces for externally implemented SPIs and sealed hierarchies only for closed engine
   states and events.
 - Model `Role` as an immutable value type with known constants rather than as an enum.
@@ -107,26 +109,21 @@ The following items may look unlike a dynamic-language API, but should still be 
 
 ## Comparison with the current Java code
 
-The current production source is in a pre-design bootstrap state.
+The current tree is no longer a bootstrap marker set. Core execution, session persistence, MCP tool
+integration, and the OpenAI Chat Completions adapter all ship production code with executable tests.
+The canonical implementation status for each requirement now lives in the
+[requirements traceability matrix](../design/requirements-design/requirements-traceability-matrix.md).
 
-| Path | Current status | Requirement mapping |
-| --- | --- | --- |
-| `agent-framework-api/.../ApiContract.java` | Module-boundary marker | Does not implement a functional requirement |
-| `agent-framework-engine/.../EngineContract.java` | Dependency-boundary marker | Does not implement a functional requirement |
-| `agent-framework-testkit/.../DeterministicClock.java` | Deterministic time fixture | Future OPS/WF test support |
-| `build-tools/harness-policy` | Repository, build, and publishing policy | Part of the build contract for OPS-023 and OPS-024 |
+This audit still matters because it records the API constraints that the implementation must keep
+obeying as the matrix moves rows from `absent` to `partial` to `implemented`. In particular, the
+executable public-contract policy in `build-tools/harness-policy` now enforces two of this audit's
+core Java rules:
 
-Functional requirements therefore cannot be marked “implemented” against the current code. For
-each id, the design mapping matrix must record separately:
+- only explicitly reviewed fixed values may remain public records, and
+- primary public API/SPI signatures do not expose raw `Map<String, Object>` contracts.
 
-1. Target module, package, and type
-2. Current implementation status: `absent`, `bootstrap`, `partial`, or `implemented`
-3. Pinned upstream production and test evidence
-4. Planned unit, contract, or golden test
-
-The default status of every AGT through PRV functional id is currently `absent`; only parts of the
-build and packaging requirements `OPS-023` and `OPS-024` are `partial`. No requirement yet meets all
-acceptance criteria and qualifies as `implemented`.
+For each requirement id, the traceability matrix records the target modules, current implementation
+status, upstream evidence, and the executable verification layers that justify that status.
 
 ## Design approval criteria
 

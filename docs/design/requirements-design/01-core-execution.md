@@ -90,6 +90,10 @@ Agent.runStreaming(request)   -> AgentStreamingRun(updates + final completion + 
 `AgentStreamingRun.updates()` provides a `Flow.Publisher<AgentResponseUpdate>`. The `cancel()` method
 on both handles triggers the same `CancellationSignal` passed to the request.
 
+The two handles are views over one `RunPipeline`: `runStreaming(...)` exposes its cold unicast
+update stream directly, while `run(...)` drains the same pipeline internally and exposes only the
+terminal response.
+
 `AgentRunRequest` is a non-null immutable value.
 
 - normalized message list
@@ -109,17 +113,36 @@ propagation construct `AgentRunRequest` with their own signal.
 Framework adapters and the standalone assembly provide a factory with fully assembled ports, so
 general users do not interact directly with `AgentEngineBuilder`.
 
-`AgentFactory` composes `AgentEngine` and `ModelCatalog`.
+`AgentFactory` composes a shared, model-independent `AgentEngine` with a `ModelCatalog`. The engine
+is created once through `AgentEngine.builder()` (session services only) and reused; each factory
+binds it to a catalog. `AgentEngine` exposes two composition overloads:
+
+- `engine.factory(ModelCatalog)`: a factory over an explicit catalog for `builder()`/`builder(name)`
+  model selection
+- `engine.factory()`: a factory over an empty catalog for the explicit-client path
+  (`builderWithClient`); catalog-backed routes still fail with the same actionable messages
 
 - `builder()`: uses the catalog's default model; fails with actionable guidance if there is no
   default
 - `builder(name)`: resolves a named model
 - `builderWithClient(ModelClient)`: uses an explicit model without a null-ambiguous Java overload
+- `bind(AgentDefinition, AgentRuntime)`: binds an externally constructed, immutable definition and
+  its runtime to the shared engine, preserving declaration-only tools that carry no binding
+
+An `AgentBuilder` separates declaration from binding. `buildDefinition()` returns the declarative
+`AgentDefinition` (id, name, description, instructions, tool declarations, and `defaultRunOptions`
+including the `maxToolIterations` budget) with no runtime binding. `build()` derives the
+`AgentRuntime` (selected `ModelClient`, tool bindings, and context providers) and calls
+`engine.bind(definition, runtime)`. Context providers and executable tool bindings live only in the
+runtime, never in the definition. A `FunctionTool` supplied to `tools()` always contributes both a
+declaration and a binding; a manually constructed `AgentDefinition` may hold declaration-only tools,
+and `bind` preserves that distinction.
 
 ### 3.2 AgentEngine
 
-`AgentEngine` is an application service that implements `Agent` or creates an `Agent`
-implementation. The host injects the following ports through the builder.
+`AgentEngine` is an application service that binds immutable `AgentDefinition` and `AgentRuntime`
+pairs into `BoundAgent` instances. The engine itself is application-scoped and model-independent;
+the host injects the following engine-wide ports through the builder.
 
 - session services
 - ordered interceptor lists
@@ -127,12 +150,20 @@ implementation. The host injects the following ports through the builder.
 - schema/result mapper
 - telemetry sink
 
+These engine-wide services are the target ownership for `AgentEngineBuilder`. In this Task 4 slice
+the builder currently exposes only the shared `SessionStore` and `StateCodecRegistry`; the ordered
+interceptor lists, `ExecutionStrategy`, schema/result mapper, and telemetry sink are added by later
+approved convergence tasks. Whether present now or added later, these engine-wide services belong to
+the engine and never to an individual `AgentDefinition` or `AgentRuntime`.
+
 At build time, the builder rejects unsupported interceptor seams, missing mandatory ports, and
 conflicting tool options.
 
-The engine is not bound to a specific model. `AgentFactory` selects a model from `ModelCatalog`,
-associates its `ModelClient` with an immutable Agent definition, and the engine runs that
-definition. A run-level model override uses the same public port.
+The engine is not bound to a specific model. `AgentEngine.builder()` configures only shared session
+services (session store, state codec registry) and `build()` returns the reusable engine.
+`AgentFactory` selects a model from `ModelCatalog`, associates its `ModelClient` with an immutable
+Agent definition, and `engine.bind(definition, runtime)` runs that definition. A run-level model
+override uses the same public port.
 
 ### 3.3 Tool facade
 
@@ -161,6 +192,11 @@ handlers, and the core does not create fake tool results.
 
 A raw provider SDK object is a transient diagnostic handle. Snapshot and wire conversions consider
 only JSON-safe extension values.
+
+Executable architecture policy keeps these value rules honest: primary public API/SPI signatures do
+not expose raw `Map<String, Object>` contracts, and only reviewed fixed values (`Usage` and
+`MessageAttribution`) remain records. Session/tool/request/response/options values stay final
+classes so later slices can extend them compatibly.
 
 ## 4. Execution state machine
 
@@ -213,8 +249,11 @@ VALIDATE
 
 ## 5. Model port and options
 
-`ModelClient` has only the minimum common functionality. Web search, code interpreter, and provider
-continuation are exposed through typed `ModelCapability<T>` or adapter-specific APIs.
+`ModelClient` has only the minimum common functionality: one `execute(ModelRequest)` call that
+returns a publisher of `ModelResponseUpdate`. A provider that answers in one shot emits one update
+and completes; a native streaming provider emits several under the same contract. Web search, code
+interpreter, and provider continuation are exposed through typed `ModelCapability<T>` or
+adapter-specific APIs.
 
 `ModelOptions` has typed immutable properties.
 
