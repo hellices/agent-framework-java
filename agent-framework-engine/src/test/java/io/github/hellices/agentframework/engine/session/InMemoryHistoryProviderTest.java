@@ -11,6 +11,7 @@ import io.github.hellices.agentframework.api.agent.AgentRunOptions;
 import io.github.hellices.agentframework.api.agent.AgentRunRequest;
 import io.github.hellices.agentframework.api.agent.AgentSession;
 import io.github.hellices.agentframework.api.agent.CancellationSignal;
+import io.github.hellices.agentframework.api.agent.RunContribution;
 import io.github.hellices.agentframework.api.context.ContextAttributes;
 import io.github.hellices.agentframework.api.message.FinishReason;
 import io.github.hellices.agentframework.api.message.Message;
@@ -371,7 +372,7 @@ class InMemoryHistoryProviderTest {
     SessionContext context =
         contextWith(sessionWithHistory("session-1", List.of(user("one"))), List.of(user("hi")));
     InMemoryHistoryProvider provider = new InMemoryHistoryProvider();
-    ProviderSessionState state = context.providerState(provider.sourceId());
+    ProviderSessionState<MessageHistory> state = context.providerState(provider.stateKey());
 
     List<Message> loaded = provider.getMessages(context, state).toCompletableFuture().join();
     provider.saveMessages(context, state, List.of(user("two"))).toCompletableFuture().join();
@@ -395,7 +396,10 @@ class InMemoryHistoryProviderTest {
     SessionContext restoredContext = contextWith(restored, List.of(user("again")));
     assertThat(
             new InMemoryHistoryProvider()
-                .getMessages(restoredContext, restoredContext.providerState("in_memory"))
+                .getMessages(
+                    restoredContext,
+                    restoredContext.providerState(
+                        SessionStateKey.of("in_memory", MessageHistory.class)))
                 .toCompletableFuture()
                 .join())
         .extracting(Message::text)
@@ -651,10 +655,8 @@ class InMemoryHistoryProviderTest {
             session("session-1", null, Map.of("in_memory", "corrupted")), List.of(user("hi")));
 
     assertThatThrownBy(() -> beforeRun(new InMemoryHistoryProvider(), context))
-        .isInstanceOf(IllegalStateException.class)
-        .hasMessage(
-            "history state for source 'in_memory' is not a"
-                + " io.github.hellices.agentframework.api.session.MessageHistory");
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("session state key collision for in_memory");
   }
 
   @Test
@@ -665,22 +667,21 @@ class InMemoryHistoryProviderTest {
             List.of(user("hi")));
 
     assertThatThrownBy(() -> beforeRun(new InMemoryHistoryProvider(), context))
-        .isInstanceOf(IllegalStateException.class)
-        .hasMessage(
-            "history state for source 'in_memory' is not a"
-                + " io.github.hellices.agentframework.api.session.MessageHistory");
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("session state key collision for in_memory");
   }
 
   @Test
   void hooksRejectANullSessionContext() {
     InMemoryHistoryProvider provider = new InMemoryHistoryProvider();
     SessionContext context = contextWith(session("session-1", null, Map.of()), List.of(user("hi")));
-    ProviderSessionState state = context.providerState("in_memory");
+    ProviderSessionState<MessageHistory> state =
+        context.providerState(SessionStateKey.of("in_memory", MessageHistory.class));
 
-    assertThatThrownBy(() -> provider.beforeRun(null, state))
+    assertThatThrownBy(() -> provider.prepare(null, state))
         .isInstanceOf(NullPointerException.class)
         .hasMessage("context must not be null");
-    assertThatThrownBy(() -> provider.afterRun(null, state))
+    assertThatThrownBy(() -> provider.complete(null, state))
         .isInstanceOf(NullPointerException.class)
         .hasMessage("context must not be null");
   }
@@ -690,10 +691,10 @@ class InMemoryHistoryProviderTest {
     InMemoryHistoryProvider provider = new InMemoryHistoryProvider();
     SessionContext context = contextWith(session("session-1", null, Map.of()), List.of(user("hi")));
 
-    assertThatThrownBy(() -> provider.beforeRun(context, null))
+    assertThatThrownBy(() -> provider.prepare(context, null))
         .isInstanceOf(NullPointerException.class)
         .hasMessage("state must not be null");
-    assertThatThrownBy(() -> provider.afterRun(context, null))
+    assertThatThrownBy(() -> provider.complete(context, null))
         .isInstanceOf(NullPointerException.class)
         .hasMessage("state must not be null");
   }
@@ -757,15 +758,19 @@ class InMemoryHistoryProviderTest {
   }
 
   private static void beforeRun(HistoryProvider provider, SessionContext context) {
-    provider
-        .beforeRun(context, context.providerState(provider.sourceId()))
-        .toCompletableFuture()
-        .join();
+    RunContribution contribution =
+        provider
+            .prepare(context, context.providerState(provider.stateKey()))
+            .toCompletableFuture()
+            .join();
+    if (!contribution.messages().isEmpty()) {
+      context.addContextMessages(provider.stateKey().id(), contribution.messages());
+    }
   }
 
   private static void afterRun(HistoryProvider provider, SessionContext context) {
     provider
-        .afterRun(context, context.providerState(provider.sourceId()))
+        .complete(context, context.providerState(provider.stateKey()))
         .toCompletableFuture()
         .join();
   }
@@ -885,18 +890,13 @@ class InMemoryHistoryProviderTest {
     }
 
     @Override
-    public String sourceId() {
-      return "capture";
-    }
-
-    @Override
-    public CompletionStage<Void> beforeRun(SessionContext context, ProviderSessionState state) {
+    public CompletionStage<RunContribution> prepare(SessionContext context) {
       captured.set(context);
-      return completedFuture(null);
+      return completedFuture(RunContribution.empty());
     }
 
     @Override
-    public CompletionStage<Void> afterRun(SessionContext context, ProviderSessionState state) {
+    public CompletionStage<Void> complete(SessionContext context) {
       return completedFuture(null);
     }
   }
@@ -910,13 +910,15 @@ class InMemoryHistoryProviderTest {
 
     @Override
     public CompletionStage<List<Message>> getMessages(
-        SessionContext context, ProviderSessionState state) {
+        SessionContext context, ProviderSessionState<MessageHistory> state) {
       return null;
     }
 
     @Override
     public CompletionStage<Void> saveMessages(
-        SessionContext context, ProviderSessionState state, List<Message> messages) {
+        SessionContext context,
+        ProviderSessionState<MessageHistory> state,
+        List<Message> messages) {
       return null;
     }
   }
@@ -933,13 +935,13 @@ class InMemoryHistoryProviderTest {
 
     @Override
     public CompletionStage<List<Message>> getMessages(
-        SessionContext context, ProviderSessionState state) {
+        SessionContext context, ProviderSessionState<MessageHistory> state) {
       return completedFuture(messages);
     }
 
     @Override
     public CompletionStage<Void> saveMessages(
-        SessionContext context, ProviderSessionState state, List<Message> stored) {
+        SessionContext context, ProviderSessionState<MessageHistory> state, List<Message> stored) {
       return completedFuture(null);
     }
   }

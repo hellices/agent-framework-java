@@ -4,6 +4,7 @@ import io.github.hellices.agentframework.api.agent.AgentDefinition;
 import io.github.hellices.agentframework.api.agent.AgentRuntime;
 import io.github.hellices.agentframework.api.agent.AgentSession;
 import io.github.hellices.agentframework.api.session.SessionContext;
+import io.github.hellices.agentframework.api.session.SessionStateKey;
 import io.github.hellices.agentframework.api.tool.FunctionTool;
 import io.github.hellices.agentframework.api.tool.ToolBinding;
 import io.github.hellices.agentframework.api.tool.ToolDefinition;
@@ -12,7 +13,7 @@ import io.github.hellices.agentframework.engine.session.InMemoryHistoryProvider;
 import io.github.hellices.agentframework.spi.session.ContextProvider;
 import io.github.hellices.agentframework.spi.session.HistoryPolicy;
 import io.github.hellices.agentframework.spi.session.HistoryProvider;
-import io.github.hellices.agentframework.spi.session.ProviderSessionState;
+import io.github.hellices.agentframework.spi.session.StatefulContextProvider;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -111,20 +112,27 @@ final class AgentBinding {
   }
 
   /**
-   * Reads every provider's {@code sourceId} exactly once, so the session state namespace a provider
-   * owns is fixed for this agent's lifetime and cannot drift between runs, and rejects a blank or
-   * duplicated namespace before any run can mix two providers' state.
+   * Reads every stateful provider's state-key id exactly once, so the session state namespace a
+   * provider owns is fixed for this agent's lifetime and cannot drift between runs, and rejects a
+   * blank or duplicated namespace before any run can mix two providers' state. A stateless provider
+   * owns no namespace, so it reserves nothing and is bound with a {@code null} source id.
    */
   private static List<ProviderBinding> bindContextProviders(List<ContextProvider> providers) {
     List<ProviderBinding> bindings = new ArrayList<>();
-    Set<String> sourceIds = new LinkedHashSet<>();
+    Set<String> stateKeyIds = new LinkedHashSet<>();
     for (ContextProvider provider : providers) {
-      String sourceId = provider.sourceId();
-      if (sourceId == null || sourceId.isBlank()) {
-        throw new IllegalArgumentException("context provider sourceId must not be blank");
-      }
-      if (!sourceIds.add(sourceId)) {
-        throw new IllegalArgumentException("duplicate context provider sourceId: " + sourceId);
+      String sourceId = null;
+      if (provider instanceof StatefulContextProvider<?> stateful) {
+        SessionStateKey<?> stateKey =
+            Objects.requireNonNull(
+                stateful.stateKey(), "stateful context provider stateKey must not be null");
+        sourceId = stateKey.id();
+        if (sourceId.isBlank()) {
+          throw new IllegalArgumentException("context provider stateKey id must not be blank");
+        }
+        if (!stateKeyIds.add(sourceId)) {
+          throw new IllegalArgumentException("duplicate context provider stateKey id: " + sourceId);
+        }
       }
       bindings.add(new ProviderBinding(sourceId, provider));
     }
@@ -225,12 +233,9 @@ final class AgentBinding {
 
   /**
    * A context provider bound to the fixed source id read once when the agent was bound, so a
-   * provider cannot change the session state namespace it owns between runs or hooks.
+   * provider cannot change the session state namespace it owns between runs or hooks. The source id
+   * is the state-key id of a {@link StatefulContextProvider}, or {@code null} for a stateless
+   * provider that owns no namespace.
    */
-  record ProviderBinding(String sourceId, ContextProvider provider) {
-
-    ProviderSessionState state(SessionContext sessionContext) {
-      return sessionContext.providerState(sourceId);
-    }
-  }
+  record ProviderBinding(String sourceId, ContextProvider provider) {}
 }

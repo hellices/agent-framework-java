@@ -13,6 +13,7 @@ import io.github.hellices.agentframework.api.agent.AgentRunRequest;
 import io.github.hellices.agentframework.api.agent.AgentSession;
 import io.github.hellices.agentframework.api.agent.AgentStreamingRun;
 import io.github.hellices.agentframework.api.agent.CancellationSignal;
+import io.github.hellices.agentframework.api.agent.RunContribution;
 import io.github.hellices.agentframework.api.context.ContextAttributes;
 import io.github.hellices.agentframework.api.message.FinishReason;
 import io.github.hellices.agentframework.api.message.Message;
@@ -41,6 +42,7 @@ import io.github.hellices.agentframework.spi.session.SessionStateDecodingExcepti
 import io.github.hellices.agentframework.spi.session.SessionStore;
 import io.github.hellices.agentframework.spi.session.StateCodec;
 import io.github.hellices.agentframework.spi.session.StateCodecRegistry;
+import io.github.hellices.agentframework.spi.session.StatefulContextProvider;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.time.Instant;
@@ -577,8 +579,7 @@ class SessionCoordinatorTest {
   @Test
   void aBeforeRunHookFailureSavesNothing() {
     RecordingStore store = new RecordingStore();
-    Agent engine =
-        engineWithStore(store, fixedClient("hello"), new FailingProvider("broken", true));
+    Agent engine = engineWithStore(store, fixedClient("hello"), new FailingProvider(true));
 
     assertThatThrownBy(() -> run(engine, session("session-1", null, Map.of()), "hi"))
         .hasRootCauseMessage("before-run failed");
@@ -588,8 +589,7 @@ class SessionCoordinatorTest {
   @Test
   void anAfterRunHookFailureSavesNothing() {
     RecordingStore store = new RecordingStore();
-    Agent engine =
-        engineWithStore(store, fixedClient("hello"), new FailingProvider("broken", false));
+    Agent engine = engineWithStore(store, fixedClient("hello"), new FailingProvider(false));
 
     assertThatThrownBy(() -> run(engine, session("session-1", null, Map.of()), "hi"))
         .hasRootCauseMessage("after-run failed");
@@ -1206,44 +1206,48 @@ class SessionCoordinatorTest {
    * declaration order, a probe declared before the engine's own default history provider sees the
    * state that provider produced for the finished run.
    */
-  private static final class ProbeProvider implements ContextProvider {
+  private static final class ProbeProvider implements StatefulContextProvider<MessageHistory> {
 
     private final String sourceId;
+    private final SessionStateKey<MessageHistory> stateKey;
     private final AtomicReference<SessionContext> context = new AtomicReference<>();
     private final AtomicReference<List<Message>> beforeRunDefaultHistory = new AtomicReference<>();
     private final AtomicReference<List<Message>> afterRunDefaultHistory = new AtomicReference<>();
-    private final AtomicReference<ProviderSessionState> beforeRunState = new AtomicReference<>();
-    private final AtomicReference<ProviderSessionState> afterRunState = new AtomicReference<>();
-    private final AtomicReference<ProviderSessionState> beforeRunDefaultHistoryState =
+    private final AtomicReference<ProviderSessionState<MessageHistory>> beforeRunState =
         new AtomicReference<>();
-    private final AtomicReference<ProviderSessionState> afterRunDefaultHistoryState =
+    private final AtomicReference<ProviderSessionState<MessageHistory>> afterRunState =
         new AtomicReference<>();
+    private final AtomicReference<ProviderSessionState<MessageHistory>>
+        beforeRunDefaultHistoryState = new AtomicReference<>();
+    private final AtomicReference<ProviderSessionState<MessageHistory>>
+        afterRunDefaultHistoryState = new AtomicReference<>();
     private final AtomicReference<Map<String, Object>> updatedState = new AtomicReference<>();
 
     private ProbeProvider(String sourceId) {
       this.sourceId = sourceId;
+      this.stateKey = SessionStateKey.of(sourceId, MessageHistory.class);
     }
 
     @Override
-    public String sourceId() {
-      return sourceId;
+    public SessionStateKey<MessageHistory> stateKey() {
+      return stateKey;
     }
 
     @Override
-    public CompletionStage<Void> beforeRun(SessionContext runContext, ProviderSessionState state) {
+    public CompletionStage<RunContribution> prepare(
+        SessionContext runContext, ProviderSessionState<MessageHistory> state) {
       context.set(runContext);
       beforeRunState.set(state);
-      beforeRunDefaultHistoryState.set(
-          runContext.providerState(InMemoryHistoryProvider.DEFAULT_SOURCE_ID));
+      beforeRunDefaultHistoryState.set(runContext.providerState(defaultHistoryKey()));
       beforeRunDefaultHistory.set(historyIn(runContext, InMemoryHistoryProvider.DEFAULT_SOURCE_ID));
-      return completedFuture(null);
+      return completedFuture(RunContribution.empty());
     }
 
     @Override
-    public CompletionStage<Void> afterRun(SessionContext runContext, ProviderSessionState state) {
+    public CompletionStage<Void> complete(
+        SessionContext runContext, ProviderSessionState<MessageHistory> state) {
       afterRunState.set(state);
-      afterRunDefaultHistoryState.set(
-          runContext.providerState(InMemoryHistoryProvider.DEFAULT_SOURCE_ID));
+      afterRunDefaultHistoryState.set(runContext.providerState(defaultHistoryKey()));
       afterRunDefaultHistory.set(historyIn(runContext, InMemoryHistoryProvider.DEFAULT_SOURCE_ID));
       state.set(MessageHistory.of(runContext.inputMessages()));
       updatedState.set(
@@ -1254,20 +1258,27 @@ class SessionCoordinatorTest {
       return completedFuture(null);
     }
 
+    private static SessionStateKey<MessageHistory> defaultHistoryKey() {
+      return SessionStateKey.of(InMemoryHistoryProvider.DEFAULT_SOURCE_ID, MessageHistory.class);
+    }
+
     private static List<Message> historyIn(SessionContext runContext, String namespace) {
       return runContext
-          .providerState(namespace)
-          .value(MessageHistory.class)
+          .providerState(SessionStateKey.of(namespace, MessageHistory.class))
+          .value()
           .map(MessageHistory::messages)
           .orElseGet(List::of);
     }
 
-    private Optional<Object> observedState(String namespace) {
-      return context.get().providerState(namespace).value();
+    private Optional<MessageHistory> observedState(String namespace) {
+      return context
+          .get()
+          .providerState(SessionStateKey.of(namespace, MessageHistory.class))
+          .value();
     }
 
     private List<Message> storedHistory(String namespace) {
-      return ((MessageHistory) observedState(namespace).orElseThrow()).messages();
+      return observedState(namespace).orElseThrow().messages();
     }
 
     private List<Message> beforeRunHistory(String namespace) {
@@ -1286,30 +1297,33 @@ class SessionCoordinatorTest {
   }
 
   /** A provider that writes a namespace it was never bound to, which must never be persisted. */
-  private static final class SiblingWritingProvider implements ContextProvider {
+  private static final class SiblingWritingProvider
+      implements StatefulContextProvider<MessageHistory> {
 
-    private final String sourceId;
-    private final String siblingSourceId;
+    private final SessionStateKey<MessageHistory> stateKey;
+    private final SessionStateKey<MessageHistory> siblingStateKey;
 
     private SiblingWritingProvider(String sourceId, String siblingSourceId) {
-      this.sourceId = sourceId;
-      this.siblingSourceId = siblingSourceId;
+      this.stateKey = SessionStateKey.of(sourceId, MessageHistory.class);
+      this.siblingStateKey = SessionStateKey.of(siblingSourceId, MessageHistory.class);
     }
 
     @Override
-    public String sourceId() {
-      return sourceId;
+    public SessionStateKey<MessageHistory> stateKey() {
+      return stateKey;
     }
 
     @Override
-    public CompletionStage<Void> beforeRun(SessionContext runContext, ProviderSessionState state) {
+    public CompletionStage<RunContribution> prepare(
+        SessionContext runContext, ProviderSessionState<MessageHistory> state) {
       state.set(MessageHistory.of(List.of(user("own"))));
-      runContext.providerState(siblingSourceId).set(MessageHistory.of(List.of(user("leaked"))));
-      return completedFuture(null);
+      runContext.providerState(siblingStateKey).set(MessageHistory.of(List.of(user("leaked"))));
+      return completedFuture(RunContribution.empty());
     }
 
     @Override
-    public CompletionStage<Void> afterRun(SessionContext runContext, ProviderSessionState state) {
+    public CompletionStage<Void> complete(
+        SessionContext runContext, ProviderSessionState<MessageHistory> state) {
       return completedFuture(null);
     }
   }
@@ -1326,18 +1340,13 @@ class SessionCoordinatorTest {
     }
 
     @Override
-    public String sourceId() {
-      return sourceId;
-    }
-
-    @Override
-    public CompletionStage<Void> beforeRun(SessionContext runContext, ProviderSessionState state) {
+    public CompletionStage<RunContribution> prepare(SessionContext runContext) {
       log.add("before:" + sourceId);
-      return completedFuture(null);
+      return completedFuture(RunContribution.empty());
     }
 
     @Override
-    public CompletionStage<Void> afterRun(SessionContext runContext, ProviderSessionState state) {
+    public CompletionStage<Void> complete(SessionContext runContext) {
       log.add("after:" + sourceId);
       return completedFuture(null);
     }
@@ -1346,28 +1355,21 @@ class SessionCoordinatorTest {
   /** Fails exactly one of the two hooks, so a test can prove a failed run never saves. */
   private static final class FailingProvider implements ContextProvider {
 
-    private final String sourceId;
     private final boolean failBefore;
 
-    private FailingProvider(String sourceId, boolean failBefore) {
-      this.sourceId = sourceId;
+    private FailingProvider(boolean failBefore) {
       this.failBefore = failBefore;
     }
 
     @Override
-    public String sourceId() {
-      return sourceId;
-    }
-
-    @Override
-    public CompletionStage<Void> beforeRun(SessionContext runContext, ProviderSessionState state) {
+    public CompletionStage<RunContribution> prepare(SessionContext runContext) {
       return failBefore
           ? CompletableFuture.failedFuture(new IllegalStateException("before-run failed"))
-          : completedFuture(null);
+          : completedFuture(RunContribution.empty());
     }
 
     @Override
-    public CompletionStage<Void> afterRun(SessionContext runContext, ProviderSessionState state) {
+    public CompletionStage<Void> complete(SessionContext runContext) {
       return failBefore
           ? completedFuture(null)
           : CompletableFuture.failedFuture(new IllegalStateException("after-run failed"));
@@ -1375,27 +1377,29 @@ class SessionCoordinatorTest {
   }
 
   /** Stores a custom state type, so a test can prove which registry the engine actually uses. */
-  private static final class CounterProvider implements ContextProvider {
+  private static final class CounterProvider implements StatefulContextProvider<Counter> {
 
-    private final String sourceId;
+    private final SessionStateKey<Counter> stateKey;
 
     private CounterProvider(String sourceId) {
-      this.sourceId = sourceId;
+      this.stateKey = SessionStateKey.of(sourceId, Counter.class);
     }
 
     @Override
-    public String sourceId() {
-      return sourceId;
+    public SessionStateKey<Counter> stateKey() {
+      return stateKey;
     }
 
     @Override
-    public CompletionStage<Void> beforeRun(SessionContext runContext, ProviderSessionState state) {
-      return completedFuture(null);
+    public CompletionStage<RunContribution> prepare(
+        SessionContext runContext, ProviderSessionState<Counter> state) {
+      return completedFuture(RunContribution.empty());
     }
 
     @Override
-    public CompletionStage<Void> afterRun(SessionContext runContext, ProviderSessionState state) {
-      state.set(new Counter(state.value(Counter.class).map(Counter::runs).orElse(0) + 1));
+    public CompletionStage<Void> complete(
+        SessionContext runContext, ProviderSessionState<Counter> state) {
+      state.set(new Counter(state.value().map(Counter::runs).orElse(0) + 1));
       return completedFuture(null);
     }
   }

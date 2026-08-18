@@ -14,6 +14,7 @@ import io.github.hellices.agentframework.api.agent.AgentRunRequest;
 import io.github.hellices.agentframework.api.agent.AgentSession;
 import io.github.hellices.agentframework.api.agent.AgentStreamingRun;
 import io.github.hellices.agentframework.api.agent.CancellationSignal;
+import io.github.hellices.agentframework.api.agent.RunContribution;
 import io.github.hellices.agentframework.api.context.ContextAttributes;
 import io.github.hellices.agentframework.api.message.FinishReason;
 import io.github.hellices.agentframework.api.message.Message;
@@ -33,6 +34,7 @@ import io.github.hellices.agentframework.spi.model.ModelResponse;
 import io.github.hellices.agentframework.spi.model.ModelResponseUpdate;
 import io.github.hellices.agentframework.spi.session.ContextProvider;
 import io.github.hellices.agentframework.spi.session.ProviderSessionState;
+import io.github.hellices.agentframework.spi.session.StatefulContextProvider;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -70,7 +72,7 @@ class AgentEngineSessionContextTest {
                     .contextProviders(new RecordingProvider("  ", new ArrayList<>()))
                     .build())
         .isInstanceOf(IllegalArgumentException.class)
-        .hasMessage("context provider sourceId must not be blank");
+        .hasMessage("id must not be blank");
   }
 
   @Test
@@ -84,7 +86,7 @@ class AgentEngineSessionContextTest {
                         new RecordingProvider("memory", log), new RecordingProvider("memory", log))
                     .build())
         .isInstanceOf(IllegalArgumentException.class)
-        .hasMessage("duplicate context provider sourceId: memory");
+        .hasMessage("duplicate context provider stateKey id: memory");
   }
 
   @Test
@@ -254,12 +256,11 @@ class AgentEngineSessionContextTest {
     List<String> log = new ArrayList<>();
     CountingClient client = new CountingClient("hello");
     RecordingProvider later = new RecordingProvider("later", log);
-    Agent engine =
-        boundBuilder(client).contextProviders(new NullStageProvider("memory"), later).build();
+    Agent engine = boundBuilder(client).contextProviders(new NullStageProvider(), later).build();
 
     assertThatThrownBy(() -> engine.run("hi").response().toCompletableFuture().join())
         .hasRootCauseInstanceOf(NullPointerException.class)
-        .hasRootCauseMessage("context provider before-run stage must not be null");
+        .hasRootCauseMessage("context provider prepare stage must not be null");
     // A null before-run stage short-circuits the run, so the model is never called and no later
     // provider hook - neither the following before-run hook nor any after-run hook - is reached.
     assertThat(client.invocations.get()).isZero();
@@ -739,8 +740,9 @@ class AgentEngineSessionContextTest {
     }
   }
 
-  private static class RecordingProvider implements ContextProvider {
+  private static class RecordingProvider implements StatefulContextProvider<JsonValue> {
     private final String sourceId;
+    private final SessionStateKey<JsonValue> stateKey;
     private final List<String> log;
     private final List<Integer> observedStateValues = new ArrayList<>();
     private final List<String> observedStateSourceIds = new ArrayList<>();
@@ -752,42 +754,46 @@ class AgentEngineSessionContextTest {
 
     private RecordingProvider(String sourceId, List<String> log) {
       this.sourceId = sourceId;
+      this.stateKey = SessionStateKey.of(sourceId, JsonValue.class);
       this.log = log;
     }
 
     @Override
-    public String sourceId() {
-      return sourceId;
+    public SessionStateKey<JsonValue> stateKey() {
+      return stateKey;
     }
 
     @Override
-    public CompletionStage<Void> beforeRun(SessionContext context, ProviderSessionState state) {
+    public CompletionStage<RunContribution> prepare(
+        SessionContext context, ProviderSessionState<JsonValue> state) {
       log.add("before:" + sourceId);
       beforeRunContexts.add(context);
       responseDuringBeforeRun = context.response();
-      observedStateSourceIds.add(state.sourceId());
-      int seen = state.value(JsonValue.class).map(AgentEngineSessionContextTest::asInt).orElse(0);
+      observedStateSourceIds.add(state.key().id());
+      int seen = state.value().map(AgentEngineSessionContextTest::asInt).orElse(0);
       observedStateValues.add(seen);
-      state.set(seen + 1);
-      context.addContextMessages(
-          state.sourceId(),
-          List.of(new Message(Role.USER, List.of(new TextContent("context:" + sourceId)))));
-      return completedFuture(null);
+      state.set(JsonValues.fromJava(seen + 1));
+      return completedFuture(
+          RunContribution.builder()
+              .messages(
+                  List.of(new Message(Role.USER, List.of(new TextContent("context:" + sourceId)))))
+              .build());
     }
 
     @Override
-    public CompletionStage<Void> afterRun(SessionContext context, ProviderSessionState state) {
+    public CompletionStage<Void> complete(
+        SessionContext context, ProviderSessionState<JsonValue> state) {
       log.add("after:" + sourceId);
       afterRunContexts.add(context);
       responseDuringAfterRun = context.response();
-      observedStateSourceIds.add(state.sourceId());
+      observedStateSourceIds.add(state.key().id());
       context.updatedSession().ifPresent(updatedSessions::add);
       return completedFuture(null);
     }
   }
 
   /**
-   * A provider whose {@code beforeRun} stays pending until the test releases it, so a run can be
+   * A provider whose {@code prepare} stays pending until the test releases it, so a run can be
    * cancelled while the framework is inside the asynchronous window Task 2 opened between the hooks
    * and the model call.
    */
@@ -799,9 +805,10 @@ class AgentEngineSessionContextTest {
     }
 
     @Override
-    public CompletionStage<Void> beforeRun(SessionContext context, ProviderSessionState state) {
-      super.beforeRun(context, state);
-      return gate.minimalCompletionStage();
+    public CompletionStage<RunContribution> prepare(
+        SessionContext context, ProviderSessionState<JsonValue> state) {
+      CompletionStage<RunContribution> contribution = super.prepare(context, state);
+      return gate.minimalCompletionStage().thenCompose(ignored -> contribution);
     }
 
     private void releaseBeforeRun() {
@@ -815,9 +822,10 @@ class AgentEngineSessionContextTest {
     }
 
     @Override
-    public CompletionStage<Void> beforeRun(SessionContext context, ProviderSessionState state) {
-      super.beforeRun(context, state);
-      CompletableFuture<Void> failed = new CompletableFuture<>();
+    public CompletionStage<RunContribution> prepare(
+        SessionContext context, ProviderSessionState<JsonValue> state) {
+      super.prepare(context, state);
+      CompletableFuture<RunContribution> failed = new CompletableFuture<>();
       failed.completeExceptionally(new IllegalStateException("before-run failure"));
       return failed;
     }
@@ -829,8 +837,9 @@ class AgentEngineSessionContextTest {
     }
 
     @Override
-    public CompletionStage<Void> afterRun(SessionContext context, ProviderSessionState state) {
-      super.afterRun(context, state);
+    public CompletionStage<Void> complete(
+        SessionContext context, ProviderSessionState<JsonValue> state) {
+      super.complete(context, state);
       CompletableFuture<Void> failed = new CompletableFuture<>();
       failed.completeExceptionally(new IllegalStateException("after-run failure"));
       return failed;
@@ -838,24 +847,15 @@ class AgentEngineSessionContextTest {
   }
 
   private static final class NullStageProvider implements ContextProvider {
-    private final String sourceId;
-
-    private NullStageProvider(String sourceId) {
-      this.sourceId = sourceId;
-    }
+    private NullStageProvider() {}
 
     @Override
-    public String sourceId() {
-      return sourceId;
-    }
-
-    @Override
-    public CompletionStage<Void> beforeRun(SessionContext context, ProviderSessionState state) {
+    public CompletionStage<RunContribution> prepare(SessionContext context) {
       return null;
     }
 
     @Override
-    public CompletionStage<Void> afterRun(SessionContext context, ProviderSessionState state) {
+    public CompletionStage<Void> complete(SessionContext context) {
       return completedFuture(null);
     }
   }

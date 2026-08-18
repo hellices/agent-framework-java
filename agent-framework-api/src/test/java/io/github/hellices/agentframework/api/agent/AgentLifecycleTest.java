@@ -1107,7 +1107,9 @@ class AgentLifecycleTest {
 
     @Override
     protected CompletionStage<Void> afterRun(SessionContext sessionContext) {
-      sessionContext.providerState("seam").set("written");
+      sessionContext
+          .providerState(SessionStateKey.of("seam", JsonValue.class))
+          .set(JsonValues.fromJava("written"));
       return super.afterRun(sessionContext);
     }
   }

@@ -13,6 +13,7 @@ import io.github.hellices.agentframework.api.agent.AgentRunRequest;
 import io.github.hellices.agentframework.api.agent.AgentSession;
 import io.github.hellices.agentframework.api.agent.AgentStreamingRun;
 import io.github.hellices.agentframework.api.agent.CancellationSignal;
+import io.github.hellices.agentframework.api.agent.RunContribution;
 import io.github.hellices.agentframework.api.context.ContextAttributes;
 import io.github.hellices.agentframework.api.message.FinishReason;
 import io.github.hellices.agentframework.api.message.Message;
@@ -23,7 +24,6 @@ import io.github.hellices.agentframework.api.session.SessionSnapshot;
 import io.github.hellices.agentframework.spi.model.ModelClient;
 import io.github.hellices.agentframework.spi.model.ModelResponse;
 import io.github.hellices.agentframework.spi.session.ContextProvider;
-import io.github.hellices.agentframework.spi.session.ProviderSessionState;
 import io.github.hellices.agentframework.spi.session.SessionStore;
 import java.util.ArrayList;
 import java.util.List;
@@ -309,18 +309,13 @@ class AgentEngineTerminalOrderingTest {
     }
 
     @Override
-    public String sourceId() {
-      return sourceId;
-    }
-
-    @Override
-    public CompletionStage<Void> beforeRun(SessionContext context, ProviderSessionState state) {
+    public CompletionStage<RunContribution> prepare(SessionContext context) {
       log.add("before:" + sourceId);
-      return completedFuture(null);
+      return completedFuture(RunContribution.empty());
     }
 
     @Override
-    public CompletionStage<Void> afterRun(SessionContext context, ProviderSessionState state) {
+    public CompletionStage<Void> complete(SessionContext context) {
       log.add("after:" + sourceId);
       responseDuringAfterRun = context.response();
       return afterRunStage;

@@ -1,9 +1,12 @@
 package io.github.hellices.agentframework.spi.session;
 
+import io.github.hellices.agentframework.api.agent.RunContribution;
 import io.github.hellices.agentframework.api.message.Message;
 import io.github.hellices.agentframework.api.message.MessageAttribution;
 import io.github.hellices.agentframework.api.session.ContextMessageContribution;
+import io.github.hellices.agentframework.api.session.MessageHistory;
 import io.github.hellices.agentframework.api.session.SessionContext;
+import io.github.hellices.agentframework.api.session.SessionStateKey;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
@@ -12,23 +15,27 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 
 /**
- * The single history contract of SES-013: one {@link ContextProvider} whose load and store
+ * The single history contract of SES-013: one {@link StatefulContextProvider} whose load and store
  * behaviour is decided by an immutable {@link HistoryPolicy} rather than by a family of subtypes.
  *
- * <p>A subclass implements storage only — {@link #getMessages} and {@link #saveMessages} — and
- * inherits the policy-driven hooks. The same implementation is therefore a primary history when it
- * loads and stores, an audit sink when it only stores inputs, an evaluation sink when it only
- * stores outputs, and a context recorder when it stores what other providers contributed.
+ * <p>History lives in one typed session-state key of {@link MessageHistory}, so the durable slot a
+ * provider owns declares its type up front: a first write resolves the {@code MessageHistory} state
+ * codec by exact class, with no dynamic type inference. A subclass implements storage only — {@link
+ * #getMessages} and {@link #saveMessages} — and inherits the policy-driven hooks. The same
+ * implementation is therefore a primary history when it loads and stores, an audit sink when it
+ * only stores inputs, an evaluation sink when it only stores outputs, and a context recorder when
+ * it stores what other providers contributed.
  *
- * <p><strong>Loading.</strong> {@link #beforeRun} runs only when {@link
- * HistoryPolicy#loadMessages()} is enabled. Loaded messages are injected in the order the storage
- * returned them and are stamped as {@value #HISTORY_SOURCE_TYPE} attribution carrying this
- * provider's {@link #sourceId()}, so history stays distinguishable from the context a memory or
- * retrieval provider contributed. Stamping replaces the stored source type and source id; only an
- * {@code originSessionId} the storage already held is preserved, so a reloaded message still names
- * the session that produced it, and only a message carrying none gets this run's session id.
+ * <p><strong>Loading.</strong> {@link #prepare} returns loaded messages only when {@link
+ * HistoryPolicy#loadMessages()} is enabled, in the order the storage returned them, stamped as
+ * {@value #HISTORY_SOURCE_TYPE} attribution carrying this provider's state-key id, so history stays
+ * distinguishable from the context a memory or retrieval provider contributed. Stamping replaces
+ * the stored source type and source id; only an {@code originSessionId} the storage already held is
+ * preserved, so a reloaded message still names the session that produced it, and only a message
+ * carrying none gets this run's session id. The engine folds the returned contribution into the run
+ * under this provider's state-key id.
  *
- * <p><strong>Storing.</strong> {@link #afterRun} builds exactly one ordered batch and hands it to
+ * <p><strong>Storing.</strong> {@link #complete} builds exactly one ordered batch and hands it to
  * {@link #saveMessages} once. The batch is the run in conversation order: the selected context
  * messages first (they preceded the caller's input in the model request), then the caller's input,
  * then the run response's messages. Categories the policy disables are left out, and a run that
@@ -56,7 +63,7 @@ import java.util.concurrent.CompletionStage;
  * neither is context contributed by another provider. A storage backend that can be tampered with
  * can therefore change roles or inject adversarial content into a run.
  */
-public abstract class HistoryProvider implements ContextProvider {
+public abstract class HistoryProvider implements StatefulContextProvider<MessageHistory> {
 
   /**
    * The attribution source type stamped onto loaded history, matching the pinned upstream chat
@@ -64,7 +71,7 @@ public abstract class HistoryProvider implements ContextProvider {
    */
   public static final String HISTORY_SOURCE_TYPE = "ChatHistory";
 
-  private final String sourceId;
+  private final SessionStateKey<MessageHistory> stateKey;
   private final HistoryPolicy policy;
 
   /**
@@ -78,7 +85,7 @@ public abstract class HistoryProvider implements ContextProvider {
   }
 
   private HistoryProvider(Binding binding) {
-    this.sourceId = binding.sourceId();
+    this.stateKey = SessionStateKey.of(binding.sourceId(), MessageHistory.class);
     this.policy = binding.policy();
   }
 
@@ -98,8 +105,8 @@ public abstract class HistoryProvider implements ContextProvider {
   }
 
   @Override
-  public final String sourceId() {
-    return sourceId;
+  public final SessionStateKey<MessageHistory> stateKey() {
+    return stateKey;
   }
 
   /** Returns the immutable policy this provider was configured with. */
@@ -115,12 +122,12 @@ public abstract class HistoryProvider implements ContextProvider {
    * session state slot. Implementations are storage-only and must not apply the policy.
    *
    * @param context the per-run context, for a storage backend that keys history by session id
-   * @param state this provider's source-bound session state view
+   * @param state this provider's key-bound session state view
    * @return a stage carrying the stored messages; neither the stage, the list, nor an entry may be
    *     {@code null}
    */
   public abstract CompletionStage<List<Message>> getMessages(
-      SessionContext context, ProviderSessionState state);
+      SessionContext context, ProviderSessionState<MessageHistory> state);
 
   /**
    * Persists one ordered batch for this session, appending it after what is already stored.
@@ -130,28 +137,30 @@ public abstract class HistoryProvider implements ContextProvider {
    * policy, and calling this directly stores exactly what is passed in.
    *
    * @param context the per-run context, for a storage backend that keys history by session id
-   * @param state this provider's source-bound session state view
+   * @param state this provider's key-bound session state view
    * @param messages the non-empty ordered batch selected by the policy
    * @return a stage completing when the batch is persisted; must not be {@code null}
    */
   public abstract CompletionStage<Void> saveMessages(
-      SessionContext context, ProviderSessionState state, List<Message> messages);
+      SessionContext context, ProviderSessionState<MessageHistory> state, List<Message> messages);
 
   /**
    * Loads stored history into the run when {@link HistoryPolicy#loadMessages()} is enabled, and
-   * does nothing otherwise. Override to control loading beyond the policy; the override owns
+   * contributes nothing otherwise. Override to control loading beyond the policy; the override owns
    * attribution and ordering in that case.
    */
   @Override
-  public CompletionStage<Void> beforeRun(SessionContext context, ProviderSessionState state) {
+  public CompletionStage<RunContribution> prepare(
+      SessionContext context, ProviderSessionState<MessageHistory> state) {
     Objects.requireNonNull(context, "context must not be null");
     Objects.requireNonNull(state, "state must not be null");
     if (!policy.loadMessages()) {
-      return CompletableFuture.completedFuture(null);
+      return CompletableFuture.completedFuture(RunContribution.empty());
     }
     return Objects.requireNonNull(
             getMessages(context, state), "history provider get-messages stage must not be null")
-        .thenAccept(messages -> context.addContextMessages(sourceId, asHistory(context, messages)));
+        .thenApply(
+            messages -> RunContribution.builder().messages(asHistory(context, messages)).build());
   }
 
   /**
@@ -164,7 +173,8 @@ public abstract class HistoryProvider implements ContextProvider {
    * caller driving the hooks directly never loses the input it already accepted.
    */
   @Override
-  public CompletionStage<Void> afterRun(SessionContext context, ProviderSessionState state) {
+  public CompletionStage<Void> complete(
+      SessionContext context, ProviderSessionState<MessageHistory> state) {
     Objects.requireNonNull(context, "context must not be null");
     Objects.requireNonNull(state, "state must not be null");
     List<Message> batch = messagesToStore(context);
@@ -189,7 +199,7 @@ public abstract class HistoryProvider implements ContextProvider {
               : stored.originSessionId();
       history.add(
           message.withAttribution(
-              new MessageAttribution(HISTORY_SOURCE_TYPE, sourceId, originSessionId)));
+              new MessageAttribution(HISTORY_SOURCE_TYPE, stateKey.id(), originSessionId)));
     }
     return List.copyOf(history);
   }
@@ -215,7 +225,7 @@ public abstract class HistoryProvider implements ContextProvider {
       String contributor = contribution.sourceId();
       boolean store =
           selectedSources == null
-              ? !sourceId.equals(contributor)
+              ? !stateKey.id().equals(contributor)
               : contributor != null && selectedSources.contains(contributor);
       if (store) {
         selected.add(contribution.message());

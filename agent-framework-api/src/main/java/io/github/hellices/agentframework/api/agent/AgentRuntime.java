@@ -1,10 +1,12 @@
 package io.github.hellices.agentframework.api.agent;
 
 import io.github.hellices.agentframework.api.context.ContextAttributes;
+import io.github.hellices.agentframework.api.session.SessionStateKey;
 import io.github.hellices.agentframework.api.tool.ToolBinding;
 import io.github.hellices.agentframework.api.tool.ToolDefinition;
 import io.github.hellices.agentframework.spi.model.ModelClient;
 import io.github.hellices.agentframework.spi.session.ContextProvider;
+import io.github.hellices.agentframework.spi.session.StatefulContextProvider;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -74,14 +76,20 @@ public final class AgentRuntime {
   }
 
   private static void validateContextProviders(List<ContextProvider> contextProviders) {
-    Set<String> sourceIds = new LinkedHashSet<>();
+    Set<String> stateKeyIds = new LinkedHashSet<>();
     for (ContextProvider contextProvider : contextProviders) {
-      String sourceId = contextProvider.sourceId();
-      if (sourceId == null || sourceId.isBlank()) {
-        throw new IllegalArgumentException("context provider sourceId must not be blank");
+      if (!(contextProvider instanceof StatefulContextProvider<?> stateful)) {
+        continue;
       }
-      if (!sourceIds.add(sourceId)) {
-        throw new IllegalArgumentException("duplicate context provider sourceId: " + sourceId);
+      SessionStateKey<?> stateKey =
+          Objects.requireNonNull(
+              stateful.stateKey(), "stateful context provider stateKey must not be null");
+      if (stateKey.id().isBlank()) {
+        throw new IllegalArgumentException("context provider stateKey id must not be blank");
+      }
+      if (!stateKeyIds.add(stateKey.id())) {
+        throw new IllegalArgumentException(
+            "duplicate context provider stateKey id: " + stateKey.id());
       }
     }
   }

@@ -8,7 +8,6 @@ import io.github.hellices.agentframework.spi.session.HistoryProvider;
 import io.github.hellices.agentframework.spi.session.ProviderSessionState;
 import java.util.List;
 import java.util.Objects;
-import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 
@@ -61,14 +60,14 @@ public final class InMemoryHistoryProvider extends HistoryProvider {
 
   @Override
   public CompletionStage<List<Message>> getMessages(
-      SessionContext context, ProviderSessionState state) {
+      SessionContext context, ProviderSessionState<MessageHistory> state) {
     Objects.requireNonNull(state, "state must not be null");
     return CompletableFuture.completedFuture(storedMessages(state));
   }
 
   @Override
   public CompletionStage<Void> saveMessages(
-      SessionContext context, ProviderSessionState state, List<Message> messages) {
+      SessionContext context, ProviderSessionState<MessageHistory> state, List<Message> messages) {
     Objects.requireNonNull(state, "state must not be null");
     Objects.requireNonNull(messages, "messages must not be null");
     for (Message message : messages) {
@@ -78,27 +77,15 @@ public final class InMemoryHistoryProvider extends HistoryProvider {
     return CompletableFuture.completedFuture(null);
   }
 
-  private static List<Message> storedMessages(ProviderSessionState state) {
+  private static List<Message> storedMessages(ProviderSessionState<MessageHistory> state) {
     return storedHistory(state).messages();
   }
 
   /**
-   * Reads the namespace as a {@link MessageHistory}. A namespace holding anything else is a
-   * corrupted or foreign session slot, and reporting it as "no history" would silently start a new
-   * conversation on top of state someone else owns, so it fails instead.
+   * Reads the namespace as a {@link MessageHistory}. The typed state key guarantees the stored
+   * value is a {@code MessageHistory}, so an empty slot simply starts a new conversation.
    */
-  private static MessageHistory storedHistory(ProviderSessionState state) {
-    Optional<Object> stored = state.value();
-    if (stored.isEmpty()) {
-      return MessageHistory.empty();
-    }
-    if (!(stored.get() instanceof MessageHistory history)) {
-      throw new IllegalStateException(
-          "history state for source '"
-              + state.sourceId()
-              + "' is not a "
-              + MessageHistory.class.getName());
-    }
-    return history;
+  private static MessageHistory storedHistory(ProviderSessionState<MessageHistory> state) {
+    return state.value().orElseGet(MessageHistory::empty);
   }
 }

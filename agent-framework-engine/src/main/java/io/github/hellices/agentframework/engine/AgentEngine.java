@@ -11,6 +11,7 @@ import io.github.hellices.agentframework.api.agent.AgentRunRequest;
 import io.github.hellices.agentframework.api.agent.AgentRuntime;
 import io.github.hellices.agentframework.api.agent.AgentStreamingRun;
 import io.github.hellices.agentframework.api.agent.CancellationSignal;
+import io.github.hellices.agentframework.api.agent.RunContribution;
 import io.github.hellices.agentframework.api.message.Message;
 import io.github.hellices.agentframework.api.session.SessionContext;
 import io.github.hellices.agentframework.api.value.JsonObject;
@@ -115,15 +116,19 @@ public final class AgentEngine {
    * later save may write back.
    *
    * <p>Restricting write-back here is what keeps the durable session a function of the providers
-   * the run actually ran: {@code SessionContext#providerState(String)} is reachable plumbing rather
-   * than an isolation boundary, so without this a provider reaching a sibling namespace would have
-   * that write persisted under a name nobody owned in this run.
+   * the run actually ran: {@code SessionContext#providerState(SessionStateKey)} is reachable
+   * plumbing rather than an isolation boundary, so without this a provider reaching a sibling
+   * namespace would have that write persisted under a name nobody owned in this run. Only stateful
+   * providers own a namespace; a stateless provider reserves nothing and contributes no id here.
    */
   private List<ProviderBinding> bindRun(AgentBinding binding, SessionContext sessionContext) {
     List<ProviderBinding> resolved = binding.resolveProviders(sessionContext);
     List<String> sourceIds = new ArrayList<>(resolved.size());
     for (ProviderBinding providerBinding : resolved) {
-      sourceIds.add(providerBinding.sourceId());
+      String sourceId = providerBinding.sourceId();
+      if (sourceId != null) {
+        sourceIds.add(sourceId);
+      }
     }
     sessionContext.restrictPersistedSources(sourceIds);
     return resolved;
@@ -294,10 +299,13 @@ public final class AgentEngine {
   }
 
   /**
-   * Composes every resolved provider's {@code beforeRun} hook in declaration order, before the
-   * run's first model call. Each hook receives the run's single {@link SessionContext} and the
-   * state view bound to its own source id. A hook that fails, returns {@code null}, or is reached
-   * after the run was cancelled fails the composed stage, so no later hook and no model call runs.
+   * Composes every resolved provider's {@code prepare} hook in declaration order, before the run's
+   * first model call. Each hook receives the run's single {@link SessionContext}; a stateful
+   * provider resolves its own key-bound state view through the default {@code prepare} bridge. The
+   * {@link RunContribution} a provider returns is folded into the run's context messages,
+   * attributed to the provider's state-key id when it owns one. A hook that fails, returns {@code
+   * null}, yields a {@code null} contribution, or is reached after the run was cancelled fails the
+   * composed stage, so no later hook and no model call runs.
    */
   private CompletionStage<Void> beforeRun(
       List<ProviderBinding> providers,
@@ -312,11 +320,39 @@ public final class AgentEngine {
                   throw new CancellationException("run was cancelled");
                 }
                 return Objects.requireNonNull(
-                    binding.provider().beforeRun(sessionContext, binding.state(sessionContext)),
-                    "context provider before-run stage must not be null");
+                        binding.provider().prepare(sessionContext),
+                        "context provider prepare stage must not be null")
+                    .thenAccept(
+                        contribution ->
+                            applyContribution(
+                                sessionContext,
+                                binding,
+                                Objects.requireNonNull(
+                                    contribution,
+                                    "context provider contribution must not be null")));
               });
     }
     return stage;
+  }
+
+  /**
+   * Folds a provider's {@link RunContribution} into the run's context messages, in declaration
+   * order. Messages a stateful provider contributes are attributed to its state-key id, so history
+   * selection can still key off the contributing provider; a stateless provider owns no id, so its
+   * messages are appended unattributed.
+   */
+  private static void applyContribution(
+      SessionContext sessionContext, ProviderBinding binding, RunContribution contribution) {
+    List<Message> messages = contribution.messages();
+    if (messages.isEmpty()) {
+      return;
+    }
+    String sourceId = binding.sourceId();
+    if (sourceId == null) {
+      sessionContext.addContextMessages(messages);
+    } else {
+      sessionContext.addContextMessages(sourceId, messages);
+    }
   }
 
   /**
@@ -377,11 +413,12 @@ public final class AgentEngine {
   }
 
   /**
-   * Composes every resolved provider's {@code afterRun} hook in reverse declaration order. The
-   * providers are the same ones {@code beforeRun} used, because resolution is a pure function of
-   * the agent's bind-time configuration and the run's set-once effective session. A hook failure
-   * fails the composed stage and stops the remaining (earlier-declared) hooks, so a run that fails
-   * anywhere never reaches the save and leaves the stored session untouched.
+   * Composes every resolved provider's {@code complete} hook in reverse declaration order. The
+   * providers are the same ones {@code prepare} used, because resolution is a pure function of the
+   * agent's bind-time configuration and the run's set-once effective session. A stateful provider
+   * resolves its own key-bound state view through the default {@code complete} bridge. A hook
+   * failure fails the composed stage and stops the remaining (earlier-declared) hooks, so a run
+   * that fails anywhere never reaches the save and leaves the stored session untouched.
    */
   private CompletionStage<Void> runProviderAfterRun(
       AgentBinding binding, SessionContext sessionContext) {
@@ -393,10 +430,8 @@ public final class AgentEngine {
           stage.thenCompose(
               ignored ->
                   Objects.requireNonNull(
-                      providerBinding
-                          .provider()
-                          .afterRun(sessionContext, providerBinding.state(sessionContext)),
-                      "context provider after-run stage must not be null"));
+                      providerBinding.provider().complete(sessionContext),
+                      "context provider complete stage must not be null"));
     }
     return stage;
   }

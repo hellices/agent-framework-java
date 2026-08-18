@@ -9,6 +9,7 @@ import io.github.hellices.agentframework.api.context.ContextAttributes;
 import io.github.hellices.agentframework.api.context.ContextKey;
 import io.github.hellices.agentframework.api.message.TextContent;
 import io.github.hellices.agentframework.api.session.SessionContext;
+import io.github.hellices.agentframework.api.session.SessionStateKey;
 import io.github.hellices.agentframework.api.tool.ToolArguments;
 import io.github.hellices.agentframework.api.tool.ToolBinding;
 import io.github.hellices.agentframework.api.tool.ToolContext;
@@ -19,6 +20,7 @@ import io.github.hellices.agentframework.spi.model.ModelClient;
 import io.github.hellices.agentframework.spi.model.StubModelClients;
 import io.github.hellices.agentframework.spi.session.ContextProvider;
 import io.github.hellices.agentframework.spi.session.ProviderSessionState;
+import io.github.hellices.agentframework.spi.session.StatefulContextProvider;
 import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -74,14 +76,14 @@ class AgentRuntimeTest {
             () ->
                 AgentRuntime.builder()
                     .modelClient(StubModelClients.stub())
-                    .contextProviders(Arrays.asList(new NamedContextProvider("history"), null)))
+                    .contextProviders(Arrays.asList(new StatefulNamedProvider("history"), null)))
         .isInstanceOf(NullPointerException.class)
         .hasMessage("contextProvider must not be null");
   }
 
   @Test
   void builderRejectsSameContextProviderAddedTwice() {
-    NamedContextProvider provider = new NamedContextProvider("memory");
+    StatefulNamedProvider provider = new StatefulNamedProvider("memory");
 
     assertThatThrownBy(
             () ->
@@ -91,33 +93,46 @@ class AgentRuntimeTest {
                     .contextProvider(provider)
                     .build())
         .isInstanceOf(IllegalArgumentException.class)
-        .hasMessage("duplicate context provider sourceId: memory");
+        .hasMessage("duplicate context provider stateKey id: memory");
   }
 
   @Test
-  void builderRejectsDifferentContextProvidersWithSameSourceId() {
+  void builderRejectsDifferentContextProvidersWithSameStateKeyId() {
     assertThatThrownBy(
             () ->
                 AgentRuntime.builder()
                     .modelClient(StubModelClients.stub())
                     .contextProviders(
                         List.of(
-                            new NamedContextProvider("memory"), new NamedContextProvider("memory")))
+                            new StatefulNamedProvider("memory"),
+                            new StatefulNamedProvider("memory")))
                     .build())
         .isInstanceOf(IllegalArgumentException.class)
-        .hasMessage("duplicate context provider sourceId: memory");
+        .hasMessage("duplicate context provider stateKey id: memory");
   }
 
   @Test
-  void builderRejectsBlankContextProviderSourceId() {
+  void builderRejectsBlankContextProviderStateKeyId() {
     assertThatThrownBy(
             () ->
                 AgentRuntime.builder()
                     .modelClient(StubModelClients.stub())
-                    .contextProvider(new NamedContextProvider(" "))
+                    .contextProvider(new StatefulNamedProvider(" "))
                     .build())
         .isInstanceOf(IllegalArgumentException.class)
-        .hasMessage("context provider sourceId must not be blank");
+        .hasMessage("id must not be blank");
+  }
+
+  @Test
+  void builderAllowsAnyNumberOfStatelessProvidersThatReserveNoNamespace() {
+    AgentRuntime runtime =
+        AgentRuntime.builder()
+            .modelClient(StubModelClients.stub())
+            .contextProvider(new StatelessProvider())
+            .contextProvider(new StatelessProvider())
+            .build();
+
+    assertThat(runtime.contextProviders()).hasSize(2);
   }
 
   @Test
@@ -129,8 +144,8 @@ class AgentRuntimeTest {
     bindings.add(ToolBinding.of("lookup", successfulHandler()));
     bindings.add(ToolBinding.of("search", successfulHandler()));
     List<ContextProvider> providers = new ArrayList<>();
-    NamedContextProvider history = new NamedContextProvider("history");
-    NamedContextProvider memory = new NamedContextProvider("memory");
+    StatefulNamedProvider history = new StatefulNamedProvider("history");
+    StatefulNamedProvider memory = new StatefulNamedProvider("memory");
     providers.add(history);
     providers.add(memory);
 
@@ -143,7 +158,7 @@ class AgentRuntimeTest {
             .build();
 
     bindings.add(ToolBinding.of("mutated", successfulHandler()));
-    providers.add(new NamedContextProvider("mutated"));
+    providers.add(new StatefulNamedProvider("mutated"));
 
     assertThat(runtime.toolBindings())
         .extracting(ToolBinding::toolName)
@@ -153,7 +168,7 @@ class AgentRuntimeTest {
     assertThatThrownBy(
             () -> runtime.toolBindings().add(ToolBinding.of("extra", successfulHandler())))
         .isInstanceOf(UnsupportedOperationException.class);
-    assertThatThrownBy(() -> runtime.contextProviders().add(new NamedContextProvider("extra")))
+    assertThatThrownBy(() -> runtime.contextProviders().add(new StatefulNamedProvider("extra")))
         .isInstanceOf(UnsupportedOperationException.class);
   }
 
@@ -201,26 +216,42 @@ class AgentRuntimeTest {
         completedFuture(ToolResult.success(new TextContent("ok")));
   }
 
-  private static final class NamedContextProvider implements ContextProvider {
-    private final String sourceId;
-
-    private NamedContextProvider(String sourceId) {
-      this.sourceId = sourceId;
+  private static final class StatelessProvider implements ContextProvider {
+    @Override
+    public CompletionStage<RunContribution> prepare(SessionContext context) {
+      return completedFuture(RunContribution.empty());
     }
 
     @Override
-    public String sourceId() {
-      return sourceId;
-    }
-
-    @Override
-    public CompletionStage<Void> beforeRun(SessionContext context, ProviderSessionState state) {
-      return completedFuture(null);
-    }
-
-    @Override
-    public CompletionStage<Void> afterRun(SessionContext context, ProviderSessionState state) {
+    public CompletionStage<Void> complete(SessionContext context) {
       return completedFuture(null);
     }
   }
+
+  private static final class StatefulNamedProvider implements StatefulContextProvider<Marker> {
+    private final String id;
+
+    private StatefulNamedProvider(String id) {
+      this.id = id;
+    }
+
+    @Override
+    public SessionStateKey<Marker> stateKey() {
+      return SessionStateKey.of(id, Marker.class);
+    }
+
+    @Override
+    public CompletionStage<RunContribution> prepare(
+        SessionContext context, ProviderSessionState<Marker> state) {
+      return completedFuture(RunContribution.empty());
+    }
+
+    @Override
+    public CompletionStage<Void> complete(
+        SessionContext context, ProviderSessionState<Marker> state) {
+      return completedFuture(null);
+    }
+  }
+
+  private interface Marker {}
 }

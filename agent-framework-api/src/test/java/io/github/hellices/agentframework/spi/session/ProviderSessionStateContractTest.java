@@ -8,9 +8,6 @@ import io.github.hellices.agentframework.api.context.ContextAttributes;
 import io.github.hellices.agentframework.api.session.SessionContext;
 import io.github.hellices.agentframework.api.session.SessionState;
 import io.github.hellices.agentframework.api.session.SessionStateKey;
-import io.github.hellices.agentframework.api.session.SessionStateValues;
-import io.github.hellices.agentframework.api.value.JsonValue;
-import io.github.hellices.agentframework.api.value.JsonValues;
 import java.lang.reflect.Method;
 import java.util.List;
 import java.util.Map;
@@ -18,8 +15,9 @@ import org.junit.jupiter.api.Test;
 
 /**
  * Executable form of the guarantee {@link ProviderSessionState} documents: the bound view a
- * provider is handed exposes no operation that names another provider's namespace, and a provider
- * written against only that view needs no cross-key API.
+ * provider is handed exposes no operation that names another provider's namespace, is typed to its
+ * declared state type, and a provider written against only that view reads and writes just its own
+ * key.
  */
 class ProviderSessionStateContractTest {
 
@@ -42,16 +40,26 @@ class ProviderSessionStateContractTest {
 
   @Test
   void aProviderBoundViewReadsAndWritesOnlyItsOwnNamespace() {
-    AgentSession session = session("session-1", null, Map.of("memory", 1, "untouched", "keep"));
+    SessionStateKey<Marker> memory = SessionStateKey.of("memory", Marker.class);
+    SessionStateKey<Marker> untouched = SessionStateKey.of("untouched", Marker.class);
+    AgentSession session =
+        AgentSession.builder()
+            .sessionId("session-1")
+            .state(
+                SessionState.empty()
+                    .with(memory, new MarkerValue("one"))
+                    .with(untouched, new MarkerValue("keep")))
+            .build();
     SessionContext sessionContext =
         new SessionContext(session, List.of(), ContextAttributes.empty(), new CancellationSignal());
 
-    ProviderSessionState bound = sessionContext.providerState("memory");
-    bound.set(2);
+    ProviderSessionState<Marker> bound = sessionContext.providerState(memory);
+    bound.set(new MarkerValue("two"));
 
-    assertThat(bound.sourceId()).isEqualTo("memory");
-    assertThat(sessionContext.updatedSession().orElseThrow().state())
-        .isEqualTo(sessionState(Map.of("memory", 2, "untouched", "keep")));
+    assertThat(bound.key()).isEqualTo(memory);
+    SessionState updated = sessionContext.updatedSession().orElseThrow().state();
+    assertThat(updated.get(memory)).contains(new MarkerValue("two"));
+    assertThat(updated.get(untouched)).contains(new MarkerValue("keep"));
   }
 
   @Test
@@ -65,36 +73,10 @@ class ProviderSessionStateContractTest {
     SessionContext sessionContext =
         new SessionContext(session, List.of(), ContextAttributes.empty(), new CancellationSignal());
 
-    sessionContext.providerState("memory").set(new MarkerValue("after"));
+    sessionContext.providerState(key).set(new MarkerValue("after"));
 
     assertThat(sessionContext.updatedSession().orElseThrow().state().get(key))
         .contains(new MarkerValue("after"));
-  }
-
-  private static AgentSession session(
-      String sessionId, String serviceSessionId, Map<String, ?> state) {
-    AgentSession.Builder builder =
-        AgentSession.builder().sessionId(sessionId).state(sessionState(state));
-    if (serviceSessionId != null) {
-      builder.serviceSessionId(serviceSessionId);
-    }
-    return builder.build();
-  }
-
-  private static SessionState sessionState(Map<String, ?> state) {
-    SessionState sessionState = SessionState.empty();
-    for (Map.Entry<String, ?> entry : state.entrySet()) {
-      sessionState = put(sessionState, entry.getKey(), entry.getValue());
-    }
-    return sessionState;
-  }
-
-  @SuppressWarnings("unchecked")
-  private static SessionState put(SessionState state, String key, Object value) {
-    if (SessionStateValues.isJsonValueShape(value)) {
-      return state.with(SessionStateKey.of(key, JsonValue.class), JsonValues.fromJava(value));
-    }
-    return state.with((SessionStateKey<Object>) SessionStateKey.of(key, value.getClass()), value);
   }
 
   private interface Marker {}
