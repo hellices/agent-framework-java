@@ -108,6 +108,35 @@ public final class ModelRequestOptions {
     }
   }
 
+  @Override
+  public boolean equals(Object other) {
+    if (this == other) {
+      return true;
+    }
+    if (!(other instanceof ModelRequestOptions that)) {
+      return false;
+    }
+    return Objects.equals(temperature, that.temperature)
+        && Objects.equals(maxOutputTokens, that.maxOutputTokens)
+        && providerOptions.equals(that.providerOptions);
+  }
+
+  @Override
+  public int hashCode() {
+    return Objects.hash(temperature, maxOutputTokens, providerOptions);
+  }
+
+  @Override
+  public String toString() {
+    return "ModelRequestOptions[temperature="
+        + temperature
+        + ", maxOutputTokens="
+        + maxOutputTokens
+        + ", providerOptions="
+        + providerOptions
+        + "]";
+  }
+
   private static Map<Class<? extends ModelProviderOption>, ModelProviderOption>
       immutableProviderOptions(
           Map<Class<? extends ModelProviderOption>, ModelProviderOption> source) {
