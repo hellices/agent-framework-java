@@ -4,9 +4,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.github.hellices.agentframework.api.agent.AgentDefinition;
-import io.github.hellices.agentframework.api.agent.AgentResponse;
+import io.github.hellices.agentframework.api.agent.AgentResponseUpdate;
 import io.github.hellices.agentframework.api.agent.AgentRunRequest;
 import io.github.hellices.agentframework.api.agent.AgentSession;
+import io.github.hellices.agentframework.api.agent.AgentStreamingRun;
 import io.github.hellices.agentframework.api.agent.CancellationSignal;
 import io.github.hellices.agentframework.api.context.ContextAttributes;
 import io.github.hellices.agentframework.api.context.ContextKey;
@@ -37,7 +38,7 @@ class InterceptorContractTest {
     assertInterceptorShape(
         AgentExecutionInterceptor.class,
         "intercept",
-        "java.util.concurrent.CompletionStage<" + AgentResponse.class.getName() + ">",
+        AgentStreamingRun.class.getName() + "<" + AgentResponseUpdate.class.getName() + ">",
         AgentInvocation.class,
         AgentInvocationChain.class);
     assertInterceptorShape(
@@ -61,7 +62,7 @@ class InterceptorContractTest {
 
     assertChainShape(
         AgentInvocationChain.class,
-        "java.util.concurrent.CompletionStage<" + AgentResponse.class.getName() + ">",
+        AgentStreamingRun.class.getName() + "<" + AgentResponseUpdate.class.getName() + ">",
         AgentInvocation.class);
     assertChainShape(
         ModelInvocationChain.class,
@@ -84,38 +85,56 @@ class InterceptorContractTest {
                 SessionInvocation.class))
         .allSatisfy(type -> assertThat(type.getInterfaces()).isEmpty())
         .allSatisfy(type -> assertThat(type.getSuperclass()).isEqualTo(Object.class));
+    assertThat(findMethod(ToolInvocation.Builder.class, "arguments")).isNull();
   }
 
   @Test
-  void invocationValuesAreImmutableAndEvolvable() {
+  void replacingAgentRequestRecomputesDerivedExecutionValues() {
     AgentDefinition definition = AgentDefinition.builder().name("agent").build();
-    AgentRunRequest request = AgentRunRequest.of("hello");
-    ContextAttributes agentAttributes = attributes("agent", "trace", "run-1");
-    ContextAttributes updatedAgentAttributes = attributes("agent", "trace", "run-2");
-    CancellationSignal cancellationSignal = new CancellationSignal();
+    CancellationSignal requestSignal = new CancellationSignal();
+    CancellationSignal replacementSignal = new CancellationSignal();
+    AgentRunRequest request =
+        AgentRunRequest.builder()
+            .attributes(attributes("agent", "trace", "run-1"))
+            .cancellationSignal(requestSignal)
+            .build();
+    AgentRunRequest replacement =
+        AgentRunRequest.builder()
+            .attributes(attributes("agent", "trace", "run-2"))
+            .cancellationSignal(replacementSignal)
+            .build();
 
     AgentInvocation agentInvocation =
-        AgentInvocation.builder()
-            .agentDefinition(definition)
-            .request(request)
-            .effectiveAttributes(agentAttributes)
-            .cancellationSignal(cancellationSignal)
-            .build();
+        AgentInvocation.builder().agentDefinition(definition).request(request).build();
     AgentInvocation updatedAgentInvocation =
-        agentInvocation.toBuilder().effectiveAttributes(updatedAgentAttributes).build();
+        agentInvocation.toBuilder().request(replacement).build();
 
     assertThat(agentInvocation.agentDefinition()).isEqualTo(definition);
     assertThat(agentInvocation.request()).isEqualTo(request);
-    assertThat(agentInvocation.effectiveAttributes()).isEqualTo(agentAttributes);
-    assertThat(agentInvocation.cancellationSignal()).isSameAs(cancellationSignal);
-    assertThat(updatedAgentInvocation.effectiveAttributes()).isEqualTo(updatedAgentAttributes);
-    assertThat(agentInvocation.effectiveAttributes()).isEqualTo(agentAttributes);
+    assertThat(agentInvocation.effectiveAttributes()).isEqualTo(request.attributes());
+    assertThat(agentInvocation.cancellationSignal()).isSameAs(requestSignal);
+    assertThat(updatedAgentInvocation.request()).isEqualTo(replacement);
+    assertThat(updatedAgentInvocation.effectiveAttributes()).isEqualTo(replacement.attributes());
+    assertThat(updatedAgentInvocation.cancellationSignal()).isSameAs(replacementSignal);
+    assertThat(agentInvocation.effectiveAttributes()).isEqualTo(request.attributes());
+    assertThat(agentInvocation.cancellationSignal()).isSameAs(requestSignal);
+  }
 
+  @Test
+  void replacingModelRequestRecomputesDerivedCancellation() {
+    CancellationSignal initialSignal = new CancellationSignal();
+    CancellationSignal replacementSignal = new CancellationSignal();
     ModelRequest modelRequest =
         ModelRequest.builder()
             .attributes(attributes("model", "trace", "model-1"))
-            .cancellationSignal(cancellationSignal)
+            .cancellationSignal(initialSignal)
             .build();
+    ModelRequest replacement =
+        ModelRequest.builder()
+            .attributes(attributes("model", "trace", "model-2"))
+            .cancellationSignal(replacementSignal)
+            .build();
+
     ModelInvocation modelInvocation =
         ModelInvocation.builder()
             .agentId("agent-1")
@@ -123,41 +142,51 @@ class InterceptorContractTest {
             .request(modelRequest)
             .build();
     ModelInvocation updatedModelInvocation =
-        modelInvocation.toBuilder().sessionId("session-2").build();
+        modelInvocation.toBuilder().request(replacement).build();
 
     assertThat(modelInvocation.agentId()).isEqualTo("agent-1");
     assertThat(modelInvocation.sessionId()).contains("session-1");
     assertThat(modelInvocation.request()).isEqualTo(modelRequest);
-    assertThat(modelInvocation.cancellationSignal()).isSameAs(cancellationSignal);
-    assertThat(updatedModelInvocation.sessionId()).contains("session-2");
-    assertThat(modelInvocation.sessionId()).contains("session-1");
+    assertThat(modelInvocation.cancellationSignal()).isSameAs(initialSignal);
+    assertThat(updatedModelInvocation.request()).isEqualTo(replacement);
+    assertThat(updatedModelInvocation.cancellationSignal()).isSameAs(replacementSignal);
+    assertThat(modelInvocation.cancellationSignal()).isSameAs(initialSignal);
+  }
 
+  @Test
+  void replacingToolCallRecomputesDerivedArguments() {
+    CancellationSignal cancellationSignal = new CancellationSignal();
     JsonObject argumentsJson = JsonObject.builder().put("city", JsonString.of("Seoul")).build();
     ToolCallContent toolCall = new ToolCallContent("call-1", "weather", argumentsJson);
     ToolDefinition toolDefinition = ToolDefinition.builder().name("weather").build();
     ToolArguments arguments = ToolArguments.of(argumentsJson);
     ToolContext toolContext =
         new ToolContext(cancellationSignal, attributes("tool", "trace", "tool-1"));
+
     ToolInvocation toolInvocation =
         ToolInvocation.builder()
             .toolCall(toolCall)
             .toolDefinition(toolDefinition)
-            .arguments(arguments)
             .context(toolContext)
             .build();
+    ToolCallContent replacementCall =
+        new ToolCallContent(
+            "call-1", "weather", JsonObject.builder().put("city", JsonString.of("Busan")).build());
     ToolInvocation updatedToolInvocation =
-        toolInvocation.toBuilder()
-            .arguments(
-                ToolArguments.of(JsonObject.builder().put("city", JsonString.of("Busan")).build()))
-            .build();
+        toolInvocation.toBuilder().toolCall(replacementCall).build();
 
     assertThat(toolInvocation.toolCall()).isEqualTo(toolCall);
     assertThat(toolInvocation.toolDefinition()).isEqualTo(toolDefinition);
     assertThat(toolInvocation.arguments()).isEqualTo(arguments);
     assertThat(toolInvocation.context()).isEqualTo(toolContext);
+    assertThat(updatedToolInvocation.toolCall()).isEqualTo(replacementCall);
     assertThat(updatedToolInvocation.arguments().string("city")).contains("Busan");
     assertThat(toolInvocation.arguments().string("city")).contains("Seoul");
+  }
 
+  @Test
+  void sessionInvocationPreservesValidLoadAndSaveShapes() {
+    CancellationSignal cancellationSignal = new CancellationSignal();
     AgentSession session = AgentSession.builder().sessionId("session-1").build();
     SessionSnapshot snapshot =
         new SessionSnapshot(
@@ -168,6 +197,7 @@ class InterceptorContractTest {
             1,
             Instant.parse("2026-08-18T00:00:00Z"),
             Map.of("history", new SessionStateEntry("history", 1, Map.of("count", "1"))));
+
     SessionInvocation sessionInvocation =
         SessionInvocation.builder()
             .operation(SessionOperation.LOAD)
@@ -209,6 +239,38 @@ class InterceptorContractTest {
     assertThat(updatedResult.snapshot())
         .hasValueSatisfying(value -> assertThat(value.revision()).isEqualTo(2));
     assertThat(result.snapshot()).contains(snapshot);
+  }
+
+  @Test
+  void invalidSessionLoadAndSaveStatesAreRejected() {
+    AgentSession session = AgentSession.builder().sessionId("session-1").build();
+    SessionSnapshot snapshot =
+        new SessionSnapshot(
+            "agent-session",
+            "1",
+            "session-1",
+            null,
+            1,
+            Instant.parse("2026-08-18T00:00:00Z"),
+            Map.of());
+
+    assertThatThrownBy(
+            () ->
+                SessionInvocation.builder()
+                    .operation(SessionOperation.LOAD)
+                    .session(session)
+                    .snapshot(snapshot)
+                    .build())
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessage("snapshot must be null for LOAD");
+    assertThatThrownBy(
+            () ->
+                SessionInvocation.builder()
+                    .operation(SessionOperation.SAVE)
+                    .session(session)
+                    .build())
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessage("snapshot must not be null for SAVE");
   }
 
   @Test
@@ -293,5 +355,14 @@ class InterceptorContractTest {
     assertThat(typeName).doesNotContain("javax.");
     assertThat(typeName).doesNotContain("io.micrometer");
     assertThat(typeName).doesNotContain("io.opentelemetry");
+  }
+
+  private static Method findMethod(Class<?> type, String name) {
+    for (Method method : type.getDeclaredMethods()) {
+      if (method.getName().equals(name)) {
+        return method;
+      }
+    }
+    return null;
   }
 }

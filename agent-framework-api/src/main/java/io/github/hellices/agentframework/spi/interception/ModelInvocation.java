@@ -11,17 +11,12 @@ public final class ModelInvocation {
   private final String agentId;
   private final String sessionId;
   private final ModelRequest request;
-  private final CancellationSignal cancellationSignal;
 
   private ModelInvocation(Builder builder) {
     this.agentId =
         requireText(Objects.requireNonNull(builder.agentId, "agentId must not be null"), "agentId");
     this.sessionId = normalizeOptional(builder.sessionId, "sessionId");
     this.request = Objects.requireNonNull(builder.request, "request must not be null");
-    this.cancellationSignal =
-        builder.cancellationSignal == null
-            ? request.cancellationSignal()
-            : builder.cancellationSignal;
   }
 
   public static Builder builder() {
@@ -41,15 +36,11 @@ public final class ModelInvocation {
   }
 
   public CancellationSignal cancellationSignal() {
-    return cancellationSignal;
+    return request.cancellationSignal();
   }
 
   public Builder toBuilder() {
-    return new Builder()
-        .agentId(agentId)
-        .sessionId(sessionId)
-        .request(request)
-        .cancellationSignal(cancellationSignal);
+    return new Builder().agentId(agentId).sessionId(sessionId).request(request);
   }
 
   @Override
@@ -85,7 +76,6 @@ public final class ModelInvocation {
     private String agentId;
     private String sessionId;
     private ModelRequest request;
-    private CancellationSignal cancellationSignal;
 
     private Builder() {}
 
@@ -101,12 +91,6 @@ public final class ModelInvocation {
 
     public Builder request(ModelRequest request) {
       this.request = Objects.requireNonNull(request, "request must not be null");
-      return this;
-    }
-
-    public Builder cancellationSignal(CancellationSignal cancellationSignal) {
-      this.cancellationSignal =
-          Objects.requireNonNull(cancellationSignal, "cancellationSignal must not be null");
       return this;
     }
 

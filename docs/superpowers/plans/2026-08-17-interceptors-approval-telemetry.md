@@ -37,7 +37,7 @@
 
 ```java
 public interface AgentExecutionInterceptor {
-  CompletionStage<AgentResponse> intercept(
+  AgentStreamingRun<AgentResponseUpdate> intercept(
       AgentInvocation invocation, AgentInvocationChain next);
 }
 
@@ -71,7 +71,9 @@ invocations, typed next/result contracts, and absence of framework types.
 - [ ] **Step 3: Implement focused open interfaces**
 
 Invocation objects contain only data needed by their seam plus cancellation and typed attributes.
-They do not expose mutable engine state or a generic object bag.
+They do not expose mutable engine state or a generic object bag. The agent seam wraps the
+canonical dual-view streaming run so one interception can consistently short-circuit or replace both
+updates and the final response together.
 
 - [ ] **Step 4: Verify GREEN and commit**
 

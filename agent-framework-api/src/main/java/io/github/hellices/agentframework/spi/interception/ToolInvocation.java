@@ -11,7 +11,6 @@ public final class ToolInvocation {
 
   private final ToolCallContent toolCall;
   private final ToolDefinition toolDefinition;
-  private final ToolArguments arguments;
   private final ToolContext context;
 
   private ToolInvocation(Builder builder) {
@@ -19,8 +18,6 @@ public final class ToolInvocation {
         immutableCopy(Objects.requireNonNull(builder.toolCall, "toolCall must not be null"));
     this.toolDefinition =
         Objects.requireNonNull(builder.toolDefinition, "toolDefinition must not be null");
-    this.arguments =
-        builder.arguments == null ? ToolArguments.of(toolCall.arguments()) : builder.arguments;
     this.context = Objects.requireNonNull(builder.context, "context must not be null");
   }
 
@@ -37,7 +34,7 @@ public final class ToolInvocation {
   }
 
   public ToolArguments arguments() {
-    return arguments;
+    return ToolArguments.of(toolCall.arguments());
   }
 
   public ToolContext context() {
@@ -45,11 +42,7 @@ public final class ToolInvocation {
   }
 
   public Builder toBuilder() {
-    return new Builder()
-        .toolCall(toolCall)
-        .toolDefinition(toolDefinition)
-        .arguments(arguments)
-        .context(context);
+    return new Builder().toolCall(toolCall).toolDefinition(toolDefinition).context(context);
   }
 
   @Override
@@ -62,13 +55,13 @@ public final class ToolInvocation {
     }
     return toolCall.equals(that.toolCall)
         && toolDefinition.equals(that.toolDefinition)
-        && arguments.equals(that.arguments)
+        && arguments().equals(that.arguments())
         && context.equals(that.context);
   }
 
   @Override
   public int hashCode() {
-    return Objects.hash(toolCall, toolDefinition, arguments, context);
+    return Objects.hash(toolCall, toolDefinition, arguments(), context);
   }
 
   @Override
@@ -78,7 +71,7 @@ public final class ToolInvocation {
         + ", toolDefinition="
         + toolDefinition
         + ", arguments="
-        + arguments
+        + arguments()
         + ", context="
         + context
         + "]";
@@ -87,7 +80,6 @@ public final class ToolInvocation {
   public static final class Builder {
     private ToolCallContent toolCall;
     private ToolDefinition toolDefinition;
-    private ToolArguments arguments;
     private ToolContext context;
 
     private Builder() {}
@@ -100,11 +92,6 @@ public final class ToolInvocation {
     public Builder toolDefinition(ToolDefinition toolDefinition) {
       this.toolDefinition =
           Objects.requireNonNull(toolDefinition, "toolDefinition must not be null");
-      return this;
-    }
-
-    public Builder arguments(ToolArguments arguments) {
-      this.arguments = Objects.requireNonNull(arguments, "arguments must not be null");
       return this;
     }
 

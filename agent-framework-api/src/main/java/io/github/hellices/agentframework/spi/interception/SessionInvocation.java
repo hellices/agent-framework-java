@@ -23,6 +23,9 @@ public final class SessionInvocation {
     this.attributes = builder.attributes == null ? ContextAttributes.empty() : builder.attributes;
     this.cancellationSignal =
         builder.cancellationSignal == null ? new CancellationSignal() : builder.cancellationSignal;
+    if (operation == SessionOperation.LOAD && snapshot != null) {
+      throw new IllegalStateException("snapshot must be null for LOAD");
+    }
     if (operation == SessionOperation.SAVE && snapshot == null) {
       throw new IllegalStateException("snapshot must not be null for SAVE");
     }
