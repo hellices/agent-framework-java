@@ -563,6 +563,14 @@ class AgentEngineInterceptorTest {
         .containsExactly("second");
   }
 
+  @Test
+  void pluralCollectionRegistrationIsAtomicAcrossSeams() {
+    assertAgentPluralCollectionRegistrationIsAtomic();
+    assertModelPluralCollectionRegistrationIsAtomic();
+    assertToolPluralCollectionRegistrationIsAtomic();
+    assertSessionPluralCollectionRegistrationIsAtomic();
+  }
+
   private static AgentInvocation agentInvocation() {
     return AgentInvocation.builder()
         .agentDefinition(AgentDefinition.builder().name("agent").build())
@@ -649,10 +657,164 @@ class AgentEngineInterceptorTest {
     return new Message(Role.ASSISTANT, List.of(new TextContent(text)));
   }
 
+  private static void assertAgentPluralCollectionRegistrationIsAtomic() {
+    AgentEngineBuilder builder =
+        AgentEngine.builder()
+            .agentExecutionInterceptor((invocation, next) -> next.proceed(invocation));
+
+    assertThatThrownBy(
+            () -> builder.agentExecutionInterceptors((List<AgentExecutionInterceptor>) null))
+        .isInstanceOf(NullPointerException.class)
+        .hasMessage("agentExecutionInterceptors must not be null");
+    assertThat(agentExecutionText(builder.build())).isEqualTo("handler");
+
+    assertThatThrownBy(
+            () ->
+                builder.agentExecutionInterceptors(
+                    asAgentInterceptorList(
+                        (invocation, next) ->
+                            AgentExecution.fromUpdate(
+                                agentUpdate("leak", "leak"), invocation.cancellationSignal()),
+                        null)))
+        .isInstanceOf(NullPointerException.class)
+        .hasMessage("agentExecutionInterceptors[1] must not be null");
+    assertThat(agentExecutionText(builder.build())).isEqualTo("handler");
+  }
+
+  private static void assertModelPluralCollectionRegistrationIsAtomic() {
+    AgentEngineBuilder builder =
+        AgentEngine.builder()
+            .modelInvocationInterceptor((invocation, next) -> next.proceed(invocation));
+
+    assertThatThrownBy(
+            () -> builder.modelInvocationInterceptors((List<ModelInvocationInterceptor>) null))
+        .isInstanceOf(NullPointerException.class)
+        .hasMessage("modelInvocationInterceptors must not be null");
+    assertThat(modelExecutionText(builder.build())).isEqualTo("handler");
+
+    assertThatThrownBy(
+            () ->
+                builder.modelInvocationInterceptors(
+                    asModelInterceptorList((invocation, next) -> modelPublisher("leak"), null)))
+        .isInstanceOf(NullPointerException.class)
+        .hasMessage("modelInvocationInterceptors[1] must not be null");
+    assertThat(modelExecutionText(builder.build())).isEqualTo("handler");
+  }
+
+  private static void assertToolPluralCollectionRegistrationIsAtomic() {
+    AgentEngineBuilder builder =
+        AgentEngine.builder()
+            .toolInvocationInterceptor((invocation, next) -> next.proceed(invocation));
+
+    assertThatThrownBy(
+            () -> builder.toolInvocationInterceptors((List<ToolInvocationInterceptor>) null))
+        .isInstanceOf(NullPointerException.class)
+        .hasMessage("toolInvocationInterceptors must not be null");
+    assertThat(toolExecutionText(builder.build())).isEqualTo("handler");
+
+    assertThatThrownBy(
+            () ->
+                builder.toolInvocationInterceptors(
+                    asToolInterceptorList(
+                        (invocation, next) -> completedFuture(toolResult("leak")), null)))
+        .isInstanceOf(NullPointerException.class)
+        .hasMessage("toolInvocationInterceptors[1] must not be null");
+    assertThat(toolExecutionText(builder.build())).isEqualTo("handler");
+  }
+
+  private static void assertSessionPluralCollectionRegistrationIsAtomic() {
+    AgentEngineBuilder builder =
+        AgentEngine.builder()
+            .sessionOperationInterceptor((invocation, next) -> next.proceed(invocation));
+
+    assertThatThrownBy(
+            () -> builder.sessionOperationInterceptors((List<SessionOperationInterceptor>) null))
+        .isInstanceOf(NullPointerException.class)
+        .hasMessage("sessionOperationInterceptors must not be null");
+    assertThat(sessionExecutionRevision(builder.build())).isZero();
+
+    assertThatThrownBy(
+            () ->
+                builder.sessionOperationInterceptors(
+                    asSessionInterceptorList(
+                        (invocation, next) ->
+                            completedFuture(sessionResult(invocation.session(), 99)),
+                        null)))
+        .isInstanceOf(NullPointerException.class)
+        .hasMessage("sessionOperationInterceptors[1] must not be null");
+    assertThat(sessionExecutionRevision(builder.build())).isZero();
+  }
+
+  private static String agentExecutionText(AgentEngine engine) {
+    return text(
+        consume(
+                engine
+                    .interceptAgent(
+                        agentInvocation(),
+                        invocation ->
+                            AgentExecution.fromUpdate(
+                                agentUpdate("handler", "handler"), invocation.cancellationSignal()))
+                    .updates())
+            .get(0));
+  }
+
+  private static String modelExecutionText(AgentEngine engine) {
+    return text(
+        consume(engine.interceptModel(modelInvocation(), invocation -> modelPublisher("handler")))
+            .get(0));
+  }
+
+  private static String toolExecutionText(AgentEngine engine) {
+    return text(
+        engine
+            .interceptTool(toolInvocation(), invocation -> completedFuture(toolResult("handler")))
+            .toCompletableFuture()
+            .join());
+  }
+
+  private static long sessionExecutionRevision(AgentEngine engine) {
+    return engine
+        .interceptSession(
+            sessionSaveInvocation(),
+            invocation -> completedFuture(sessionResult(invocation.session(), 0)))
+        .toCompletableFuture()
+        .join()
+        .snapshot()
+        .orElseThrow()
+        .revision();
+  }
+
   private static List<AgentExecutionInterceptor> asAgentInterceptorList(
       AgentExecutionInterceptor... interceptors) {
     List<AgentExecutionInterceptor> values = new ArrayList<>();
     for (AgentExecutionInterceptor interceptor : interceptors) {
+      values.add(interceptor);
+    }
+    return values;
+  }
+
+  private static List<ModelInvocationInterceptor> asModelInterceptorList(
+      ModelInvocationInterceptor... interceptors) {
+    List<ModelInvocationInterceptor> values = new ArrayList<>();
+    for (ModelInvocationInterceptor interceptor : interceptors) {
+      values.add(interceptor);
+    }
+    return values;
+  }
+
+  private static List<ToolInvocationInterceptor> asToolInterceptorList(
+      ToolInvocationInterceptor... interceptors) {
+    List<ToolInvocationInterceptor> values = new ArrayList<>();
+    for (ToolInvocationInterceptor interceptor : interceptors) {
+      values.add(interceptor);
+    }
+    return values;
+  }
+
+  private static List<SessionOperationInterceptor> asSessionInterceptorList(
+      SessionOperationInterceptor... interceptors) {
+    List<SessionOperationInterceptor> values = new ArrayList<>();
+    for (SessionOperationInterceptor interceptor : interceptors) {
       values.add(interceptor);
     }
     return values;

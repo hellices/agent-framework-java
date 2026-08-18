@@ -79,7 +79,8 @@ public final class AgentEngineBuilder {
   /** Registers agent-execution interceptors in outer-to-inner declaration order. */
   public AgentEngineBuilder agentExecutionInterceptors(
       List<? extends AgentExecutionInterceptor> interceptors) {
-    appendInterceptors(agentExecutionInterceptors, interceptors, "agentExecutionInterceptors");
+    agentExecutionInterceptors.addAll(
+        validatedSnapshot(interceptors, "agentExecutionInterceptors"));
     return this;
   }
 
@@ -93,7 +94,8 @@ public final class AgentEngineBuilder {
   /** Registers model-invocation interceptors in outer-to-inner declaration order. */
   public AgentEngineBuilder modelInvocationInterceptors(
       List<? extends ModelInvocationInterceptor> interceptors) {
-    appendInterceptors(modelInvocationInterceptors, interceptors, "modelInvocationInterceptors");
+    modelInvocationInterceptors.addAll(
+        validatedSnapshot(interceptors, "modelInvocationInterceptors"));
     return this;
   }
 
@@ -107,7 +109,8 @@ public final class AgentEngineBuilder {
   /** Registers tool-invocation interceptors in outer-to-inner declaration order. */
   public AgentEngineBuilder toolInvocationInterceptors(
       List<? extends ToolInvocationInterceptor> interceptors) {
-    appendInterceptors(toolInvocationInterceptors, interceptors, "toolInvocationInterceptors");
+    toolInvocationInterceptors.addAll(
+        validatedSnapshot(interceptors, "toolInvocationInterceptors"));
     return this;
   }
 
@@ -121,7 +124,8 @@ public final class AgentEngineBuilder {
   /** Registers session-operation interceptors in outer-to-inner declaration order. */
   public AgentEngineBuilder sessionOperationInterceptors(
       List<? extends SessionOperationInterceptor> interceptors) {
-    appendInterceptors(sessionOperationInterceptors, interceptors, "sessionOperationInterceptors");
+    sessionOperationInterceptors.addAll(
+        validatedSnapshot(interceptors, "sessionOperationInterceptors"));
     return this;
   }
 
@@ -146,12 +150,13 @@ public final class AgentEngineBuilder {
             List.copyOf(sessionOperationInterceptors)));
   }
 
-  private static <T> void appendInterceptors(
-      List<T> sink, List<? extends T> interceptors, String label) {
+  private static <T> List<T> validatedSnapshot(List<? extends T> interceptors, String label) {
     List<? extends T> value = Objects.requireNonNull(interceptors, label + " must not be null");
+    List<T> snapshot = new ArrayList<>(value.size());
     for (int index = 0; index < value.size(); index++) {
-      sink.add(
+      snapshot.add(
           Objects.requireNonNull(value.get(index), label + "[" + index + "] must not be null"));
     }
+    return List.copyOf(snapshot);
   }
 }
