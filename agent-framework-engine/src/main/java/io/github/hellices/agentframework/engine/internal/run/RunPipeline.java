@@ -20,6 +20,11 @@ import io.github.hellices.agentframework.engine.internal.tool.ToolLoopPolicy;
 import io.github.hellices.agentframework.spi.model.ModelRequest;
 import io.github.hellices.agentframework.spi.model.ModelResponse;
 import io.github.hellices.agentframework.spi.model.ModelResponseUpdate;
+import io.github.hellices.agentframework.spi.telemetry.TelemetryAttributes;
+import io.github.hellices.agentframework.spi.telemetry.TelemetryOperation;
+import io.github.hellices.agentframework.spi.telemetry.TelemetryOperationKind;
+import io.github.hellices.agentframework.spi.telemetry.TelemetrySink;
+import io.github.hellices.agentframework.spi.telemetry.TelemetryStart;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -124,6 +129,7 @@ public final class RunPipeline implements Flow.Publisher<AgentResponseUpdate> {
   private final RunExecution execution;
   private final ToolApprovalCoordinator approvals;
   private final CompletionStage<Void> approvalGate;
+  private final TelemetrySink telemetrySink;
   private final CompletableFuture<ModelResponse> ordinaryTerminal = new CompletableFuture<>();
   private final AtomicBoolean subscribed = new AtomicBoolean();
 
@@ -156,7 +162,8 @@ public final class RunPipeline implements Flow.Publisher<AgentResponseUpdate> {
       ResponseIdentity identity,
       RunExecution execution,
       ToolApprovalCoordinator approvals,
-      CompletionStage<Void> approvalGate) {
+      CompletionStage<Void> approvalGate,
+      TelemetrySink telemetrySink) {
     this.firstStream = Objects.requireNonNull(firstStream, "firstStream must not be null");
     this.firstRequest = Objects.requireNonNull(firstRequest, "firstRequest must not be null");
     this.nextStream = Objects.requireNonNull(nextStream, "nextStream must not be null");
@@ -167,6 +174,7 @@ public final class RunPipeline implements Flow.Publisher<AgentResponseUpdate> {
     this.execution = Objects.requireNonNull(execution, "execution must not be null");
     this.approvals = approvals;
     this.approvalGate = approvalGate;
+    this.telemetrySink = Objects.requireNonNull(telemetrySink, "telemetrySink must not be null");
     if (approvals != null && approvalGate == null) {
       throw new IllegalArgumentException(
           "approvalGate must not be null when approvals are enabled");
@@ -241,6 +249,7 @@ public final class RunPipeline implements Flow.Publisher<AgentResponseUpdate> {
     private Usage ordinaryUsage;
     private long demand;
     private Flow.Subscription upstream;
+    private TelemetryOperation agentRunOp;
 
     private LoopSubscription(Flow.Subscriber<? super AgentResponseUpdate> downstream) {
       this.downstream = downstream;
@@ -250,6 +259,24 @@ public final class RunPipeline implements Flow.Publisher<AgentResponseUpdate> {
       if (cancelled || terminated.get()) {
         return;
       }
+      // Open the agent-run telemetry operation. The operation mirrors the ordinary terminal:
+      // closed on success and failed with the unwrapped cause on failure or cancellation.
+      agentRunOp =
+          telemetrySink.start(
+              TelemetryStart.builder(TelemetryOperationKind.AGENT_RUN, "agent.run")
+                  .attribute(TelemetryAttributes.AGENT_ID, identity.agentId())
+                  .attribute(
+                      TelemetryAttributes.AGENT_NAME,
+                      identity.authorName() != null ? identity.authorName() : "")
+                  .build());
+      ordinaryTerminal.whenComplete(
+          (response, err) -> {
+            if (err != null) {
+              agentRunOp.fail(unwrap(err));
+            } else {
+              agentRunOp.close();
+            }
+          });
       Runnable removeListener = request.cancellationSignal().onCancel(this::cancel);
       removeCancellationListener = removeListener;
       if (cancelled || terminated.get()) {
@@ -308,7 +335,9 @@ public final class RunPipeline implements Flow.Publisher<AgentResponseUpdate> {
       CompletionStage<List<Content>> results;
       try {
         advance(RunPhase.EXECUTE_TOOL_BATCH);
-        results = policy().executeDecidedToolCalls(decided, request, toolInvoker);
+        results =
+            policy()
+                .executeDecidedToolCalls(decided, request, telemetryWrappedInvoker(decided.size()));
       } catch (RuntimeException executionFailure) {
         fail(executionFailure);
         return;
@@ -441,12 +470,14 @@ public final class RunPipeline implements Flow.Publisher<AgentResponseUpdate> {
         return;
       }
       advance(RunPhase.PREPARE_MODEL_REQUEST);
+      ModelSubscriber subscriber = new ModelSubscriber(index, iterationRequest);
       try {
         Flow.Publisher<ModelResponseUpdate> publisher =
             Objects.requireNonNull(source.get(), "model client update publisher must not be null");
         advance(RunPhase.CALL_MODEL);
-        publisher.subscribe(new ModelSubscriber(index, iterationRequest));
+        publisher.subscribe(subscriber);
       } catch (RuntimeException startFailure) {
+        subscriber.failOperation(unwrap(startFailure));
         fail(startFailure);
       }
     }
@@ -523,14 +554,15 @@ public final class RunPipeline implements Flow.Publisher<AgentResponseUpdate> {
           }
           advance(RunPhase.EXECUTE_TOOL_BATCH);
           results =
-              policy.executeDecidedToolCalls(plan.decided().orElseThrow(), request, toolInvoker);
+              policy.executeDecidedToolCalls(
+                  plan.decided().orElseThrow(), request, telemetryWrappedInvoker(calls.size()));
         } else {
           // Approvals are not configured for this run: every call in the batch was already
           // confirmed declared and executable-or-declaration-only above, so this is the ordinary,
           // approval-free execution path (I-2's fail-closed guarantee is enforced earlier by
           // requireAllDeclared, not by this branch).
           advance(RunPhase.EXECUTE_TOOL_BATCH);
-          results = policy.executeToolCalls(calls, request, toolInvoker);
+          results = policy.executeToolCalls(calls, request, telemetryWrappedInvoker(calls.size()));
         }
       } catch (RuntimeException iterationFailure) {
         fail(iterationFailure);
@@ -645,6 +677,34 @@ public final class RunPipeline implements Flow.Publisher<AgentResponseUpdate> {
     }
 
     /**
+     * Wraps the shared tool invoker with a telemetry operation per call. Tools within a batch run
+     * sequentially in call order, so the counter increments safely without additional locking.
+     */
+    private ToolLoopPolicy.BoundToolInvoker telemetryWrappedInvoker(int batchSize) {
+      AtomicInteger callIndex = new AtomicInteger(0);
+      return (tool, call, ctx) -> {
+        int idx = callIndex.getAndIncrement();
+        TelemetryOperation toolOp =
+            telemetrySink.start(
+                TelemetryStart.builder(TelemetryOperationKind.TOOL_CALL, "tool.call")
+                    .attribute(TelemetryAttributes.TOOL_NAME, call.name())
+                    .attribute(TelemetryAttributes.TOOL_CALL_COUNT, (long) batchSize)
+                    .attribute(TelemetryAttributes.TOOL_CALL_INDEX, (long) idx)
+                    .build());
+        return toolInvoker
+            .invoke(tool, call, ctx)
+            .whenComplete(
+                (result, err) -> {
+                  if (err != null) {
+                    toolOp.fail(unwrap(err));
+                  } else {
+                    toolOp.close();
+                  }
+                });
+      };
+    }
+
+    /**
      * Runs the emission trampoline. A signal a downstream callback throws out of is not this
      * subscription's failure to record, but the work-in-progress counter is reset before the throw
      * leaves, because leaving it raised would strand the run without a terminal signal.
@@ -747,6 +807,7 @@ public final class RunPipeline implements Flow.Publisher<AgentResponseUpdate> {
 
       private final int index;
       private final ModelRequest iterationRequest;
+      private final TelemetryOperation modelCallOp;
       private final StreamingModelResponseAccumulator accumulator =
           new StreamingModelResponseAccumulator(identity);
       private final List<ModelResponseUpdate> rawUpdates = new ArrayList<>();
@@ -755,6 +816,18 @@ public final class RunPipeline implements Flow.Publisher<AgentResponseUpdate> {
       private ModelSubscriber(int index, ModelRequest iterationRequest) {
         this.index = index;
         this.iterationRequest = iterationRequest;
+        // Open the model-call telemetry operation here rather than as a local variable in
+        // beginIteration, so its lifecycle is owned by this subscriber instance.
+        this.modelCallOp =
+            telemetrySink.start(
+                TelemetryStart.builder(TelemetryOperationKind.MODEL_CALL, "model.call")
+                    .attribute(TelemetryAttributes.MODEL_ITERATION, (long) index)
+                    .build());
+      }
+
+      /** Fails the model call operation; called from beginIteration when source.get() throws. */
+      void failOperation(Throwable cause) {
+        modelCallOp.fail(cause);
       }
 
       @Override
@@ -789,6 +862,7 @@ public final class RunPipeline implements Flow.Publisher<AgentResponseUpdate> {
           rawUpdates.add(update);
         } catch (RuntimeException recordFailure) {
           done = true;
+          modelCallOp.fail(unwrap(recordFailure));
           fail(recordFailure);
           return;
         }
@@ -802,6 +876,7 @@ public final class RunPipeline implements Flow.Publisher<AgentResponseUpdate> {
           return;
         }
         done = true;
+        modelCallOp.fail(unwrap(throwable));
         fail(throwable);
       }
 
@@ -811,6 +886,7 @@ public final class RunPipeline implements Flow.Publisher<AgentResponseUpdate> {
           return;
         }
         done = true;
+        modelCallOp.close();
         completeIteration(index, iterationRequest, accumulator, rawUpdates);
       }
     }

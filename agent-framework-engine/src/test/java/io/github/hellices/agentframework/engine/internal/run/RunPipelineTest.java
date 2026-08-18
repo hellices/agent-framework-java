@@ -63,7 +63,8 @@ class RunPipelineTest {
         new ResponseIdentity("agent-1", "response-1", null, Instant.now()),
         minimalExecution(),
         approvals,
-        approvalGate);
+        approvalGate,
+        io.github.hellices.agentframework.spi.telemetry.TelemetrySink.noOp());
   }
 
   private static Flow.Publisher<ModelResponseUpdate> neverSubscribed() {

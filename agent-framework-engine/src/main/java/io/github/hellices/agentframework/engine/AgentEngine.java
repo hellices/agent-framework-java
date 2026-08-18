@@ -46,6 +46,7 @@ import io.github.hellices.agentframework.spi.model.ModelClient;
 import io.github.hellices.agentframework.spi.model.ModelRequest;
 import io.github.hellices.agentframework.spi.model.ModelResponse;
 import io.github.hellices.agentframework.spi.model.ModelResponseUpdate;
+import io.github.hellices.agentframework.spi.telemetry.TelemetrySink;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
@@ -76,15 +77,24 @@ public final class AgentEngine {
 
   private final SessionCoordinator sessionCoordinator;
   private final InterceptorRegistry interceptorRegistry;
+  private final TelemetrySink telemetrySink;
 
   AgentEngine(SessionCoordinator sessionCoordinator) {
     this(sessionCoordinator, new InterceptorRegistry(List.of(), List.of(), List.of(), List.of()));
   }
 
   AgentEngine(SessionCoordinator sessionCoordinator, InterceptorRegistry interceptorRegistry) {
+    this(sessionCoordinator, interceptorRegistry, TelemetrySink.noOp());
+  }
+
+  AgentEngine(
+      SessionCoordinator sessionCoordinator,
+      InterceptorRegistry interceptorRegistry,
+      TelemetrySink telemetrySink) {
     this.sessionCoordinator = sessionCoordinator;
     this.interceptorRegistry =
         Objects.requireNonNull(interceptorRegistry, "interceptorRegistry must not be null");
+    this.telemetrySink = Objects.requireNonNull(telemetrySink, "telemetrySink must not be null");
   }
 
   public static AgentEngineBuilder builder() {
@@ -360,7 +370,8 @@ public final class AgentEngine {
           identity,
           execution,
           null,
-          null);
+          null,
+          telemetrySink);
     }
     // An approving run never starts its first model call eagerly: the pending queue has to be
     // resolved against the loaded session first, and a resolved approval may put tool results into
@@ -381,7 +392,8 @@ public final class AgentEngine {
         identity,
         execution,
         new ToolApprovalCoordinator(approvalSettings, sessionContext, request),
-        gate == null ? CompletableFuture.completedFuture(null) : gate);
+        gate == null ? CompletableFuture.completedFuture(null) : gate,
+        telemetrySink);
   }
 
   /**

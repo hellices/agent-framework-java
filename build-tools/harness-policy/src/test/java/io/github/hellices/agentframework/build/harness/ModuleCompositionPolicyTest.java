@@ -30,6 +30,7 @@ class ModuleCompositionPolicyTest {
           ":agent-framework-engine",
           ":agent-framework-testkit",
           ":integrations:agent-framework-mcp",
+          ":integrations:agent-framework-otel",
           ":providers:agent-framework-openai");
 
   private static final String PLATFORM_PROJECT = ":agent-framework-bom";
@@ -95,6 +96,7 @@ class ModuleCompositionPolicyTest {
           ":agent-framework-engine", List.of(":agent-framework-api"),
           ":agent-framework-testkit", List.of(":agent-framework-api"),
           ":integrations:agent-framework-mcp", List.of(":agent-framework-api"),
+          ":integrations:agent-framework-otel", List.of(":agent-framework-api"),
           ":providers:agent-framework-openai", List.of(":agent-framework-api"));
 
   /**

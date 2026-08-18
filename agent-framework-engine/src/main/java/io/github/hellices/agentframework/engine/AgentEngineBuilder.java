@@ -9,6 +9,7 @@ import io.github.hellices.agentframework.spi.interception.SessionOperationInterc
 import io.github.hellices.agentframework.spi.interception.ToolInvocationInterceptor;
 import io.github.hellices.agentframework.spi.session.SessionStore;
 import io.github.hellices.agentframework.spi.session.StateCodecRegistry;
+import io.github.hellices.agentframework.spi.telemetry.TelemetrySink;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
@@ -27,6 +28,7 @@ public final class AgentEngineBuilder {
 
   private SessionStore sessionStore;
   private StateCodecRegistry stateCodecRegistry;
+  private TelemetrySink telemetrySink;
   private final List<AgentExecutionInterceptor> agentExecutionInterceptors = new ArrayList<>();
   private final List<ModelInvocationInterceptor> modelInvocationInterceptors = new ArrayList<>();
   private final List<ToolInvocationInterceptor> toolInvocationInterceptors = new ArrayList<>();
@@ -133,6 +135,21 @@ public final class AgentEngineBuilder {
     return this;
   }
 
+  /**
+   * Sets the framework-neutral telemetry sink that observes agent runs, model calls, tool calls,
+   * and session operations.
+   *
+   * <p>The engine uses {@link TelemetrySink#noOp()} when this method is not called. Sensitive data
+   * — prompt bodies, model output, tool arguments, tool results, credentials, and personal traces —
+   * are never passed to the sink.
+   *
+   * @param telemetrySink the sink to use; must not be null
+   */
+  public AgentEngineBuilder telemetrySink(TelemetrySink telemetrySink) {
+    this.telemetrySink = Objects.requireNonNull(telemetrySink, "telemetrySink must not be null");
+    return this;
+  }
+
   public AgentEngine build() {
     if (sessionStore == null && stateCodecRegistry != null) {
       throw new IllegalStateException("stateCodecRegistry requires a configured sessionStore");
@@ -150,7 +167,8 @@ public final class AgentEngineBuilder {
                 sessionStore,
                 stateCodecRegistry == null ? defaultStateCodecRegistry() : stateCodecRegistry,
                 interceptorRegistry::interceptSession);
-    return new AgentEngine(sessionCoordinator, interceptorRegistry);
+    TelemetrySink effectiveSink = telemetrySink != null ? telemetrySink : TelemetrySink.noOp();
+    return new AgentEngine(sessionCoordinator, interceptorRegistry, effectiveSink);
   }
 
   /**
