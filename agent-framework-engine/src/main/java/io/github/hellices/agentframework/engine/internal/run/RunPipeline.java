@@ -99,6 +99,7 @@ public final class RunPipeline implements Flow.Publisher<AgentResponseUpdate> {
   private final Supplier<ModelRequest> firstRequest;
   private final Function<ModelRequest, Flow.Publisher<ModelResponseUpdate>> nextStream;
   private final Supplier<ToolLoopPolicy> policySupplier;
+  private final ToolLoopPolicy.BoundToolInvoker toolInvoker;
   private final AgentRunRequest request;
   private final ResponseIdentity identity;
   private final RunExecution execution;
@@ -112,6 +113,8 @@ public final class RunPipeline implements Flow.Publisher<AgentResponseUpdate> {
    *     made
    * @param nextStream how every later model call is made
    * @param policy the shared tool budget rules this run follows
+   * @param toolInvoker how each executed bound tool call is run, so the engine can route exactly
+   *     the calls this run executes through the tool interceptor seam
    * @param request the run being executed, carrying its cancellation signal and attributes
    * @param identity the response every update of this run belongs to
    * @param execution the run's explicit state machine, driven through {@code FINALIZE_RESPONSE}
@@ -121,6 +124,7 @@ public final class RunPipeline implements Flow.Publisher<AgentResponseUpdate> {
       Supplier<ModelRequest> firstRequest,
       Function<ModelRequest, Flow.Publisher<ModelResponseUpdate>> nextStream,
       Supplier<ToolLoopPolicy> policySupplier,
+      ToolLoopPolicy.BoundToolInvoker toolInvoker,
       AgentRunRequest request,
       ResponseIdentity identity,
       RunExecution execution) {
@@ -128,6 +132,7 @@ public final class RunPipeline implements Flow.Publisher<AgentResponseUpdate> {
     this.firstRequest = Objects.requireNonNull(firstRequest, "firstRequest must not be null");
     this.nextStream = Objects.requireNonNull(nextStream, "nextStream must not be null");
     this.policySupplier = Objects.requireNonNull(policySupplier, "policySupplier must not be null");
+    this.toolInvoker = Objects.requireNonNull(toolInvoker, "toolInvoker must not be null");
     this.request = Objects.requireNonNull(request, "request must not be null");
     this.identity = Objects.requireNonNull(identity, "identity must not be null");
     this.execution = Objects.requireNonNull(execution, "execution must not be null");
@@ -343,7 +348,7 @@ public final class RunPipeline implements Flow.Publisher<AgentResponseUpdate> {
                 ? Objects.requireNonNull(firstRequest.get(), "model request must not be null")
                 : iterationRequest;
         advance(RunPhase.EXECUTE_TOOL_BATCH);
-        results = policy.executeToolCalls(calls, request);
+        results = policy.executeToolCalls(calls, request, toolInvoker);
       } catch (RuntimeException iterationFailure) {
         fail(iterationFailure);
         return;

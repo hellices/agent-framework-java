@@ -133,6 +133,12 @@ public final class AgentEngineBuilder {
     if (sessionStore == null && stateCodecRegistry != null) {
       throw new IllegalStateException("stateCodecRegistry requires a configured sessionStore");
     }
+    InterceptorRegistry interceptorRegistry =
+        new InterceptorRegistry(
+            List.copyOf(agentExecutionInterceptors),
+            List.copyOf(modelInvocationInterceptors),
+            List.copyOf(toolInvocationInterceptors),
+            List.copyOf(sessionOperationInterceptors));
     SessionCoordinator sessionCoordinator =
         sessionStore == null
             ? null
@@ -140,14 +146,9 @@ public final class AgentEngineBuilder {
                 sessionStore,
                 stateCodecRegistry == null
                     ? StateCodecRegistry.builder().build()
-                    : stateCodecRegistry);
-    return new AgentEngine(
-        sessionCoordinator,
-        new InterceptorRegistry(
-            List.copyOf(agentExecutionInterceptors),
-            List.copyOf(modelInvocationInterceptors),
-            List.copyOf(toolInvocationInterceptors),
-            List.copyOf(sessionOperationInterceptors)));
+                    : stateCodecRegistry,
+                interceptorRegistry::interceptSession);
+    return new AgentEngine(sessionCoordinator, interceptorRegistry);
   }
 
   private static <T> List<T> validatedSnapshot(List<? extends T> interceptors, String label) {

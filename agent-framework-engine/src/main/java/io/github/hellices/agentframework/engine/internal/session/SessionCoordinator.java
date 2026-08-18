@@ -4,6 +4,10 @@ import io.github.hellices.agentframework.api.agent.AgentSession;
 import io.github.hellices.agentframework.api.session.SessionContext;
 import io.github.hellices.agentframework.api.session.SessionSnapshot;
 import io.github.hellices.agentframework.api.session.SessionSnapshotMetadata;
+import io.github.hellices.agentframework.spi.interception.SessionInvocation;
+import io.github.hellices.agentframework.spi.interception.SessionInvocationChain;
+import io.github.hellices.agentframework.spi.interception.SessionOperation;
+import io.github.hellices.agentframework.spi.interception.SessionOperationResult;
 import io.github.hellices.agentframework.spi.session.SessionStore;
 import io.github.hellices.agentframework.spi.session.StateCodecRegistry;
 import java.time.Instant;
@@ -38,12 +42,32 @@ import java.util.concurrent.CompletionStage;
  */
 public final class SessionCoordinator {
 
+  /**
+   * How one session-store operation is routed through the session interceptor seam. The default
+   * calls the terminal directly; the engine supplies the registry's session chain so a chain
+   * observes or replaces every load and save exactly once.
+   */
+  @FunctionalInterface
+  public interface SessionSeam {
+    CompletionStage<SessionOperationResult> intercept(
+        SessionInvocation invocation, SessionInvocationChain terminal);
+  }
+
+  private static final SessionSeam DIRECT_SEAM =
+      (invocation, terminal) -> terminal.proceed(invocation);
+
   private final SessionStore store;
   private final StateCodecRegistry registry;
+  private final SessionSeam seam;
 
   public SessionCoordinator(SessionStore store, StateCodecRegistry registry) {
+    this(store, registry, DIRECT_SEAM);
+  }
+
+  public SessionCoordinator(SessionStore store, StateCodecRegistry registry, SessionSeam seam) {
     this.store = Objects.requireNonNull(store, "sessionStore must not be null");
     this.registry = Objects.requireNonNull(registry, "stateCodecRegistry must not be null");
+    this.seam = Objects.requireNonNull(seam, "sessionSeam must not be null");
   }
 
   /**
@@ -64,17 +88,48 @@ public final class SessionCoordinator {
     if (session == null) {
       return CompletableFuture.completedFuture(null);
     }
-    return requireStage(
-            store.load(session.sessionId()), "session store load stage must not be null")
+    SessionInvocation invocation =
+        SessionInvocation.builder()
+            .operation(SessionOperation.LOAD)
+            .session(session)
+            .attributes(sessionContext.attributes())
+            .cancellationSignal(sessionContext.cancellationSignal())
+            .build();
+    return invokeSeam(invocation, this::loadTerminal, "session load stage must not be null")
         .thenAccept(
+            result -> {
+              SessionOperationResult loaded =
+                  Objects.requireNonNull(result, "session load result must not be null");
+              loaded
+                  .snapshot()
+                  .ifPresent(
+                      value ->
+                          sessionContext.hydrate(
+                              loaded.session(),
+                              new SessionSnapshotMetadata(value.revision(), value.createdAt())));
+            });
+  }
+
+  private CompletionStage<SessionOperationResult> loadTerminal(SessionInvocation invocation) {
+    return requireStage(
+            store.load(invocation.session().sessionId()),
+            "session store load stage must not be null")
+        .thenApply(
             loaded -> {
               Optional<SessionSnapshot> snapshot =
                   Objects.requireNonNull(loaded, "session store load result must not be null");
-              snapshot.ifPresent(
-                  value ->
-                      sessionContext.hydrate(
-                          registry.restore(value),
-                          new SessionSnapshotMetadata(value.revision(), value.createdAt())));
+              if (snapshot.isEmpty()) {
+                return SessionOperationResult.builder()
+                    .operation(SessionOperation.LOAD)
+                    .session(invocation.session())
+                    .build();
+              }
+              SessionSnapshot value = snapshot.get();
+              return SessionOperationResult.builder()
+                  .operation(SessionOperation.LOAD)
+                  .session(registry.restore(value))
+                  .snapshot(value)
+                  .build();
             });
   }
 
@@ -99,9 +154,50 @@ public final class SessionCoordinator {
     Optional<SessionSnapshotMetadata> metadata = sessionContext.snapshotMetadata();
     long revision = metadata.map(value -> Math.addExact(value.revision(), 1L)).orElse(0L);
     Instant createdAt = metadata.map(SessionSnapshotMetadata::createdAt).orElseGet(Instant::now);
-    return requireStage(
-        store.save(registry.snapshot(updated.get(), revision, createdAt)),
-        "session store save stage must not be null");
+    SessionSnapshot snapshot = registry.snapshot(updated.get(), revision, createdAt);
+    SessionInvocation invocation =
+        SessionInvocation.builder()
+            .operation(SessionOperation.SAVE)
+            .session(updated.get())
+            .snapshot(snapshot)
+            .attributes(sessionContext.attributes())
+            .cancellationSignal(sessionContext.cancellationSignal())
+            .build();
+    return invokeSeam(invocation, this::saveTerminal, "session save stage must not be null")
+        .thenApply(ignored -> null);
+  }
+
+  private CompletionStage<SessionOperationResult> saveTerminal(SessionInvocation invocation) {
+    SessionSnapshot snapshot =
+        invocation
+            .snapshot()
+            .orElseThrow(() -> new IllegalStateException("SAVE invocation must carry a snapshot"));
+    return requireStage(store.save(snapshot), "session store save stage must not be null")
+        .thenApply(
+            ignored ->
+                SessionOperationResult.builder()
+                    .operation(SessionOperation.SAVE)
+                    .session(invocation.session())
+                    .snapshot(snapshot)
+                    .build());
+  }
+
+  /**
+   * Runs the session seam for one operation, adapting a synchronous interceptor throw or a {@code
+   * null} stage into a failed stage that carries the exact same cause. The engine gates the run's
+   * first model call on the load stage and reports the save stage on the run's outcome, so routing
+   * a synchronous seam failure into the returned stage is what lets the run's own response and
+   * update channels report it instead of failing an unrelated caller synchronously.
+   */
+  private CompletionStage<SessionOperationResult> invokeSeam(
+      SessionInvocation invocation, SessionInvocationChain terminal, String message) {
+    try {
+      return requireStage(seam.intercept(invocation, terminal), message);
+    } catch (RuntimeException failure) {
+      CompletableFuture<SessionOperationResult> failed = new CompletableFuture<>();
+      failed.completeExceptionally(failure);
+      return failed;
+    }
   }
 
   private static <T> CompletionStage<T> requireStage(CompletionStage<T> stage, String message) {

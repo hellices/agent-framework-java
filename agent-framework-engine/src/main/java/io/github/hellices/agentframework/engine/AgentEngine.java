@@ -199,24 +199,43 @@ public final class AgentEngine {
         new ResponseIdentity(
             binding.id(), UUID.randomUUID().toString(), binding.name(), Instant.now());
     SessionContext sessionContext = context.sessionContext();
-    RunPipeline pipeline = buildPipeline(binding, context, request, identity);
-    RunExecution execution = pipeline.execution();
-    // The ordinary run observes the loop's single assembled response, so an internal subscriber
-    // drives every model and tool iteration to completion while the caller reads terminalResponse.
-    CompletionStage<ModelResponse> terminal = pipeline.terminalResponse();
-    pipeline.subscribe(new DrainingSubscriber());
+    AgentPipelineHandle handle = interceptRun(binding, context, request, identity);
+    if (handle.failed()) {
+      return AgentRun.engineManaged(
+          failedStage(handle.failure()),
+          request.cancellationSignal(),
+          sessionContext::updatedSession);
+    }
+    if (handle.pipeline() != null) {
+      RunPipeline pipeline = handle.pipeline();
+      RunExecution execution = pipeline.execution();
+      // The ordinary run observes the loop's single assembled response, so an internal subscriber
+      // drives every model and tool iteration to completion while the caller reads
+      // terminalResponse.
+      CompletionStage<ModelResponse> terminal = pipeline.terminalResponse();
+      pipeline.subscribe(new DrainingSubscriber());
+      CompletionStage<AgentResponse> response =
+          terminal
+              .thenApply(
+                  model ->
+                      ModelResponseMapper.toAgentResponse(
+                          identity.agentId(),
+                          identity.responseId(),
+                          identity.authorName(),
+                          identity.createdAt(),
+                          model))
+              .thenCompose(
+                  agentResponse -> completeRun(binding, sessionContext, execution, agentResponse));
+      return AgentRun.engineManaged(
+          response, request.cancellationSignal(), sessionContext::updatedSession);
+    }
+    // A short-circuited run never built a pipeline: its final response is derived from the
+    // canonical
+    // updates the interceptor returned, then handed to the same session finalization the engine
+    // owns.
     CompletionStage<AgentResponse> response =
-        terminal
-            .thenApply(
-                model ->
-                    ModelResponseMapper.toAgentResponse(
-                        identity.agentId(),
-                        identity.responseId(),
-                        identity.authorName(),
-                        identity.createdAt(),
-                        model))
-            .thenCompose(
-                agentResponse -> completeRun(binding, sessionContext, execution, agentResponse));
+        collectUpdates(handle.execution().updates())
+            .thenCompose(agentResponse -> finalizeShortCircuit(sessionContext, agentResponse));
     return AgentRun.engineManaged(
         response, request.cancellationSignal(), sessionContext::updatedSession);
   }
@@ -241,8 +260,32 @@ public final class AgentEngine {
       throw new UnsupportedOperationException("continuation tool execution is not supported");
     }
     ModelClient selectedClient = request.options().resolveModelClient(binding.modelClient());
-    Function<ModelRequest, Flow.Publisher<ModelResponseUpdate>> invoker = selectedClient::execute;
     SessionContext sessionContext = context.sessionContext();
+    String modelAgentId = binding.id();
+    String modelSessionId =
+        sessionContext.session() == null ? null : sessionContext.session().sessionId();
+    Function<ModelRequest, Flow.Publisher<ModelResponseUpdate>> invoker =
+        modelRequest ->
+            interceptModel(
+                ModelInvocation.builder()
+                    .agentId(modelAgentId)
+                    .sessionId(modelSessionId)
+                    .request(modelRequest)
+                    .build(),
+                modelInvocation ->
+                    Objects.requireNonNull(
+                        selectedClient.execute(modelInvocation.request()),
+                        "model client update publisher must not be null"));
+    ToolLoopPolicy.BoundToolInvoker toolInvoker =
+        (tool, call, toolContext) ->
+            interceptTool(
+                ToolInvocation.builder()
+                    .toolCall(call)
+                    .toolDefinition(tool.definition())
+                    .context(toolContext)
+                    .build(),
+                toolInvocation ->
+                    tool.execute(toolInvocation.arguments(), toolInvocation.context()));
     RunExecution execution = RunExecution.create(request, binding.definition(), binding.runtime());
     RunEffectiveState state =
         new RunEffectiveState(
@@ -274,6 +317,7 @@ public final class AgentEngine {
         firstRequest::get,
         invoker,
         state::toolLoop,
+        toolInvoker,
         request,
         identity,
         execution);
@@ -346,13 +390,221 @@ public final class AgentEngine {
         new ResponseIdentity(
             binding.id(), UUID.randomUUID().toString(), binding.name(), Instant.now());
     SessionContext sessionContext = context.sessionContext();
-    RunPipeline pipeline = buildPipeline(binding, context, request, identity);
-    RunExecution execution = pipeline.execution();
+    AgentPipelineHandle handle = interceptRun(binding, context, request, identity);
+    if (handle.failed()) {
+      return AgentStreamingRun.engineManaged(
+          failingPublisher(handle.failure()),
+          request.cancellationSignal(),
+          response -> failedStage(handle.failure()),
+          sessionContext::updatedSession);
+    }
+    if (handle.pipeline() != null) {
+      RunExecution execution = handle.pipeline().execution();
+      return AgentStreamingRun.engineManaged(
+          handle.execution().updates(),
+          request.cancellationSignal(),
+          response -> completeRun(binding, sessionContext, execution, response),
+          sessionContext::updatedSession);
+    }
     return AgentStreamingRun.engineManaged(
-        pipeline,
+        handle.execution().updates(),
         request.cancellationSignal(),
-        response -> completeRun(binding, sessionContext, execution, response),
+        response -> finalizeShortCircuit(sessionContext, response),
         sessionContext::updatedSession);
+  }
+
+  /**
+   * Wraps the pre-finalization {@link AgentExecution} the agent seam produces around a run's
+   * pipeline, so the four interceptor families see a run once each in the right place. The chain's
+   * terminal lazily builds the run's {@link RunPipeline} exactly when a chain proceeds to it, so an
+   * interceptor that short-circuits performs no model, session, or tool work: no pipeline is built,
+   * and the returned handle carries only the canonical updates the interceptor chose. A synchronous
+   * failure the pipeline build raises stays synchronous — preserving the eager run's failure shape
+   * — while a failure an interceptor raises, a {@code null} it returns, or a cancellation signal it
+   * swaps is routed to the run's own response or update failure channel with its exact root cause.
+   */
+  private AgentPipelineHandle interceptRun(
+      AgentBinding binding,
+      AgentRunContext context,
+      AgentRunRequest request,
+      ResponseIdentity identity) {
+    AgentInvocation invocation =
+        AgentInvocation.builder().agentDefinition(binding.definition()).request(request).build();
+    AtomicReference<RunPipeline> pipelineRef = new AtomicReference<>();
+    AgentInvocationChain terminal =
+        proceeding -> {
+          try {
+            RunPipeline pipeline = buildPipeline(binding, context, request, identity);
+            pipelineRef.set(pipeline);
+            return AgentExecution.fromUpdates(pipeline, request.cancellationSignal());
+          } catch (RuntimeException failure) {
+            throw new PipelineBuildException(failure);
+          }
+        };
+    AgentExecution execution;
+    try {
+      execution = interceptAgent(invocation, terminal);
+    } catch (PipelineBuildException failure) {
+      // A pipeline-build failure keeps failing the caller synchronously, exactly as an eager run
+      // did before the seam existed; only interceptor-raised failures are routed asynchronously.
+      throw failure.cause();
+    } catch (RuntimeException failure) {
+      return AgentPipelineHandle.failed(failure);
+    }
+    if (!execution.cancellationSignal().equals(request.cancellationSignal())) {
+      // The seam must hand back the run's own signal (CancellationSignal has identity equality), so
+      // a cancellation reaches the stream the run subscribes to. A swapped signal fails explicitly
+      // here, before any subscription, rather than leaking a run that cannot be cancelled.
+      return AgentPipelineHandle.failed(
+          new IllegalStateException(
+              "agent execution cancellationSignal must be the run's cancellation signal"));
+    }
+    return AgentPipelineHandle.of(execution, pipelineRef.get());
+  }
+
+  /**
+   * Subscribes to a short-circuited execution's canonical updates and reconstructs the run's final
+   * response from them, the same way a streamed run's finalizer does, so a short-circuit and a
+   * normal run derive their response from the same update contract.
+   */
+  private static CompletionStage<AgentResponse> collectUpdates(
+      Flow.Publisher<AgentResponseUpdate> updates) {
+    CompletableFuture<AgentResponse> outcome = new CompletableFuture<>();
+    updates.subscribe(
+        new Flow.Subscriber<>() {
+          private final List<AgentResponseUpdate> buffered = new ArrayList<>();
+
+          @Override
+          public void onSubscribe(Flow.Subscription subscription) {
+            subscription.request(Long.MAX_VALUE);
+          }
+
+          @Override
+          public void onNext(AgentResponseUpdate item) {
+            buffered.add(Objects.requireNonNull(item, "agent response update must not be null"));
+          }
+
+          @Override
+          public void onError(Throwable throwable) {
+            outcome.completeExceptionally(unwrap(throwable));
+          }
+
+          @Override
+          public void onComplete() {
+            try {
+              outcome.complete(AgentResponse.fromUpdates(List.copyOf(buffered)));
+            } catch (RuntimeException failure) {
+              outcome.completeExceptionally(failure);
+            }
+          }
+        });
+    return outcome.minimalCompletionStage();
+  }
+
+  /**
+   * Completes the durable lifecycle of a short-circuited run: it fills the run's response slot once
+   * and persists the session, without the provider {@code afterRun} hooks, because a short-circuit
+   * never opened them. A run that built its pipeline uses {@link #completeRun} instead.
+   */
+  private CompletionStage<AgentResponse> finalizeShortCircuit(
+      SessionContext sessionContext, AgentResponse response) {
+    CompletableFuture<AgentResponse> outcome = new CompletableFuture<>();
+    try {
+      sessionContext.complete(response);
+    } catch (RuntimeException immediate) {
+      outcome.completeExceptionally(immediate);
+      return outcome.minimalCompletionStage();
+    }
+    saveSession(sessionContext)
+        .whenComplete(
+            (ignored, failure) -> {
+              if (failure == null) {
+                outcome.complete(response);
+              } else {
+                outcome.completeExceptionally(unwrap(failure));
+              }
+            });
+    return outcome.minimalCompletionStage();
+  }
+
+  private static <T> CompletionStage<T> failedStage(Throwable failure) {
+    CompletableFuture<T> outcome = new CompletableFuture<>();
+    outcome.completeExceptionally(failure);
+    return outcome.minimalCompletionStage();
+  }
+
+  private static Flow.Publisher<AgentResponseUpdate> failingPublisher(Throwable failure) {
+    return subscriber -> {
+      Objects.requireNonNull(subscriber, "subscriber must not be null");
+      subscriber.onSubscribe(EmptySubscription.INSTANCE);
+      subscriber.onError(failure);
+    };
+  }
+
+  /**
+   * Marks a failure raised while the agent seam's terminal builds the run's pipeline, so the run
+   * can keep failing the caller synchronously for a pipeline-build failure while routing an
+   * interceptor-raised failure to the run's own response or update channel.
+   */
+  private static final class PipelineBuildException extends RuntimeException {
+
+    private static final long serialVersionUID = 1L;
+
+    private final transient RuntimeException cause;
+
+    PipelineBuildException(RuntimeException cause) {
+      super(cause);
+      this.cause = cause;
+    }
+
+    RuntimeException cause() {
+      return cause;
+    }
+  }
+
+  /**
+   * The outcome of running the agent interceptor seam once for a run: either a routed failure, a
+   * built pipeline with its execution, or a short-circuited execution carrying only canonical
+   * updates (its pipeline is {@code null}).
+   */
+  private static final class AgentPipelineHandle {
+
+    private final AgentExecution execution;
+    private final RunPipeline pipeline;
+    private final RuntimeException failure;
+
+    private AgentPipelineHandle(
+        AgentExecution execution, RunPipeline pipeline, RuntimeException failure) {
+      this.execution = execution;
+      this.pipeline = pipeline;
+      this.failure = failure;
+    }
+
+    static AgentPipelineHandle of(AgentExecution execution, RunPipeline pipeline) {
+      return new AgentPipelineHandle(
+          Objects.requireNonNull(execution, "execution must not be null"), pipeline, null);
+    }
+
+    static AgentPipelineHandle failed(RuntimeException failure) {
+      return new AgentPipelineHandle(
+          null, null, Objects.requireNonNull(failure, "failure must not be null"));
+    }
+
+    boolean failed() {
+      return failure != null;
+    }
+
+    RuntimeException failure() {
+      return failure;
+    }
+
+    AgentExecution execution() {
+      return execution;
+    }
+
+    RunPipeline pipeline() {
+      return pipeline;
+    }
   }
 
   /**

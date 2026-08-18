@@ -209,20 +209,47 @@ public final class ToolLoopPolicy {
   }
 
   /**
+   * How one bound tool call is actually run. The default runs the tool handler directly; the engine
+   * supplies an implementation that routes each executed bound call through the tool interceptor
+   * seam, so a chain observes or replaces exactly the calls this policy would have run.
+   */
+  @FunctionalInterface
+  public interface BoundToolInvoker {
+    CompletionStage<ToolResult> invoke(
+        FunctionTool tool, ToolCallContent call, ToolContext context);
+  }
+
+  private static final BoundToolInvoker DIRECT_INVOKER =
+      (tool, call, context) -> tool.execute(ToolArguments.of(call.arguments()), context);
+
+  /**
+   * Executes {@code calls} one after another and completes with their results in call order,
+   * running each bound call directly.
+   */
+  public CompletionStage<List<Content>> executeToolCalls(
+      List<ToolCallContent> calls, AgentRunRequest request) {
+    return executeToolCalls(calls, request, DIRECT_INVOKER);
+  }
+
+  /**
    * Executes {@code calls} one after another and completes with their results in call order.
    *
    * <p>Sequential execution is what makes the result order a property of the request rather than of
    * how fast each handler happens to complete, and it lets a cancellation observed between two
-   * calls stop the remaining ones.
+   * calls stop the remaining ones. Each bound call is run through {@code invoker}, so the engine
+   * can route exactly the calls that are actually executed through the tool interceptor seam
+   * without this policy owning the seam or its state.
    */
   public CompletionStage<List<Content>> executeToolCalls(
-      List<ToolCallContent> calls, AgentRunRequest request) {
-    return executeToolCalls(calls, request, 0, List.of());
+      List<ToolCallContent> calls, AgentRunRequest request, BoundToolInvoker invoker) {
+    return executeToolCalls(
+        calls, request, Objects.requireNonNull(invoker, "invoker must not be null"), 0, List.of());
   }
 
   private CompletionStage<List<Content>> executeToolCalls(
       List<ToolCallContent> calls,
       AgentRunRequest request,
+      BoundToolInvoker invoker,
       int index,
       List<Content> accumulatedResults) {
     if (index >= calls.size()) {
@@ -238,8 +265,9 @@ public final class ToolLoopPolicy {
     }
     CompletionStage<ToolResult> resultStage =
         Objects.requireNonNull(
-            tool.execute(
-                ToolArguments.of(call.arguments()),
+            invoker.invoke(
+                tool,
+                call,
                 new ToolContext(request.cancellationSignal(), effectiveAttributes(request))),
             "tool handler response stage must not be null");
     return resultStage.thenCompose(
@@ -247,7 +275,7 @@ public final class ToolLoopPolicy {
           List<Content> nextResults = new ArrayList<>(accumulatedResults);
           nextResults.add(
               new ToolResultContent(call.callId(), call.name(), result.content(), result.error()));
-          return executeToolCalls(calls, request, index + 1, List.copyOf(nextResults));
+          return executeToolCalls(calls, request, invoker, index + 1, List.copyOf(nextResults));
         });
   }
 
