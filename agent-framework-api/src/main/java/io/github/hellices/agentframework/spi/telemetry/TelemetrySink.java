@@ -7,10 +7,10 @@ package io.github.hellices.agentframework.spi.telemetry;
  * call, tool call, session operation). Operations are nested: a model-call operation is opened
  * inside an agent-run operation and closed before the agent-run operation closes.
  *
- * <p>The default engine configuration uses {@link NoOpTelemetrySink}. Replace it via {@link
- * io.github.hellices.agentframework.engine.AgentEngineBuilder#telemetrySink} to route events to any
- * observability backend. The optional {@code agent-framework-otel} integration maps neutral values
- * to OpenTelemetry GenAI semantic conventions.
+ * <p>The default engine configuration uses {@link NoOpTelemetrySink}. Configure a replacement
+ * through the engine builder to route events to any observability backend. The optional {@code
+ * agent-framework-otel} integration maps neutral values to OpenTelemetry GenAI semantic
+ * conventions.
  *
  * <p>Sensitive data contract: the engine never passes prompt bodies, model output, tool arguments,
  * tool results, credentials, or personal traces to any sink method. Attribute keys are taken only

@@ -141,7 +141,7 @@ public final class RunPipeline implements Flow.Publisher<AgentResponseUpdate> {
    * @param firstRequest the request the first model call was made with, readable once that call was
    *     made
    * @param nextStream how every later model call is made
-   * @param policy the shared tool budget rules this run follows
+   * @param policySupplier supplies the shared tool budget rules this run follows
    * @param toolInvoker how each executed bound tool call is run, so the engine can route exactly
    *     the calls this run executes through the tool interceptor seam
    * @param request the run being executed, carrying its cancellation signal and attributes
@@ -151,6 +151,8 @@ public final class RunPipeline implements Flow.Publisher<AgentResponseUpdate> {
    *     approval settings and no tool call of this run is subject to approval
    * @param approvalGate the stage the approval queue is readable after, so the queue is resolved
    *     against a session that has already been loaded
+   * @param telemetrySink the configured telemetry sink
+   * @param agentRunOp the parent telemetry operation for this run
    */
   public RunPipeline(
       Function<List<Message>, Flow.Publisher<ModelResponseUpdate>> firstStream,
