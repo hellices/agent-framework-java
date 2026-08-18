@@ -234,6 +234,81 @@ class SessionCoordinatorTest {
     assertThat(saved.state()).containsOnlyKeys("probe");
   }
 
+  // --- AGT-016 the model's service-history capability decides default ownership -----------------
+
+  @Test
+  void aServiceManagingModelResolvesNoDefaultInMemoryHistoryWithoutAServiceSessionId() {
+    ProbeProvider probe = new ProbeProvider("probe");
+    Agent engine = boundBuilder(serviceManagingClient("hello")).contextProviders(probe).build();
+
+    run(engine, session("session-1", null, Map.of()), "hi");
+
+    assertThat(probe.observedState(InMemoryHistoryProvider.DEFAULT_SOURCE_ID)).isEmpty();
+  }
+
+  @Test
+  void aServiceManagingModelResolvesNoDefaultInMemoryHistoryWithAServiceSessionId() {
+    ProbeProvider probe = new ProbeProvider("probe");
+    Agent engine = boundBuilder(serviceManagingClient("hello")).contextProviders(probe).build();
+
+    run(engine, session("session-1", "service-1", Map.of()), "hi");
+
+    assertThat(probe.observedState(InMemoryHistoryProvider.DEFAULT_SOURCE_ID)).isEmpty();
+  }
+
+  @Test
+  void aServiceManagingModelNeverReplaysThePromptFromALocalDefaultAcrossRuns() {
+    RecordingStore store = new RecordingStore();
+    AtomicReference<ModelRequest> captured = new AtomicReference<>();
+    Agent engine = engineWithStore(store, serviceManagingCapturingClient(captured, "hello"));
+
+    run(engine, session("session-1", null, Map.of()), "first");
+    run(engine, session("session-1", null, Map.of()), "second");
+
+    assertThat(captured.get().messages()).extracting(Message::text).containsExactly("second");
+    assertThat(store.saved("session-1").state())
+        .doesNotContainKey(InMemoryHistoryProvider.DEFAULT_SOURCE_ID);
+  }
+
+  @Test
+  void turningTheServiceHistoryOffReEnablesTheLocalDefaultHistoryPath() {
+    RecordingStore store = new RecordingStore();
+    run(
+        engineWithStore(store, serviceManagingClient("hello")),
+        session("session-1", null, Map.of()),
+        "first");
+    assertThat(store.saved("session-1").state())
+        .doesNotContainKey(InMemoryHistoryProvider.DEFAULT_SOURCE_ID);
+
+    AtomicReference<ModelRequest> captured = new AtomicReference<>();
+    run(
+        engineWithStore(store, capturingClient(captured, "answer")),
+        session("session-1", null, Map.of()),
+        "second");
+
+    assertThat(store.saved("session-1").state())
+        .containsKey(InMemoryHistoryProvider.DEFAULT_SOURCE_ID);
+    assertThat(captured.get().messages()).extracting(Message::text).containsExactly("second");
+  }
+
+  @Test
+  void aServiceManagingModelKeepsAnExplicitStoreOnlyDefaultNamespaceProviderWithoutACollision() {
+    RecordingStore store = new RecordingStore();
+    AtomicReference<ModelRequest> captured = new AtomicReference<>();
+    Agent engine =
+        engineWithStore(
+            store,
+            serviceManagingCapturingClient(captured, "hello"),
+            new InMemoryHistoryProvider(
+                InMemoryHistoryProvider.DEFAULT_SOURCE_ID,
+                HistoryPolicy.builder().loadMessages(false).storeOutputs(false).build()));
+
+    run(engine, session("session-1", null, Map.of()), "hi");
+
+    assertThat(captured.get()).isNotNull();
+    assertThat(store.log).containsExactly("load:session-1", "save:session-1");
+  }
+
   // --- SES-001/SES-002: the caller's service conversation handle is never silently replaced
   // -------
 
@@ -1092,6 +1167,40 @@ class SessionCoordinatorTest {
     return request -> {
       log.add("model");
       return EngineModels.of(modelResponse(text));
+    };
+  }
+
+  private static ModelClient serviceManagingClient(String text) {
+    return new ModelClient() {
+      @Override
+      public Flow.Publisher<ModelResponseUpdate> execute(ModelRequest request) {
+        return EngineModels.of(modelResponse(text));
+      }
+
+      @Override
+      public io.github.hellices.agentframework.spi.model.ModelCapabilities capabilities() {
+        return io.github.hellices.agentframework.spi.model.ModelCapabilities.builder()
+            .serviceManagesHistory(true)
+            .build();
+      }
+    };
+  }
+
+  private static ModelClient serviceManagingCapturingClient(
+      AtomicReference<ModelRequest> captured, String text) {
+    return new ModelClient() {
+      @Override
+      public Flow.Publisher<ModelResponseUpdate> execute(ModelRequest request) {
+        captured.set(request);
+        return EngineModels.of(modelResponse(text));
+      }
+
+      @Override
+      public io.github.hellices.agentframework.spi.model.ModelCapabilities capabilities() {
+        return io.github.hellices.agentframework.spi.model.ModelCapabilities.builder()
+            .serviceManagesHistory(true)
+            .build();
+      }
     };
   }
 

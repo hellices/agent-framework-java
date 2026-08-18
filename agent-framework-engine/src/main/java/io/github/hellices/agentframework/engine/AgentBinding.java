@@ -53,7 +53,9 @@ final class AgentBinding {
             this.executableTools,
             definition.defaultRunOptions().maxToolIterations());
     this.configuredProviders = bindContextProviders(runtime.contextProviders());
-    this.defaultHistory = bindDefaultHistory(this.configuredProviders);
+    this.defaultHistory =
+        bindDefaultHistory(
+            this.configuredProviders, runtime.modelClient().capabilities().serviceManagesHistory());
   }
 
   /**
@@ -156,7 +158,7 @@ final class AgentBinding {
 
   /**
    * Decides once, when the agent is bound, whether this agent owns a default in-memory chat history
-   * (SES-014).
+   * (SES-014, AGT-016).
    *
    * <p>A configured {@link HistoryProvider} that loads messages already answers "what did we say
    * before?" for every run, so injecting a second history on top of it would replay the same
@@ -171,9 +173,20 @@ final class AgentBinding {
    * first. A stable namespace makes the collision a configuration error instead, reported by {@link
    * #resolveProviders(SessionContext)} for the runs that would actually need the default.
    *
+   * <p>When the model service keeps the conversation history itself ({@code
+   * serviceManagesHistory}), this agent never owns a local default: injecting one would store the
+   * same messages twice and replay them into a request the service already carries (AGT-016). The
+   * suppression is total — the local default path is never eligible for any run of this agent — so
+   * a configured provider on the default namespace is not treated as a collision either, because
+   * nothing would ever contend for that namespace.
+   *
    * @return the binding to append for eligible runs, or a conflicting or suppressed marker
    */
-  private static DefaultHistory bindDefaultHistory(List<ProviderBinding> configured) {
+  private static DefaultHistory bindDefaultHistory(
+      List<ProviderBinding> configured, boolean serviceManagesHistory) {
+    if (serviceManagesHistory) {
+      return new DefaultHistory(null, false);
+    }
     for (ProviderBinding binding : configured) {
       if (binding.provider() instanceof HistoryProvider<?> history
           && history.policy().loadMessages()) {
@@ -197,10 +210,12 @@ final class AgentBinding {
    * Resolves the provider list for one run: the configured providers, plus the default in-memory
    * history when this run is eligible for it (SES-014).
    *
-   * <p>A run is eligible only when it has a session to keep history in and the effective session is
-   * not service-managed. A sessionless run has nowhere to store the conversation, and a run whose
-   * session carries a {@code serviceSessionId} has the conversation kept by the model service, so
-   * in both cases injecting a history would either lose it or duplicate it.
+   * <p>A run is eligible only when it has a session to keep history in, its model does not manage
+   * history itself, and the effective session is not service-managed. A sessionless run has nowhere
+   * to store the conversation; a model that keeps history itself already owns it (its default was
+   * suppressed at bind time, so {@link #defaultHistory} carries no binding); and a run whose
+   * session carries a {@code serviceSessionId} has the conversation kept by the model service. In
+   * each case injecting a history would either lose it or duplicate it (AGT-016).
    *
    * <p>An eligible run whose default namespace is owned by a configured provider fails here, before
    * the model is called and before anything is saved, rather than quietly moving the default

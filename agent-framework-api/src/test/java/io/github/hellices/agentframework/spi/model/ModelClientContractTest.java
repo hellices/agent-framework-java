@@ -100,6 +100,46 @@ class ModelClientContractTest {
     assertThat(subscriber.terminalCount()).isEqualTo(1);
   }
 
+  @Test
+  void aLambdaProviderKeepsTheServiceUnmanagedHistoryDefault() {
+    ModelClient lambdaProvider = req -> subscriber -> subscriber.onSubscribe(noOpSubscription());
+
+    assertThat(lambdaProvider.capabilities()).isEqualTo(ModelCapabilities.defaults());
+    assertThat(lambdaProvider.capabilities().serviceManagesHistory()).isFalse();
+  }
+
+  @Test
+  void aProviderMayAdvertiseServiceManagedHistory() {
+    ModelClient serviceManaged =
+        new ModelClient() {
+          @Override
+          public Flow.Publisher<ModelResponseUpdate> execute(ModelRequest request) {
+            return subscriber -> subscriber.onSubscribe(noOpSubscription());
+          }
+
+          @Override
+          public ModelCapabilities capabilities() {
+            return ModelCapabilities.builder().serviceManagesHistory(true).build();
+          }
+        };
+
+    assertThat(serviceManaged.capabilities().serviceManagesHistory()).isTrue();
+  }
+
+  private static Flow.Subscription noOpSubscription() {
+    return new Flow.Subscription() {
+      @Override
+      public void request(long n) {
+        // The default-capability tests never demand an update.
+      }
+
+      @Override
+      public void cancel() {
+        // The default-capability tests never cancel.
+      }
+    };
+  }
+
   private static ModelRequest request() {
     return ModelRequest.builder().build();
   }

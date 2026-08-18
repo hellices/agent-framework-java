@@ -29,4 +29,20 @@ public interface ModelClient {
    * @return a publisher of the model's response updates, never {@code null}
    */
   Flow.Publisher<ModelResponseUpdate> execute(ModelRequest request);
+
+  /**
+   * Returns what this provider can do, so the engine adapts without probing the client's concrete
+   * type. The default advertises a provider that keeps no history itself, so the local history path
+   * owns the conversation (AGT-016); a provider whose service stores history overrides this to
+   * return a descriptor with {@link ModelCapabilities#serviceManagesHistory()} enabled.
+   *
+   * <p>This is a defaulted method, so {@link ModelClient} stays a functional interface: {@link
+   * #execute(ModelRequest)} remains its single abstract method and a provider can still be written
+   * as a lambda.
+   *
+   * @return this provider's capabilities, never {@code null}
+   */
+  default ModelCapabilities capabilities() {
+    return ModelCapabilities.defaults();
+  }
 }
