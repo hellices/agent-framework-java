@@ -13,6 +13,15 @@ import java.util.function.Function;
  * <p>This value carries only the canonical update stream and the execution's cancellation signal.
  * The engine owns final-response derivation, session persistence, and every post-stream lifecycle
  * step after the returned updates finish, so those stages are deliberately not exposed here.
+ *
+ * <p>When an interceptor proceeds through {@link AgentInvocationChain#proceed}, the execution it
+ * receives wraps the run's pipeline; the updates it hands back must consume that execution, either
+ * by returning it directly or by deriving from it with {@link #mapUpdates}. Only consuming the
+ * proceeded updates drives the pipeline to a response and advances the run's lifecycle. Building a
+ * fresh, independent execution with {@link #fromUpdates} or {@link #fromUpdate} after proceeding
+ * abandons that pipeline and makes the run unfinalizable — the engine fails it explicitly. Those
+ * factory methods are for a <em>short-circuit</em>, where the interceptor supplies its own updates
+ * and never calls {@code proceed}.
  */
 public final class AgentExecution {
 

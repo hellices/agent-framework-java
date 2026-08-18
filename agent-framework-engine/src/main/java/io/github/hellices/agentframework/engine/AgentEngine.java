@@ -23,7 +23,9 @@ import io.github.hellices.agentframework.engine.internal.interception.Intercepto
 import io.github.hellices.agentframework.engine.internal.model.ModelResponseMapper;
 import io.github.hellices.agentframework.engine.internal.model.ResponseIdentity;
 import io.github.hellices.agentframework.engine.internal.run.RunExecution;
+import io.github.hellices.agentframework.engine.internal.run.RunPhase;
 import io.github.hellices.agentframework.engine.internal.run.RunPipeline;
+import io.github.hellices.agentframework.engine.internal.run.RunState;
 import io.github.hellices.agentframework.engine.internal.session.SessionCoordinator;
 import io.github.hellices.agentframework.engine.internal.tool.ToolLoopPolicy;
 import io.github.hellices.agentframework.spi.interception.AgentExecution;
@@ -700,6 +702,23 @@ public final class AgentEngine {
       RunExecution execution,
       AgentResponse response) {
     CompletableFuture<AgentResponse> outcome = new CompletableFuture<>();
+    RunState runState = execution.state();
+    if (!runState.isTerminal() && runState.phase() != RunPhase.FINALIZE_RESPONSE) {
+      // The interceptor proceeded, so the pipeline was built and its execution started at VALIDATE,
+      // but the updates it returned never consumed that pipeline: the run reached no response and
+      // its state machine never advanced to FINALIZE_RESPONSE. Fail with an explicit seam-contract
+      // diagnostic rather than leaking the internal phase-transition message, identically for the
+      // ordinary and streaming shapes. This runs before any context completion, provider hook, or
+      // session save, so the run fails closed and persists nothing.
+      RuntimeException misuse =
+          new IllegalStateException(
+              "an agent interceptor that proceeds must return updates that consume the proceeded"
+                  + " execution; a replacement that abandons it must short-circuit without"
+                  + " proceeding");
+      execution.terminateExceptionally(misuse);
+      outcome.completeExceptionally(misuse);
+      return outcome.minimalCompletionStage();
+    }
     try {
       execution.enterContextCompletion();
       sessionContext.complete(response);

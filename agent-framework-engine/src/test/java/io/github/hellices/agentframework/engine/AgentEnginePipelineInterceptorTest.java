@@ -569,7 +569,141 @@ class AgentEnginePipelineInterceptorTest {
     assertThat(order).containsExactly("load", "provider:HELLO", "save");
   }
 
+  // --- I1: proceeding then abandoning the pipeline fails explicitly, identically, without saving
+  // --
+
+  @Test
+  void agentInterceptorThatProceedsButAbandonsThePipelineFailsOrdinaryRunExplicitly() {
+    RecordingStore store = new RecordingStore();
+    store.seed(seededSnapshot());
+    Agent agent = storeAgentWithInterceptor(store, abandoningInterceptor(), throwingModel());
+
+    AgentRun run = agent.run(request(session("session-1"), "hi"));
+
+    assertThatThrownBy(() -> run.response().toCompletableFuture().join())
+        .hasRootCauseInstanceOf(IllegalStateException.class)
+        .hasRootCauseMessage(PROCEEDED_WITHOUT_CONSUMING);
+    assertThat(store.log).doesNotContain("save:session-1");
+    assertThat(store.snapshots.get("session-1")).isEqualTo(seededSnapshot());
+  }
+
+  @Test
+  void agentInterceptorThatProceedsButAbandonsThePipelineFailsStreamingRunExplicitly() {
+    RecordingStore store = new RecordingStore();
+    store.seed(seededSnapshot());
+    Agent agent = storeAgentWithInterceptor(store, abandoningInterceptor(), throwingModel());
+
+    AgentStreamingRun<AgentResponseUpdate> run =
+        agent.runStreaming(request(session("session-1"), "hi"));
+    Throwable updateFailure = drainForError(run.updates());
+
+    assertThat(rootCause(updateFailure))
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessage(PROCEEDED_WITHOUT_CONSUMING);
+    assertThatThrownBy(() -> run.response().toCompletableFuture().join())
+        .hasRootCauseInstanceOf(IllegalStateException.class)
+        .hasRootCauseMessage(PROCEEDED_WITHOUT_CONSUMING);
+    assertThat(store.log).doesNotContain("save:session-1");
+    assertThat(store.snapshots.get("session-1")).isEqualTo(seededSnapshot());
+  }
+
+  @Test
+  void abandoningThePipelineFailsOrdinaryAndStreamingWithTheIdenticalRootCause() {
+    Throwable ordinary =
+        rootCause(
+            catchFailure(
+                () ->
+                    storeAgentWithInterceptor(
+                            new RecordingStore(), abandoningInterceptor(), throwingModel())
+                        .run(request(session("session-1"), "hi"))
+                        .response()
+                        .toCompletableFuture()
+                        .join()));
+    Throwable streaming =
+        rootCause(
+            catchFailure(
+                () -> {
+                  AgentStreamingRun<AgentResponseUpdate> run =
+                      storeAgentWithInterceptor(
+                              new RecordingStore(), abandoningInterceptor(), throwingModel())
+                          .runStreaming(request(session("session-1"), "hi"));
+                  drainForError(run.updates());
+                  return run.response().toCompletableFuture().join();
+                }));
+
+    assertThat(ordinary).isInstanceOf(IllegalStateException.class);
+    assertThat(streaming).isInstanceOf(IllegalStateException.class);
+    assertThat(ordinary.getClass()).isEqualTo(streaming.getClass());
+    assertThat(ordinary.getMessage()).isEqualTo(streaming.getMessage());
+  }
+
   // --- helpers ---------------------------------------------------------------------------------
+
+  private static final String PROCEEDED_WITHOUT_CONSUMING =
+      "an agent interceptor that proceeds must return updates that consume the proceeded execution;"
+          + " a replacement that abandons it must short-circuit without proceeding";
+
+  private static Agent storeAgentWithInterceptor(
+      SessionStore store, AgentExecutionInterceptor interceptor, ModelClient client) {
+    return AgentEngine.builder()
+        .sessionStore(store)
+        .agentExecutionInterceptor(interceptor)
+        .build()
+        .factory()
+        .builderWithClient(client)
+        .id("agent-1")
+        .name("assistant")
+        .build();
+  }
+
+  private static AgentExecutionInterceptor abandoningInterceptor() {
+    return (invocation, next) -> {
+      next.proceed(invocation);
+      return AgentExecution.fromUpdate(agentUpdate("abandoned"), invocation.cancellationSignal());
+    };
+  }
+
+  private static Throwable drainForError(Flow.Publisher<AgentResponseUpdate> publisher) {
+    CompletableFuture<Throwable> outcome = new CompletableFuture<>();
+    publisher.subscribe(
+        new Flow.Subscriber<>() {
+          @Override
+          public void onSubscribe(Flow.Subscription subscription) {
+            subscription.request(Long.MAX_VALUE);
+          }
+
+          @Override
+          public void onNext(AgentResponseUpdate item) {}
+
+          @Override
+          public void onError(Throwable throwable) {
+            outcome.complete(throwable);
+          }
+
+          @Override
+          public void onComplete() {
+            outcome.complete(null);
+          }
+        });
+    return outcome.join();
+  }
+
+  private static Throwable catchFailure(java.util.concurrent.Callable<?> action) {
+    try {
+      action.call();
+      return null;
+    } catch (Exception failure) {
+      return failure;
+    }
+  }
+
+  private static Throwable rootCause(Throwable throwable) {
+    Throwable current = throwable;
+    while (current.getCause() != null) {
+      current = current.getCause();
+    }
+    return current;
+  }
 
   private static Agent shortCircuitingStoreAgent(SessionStore store) {
     return AgentEngine.builder()
