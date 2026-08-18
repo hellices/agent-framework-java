@@ -64,7 +64,14 @@ import java.util.function.Supplier;
  *
  * <h2>State machine</h2>
  *
- * <p>One iteration moves through three phases:
+ * <p>When the run's agent has tool approval configured, resolving a queue the run inherited comes
+ * first: {@link RunPhase#RESOLVE_APPROVAL} matches the caller's approval responses against the
+ * queue's head, in order, before any model call is made. A fully resolved queue's decided calls
+ * execute and their results start the run's first model call exactly as an uninterrupted run's
+ * would; an unresolved head instead moves the run to {@link RunPhase#WAIT_APPROVAL} and ends it at
+ * {@code STOP} with that request surfaced, without a model call being made at all.
+ *
+ * <p>Once a model call is made, one iteration moves through three phases:
  *
  * <ol>
  *   <li><b>Model</b> — a model publisher is subscribed and its updates are mapped, recorded in the
@@ -74,7 +81,12 @@ import java.util.function.Supplier;
  *   <li><b>Tools</b> — when the model call completes, its accumulated response decides the run:
  *       without tool calls the loop is finished, the call's metadata is queued as the stream's last
  *       update and the stream completes; with tool calls the shared {@link ToolLoopPolicy}
- *       validates the budget and executes them, exactly as before.
+ *       validates the budget and, when every call is executable and approvals are configured, plans
+ *       the batch against the approval coordinator instead of executing directly — moving the run
+ *       to {@link RunPhase#WAIT_APPROVAL} exactly as above when a call in the batch is unresolved.
+ *       A call to an undeclared tool is never handed to the approval coordinator regardless of
+ *       configuration: it always executes and fails with the same safe error tool execution has
+ *       always reported.
  *   <li><b>Results</b> — each tool result is queued as its own update and emitted under downstream
  *       demand, in call order. The next iteration starts only after the last of them was delivered,
  *       so the model never sees a request whose results the subscriber has not seen yet.
@@ -156,6 +168,10 @@ public final class RunPipeline implements Flow.Publisher<AgentResponseUpdate> {
     if (approvals != null && approvalGate == null) {
       throw new IllegalArgumentException(
           "approvalGate must not be null when approvals are enabled");
+    }
+    if (approvals == null && approvalGate != null) {
+      throw new IllegalArgumentException(
+          "approvalGate must be null when approvals are not configured");
     }
   }
 
@@ -483,8 +499,7 @@ public final class RunPipeline implements Flow.Publisher<AgentResponseUpdate> {
           // A declaration-only tool was invoked: it is declared and offered to the model but has
           // no local body, so the run ends with the reassembled response — whose tool-call updates
           // were already emitted — instead of fabricating results the Java core cannot produce
-          // (TOOL-006). A call to an undeclared tool is not handled here: it reaches execution and
-          // fails with the existing safe error.
+          // (TOOL-006).
           completeRun(response, ordinaryResponse);
           return;
         }
@@ -492,7 +507,7 @@ public final class RunPipeline implements Flow.Publisher<AgentResponseUpdate> {
             iterationRequest == null
                 ? Objects.requireNonNull(firstRequest.get(), "model request must not be null")
                 : iterationRequest;
-        if (approvals != null) {
+        if (approvals != null && policy.canExecuteAll(calls)) {
           ToolApprovalCoordinator.Plan plan = approvals.planBatch(calls);
           Optional<ToolApprovalRequestContent> waitingFor = plan.waitingFor();
           if (waitingFor.isPresent()) {
@@ -503,6 +518,11 @@ public final class RunPipeline implements Flow.Publisher<AgentResponseUpdate> {
           results =
               policy.executeDecidedToolCalls(plan.decided().orElseThrow(), request, toolInvoker);
         } else {
+          // Either approvals are not configured, or a call to an undeclared tool is present: that
+          // call can never run regardless of approval, so it must fail closed through the ordinary
+          // execution path's existing safe error (I-2) rather than reach queue planning or
+          // persistence — an approval request must never be surfaced or persisted for a tool call
+          // that cannot execute.
           advance(RunPhase.EXECUTE_TOOL_BATCH);
           results = policy.executeToolCalls(calls, request, toolInvoker);
         }

@@ -1,10 +1,13 @@
 package io.github.hellices.agentframework.api.agent;
 
+import io.github.hellices.agentframework.api.message.Content;
 import io.github.hellices.agentframework.api.message.FinishReason;
 import io.github.hellices.agentframework.api.message.Message;
+import io.github.hellices.agentframework.api.message.ToolApprovalRequestContent;
 import io.github.hellices.agentframework.api.message.Usage;
 import io.github.hellices.agentframework.api.value.JsonObject;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 
@@ -106,6 +109,29 @@ public final class AgentResponseUpdate {
       builder.append(message.text());
     }
     return builder.toString();
+  }
+
+  /**
+   * The pending tool-approval requests carried by this update's own {@link #messages()} (TOOL-016
+   * AC-3), in order.
+   *
+   * <p>This mirrors {@link AgentResponse#userInputRequests()} at the update level, so a streaming
+   * caller can discover an approval wait without scanning concrete message content, and an
+   * assembled response's {@code userInputRequests()} agrees with what the updates that built it
+   * already reported.
+   *
+   * @return an immutable, possibly empty list of pending approval requests, never {@code null}
+   */
+  public List<ToolApprovalRequestContent> userInputRequests() {
+    List<ToolApprovalRequestContent> requests = new ArrayList<>();
+    for (Message message : messages) {
+      for (Content content : message.content()) {
+        if (content instanceof ToolApprovalRequestContent request) {
+          requests.add(request);
+        }
+      }
+    }
+    return List.copyOf(requests);
   }
 
   @Override

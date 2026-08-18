@@ -168,6 +168,32 @@ class AgentEngineToolApprovalTest {
   }
 
   @Test
+  void anUndeclaredToolCallFailsClosedEvenWhenApprovalsAreConfigured() {
+    // "weather" is the only declared tool; the model calling "ghost" is an undeclared call, not a
+    // declaration-only one, and must fail before queue planning/persistence even though approvals
+    // are configured for this run (I-2: this used to fall through to approvals.planBatch and
+    // surface a spurious approval request instead of failing closed).
+    ApprovalFixture fixture =
+        new ApprovalFixture(
+            requireApproval(),
+            List.of(
+                modelResponse(
+                    new Message(
+                        Role.ASSISTANT,
+                        List.of(new ToolCallContent("call-1", "ghost", JsonObject.empty()))),
+                    FinishReason.TOOL_CALLS)),
+            "weather");
+
+    assertThatThrownBy(() -> fixture.run("session-undeclared", userText("hi")))
+        .rootCause()
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessage("unknown tool call: ghost");
+
+    assertThat(fixture.invocations).isEmpty();
+    assertThat(fixture.store.saved).isEmpty();
+  }
+
+  @Test
   void anApprovedResponseExecutesThePersistedCallAndResumesTheLoop() {
     ApprovalFixture fixture =
         new ApprovalFixture(
@@ -193,6 +219,24 @@ class AgentEngineToolApprovalTest {
         onlyApprovalRequest(fixture.run("session-approval-3", userText("hi"))).requestId();
 
     AgentResponse resumed = fixture.run("session-approval-3", approvalResponse("forged", true));
+
+    assertThat(onlyApprovalRequest(resumed).requestId()).isEqualTo(requestId);
+    assertThat(fixture.invocations).isEmpty();
+    assertThat(fixture.modelCalls).hasValue(1);
+  }
+
+  @Test
+  void
+      anApprovalResponseForAnUnknownRequestResolvesNothingAndResurfacesTheSameRequestOnAStreamingRunToo() {
+    ApprovalFixture fixture =
+        new ApprovalFixture(
+            requireApproval(), List.of(weatherCall(), textResponse("It is sunny")), "weather");
+    String requestId =
+        onlyApprovalRequest(fixture.stream("session-approval-3-streaming", userText("hi")))
+            .requestId();
+
+    AgentResponse resumed =
+        fixture.stream("session-approval-3-streaming", approvalResponse("forged", true));
 
     assertThat(onlyApprovalRequest(resumed).requestId()).isEqualTo(requestId);
     assertThat(fixture.invocations).isEmpty();
@@ -500,6 +544,34 @@ class AgentEngineToolApprovalTest {
   }
 
   @Test
+  void automaticApprovalsStopAtTheConfiguredUpperBoundOnAStreamingRunToo() {
+    ApprovalFixture fixture =
+        new ApprovalFixture(
+            ToolApprovalSettings.builder()
+                .policy(context -> ToolApprovalDecision.APPROVE)
+                .maxAutomaticApprovals(1)
+                .build(),
+            List.of(
+                weatherCall(),
+                modelResponse(
+                    new Message(
+                        Role.ASSISTANT,
+                        List.of(
+                            new ToolCallContent(
+                                "call-2", "weather", jsonObject(Map.of("city", "Busan"))))),
+                    FinishReason.TOOL_CALLS),
+                textResponse("unreachable")),
+            "weather");
+
+    AgentResponse response = fixture.stream("session-cap-streaming", userText("hi"));
+
+    assertThat(fixture.invocations).containsExactly(invocation("weather", Map.of("city", "Seoul")));
+    ToolApprovalRequestContent request = onlyApprovalRequest(response);
+    assertThat(request.toolCallId()).isEqualTo("call-2");
+    assertThat(fixture.modelCalls).hasValue(2);
+  }
+
+  @Test
   void configuredApprovalWithoutASessionFailsImmediatelyForBothRunShapes() {
     ApprovalFixture fixture =
         new ApprovalFixture(
@@ -600,6 +672,11 @@ class AgentEngineToolApprovalTest {
 
     assertThat(describe(streamingResponse)).isEqualTo(describe(ordinaryResponse));
     assertThat(streamingResponse.finishReason()).isEqualTo(ordinaryResponse.finishReason());
+    assertThat(streamingResponse.usage()).isEqualTo(ordinaryResponse.usage());
+    assertThat(streamingResponse.continuationToken())
+        .isEqualTo(ordinaryResponse.continuationToken());
+    assertThat(normalizeApprovalRequestIds(streamingResponse.userInputRequests()))
+        .isEqualTo(normalizeApprovalRequestIds(ordinaryResponse.userInputRequests()));
     assertThat(streaming.invocations).isEqualTo(ordinary.invocations);
   }
 
@@ -623,8 +700,95 @@ class AgentEngineToolApprovalTest {
 
     assertThat(describe(streamingResponse)).isEqualTo(describe(ordinaryResponse));
     assertThat(streamingResponse.finishReason()).isEqualTo(ordinaryResponse.finishReason());
+    assertThat(streamingResponse.usage()).isEqualTo(ordinaryResponse.usage());
+    assertThat(streamingResponse.continuationToken())
+        .isEqualTo(ordinaryResponse.continuationToken());
     assertThat(streaming.invocations).isEqualTo(ordinary.invocations);
     assertThat(streaming.modelCalls.get()).isEqualTo(ordinary.modelCalls.get());
+  }
+
+  @Test
+  void
+      anApprovalWaitKeepsSeparateMessageBoundariesAndAnIdenticalResumedModelRequestAcrossRunKinds() {
+    // I-1: the engine-synthesized approval-request message must never coalesce with the model's
+    // own assistant tool-call message on the streaming path the way AgentResponse.fromUpdates
+    // otherwise merges same-role, message-id-less updates, and the persisted history that shapes
+    // the next resumed model call must have the same message-boundary shape for both run kinds.
+    ApprovalFixture ordinary =
+        new ApprovalFixture(
+            requireApproval(), List.of(weatherCall(), textResponse("It is sunny")), "weather");
+    ApprovalFixture streaming =
+        new ApprovalFixture(
+            requireApproval(), List.of(weatherCall(), textResponse("It is sunny")), "weather");
+
+    AgentResponse ordinaryWaiting = ordinary.run("session-boundary", userText("hi"));
+    AgentResponse streamingWaiting = streaming.stream("session-boundary", userText("hi"));
+
+    // Response boundary: the assistant tool-call message and the approval-request message stay
+    // two separate messages, in the same roles and order, on both paths.
+    assertThat(streamingWaiting.messages()).hasSize(2);
+    assertThat(streamingWaiting.messages()).hasSameSizeAs(ordinaryWaiting.messages());
+    assertThat(streamingWaiting.messages().stream().map(Message::role).toList())
+        .isEqualTo(ordinaryWaiting.messages().stream().map(Message::role).toList());
+    assertThat(normalizeApprovalIds(streamingWaiting.messages()))
+        .isEqualTo(normalizeApprovalIds(ordinaryWaiting.messages()));
+
+    String ordinaryRequestId = onlyApprovalRequest(ordinaryWaiting).requestId();
+    String streamingRequestId = onlyApprovalRequest(streamingWaiting).requestId();
+    ordinary.run("session-boundary", approvalResponse(ordinaryRequestId, true));
+    streaming.stream("session-boundary", approvalResponse(streamingRequestId, true));
+
+    // Next resumed model request: the persisted history the second model call is built from has
+    // the same message-boundary shape for both run kinds.
+    assertThat(streaming.modelRequestMessages).hasSize(2);
+    assertThat(ordinary.modelRequestMessages).hasSize(2);
+    assertThat(normalizeApprovalIds(streaming.modelRequestMessages.get(1)))
+        .isEqualTo(normalizeApprovalIds(ordinary.modelRequestMessages.get(1)));
+  }
+
+  /**
+   * Replaces every approval request/response id with a fixed placeholder while keeping every other
+   * message and its content exactly as given, so a run-specific random id never masks a real
+   * structural difference between two independently minted approval flows.
+   */
+  private static List<Message> normalizeApprovalIds(List<Message> messages) {
+    List<Message> normalized = new ArrayList<>();
+    for (Message message : messages) {
+      List<Content> content = new ArrayList<>();
+      for (Content item : message.content()) {
+        if (item instanceof ToolApprovalRequestContent request) {
+          content.add(
+              new ToolApprovalRequestContent(
+                  "normalized-request-id",
+                  request.toolCallId(),
+                  request.toolName(),
+                  request.arguments(),
+                  request.hostBoundary().orElse(null)));
+        } else if (item instanceof ToolApprovalResponseContent response) {
+          content.add(
+              new ToolApprovalResponseContent("normalized-request-id", response.approved()));
+        } else {
+          content.add(item);
+        }
+      }
+      normalized.add(new Message(message.role(), content));
+    }
+    return normalized;
+  }
+
+  private static List<ToolApprovalRequestContent> normalizeApprovalRequestIds(
+      List<ToolApprovalRequestContent> requests) {
+    List<ToolApprovalRequestContent> normalized = new ArrayList<>();
+    for (ToolApprovalRequestContent request : requests) {
+      normalized.add(
+          new ToolApprovalRequestContent(
+              "normalized-request-id",
+              request.toolCallId(),
+              request.toolName(),
+              request.arguments(),
+              request.hostBoundary().orElse(null)));
+    }
+    return normalized;
   }
 
   private static ToolApprovalSettings requireApproval() {
@@ -794,6 +958,7 @@ class AgentEngineToolApprovalTest {
     private final AtomicInteger modelCalls = new AtomicInteger();
     private final List<String> invocations = new ArrayList<>();
     private final RecordingSessionStore store = new RecordingSessionStore();
+    private final List<List<Message>> modelRequestMessages = new ArrayList<>();
     private final Agent agent;
 
     private ApprovalFixture(
@@ -809,7 +974,9 @@ class AgentEngineToolApprovalTest {
       AgentDefinition.Builder definition =
           AgentDefinition.builder().id("agent-1").name("assistant");
       AgentRuntime.Builder runtime =
-          AgentRuntime.builder().modelClient(scripted(modelCalls, script)).toolApproval(settings);
+          AgentRuntime.builder()
+              .modelClient(scripted(modelCalls, script, modelRequestMessages))
+              .toolApproval(settings);
       for (String toolName : toolNames) {
         FunctionTool tool =
             FunctionTool.create(
@@ -854,8 +1021,10 @@ class AgentEngineToolApprovalTest {
     }
   }
 
-  private static ModelClient scripted(AtomicInteger calls, List<ModelResponse> script) {
+  private static ModelClient scripted(
+      AtomicInteger calls, List<ModelResponse> script, List<List<Message>> recordedRequests) {
     return request -> {
+      recordedRequests.add(request.messages());
       int index = calls.getAndIncrement();
       if (index >= script.size()) {
         throw new IllegalStateException("unexpected model call: " + index);

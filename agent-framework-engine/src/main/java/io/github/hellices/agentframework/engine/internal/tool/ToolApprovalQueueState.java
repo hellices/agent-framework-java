@@ -183,6 +183,11 @@ public final class ToolApprovalQueueState {
       this.decision = decision;
     }
 
+    // Copies at both construction and every read, matching the established repo-wide convention
+    // for a Content value that carries an unconstrained rawRepresentation (see, for example,
+    // ToolInvocation and ToolLoopPolicy.DecidedCall): the copy is what defends this field against
+    // SpotBugs' EI_EXPOSE_REP / EI_EXPOSE_REP2 without a blanket suppression, since the content
+    // itself has no exposed mutable state to defend beyond that field.
     private static ToolApprovalRequestContent immutableCopy(ToolApprovalRequestContent request) {
       return new ToolApprovalRequestContent(
           request.requestId(),

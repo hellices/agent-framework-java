@@ -3,6 +3,7 @@ package io.github.hellices.agentframework.api.agent;
 import io.github.hellices.agentframework.api.message.Content;
 import io.github.hellices.agentframework.api.message.FinishReason;
 import io.github.hellices.agentframework.api.message.Message;
+import io.github.hellices.agentframework.api.message.ToolApprovalRequestContent;
 import io.github.hellices.agentframework.api.message.Usage;
 import io.github.hellices.agentframework.api.value.JsonNumber;
 import io.github.hellices.agentframework.api.value.JsonObject;
@@ -112,6 +113,29 @@ public final class AgentResponse {
       builder.append(message.text());
     }
     return builder.toString();
+  }
+
+  /**
+   * The pending tool-approval requests this response is waiting on (TOOL-016 AC-3), gathered from
+   * {@link #messages()} in order.
+   *
+   * <p>A request stays a user-input-request until a matching {@link
+   * io.github.hellices.agentframework.api.message.ToolApprovalResponseContent} resolves it; a
+   * response never appears here, so this list surfaces only what still needs a caller decision,
+   * without a caller having to scan concrete message content to discover it.
+   *
+   * @return an immutable, possibly empty list of pending approval requests, never {@code null}
+   */
+  public List<ToolApprovalRequestContent> userInputRequests() {
+    List<ToolApprovalRequestContent> requests = new ArrayList<>();
+    for (Message message : messages) {
+      for (Content content : message.content()) {
+        if (content instanceof ToolApprovalRequestContent request) {
+          requests.add(request);
+        }
+      }
+    }
+    return List.copyOf(requests);
   }
 
   public static AgentResponse fromUpdates(List<AgentResponseUpdate> updates) {

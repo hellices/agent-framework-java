@@ -1,8 +1,10 @@
 package io.github.hellices.agentframework.engine.internal.model;
 
 import io.github.hellices.agentframework.api.agent.AgentResponseUpdate;
+import io.github.hellices.agentframework.api.message.Content;
 import io.github.hellices.agentframework.api.message.FinishReason;
 import io.github.hellices.agentframework.api.message.Message;
+import io.github.hellices.agentframework.api.message.ToolApprovalRequestContent;
 import io.github.hellices.agentframework.api.value.JsonObject;
 import io.github.hellices.agentframework.spi.model.ModelResponseUpdate;
 import java.time.Instant;
@@ -65,6 +67,15 @@ public record ResponseIdentity(
    * outcome would tell a caller that tool calls are still in flight when the run has in fact
    * stopped and is waiting for them. Reporting {@code STOP} here is also what makes an ordinary and
    * a streaming run agree, since the ordinary view builds its own terminal response the same way.
+   *
+   * <p>It also carries a stable {@code messageId} derived from the approval request's own {@link
+   * ToolApprovalRequestContent#requestId()} (I-1): {@link
+   * io.github.hellices.agentframework.api.agent.AgentResponse#fromUpdates} coalesces consecutive
+   * same-role updates that both leave {@code messageId} unset, which would otherwise merge this
+   * engine-synthesised message into the model's own preceding assistant tool-call message on the
+   * streaming path only — a boundary an ordinary run's directly-built response never collapses.
+   * Minting the id from the request's own domain identity, rather than a random value, keeps this
+   * update deterministic and reproducible without depending on any provider-supplied identity.
    */
   public AgentResponseUpdate approvalRequestUpdate(Message message) {
     return AgentResponseUpdate.builder()
@@ -72,10 +83,20 @@ public record ResponseIdentity(
         .responseId(responseId)
         .authorName(authorName)
         .createdAt(createdAt)
+        .messageId(approvalMessageId(message))
         .messages(List.of(message))
         .finishReason(FinishReason.STOP)
         .additionalProperties(JsonObject.empty())
         .build();
+  }
+
+  private static String approvalMessageId(Message message) {
+    for (Content content : message.content()) {
+      if (content instanceof ToolApprovalRequestContent request) {
+        return "tool-approval:" + request.requestId();
+      }
+    }
+    return null;
   }
 
   /**

@@ -823,10 +823,15 @@ public final class AgentEngine {
   /**
    * Builds the run's first model request from the effective contributions: the deduplicated leading
    * instruction messages, then the provider-contributed context messages in contribution order,
-   * then the caller's input; the merged model options over the definition defaults; and the
-   * effective tool declarations offered to the model. Every later tool-loop iteration reuses this
-   * request's options and leading instruction and context messages, and the effective tool
-   * declarations, through the run's per-run {@link ToolLoopPolicy}.
+   * then the caller's input, then {@code appendedMessages}; the merged model options over the
+   * definition defaults; and the effective tool declarations offered to the model. Every later
+   * tool-loop iteration reuses this request's options and leading instruction and context messages,
+   * and the effective tool declarations, through the run's per-run {@link ToolLoopPolicy}.
+   *
+   * <p>{@code appendedMessages} is where a run resuming a fully resolved approval queue places the
+   * results {@link ToolLoopPolicy#executeDecidedToolCalls} already produced for those calls, so the
+   * first model request of the resumed run carries them after the caller's own resume-turn input
+   * rather than losing them to a second, redundant model call.
    */
   private ModelRequest toModelRequest(
       RunEffectiveState state,

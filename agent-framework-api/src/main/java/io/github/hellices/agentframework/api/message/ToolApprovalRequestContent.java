@@ -12,6 +12,14 @@ import java.util.Optional;
  * host-boundary identifier (an MCP server label or equivalent) so the same tool name on two
  * different hosts is never treated as the same approval subject (TOOL-019). A request surfaces as a
  * user-input-request until a matching {@link ToolApprovalResponseContent} resolves it.
+ *
+ * <p>Once resolved, a request and its matching response are replayed into the next model request as
+ * ordinary conversation history, the same as any other message content this core owns — the engine
+ * does not strip them out, because whether a wire format has an equivalent concept for "the core
+ * asked the caller, and the caller answered" is provider-specific, not something the core-neutral
+ * public contract can assume one way or the other. A provider adapter whose wire format has no
+ * equivalent is the one responsible for filtering, reordering, or re-encoding this content when it
+ * maps history onto that format; the core's job ends at replaying it unchanged.
  */
 public final class ToolApprovalRequestContent extends Content {
 

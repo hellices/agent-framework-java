@@ -53,6 +53,15 @@ public final class ToolApprovalSettings {
     return policy;
   }
 
+  /**
+   * The upper bound on automatically approved calls this configuration allows within a single run.
+   *
+   * <p>This is a per-run allowance, not a lifetime one: the count it bounds is kept by the run's
+   * own {@code ToolApprovalCoordinator} and starts fresh at zero every time an agent starts a run,
+   * including a caller resuming a run that previously stopped to ask for approval. A caller cannot
+   * exhaust this allowance across separate runs, and resuming a paused run does not inherit
+   * whatever count the run had already spent before it stopped to wait.
+   */
   public int maxAutomaticApprovals() {
     return maxAutomaticApprovals;
   }

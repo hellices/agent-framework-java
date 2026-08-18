@@ -8,6 +8,8 @@ import io.github.hellices.agentframework.api.message.Message;
 import io.github.hellices.agentframework.api.message.MessageAttribution;
 import io.github.hellices.agentframework.api.message.Role;
 import io.github.hellices.agentframework.api.message.TextContent;
+import io.github.hellices.agentframework.api.message.ToolApprovalRequestContent;
+import io.github.hellices.agentframework.api.message.ToolApprovalResponseContent;
 import io.github.hellices.agentframework.api.message.Usage;
 import io.github.hellices.agentframework.api.value.JsonNumber;
 import io.github.hellices.agentframework.api.value.JsonObject;
@@ -42,6 +44,73 @@ class AgentResponseAssemblyTest {
     assertThat(response.messages())
         .extracting(Message::role)
         .containsExactly(Role.ASSISTANT, Role.USER);
+  }
+
+  @Test
+  void userInputRequestsGathersToolApprovalRequestsAcrossMessagesInResponseOrder() {
+    ToolApprovalRequestContent first =
+        new ToolApprovalRequestContent("req-1", "call-1", "weather", JsonObject.empty(), null);
+    ToolApprovalRequestContent second =
+        new ToolApprovalRequestContent("req-2", "call-2", "search", JsonObject.empty(), null);
+    AgentResponse response =
+        AgentResponse.builder()
+            .agentId("agent-1")
+            .responseId("response-1")
+            .messages(
+                List.of(
+                    new Message(Role.ASSISTANT, List.of(new TextContent("checking"))),
+                    new Message(Role.ASSISTANT, List.of(first, second))))
+            .finishReason(FinishReason.STOP)
+            .build();
+
+    assertThat(response.userInputRequests()).containsExactly(first, second);
+  }
+
+  @Test
+  void userInputRequestsIsEmptyWhenNoApprovalIsPending() {
+    AgentResponse response =
+        AgentResponse.builder()
+            .agentId("agent-1")
+            .responseId("response-1")
+            .messages(List.of(new Message(Role.ASSISTANT, List.of(new TextContent("hi")))))
+            .finishReason(FinishReason.STOP)
+            .build();
+
+    assertThat(response.userInputRequests()).isEmpty();
+  }
+
+  @Test
+  void userInputRequestsExcludesToolApprovalResponsesNotJustRequests() {
+    ToolApprovalRequestContent request =
+        new ToolApprovalRequestContent("req-1", "call-1", "weather", JsonObject.empty(), null);
+    AgentResponse response =
+        AgentResponse.builder()
+            .agentId("agent-1")
+            .responseId("response-1")
+            .messages(
+                List.of(
+                    new Message(Role.ASSISTANT, List.of(request)),
+                    new Message(Role.USER, List.of(ToolApprovalResponseContent.approve("req-1")))))
+            .finishReason(FinishReason.STOP)
+            .build();
+
+    assertThat(response.userInputRequests()).containsExactly(request);
+  }
+
+  @Test
+  void updateUserInputRequestsGathersToolApprovalRequestsFromItsOwnMessages() {
+    ToolApprovalRequestContent request =
+        new ToolApprovalRequestContent("req-1", "call-1", "weather", JsonObject.empty(), null);
+    AgentResponseUpdate update = update(new Message(Role.ASSISTANT, List.of(request)));
+
+    assertThat(update.userInputRequests()).containsExactly(request);
+  }
+
+  @Test
+  void updateUserInputRequestsIsEmptyWhenNoApprovalIsPending() {
+    AgentResponseUpdate update = update(null, Role.ASSISTANT, "hi");
+
+    assertThat(update.userInputRequests()).isEmpty();
   }
 
   @Test

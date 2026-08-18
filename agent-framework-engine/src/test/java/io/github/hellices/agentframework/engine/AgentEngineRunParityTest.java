@@ -9,17 +9,23 @@ import io.github.hellices.agentframework.api.agent.AgentBuilder;
 import io.github.hellices.agentframework.api.agent.AgentDefinition;
 import io.github.hellices.agentframework.api.agent.AgentResponse;
 import io.github.hellices.agentframework.api.agent.AgentResponseUpdate;
+import io.github.hellices.agentframework.api.agent.AgentRunRequest;
 import io.github.hellices.agentframework.api.agent.AgentRuntime;
+import io.github.hellices.agentframework.api.agent.AgentSession;
 import io.github.hellices.agentframework.api.agent.AgentStreamingRun;
 import io.github.hellices.agentframework.api.message.Content;
 import io.github.hellices.agentframework.api.message.FinishReason;
 import io.github.hellices.agentframework.api.message.Message;
 import io.github.hellices.agentframework.api.message.Role;
 import io.github.hellices.agentframework.api.message.TextContent;
+import io.github.hellices.agentframework.api.message.ToolApprovalRequestContent;
+import io.github.hellices.agentframework.api.message.ToolApprovalResponseContent;
 import io.github.hellices.agentframework.api.message.ToolCallContent;
 import io.github.hellices.agentframework.api.message.ToolResultContent;
 import io.github.hellices.agentframework.api.message.Usage;
+import io.github.hellices.agentframework.api.session.SessionSnapshot;
 import io.github.hellices.agentframework.api.tool.FunctionTool;
+import io.github.hellices.agentframework.api.tool.ToolApprovalSettings;
 import io.github.hellices.agentframework.api.tool.ToolBinding;
 import io.github.hellices.agentframework.api.tool.ToolDefinition;
 import io.github.hellices.agentframework.api.tool.ToolHandler;
@@ -29,11 +35,15 @@ import io.github.hellices.agentframework.api.value.JsonValues;
 import io.github.hellices.agentframework.spi.model.ModelClient;
 import io.github.hellices.agentframework.spi.model.ModelResponse;
 import io.github.hellices.agentframework.spi.model.ModelResponseUpdate;
+import io.github.hellices.agentframework.spi.session.SessionStore;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Flow;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
@@ -354,6 +364,48 @@ class AgentEngineRunParityTest {
   }
 
   @Test
+  void anApprovalWaitAndItsResumeAreIdenticalForOrdinaryAndStreamingRuns() {
+    ModelResponse waitingCall =
+        modelResponse(
+            List.of(toolCall("call-1", "weather", SEOUL)), null, FinishReason.TOOL_CALLS, Map.of());
+    ModelResponse finished =
+        modelResponse(List.of(assistant("sunny")), null, FinishReason.STOP, Map.of());
+
+    Agent ordinaryAgent =
+        approvalAgent(new RecordingApprovalSessionStore(), twoIterations(waitingCall, finished));
+    Agent streamingAgent =
+        approvalAgent(new RecordingApprovalSessionStore(), twoIterations(waitingCall, finished));
+
+    AgentRunRequest firstTurn = sessionRequest("session-approval-parity", "hi");
+    AgentResponse ordinaryWaiting =
+        ordinaryAgent.run(firstTurn).response().toCompletableFuture().join();
+    AgentResponse streamingWaiting = streamResponse(streamingAgent, firstTurn);
+
+    // Response boundary and typed waiting surface (C-1, I-1) agree between both run kinds.
+    assertThat(streamingWaiting.finishReason()).isEqualTo(ordinaryWaiting.finishReason());
+    assertThat(streamingWaiting.messages()).hasSameSizeAs(ordinaryWaiting.messages());
+    assertThat(describe(streamingWaiting.messages()))
+        .isEqualTo(describe(ordinaryWaiting.messages()));
+    assertThat(streamingWaiting.userInputRequests()).hasSize(1);
+    assertThat(ordinaryWaiting.userInputRequests()).hasSize(1);
+    assertThat(streamingWaiting.userInputRequests().get(0).toolName())
+        .isEqualTo(ordinaryWaiting.userInputRequests().get(0).toolName());
+
+    AgentRunRequest ordinaryResume =
+        approvalResumeRequest(
+            "session-approval-parity", ordinaryWaiting.userInputRequests().get(0).requestId());
+    AgentRunRequest streamingResume =
+        approvalResumeRequest(
+            "session-approval-parity", streamingWaiting.userInputRequests().get(0).requestId());
+
+    AgentResponse ordinaryResumed =
+        ordinaryAgent.run(ordinaryResume).response().toCompletableFuture().join();
+    AgentResponse streamingResumed = streamResponse(streamingAgent, streamingResume);
+
+    assertParity(ordinaryResumed, streamingResumed);
+  }
+
+  @Test
   void anUnknownToolCallFailsBothRunsWithTheSameRootError() {
     ModelResponse response =
         modelResponse(
@@ -450,6 +502,12 @@ class AgentEngineRunParityTest {
     return run.response().toCompletableFuture().join();
   }
 
+  private static AgentResponse streamResponse(Agent agent, AgentRunRequest request) {
+    AgentStreamingRun<AgentResponseUpdate> run = agent.runStreaming(request);
+    subscribe(run.updates()).join();
+    return run.response().toCompletableFuture().join();
+  }
+
   private static Agent agent(ModelClient client, FunctionTool... tools) {
     return boundBuilder(client).id("agent-1").name("assistant").tools(tools).build();
   }
@@ -480,6 +538,40 @@ class AgentEngineRunParityTest {
                         completedFuture(ToolResult.success(new TextContent("unused")))))
             .build();
     return AgentEngine.builder().build().bind(definition, runtime);
+  }
+
+  /** An agent bound to {@code store} with tool approval required for every call to "weather". */
+  private static Agent approvalAgent(SessionStore store, ModelClient client) {
+    FunctionTool weather = weatherTool();
+    AgentDefinition definition =
+        AgentDefinition.builder()
+            .id("agent-1")
+            .name("assistant")
+            .tool(weather.definition())
+            .build();
+    AgentRuntime runtime =
+        AgentRuntime.builder()
+            .modelClient(client)
+            .toolApproval(ToolApprovalSettings.builder().build())
+            .toolBinding(ToolBinding.of("weather", weather::execute))
+            .build();
+    return AgentEngine.builder().sessionStore(store).build().bind(definition, runtime);
+  }
+
+  private static AgentRunRequest sessionRequest(String sessionId, String text) {
+    return AgentRunRequest.builder()
+        .messages(Message.normalize(text))
+        .session(AgentSession.builder().sessionId(sessionId).build())
+        .build();
+  }
+
+  private static AgentRunRequest approvalResumeRequest(String sessionId, String requestId) {
+    return AgentRunRequest.builder()
+        .messages(
+            List.of(
+                new Message(Role.USER, List.of(ToolApprovalResponseContent.approve(requestId)))))
+        .session(AgentSession.builder().sessionId(sessionId).build())
+        .build();
   }
 
   private static AgentBuilder boundBuilder(ModelClient client) {
@@ -627,6 +719,19 @@ class AgentEngineRunParityTest {
               .append(result.error())
               .append(':')
               .append(result.content().stream().map(Content::text).toList());
+        } else if (content instanceof ToolApprovalRequestContent request) {
+          // The random request id each run mints for its own approval request identifies the run,
+          // not the outcome, so it is left out here — the same reason AgentEngineToolApprovalTest's
+          // own describe() omits it.
+          builder
+              .append("|approval-request:")
+              .append(request.toolCallId())
+              .append(':')
+              .append(request.toolName())
+              .append(':')
+              .append(request.arguments());
+        } else if (content instanceof ToolApprovalResponseContent response) {
+          builder.append("|approval-response:").append(response.approved());
         }
       }
       described.add(builder.toString());
@@ -683,5 +788,27 @@ class AgentEngineRunParityTest {
 
   private static JsonObject jsonObject(Map<String, Object> values) {
     return values.isEmpty() ? JsonObject.empty() : (JsonObject) JsonValues.fromJava(values);
+  }
+
+  /** A minimal in-memory {@link SessionStore}, scoped to one approval-parity test at a time. */
+  private static final class RecordingApprovalSessionStore implements SessionStore {
+    private final Map<String, SessionSnapshot> saved = new HashMap<>();
+
+    @Override
+    public CompletionStage<Optional<SessionSnapshot>> load(String sessionId) {
+      return completedFuture(Optional.ofNullable(saved.get(sessionId)));
+    }
+
+    @Override
+    public CompletionStage<Void> save(SessionSnapshot snapshot) {
+      saved.put(snapshot.sessionId(), snapshot);
+      return completedFuture(null);
+    }
+
+    @Override
+    public CompletionStage<Void> delete(String sessionId) {
+      saved.remove(sessionId);
+      return completedFuture(null);
+    }
   }
 }

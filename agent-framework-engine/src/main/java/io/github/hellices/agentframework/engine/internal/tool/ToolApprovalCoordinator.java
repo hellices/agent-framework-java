@@ -16,6 +16,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * The approval state machine of one run: it decides which pending tool calls may execute, which
@@ -37,7 +38,20 @@ public final class ToolApprovalCoordinator {
   private final ToolApprovalSettings settings;
   private final SessionContext sessionContext;
   private final AgentRunRequest request;
-  private int automaticApprovals;
+
+  /**
+   * How many policy-driven automatic approvals this run has spent against {@link
+   * ToolApprovalSettings#maxAutomaticApprovals()}.
+   *
+   * <p>One coordinator instance is created per run and is never shared across runs, but a single
+   * run's iterations can each resume on a different callback thread as {@link #planBatch} is
+   * invoked from successive {@code whenComplete} continuations. {@link AtomicInteger} makes the
+   * check against the cap and the following increment one atomic step, so two concurrently resuming
+   * iterations can never both observe room under the cap and both spend it — the field itself also
+   * carries the same cross-thread visibility a plain {@code volatile} would, without the
+   * read-then-write race a bare increment on a volatile field would leave open.
+   */
+  private final AtomicInteger automaticApprovals = new AtomicInteger();
 
   public ToolApprovalCoordinator(
       ToolApprovalSettings settings, SessionContext sessionContext, AgentRunRequest request) {
@@ -76,7 +90,14 @@ public final class ToolApprovalCoordinator {
     for (ToolApprovalQueueState.Entry entry : queue.entries()) {
       decided.add(
           new ToolLoopPolicy.DecidedCall(
-              toolCall(entry.request()), entry.decision().orElse(Boolean.FALSE)));
+              toolCall(entry.request()),
+              entry
+                  .decision()
+                  .orElseThrow(
+                      () ->
+                          new IllegalStateException(
+                              "approval queue entry reached resolution without a decision: "
+                                  + entry.request().requestId()))));
     }
     state.clear();
     return Plan.resolved(decided);
@@ -88,14 +109,16 @@ public final class ToolApprovalCoordinator {
    *
    * <p>The whole batch is decided before any of it runs, and a single unresolved call holds the
    * whole batch: a partially executed batch would let a tool run whose sibling the caller was still
-   * being asked about. When the batch has to wait, every call of it is queued — the ones already
-   * decided carrying their decision — so the decisions survive the runs that resolve the rest and
-   * the batch still executes in the order the model asked for.
+   * being asked about. Deciding is a first pass over {@code calls} alone; the persisted queue is
+   * only read, built and written in a second pass, and only when at least one call is unresolved,
+   * so the common case — every call decided immediately — never allocates a queue entry's random
+   * request id or touches session state at all. When the batch has to wait, every call of it is
+   * queued — the ones already decided carrying their decision — so the decisions survive the runs
+   * that resolve the rest and the batch still executes in the order the model asked for.
    */
   public Plan planBatch(List<ToolCallContent> calls) {
-    ProviderSessionState<ToolApprovalQueueState> state = queueState();
-    ToolApprovalQueueState queue = state.value().orElseGet(ToolApprovalQueueState::empty);
     List<ToolLoopPolicy.DecidedCall> decided = new ArrayList<>(calls.size());
+    List<PendingCall> pending = new ArrayList<>(calls.size());
     boolean anyUnresolved = false;
     for (ToolCallContent call : calls) {
       String hostBoundary = settings.hostBoundary(call);
@@ -107,50 +130,73 @@ public final class ToolApprovalCoordinator {
             case DENY -> Boolean.FALSE;
             case REQUIRE_APPROVAL -> null;
           };
+      pending.add(new PendingCall(call, hostBoundary, resolved));
       if (resolved == null) {
         anyUnresolved = true;
       } else {
         decided.add(new ToolLoopPolicy.DecidedCall(call, resolved));
       }
+    }
+    if (!anyUnresolved) {
+      return Plan.resolved(decided);
+    }
+    ProviderSessionState<ToolApprovalQueueState> state = queueState();
+    ToolApprovalQueueState queue = state.value().orElseGet(ToolApprovalQueueState::empty);
+    for (PendingCall call : pending) {
       queue =
           queue.append(
               new ToolApprovalRequestContent(
                   UUID.randomUUID().toString(),
-                  call.callId(),
-                  call.name(),
-                  call.arguments(),
-                  hostBoundary),
-              resolved);
-    }
-    if (!anyUnresolved) {
-      return Plan.resolved(decided);
+                  call.call().callId(),
+                  call.call().name(),
+                  call.call().arguments(),
+                  call.hostBoundary()),
+              call.resolved());
     }
     state.set(queue);
     return Plan.waiting(
         queue.head().orElseThrow(() -> new IllegalStateException("approval queue lost its head")));
   }
 
+  /** One call's decision, held until the second pass decides whether the queue needs it. */
+  private record PendingCall(ToolCallContent call, String hostBoundary, Boolean resolved) {}
+
   /**
    * Applies the configured evaluation order and the automatic-approval bound.
    *
-   * <p>A standing approval is the caller's own decision and is neither counted nor capped. Only a
-   * policy approval is automatic in the sense TOOL-021 bounds, so once this run has spent its
-   * allowance the next such call is surfaced instead — which is what stops an approve-everything
-   * policy from driving an unbounded internal re-invocation chain.
+   * <p>{@link ToolApprovalSettings#evaluate(ToolApprovalContext)} alone owns TOOL-021's fixed
+   * precedence — a matching standing approval always wins and the policy is never consulted when
+   * one matches — so this coordinator asks it first rather than re-deriving that precedence itself
+   * ahead of the call. A standing approval is the caller's own decision and is neither counted nor
+   * capped, so once {@code evaluate} approves, {@link
+   * ToolApprovalSettings#matchesStandingApproval(ToolApprovalContext)} is consulted a second time
+   * only to tell a standing approval apart from a policy approval for the automatic-approval count:
+   * only a policy approval is automatic in the sense TOOL-021 bounds, so once this run has spent
+   * its allowance the next such call is surfaced instead — which is what stops an
+   * approve-everything policy from driving an unbounded internal re-invocation chain.
    */
   private ToolApprovalDecision decide(ToolApprovalContext context) {
-    if (settings.matchesStandingApproval(context)) {
-      return ToolApprovalDecision.APPROVE;
-    }
     ToolApprovalDecision decision = settings.evaluate(context);
     if (decision != ToolApprovalDecision.APPROVE) {
       return decision;
     }
-    if (automaticApprovals >= settings.maxAutomaticApprovals()) {
-      return ToolApprovalDecision.REQUIRE_APPROVAL;
+    if (settings.matchesStandingApproval(context)) {
+      return ToolApprovalDecision.APPROVE;
     }
-    automaticApprovals++;
-    return ToolApprovalDecision.APPROVE;
+    return tryConsumeAutomaticApproval()
+        ? ToolApprovalDecision.APPROVE
+        : ToolApprovalDecision.REQUIRE_APPROVAL;
+  }
+
+  /**
+   * Atomically checks the automatic-approval cap and, if room remains, spends one slot against it
+   * in the same step — so two concurrently resuming iterations can never both observe room under
+   * the cap and both spend it.
+   */
+  private boolean tryConsumeAutomaticApproval() {
+    int max = settings.maxAutomaticApprovals();
+    int before = automaticApprovals.getAndUpdate(count -> count < max ? count + 1 : count);
+    return before < max;
   }
 
   private ProviderSessionState<ToolApprovalQueueState> queueState() {
