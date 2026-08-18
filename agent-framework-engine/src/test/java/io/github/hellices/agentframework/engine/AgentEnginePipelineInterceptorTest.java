@@ -7,11 +7,13 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import io.github.hellices.agentframework.api.agent.Agent;
 import io.github.hellices.agentframework.api.agent.AgentResponse;
 import io.github.hellices.agentframework.api.agent.AgentResponseUpdate;
+import io.github.hellices.agentframework.api.agent.AgentRun;
 import io.github.hellices.agentframework.api.agent.AgentRunOptions;
 import io.github.hellices.agentframework.api.agent.AgentRunRequest;
 import io.github.hellices.agentframework.api.agent.AgentSession;
 import io.github.hellices.agentframework.api.agent.AgentStreamingRun;
 import io.github.hellices.agentframework.api.agent.CancellationSignal;
+import io.github.hellices.agentframework.api.agent.RunContribution;
 import io.github.hellices.agentframework.api.context.ContextAttributes;
 import io.github.hellices.agentframework.api.message.Content;
 import io.github.hellices.agentframework.api.message.FinishReason;
@@ -20,6 +22,7 @@ import io.github.hellices.agentframework.api.message.Role;
 import io.github.hellices.agentframework.api.message.TextContent;
 import io.github.hellices.agentframework.api.message.ToolCallContent;
 import io.github.hellices.agentframework.api.message.ToolResultContent;
+import io.github.hellices.agentframework.api.session.SessionContext;
 import io.github.hellices.agentframework.api.session.SessionSnapshot;
 import io.github.hellices.agentframework.api.tool.FunctionTool;
 import io.github.hellices.agentframework.api.tool.ToolResult;
@@ -32,15 +35,19 @@ import io.github.hellices.agentframework.spi.interception.SessionOperationInterc
 import io.github.hellices.agentframework.spi.interception.ToolInvocationInterceptor;
 import io.github.hellices.agentframework.spi.model.ModelClient;
 import io.github.hellices.agentframework.spi.model.ModelResponse;
+import io.github.hellices.agentframework.spi.session.ContextProvider;
 import io.github.hellices.agentframework.spi.session.SessionStore;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Flow;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Function;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -420,7 +427,196 @@ class AgentEnginePipelineInterceptorTest {
     assertThat(response.text()).isEqualTo("ok");
   }
 
+  // --- F1: an agent short-circuit touches neither the context providers nor the store ----------
+
+  @Test
+  void agentShortCircuitDoesNotLoadOrSaveAPreseededStoreForOrdinaryRun() {
+    RecordingStore store = new RecordingStore();
+    SessionSnapshot seeded = seededSnapshot();
+    store.seed(seeded);
+    AgentSession input = session("session-1");
+    Agent agent = shortCircuitingStoreAgent(store);
+
+    AgentRun run = agent.run(request(input, "hi"));
+    AgentResponse response = run.response().toCompletableFuture().join();
+
+    assertThat(response.text()).isEqualTo("short-circuit");
+    assertThat(store.log).isEmpty();
+    assertThat(store.snapshots.get("session-1")).isEqualTo(seeded);
+    assertThat(run.session().toCompletableFuture().join()).contains(input);
+  }
+
+  @Test
+  void agentShortCircuitDoesNotLoadOrSaveAPreseededStoreForStreamingRun() {
+    RecordingStore store = new RecordingStore();
+    SessionSnapshot seeded = seededSnapshot();
+    store.seed(seeded);
+    AgentSession input = session("session-1");
+    Agent agent = shortCircuitingStoreAgent(store);
+
+    AgentStreamingRun<AgentResponseUpdate> run = agent.runStreaming(request(input, "hi"));
+    drain(run.updates());
+    AgentResponse response = run.response().toCompletableFuture().join();
+
+    assertThat(response.text()).isEqualTo("short-circuit");
+    assertThat(store.log).isEmpty();
+    assertThat(store.snapshots.get("session-1")).isEqualTo(seeded);
+    assertThat(run.session().toCompletableFuture().join()).contains(input);
+  }
+
+  // --- F2: a transformed execution is the sole source of the final response for both shapes -----
+
+  @Test
+  void agentUpdateMappingIsTheSoleSourceForTheOrdinaryResponse() {
+    Agent agent =
+        agentWith(
+            builder -> builder.agentExecutionInterceptor(upperCasingInterceptor()), fixed("hello"));
+
+    AgentResponse response = agent.run("hi").response().toCompletableFuture().join();
+
+    assertThat(response.text()).isEqualTo("HELLO");
+  }
+
+  @Test
+  void agentUpdateMappingReflectsIdenticallyInOrdinaryAndStreaming() {
+    AgentResponse ordinary =
+        agentWith(
+                builder -> builder.agentExecutionInterceptor(upperCasingInterceptor()),
+                fixed("hello"))
+            .run("hi")
+            .response()
+            .toCompletableFuture()
+            .join();
+    AgentResponse streaming =
+        streamResponse(
+            agentWith(
+                builder -> builder.agentExecutionInterceptor(upperCasingInterceptor()),
+                fixed("hello")));
+
+    assertThat(ordinary.text()).isEqualTo("HELLO");
+    assertThat(streaming.text()).isEqualTo("HELLO");
+  }
+
+  @Test
+  void agentUpdateReplacementReflectsIdenticallyInOrdinaryAndStreaming() {
+    AgentResponse ordinary =
+        agentWith(
+                builder -> builder.agentExecutionInterceptor(replacingInterceptor("replaced-text")),
+                fixed("hello"))
+            .run("hi")
+            .response()
+            .toCompletableFuture()
+            .join();
+    AgentResponse streaming =
+        streamResponse(
+            agentWith(
+                builder -> builder.agentExecutionInterceptor(replacingInterceptor("replaced-text")),
+                fixed("hello")));
+
+    assertThat(ordinary.text()).isEqualTo("replaced-text");
+    assertThat(streaming.text()).isEqualTo("replaced-text");
+  }
+
+  @Test
+  void aContextProviderSeesTheTransformedResponseBeforeSave() {
+    List<String> order = new ArrayList<>();
+    SessionStore store =
+        new SessionStore() {
+          @Override
+          public CompletionStage<Optional<SessionSnapshot>> load(String sessionId) {
+            order.add("load");
+            return completedFuture(Optional.empty());
+          }
+
+          @Override
+          public CompletionStage<Void> save(SessionSnapshot snapshot) {
+            order.add("save");
+            return completedFuture(null);
+          }
+
+          @Override
+          public CompletionStage<Void> delete(String sessionId) {
+            return completedFuture(null);
+          }
+        };
+    ContextProvider provider =
+        new ContextProvider() {
+          @Override
+          public CompletionStage<RunContribution> prepare(SessionContext context) {
+            return completedFuture(RunContribution.empty());
+          }
+
+          @Override
+          public CompletionStage<Void> complete(SessionContext context) {
+            order.add("provider:" + context.response().map(AgentResponse::text).orElse("<none>"));
+            return completedFuture(null);
+          }
+        };
+    Agent agent =
+        AgentEngine.builder()
+            .sessionStore(store)
+            .agentExecutionInterceptor(upperCasingInterceptor())
+            .build()
+            .factory()
+            .builderWithClient(fixed("hello"))
+            .id("agent-1")
+            .name("assistant")
+            .contextProviders(provider)
+            .build();
+
+    run(agent, session("session-1"), "hi");
+
+    assertThat(order).containsExactly("load", "provider:HELLO", "save");
+  }
+
   // --- helpers ---------------------------------------------------------------------------------
+
+  private static Agent shortCircuitingStoreAgent(SessionStore store) {
+    return AgentEngine.builder()
+        .sessionStore(store)
+        .agentExecutionInterceptor(
+            (invocation, next) ->
+                AgentExecution.fromUpdate(
+                    agentUpdate("short-circuit"), invocation.cancellationSignal()))
+        .build()
+        .factory()
+        .builderWithClient(throwingModel())
+        .id("agent-1")
+        .name("assistant")
+        .build();
+  }
+
+  private static SessionSnapshot seededSnapshot() {
+    return new SessionSnapshot(
+        "session", "1.0", "session-1", null, 5, Instant.parse("2020-01-01T00:00:00Z"), Map.of());
+  }
+
+  private static AgentExecutionInterceptor upperCasingInterceptor() {
+    return (invocation, next) ->
+        next.proceed(invocation)
+            .mapUpdates(update -> mapText(update, text -> text.toUpperCase(Locale.ROOT)));
+  }
+
+  private static AgentExecutionInterceptor replacingInterceptor(String replacement) {
+    return (invocation, next) ->
+        next.proceed(invocation).mapUpdates(update -> mapText(update, text -> replacement));
+  }
+
+  private static AgentResponseUpdate mapText(
+      AgentResponseUpdate update, Function<String, String> textMapper) {
+    List<Message> mapped = new ArrayList<>();
+    for (Message message : update.messages()) {
+      List<Content> content = new ArrayList<>();
+      for (Content item : message.content()) {
+        content.add(
+            item instanceof TextContent text
+                ? new TextContent(textMapper.apply(text.text()))
+                : item);
+      }
+      mapped.add(new Message(message.role(), content));
+    }
+    return update.toBuilder().messages(mapped).build();
+  }
 
   private static AgentExecutionInterceptor counting(AtomicInteger counter) {
     return (invocation, next) -> {
@@ -601,6 +797,10 @@ class AgentEnginePipelineInterceptorTest {
 
     private final List<String> log = new ArrayList<>();
     private final Map<String, SessionSnapshot> snapshots = new java.util.LinkedHashMap<>();
+
+    private void seed(SessionSnapshot snapshot) {
+      snapshots.put(snapshot.sessionId(), snapshot);
+    }
 
     @Override
     public CompletionStage<Optional<SessionSnapshot>> load(String sessionId) {

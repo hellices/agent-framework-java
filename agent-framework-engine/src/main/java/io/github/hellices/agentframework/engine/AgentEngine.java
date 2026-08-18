@@ -206,38 +206,55 @@ public final class AgentEngine {
           request.cancellationSignal(),
           sessionContext::updatedSession);
     }
-    if (handle.pipeline() != null) {
-      RunPipeline pipeline = handle.pipeline();
+    return AgentRun.engineManaged(
+        finalizeOrdinary(binding, sessionContext, identity, handle),
+        request.cancellationSignal(),
+        sessionContext::updatedSession);
+  }
+
+  /**
+   * Derives an ordinary run's response and drives its post-run lifecycle, from whichever source the
+   * agent seam left canonical.
+   *
+   * <p>A pass-through run reads the pipeline's boundary-preserving terminal response, exactly as it
+   * did before the seam existed: an internal subscriber drives every model and tool iteration to
+   * completion while the caller waits only for that assembled response. A run whose agent
+   * interceptor replaced or mapped the execution's updates instead reconstructs its response from
+   * those transformed updates — the same updates a streaming caller would see — so the
+   * transformation is the sole source of the final response for both run shapes. A short-circuited
+   * run reconstructs from the interceptor's updates too, then finalizes without any pipeline,
+   * provider, or store work.
+   */
+  private CompletionStage<AgentResponse> finalizeOrdinary(
+      AgentBinding binding,
+      SessionContext sessionContext,
+      ResponseIdentity identity,
+      AgentPipelineHandle handle) {
+    RunPipeline pipeline = handle.pipeline();
+    if (pipeline != null && !handle.transformed()) {
       RunExecution execution = pipeline.execution();
-      // The ordinary run observes the loop's single assembled response, so an internal subscriber
-      // drives every model and tool iteration to completion while the caller reads
-      // terminalResponse.
       CompletionStage<ModelResponse> terminal = pipeline.terminalResponse();
       pipeline.subscribe(new DrainingSubscriber());
-      CompletionStage<AgentResponse> response =
-          terminal
-              .thenApply(
-                  model ->
-                      ModelResponseMapper.toAgentResponse(
-                          identity.agentId(),
-                          identity.responseId(),
-                          identity.authorName(),
-                          identity.createdAt(),
-                          model))
-              .thenCompose(
-                  agentResponse -> completeRun(binding, sessionContext, execution, agentResponse));
-      return AgentRun.engineManaged(
-          response, request.cancellationSignal(), sessionContext::updatedSession);
+      return terminal
+          .thenApply(
+              model ->
+                  ModelResponseMapper.toAgentResponse(
+                      identity.agentId(),
+                      identity.responseId(),
+                      identity.authorName(),
+                      identity.createdAt(),
+                      model))
+          .thenCompose(
+              agentResponse -> completeRun(binding, sessionContext, execution, agentResponse));
     }
-    // A short-circuited run never built a pipeline: its final response is derived from the
-    // canonical
-    // updates the interceptor returned, then handed to the same session finalization the engine
-    // owns.
-    CompletionStage<AgentResponse> response =
-        collectUpdates(handle.execution().updates())
-            .thenCompose(agentResponse -> finalizeShortCircuit(sessionContext, agentResponse));
-    return AgentRun.engineManaged(
-        response, request.cancellationSignal(), sessionContext::updatedSession);
+    CompletionStage<AgentResponse> reconstructed = collectUpdates(handle.execution().updates());
+    if (pipeline != null) {
+      RunExecution execution = pipeline.execution();
+      return reconstructed.thenCompose(
+          agentResponse -> completeRun(binding, sessionContext, execution, agentResponse));
+    }
+    return reconstructed.thenCompose(
+        agentResponse -> finalizeShortCircuit(sessionContext, agentResponse));
   }
 
   /**
@@ -431,12 +448,16 @@ public final class AgentEngine {
     AgentInvocation invocation =
         AgentInvocation.builder().agentDefinition(binding.definition()).request(request).build();
     AtomicReference<RunPipeline> pipelineRef = new AtomicReference<>();
+    AtomicReference<AgentExecution> terminalRef = new AtomicReference<>();
     AgentInvocationChain terminal =
         proceeding -> {
           try {
             RunPipeline pipeline = buildPipeline(binding, context, request, identity);
             pipelineRef.set(pipeline);
-            return AgentExecution.fromUpdates(pipeline, request.cancellationSignal());
+            AgentExecution built =
+                AgentExecution.fromUpdates(pipeline, request.cancellationSignal());
+            terminalRef.set(built);
+            return built;
           } catch (RuntimeException failure) {
             throw new PipelineBuildException(failure);
           }
@@ -459,7 +480,15 @@ public final class AgentEngine {
           new IllegalStateException(
               "agent execution cancellationSignal must be the run's cancellation signal"));
     }
-    return AgentPipelineHandle.of(execution, pipelineRef.get());
+    RunPipeline pipeline = pipelineRef.get();
+    // An interceptor that replaces or maps the execution hands back a different value than the
+    // terminal built (AgentExecution has identity equality), so its transformed updates — not the
+    // pipeline's raw response — become the sole source of the run's final response, for the
+    // ordinary
+    // run as much as the streaming one. A pass-through interceptor returns the terminal's own
+    // execution unchanged, so an ordinary run keeps its boundary-preserving terminal response.
+    boolean transformed = pipeline != null && !execution.equals(terminalRef.get());
+    return AgentPipelineHandle.of(execution, pipeline, transformed);
   }
 
   /**
@@ -502,9 +531,13 @@ public final class AgentEngine {
   }
 
   /**
-   * Completes the durable lifecycle of a short-circuited run: it fills the run's response slot once
-   * and persists the session, without the provider {@code afterRun} hooks, because a short-circuit
-   * never opened them. A run that built its pipeline uses {@link #completeRun} instead.
+   * Completes the lifecycle of a short-circuited run: it fills the run's response slot once from
+   * the canonical updates the interceptor returned and completes with the run's input session. A
+   * pre-finalization short-circuit performed no session load and resolved no context provider, so
+   * it runs neither the provider {@code afterRun} hooks nor a session save — persisting here would
+   * overwrite a stored session it never read, regressing its revision. A run that built its
+   * pipeline uses {@link #completeRun} instead, which owns the full provider and persistence
+   * lifecycle.
    */
   private CompletionStage<AgentResponse> finalizeShortCircuit(
       SessionContext sessionContext, AgentResponse response) {
@@ -515,15 +548,7 @@ public final class AgentEngine {
       outcome.completeExceptionally(immediate);
       return outcome.minimalCompletionStage();
     }
-    saveSession(sessionContext)
-        .whenComplete(
-            (ignored, failure) -> {
-              if (failure == null) {
-                outcome.complete(response);
-              } else {
-                outcome.completeExceptionally(unwrap(failure));
-              }
-            });
+    outcome.complete(response);
     return outcome.minimalCompletionStage();
   }
 
@@ -571,23 +596,32 @@ public final class AgentEngine {
 
     private final AgentExecution execution;
     private final RunPipeline pipeline;
+    private final boolean transformed;
     private final RuntimeException failure;
 
     private AgentPipelineHandle(
-        AgentExecution execution, RunPipeline pipeline, RuntimeException failure) {
+        AgentExecution execution,
+        RunPipeline pipeline,
+        boolean transformed,
+        RuntimeException failure) {
       this.execution = execution;
       this.pipeline = pipeline;
+      this.transformed = transformed;
       this.failure = failure;
     }
 
-    static AgentPipelineHandle of(AgentExecution execution, RunPipeline pipeline) {
+    static AgentPipelineHandle of(
+        AgentExecution execution, RunPipeline pipeline, boolean transformed) {
       return new AgentPipelineHandle(
-          Objects.requireNonNull(execution, "execution must not be null"), pipeline, null);
+          Objects.requireNonNull(execution, "execution must not be null"),
+          pipeline,
+          transformed,
+          null);
     }
 
     static AgentPipelineHandle failed(RuntimeException failure) {
       return new AgentPipelineHandle(
-          null, null, Objects.requireNonNull(failure, "failure must not be null"));
+          null, null, false, Objects.requireNonNull(failure, "failure must not be null"));
     }
 
     boolean failed() {
@@ -604,6 +638,14 @@ public final class AgentEngine {
 
     RunPipeline pipeline() {
       return pipeline;
+    }
+
+    /**
+     * Whether an interceptor replaced or mapped the execution's updates, so its transformed updates
+     * are the sole source of the run's final response even on the ordinary path.
+     */
+    boolean transformed() {
+      return transformed;
     }
   }
 
