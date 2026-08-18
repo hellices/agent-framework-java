@@ -13,6 +13,8 @@ import io.github.hellices.agentframework.engine.internal.model.ResponseIdentity;
 import io.github.hellices.agentframework.engine.internal.tool.ToolApprovalCoordinator;
 import io.github.hellices.agentframework.spi.model.ModelRequest;
 import io.github.hellices.agentframework.spi.model.ModelResponseUpdate;
+import io.github.hellices.agentframework.spi.telemetry.TelemetryOperationKind;
+import io.github.hellices.agentframework.spi.telemetry.TelemetryStart;
 import java.time.Instant;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
@@ -64,7 +66,9 @@ class RunPipelineTest {
         minimalExecution(),
         approvals,
         approvalGate,
-        io.github.hellices.agentframework.spi.telemetry.TelemetrySink.noOp());
+        io.github.hellices.agentframework.spi.telemetry.TelemetrySink.noOp(),
+        io.github.hellices.agentframework.spi.telemetry.TelemetrySink.noOp()
+            .start(TelemetryStart.builder(TelemetryOperationKind.AGENT_RUN, "agent.run").build()));
   }
 
   private static Flow.Publisher<ModelResponseUpdate> neverSubscribed() {

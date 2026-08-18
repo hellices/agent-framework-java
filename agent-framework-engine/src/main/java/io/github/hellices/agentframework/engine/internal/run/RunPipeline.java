@@ -130,6 +130,7 @@ public final class RunPipeline implements Flow.Publisher<AgentResponseUpdate> {
   private final ToolApprovalCoordinator approvals;
   private final CompletionStage<Void> approvalGate;
   private final TelemetrySink telemetrySink;
+  private final TelemetryOperation agentRunOp;
   private final CompletableFuture<ModelResponse> ordinaryTerminal = new CompletableFuture<>();
   private final AtomicBoolean subscribed = new AtomicBoolean();
 
@@ -163,7 +164,8 @@ public final class RunPipeline implements Flow.Publisher<AgentResponseUpdate> {
       RunExecution execution,
       ToolApprovalCoordinator approvals,
       CompletionStage<Void> approvalGate,
-      TelemetrySink telemetrySink) {
+      TelemetrySink telemetrySink,
+      TelemetryOperation agentRunOp) {
     this.firstStream = Objects.requireNonNull(firstStream, "firstStream must not be null");
     this.firstRequest = Objects.requireNonNull(firstRequest, "firstRequest must not be null");
     this.nextStream = Objects.requireNonNull(nextStream, "nextStream must not be null");
@@ -175,6 +177,7 @@ public final class RunPipeline implements Flow.Publisher<AgentResponseUpdate> {
     this.approvals = approvals;
     this.approvalGate = approvalGate;
     this.telemetrySink = Objects.requireNonNull(telemetrySink, "telemetrySink must not be null");
+    this.agentRunOp = Objects.requireNonNull(agentRunOp, "agentRunOp must not be null");
     if (approvals != null && approvalGate == null) {
       throw new IllegalArgumentException(
           "approvalGate must not be null when approvals are enabled");
@@ -203,6 +206,10 @@ public final class RunPipeline implements Flow.Publisher<AgentResponseUpdate> {
   /** The run's explicit state machine, so the engine can drive the post-finalise lifecycle. */
   public RunExecution execution() {
     return execution;
+  }
+
+  public TelemetryOperation agentRunOp() {
+    return agentRunOp;
   }
 
   @Override
@@ -249,7 +256,6 @@ public final class RunPipeline implements Flow.Publisher<AgentResponseUpdate> {
     private Usage ordinaryUsage;
     private long demand;
     private Flow.Subscription upstream;
-    private TelemetryOperation agentRunOp;
 
     private LoopSubscription(Flow.Subscriber<? super AgentResponseUpdate> downstream) {
       this.downstream = downstream;
@@ -259,23 +265,12 @@ public final class RunPipeline implements Flow.Publisher<AgentResponseUpdate> {
       if (cancelled || terminated.get()) {
         return;
       }
-      // Open the agent-run telemetry operation. The operation mirrors the ordinary terminal:
-      // closed on success and failed with the unwrapped cause on failure or cancellation.
-      agentRunOp =
-          telemetrySink.start(
-              TelemetryStart.builder(TelemetryOperationKind.AGENT_RUN, "agent.run")
-                  .attribute(TelemetryAttributes.AGENT_ID, identity.agentId())
-                  .attribute(
-                      TelemetryAttributes.AGENT_NAME,
-                      identity.authorName() != null ? identity.authorName() : "")
-                  .build());
       ordinaryTerminal.whenComplete(
           (response, err) -> {
             if (err != null) {
-              agentRunOp.fail(unwrap(err));
-            } else {
-              agentRunOp.close();
+              RunPipeline.this.agentRunOp.fail(unwrap(err));
             }
+            // On success, AgentEngine closes the op after session save.
           });
       Runnable removeListener = request.cancellationSignal().onCancel(this::cancel);
       removeCancellationListener = removeListener;

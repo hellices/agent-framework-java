@@ -46,7 +46,11 @@ import io.github.hellices.agentframework.spi.model.ModelClient;
 import io.github.hellices.agentframework.spi.model.ModelRequest;
 import io.github.hellices.agentframework.spi.model.ModelResponse;
 import io.github.hellices.agentframework.spi.model.ModelResponseUpdate;
+import io.github.hellices.agentframework.spi.telemetry.TelemetryAttributes;
+import io.github.hellices.agentframework.spi.telemetry.TelemetryOperation;
+import io.github.hellices.agentframework.spi.telemetry.TelemetryOperationKind;
 import io.github.hellices.agentframework.spi.telemetry.TelemetrySink;
+import io.github.hellices.agentframework.spi.telemetry.TelemetryStart;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
@@ -267,13 +271,17 @@ public final class AgentEngine {
                       ResponseIdentity.terminalMessageId(model.messages()),
                       model))
           .thenCompose(
-              agentResponse -> completeRun(binding, sessionContext, execution, agentResponse));
+              agentResponse ->
+                  completeRun(
+                      binding, sessionContext, execution, agentResponse, pipeline.agentRunOp()));
     }
     CompletionStage<AgentResponse> reconstructed = collectUpdates(handle.execution().updates());
     if (pipeline != null) {
       RunExecution execution = pipeline.execution();
       return reconstructed.thenCompose(
-          agentResponse -> completeRun(binding, sessionContext, execution, agentResponse));
+          agentResponse ->
+              completeRun(
+                  binding, sessionContext, execution, agentResponse, pipeline.agentRunOp()));
     }
     return reconstructed.thenCompose(
         agentResponse -> finalizeShortCircuit(sessionContext, agentResponse));
@@ -307,61 +315,97 @@ public final class AgentEngine {
       // configuration and makes it identical for an ordinary and a streaming run (TOOL-020).
       throw new IllegalStateException("tool approval requires a session");
     }
-    String modelAgentId = binding.id();
-    String modelSessionId =
-        sessionContext.session() == null ? null : sessionContext.session().sessionId();
-    Function<ModelRequest, Flow.Publisher<ModelResponseUpdate>> invoker =
-        modelRequest ->
-            interceptModel(
-                ModelInvocation.builder()
-                    .agentId(modelAgentId)
-                    .sessionId(modelSessionId)
-                    .request(modelRequest)
-                    .build(),
-                modelInvocation ->
-                    Objects.requireNonNull(
-                        selectedClient.execute(modelInvocation.request()),
-                        "model client update publisher must not be null"));
-    ToolLoopPolicy.BoundToolInvoker toolInvoker =
-        (tool, call, toolContext) ->
-            interceptTool(
-                ToolInvocation.builder()
-                    .toolCall(call)
-                    .toolDefinition(tool.definition())
-                    .context(toolContext)
-                    .build(),
-                toolInvocation ->
-                    tool.execute(toolInvocation.arguments(), toolInvocation.context()));
-    RunExecution execution = RunExecution.create(request, binding.definition(), binding.runtime());
-    RunEffectiveState state =
-        new RunEffectiveState(
-            binding, RunContributionMerger.merge(binding.definition(), List.of()));
-    CompletionStage<Void> gate =
-        runGate(binding, sessionContext, request.cancellationSignal(), state);
-    AtomicReference<ModelRequest> firstRequest = new AtomicReference<>();
-    Function<List<Message>, Flow.Publisher<ModelResponseUpdate>> firstStream =
-        appendedMessages -> {
-          ModelRequest modelRequest =
-              toModelRequest(state, request, sessionContext, appendedMessages);
-          firstRequest.set(modelRequest);
-          return Objects.requireNonNull(
-              invoker.apply(modelRequest), "model client update publisher must not be null");
-        };
-    if (approvalSettings == null) {
-      Flow.Publisher<ModelResponseUpdate> modelUpdates =
-          gate == null
-              ? firstStream.apply(List.of())
-              : deferUntil(
-                  gate,
-                  request.cancellationSignal(),
-                  () -> {
-                    if (request.cancellationSignal().isCancelled()) {
-                      throw new CancellationException("run was cancelled");
-                    }
-                    return firstStream.apply(List.of());
-                  });
+    AtomicReference<TelemetryOperation> agentRunOpRef =
+        new AtomicReference<>(
+            telemetrySink.start(
+                TelemetryStart.builder(TelemetryOperationKind.AGENT_RUN, "agent.run")
+                    .attribute(TelemetryAttributes.AGENT_ID, binding.id())
+                    .attribute(
+                        TelemetryAttributes.AGENT_NAME,
+                        binding.definition().name() != null ? binding.definition().name() : "")
+                    .build()));
+    try {
+      String modelAgentId = binding.id();
+      String modelSessionId =
+          sessionContext.session() == null ? null : sessionContext.session().sessionId();
+      Function<ModelRequest, Flow.Publisher<ModelResponseUpdate>> invoker =
+          modelRequest ->
+              interceptModel(
+                  ModelInvocation.builder()
+                      .agentId(modelAgentId)
+                      .sessionId(modelSessionId)
+                      .request(modelRequest)
+                      .build(),
+                  modelInvocation ->
+                      Objects.requireNonNull(
+                          selectedClient.execute(modelInvocation.request()),
+                          "model client update publisher must not be null"));
+      ToolLoopPolicy.BoundToolInvoker toolInvoker =
+          (tool, call, toolContext) ->
+              interceptTool(
+                  ToolInvocation.builder()
+                      .toolCall(call)
+                      .toolDefinition(tool.definition())
+                      .context(toolContext)
+                      .build(),
+                  toolInvocation ->
+                      tool.execute(toolInvocation.arguments(), toolInvocation.context()));
+      RunExecution execution =
+          RunExecution.create(request, binding.definition(), binding.runtime());
+      RunEffectiveState state =
+          new RunEffectiveState(
+              binding, RunContributionMerger.merge(binding.definition(), List.of()));
+      CompletionStage<Void> gate =
+          runGateWithTelemetry(binding, sessionContext, request.cancellationSignal(), state);
+      AtomicReference<ModelRequest> firstRequest = new AtomicReference<>();
+      Function<List<Message>, Flow.Publisher<ModelResponseUpdate>> firstStream =
+          appendedMessages -> {
+            ModelRequest modelRequest =
+                toModelRequest(state, request, sessionContext, appendedMessages);
+            firstRequest.set(modelRequest);
+            return Objects.requireNonNull(
+                invoker.apply(modelRequest), "model client update publisher must not be null");
+          };
+      if (approvalSettings == null) {
+        Flow.Publisher<ModelResponseUpdate> modelUpdates =
+            gate == null
+                ? firstStream.apply(List.of())
+                : deferUntil(
+                    gate,
+                    request.cancellationSignal(),
+                    () -> {
+                      if (request.cancellationSignal().isCancelled()) {
+                        throw new CancellationException("run was cancelled");
+                      }
+                      return firstStream.apply(List.of());
+                    });
+        return new RunPipeline(
+            appendedMessages -> modelUpdates,
+            firstRequest::get,
+            invoker,
+            state::toolLoop,
+            toolInvoker,
+            request,
+            identity,
+            execution,
+            null,
+            null,
+            telemetrySink,
+            agentRunOpRef.get());
+      }
+      // An approving run never starts its first model call eagerly: the pending queue has to be
+      // resolved against the loaded session first, and a resolved approval may put tool results
+      // into
+      // that very first request. The pipeline therefore waits on the same gate itself instead of
+      // the
+      // model publisher being deferred behind it.
       return new RunPipeline(
-          appendedMessages -> modelUpdates,
+          appendedMessages -> {
+            if (request.cancellationSignal().isCancelled()) {
+              throw new CancellationException("run was cancelled");
+            }
+            return firstStream.apply(appendedMessages);
+          },
           firstRequest::get,
           invoker,
           state::toolLoop,
@@ -369,31 +413,14 @@ public final class AgentEngine {
           request,
           identity,
           execution,
-          null,
-          null,
-          telemetrySink);
+          new ToolApprovalCoordinator(approvalSettings, sessionContext, request),
+          gate == null ? CompletableFuture.completedFuture(null) : gate,
+          telemetrySink,
+          agentRunOpRef.get());
+    } catch (RuntimeException e) {
+      agentRunOpRef.get().fail(e);
+      throw e;
     }
-    // An approving run never starts its first model call eagerly: the pending queue has to be
-    // resolved against the loaded session first, and a resolved approval may put tool results into
-    // that very first request. The pipeline therefore waits on the same gate itself instead of the
-    // model publisher being deferred behind it.
-    return new RunPipeline(
-        appendedMessages -> {
-          if (request.cancellationSignal().isCancelled()) {
-            throw new CancellationException("run was cancelled");
-          }
-          return firstStream.apply(appendedMessages);
-        },
-        firstRequest::get,
-        invoker,
-        state::toolLoop,
-        toolInvoker,
-        request,
-        identity,
-        execution,
-        new ToolApprovalCoordinator(approvalSettings, sessionContext, request),
-        gate == null ? CompletableFuture.completedFuture(null) : gate,
-        telemetrySink);
   }
 
   /**
@@ -411,14 +438,30 @@ public final class AgentEngine {
    * touches no store reaches that branch — see {@link #runInternal} for what that means for a run
    * that carries a session.
    */
-  private CompletionStage<Void> runGate(
+  private CompletionStage<Void> runGateWithTelemetry(
       AgentBinding binding,
       SessionContext sessionContext,
       CancellationSignal cancellationSignal,
       RunEffectiveState state) {
     if (sessionCoordinator != null && sessionContext.session() != null) {
+      String sessionId = sessionContext.session().sessionId();
+      AtomicReference<TelemetryOperation> loadOpRef =
+          new AtomicReference<>(
+              telemetrySink.start(
+                  TelemetryStart.builder(TelemetryOperationKind.SESSION_OPERATION, "session.load")
+                      .attribute(TelemetryAttributes.SESSION_OPERATION, "load")
+                      .attribute(TelemetryAttributes.SESSION_ID, sessionId)
+                      .build()));
       return sessionCoordinator
           .load(sessionContext)
+          .whenComplete(
+              (v, err) -> {
+                if (err == null) {
+                  loadOpRef.get().close();
+                } else {
+                  loadOpRef.get().fail(unwrap(err));
+                }
+              })
           .thenCompose(
               ignored ->
                   prepareRun(
@@ -476,7 +519,13 @@ public final class AgentEngine {
       return AgentStreamingRun.engineManaged(
           handle.execution().updates(),
           request.cancellationSignal(),
-          response -> completeRun(binding, sessionContext, execution, response),
+          response ->
+              completeRun(
+                  binding,
+                  sessionContext,
+                  execution,
+                  response,
+                  handle.pipeline() != null ? handle.pipeline().agentRunOp() : null),
           sessionContext::updatedSession);
     }
     return AgentStreamingRun.engineManaged(
@@ -754,7 +803,8 @@ public final class AgentEngine {
       AgentBinding binding,
       SessionContext sessionContext,
       RunExecution execution,
-      AgentResponse response) {
+      AgentResponse response,
+      TelemetryOperation agentRunOp) {
     CompletableFuture<AgentResponse> outcome = new CompletableFuture<>();
     RunState runState = execution.state();
     if (!runState.isTerminal() && runState.phase() != RunPhase.FINALIZE_RESPONSE) {
@@ -770,6 +820,9 @@ public final class AgentEngine {
                   + " execution; a replacement that abandons it must short-circuit without"
                   + " proceeding");
       execution.terminateExceptionally(misuse);
+      if (agentRunOp != null) {
+        agentRunOp.fail(misuse);
+      }
       outcome.completeExceptionally(misuse);
       return outcome.minimalCompletionStage();
     }
@@ -778,6 +831,9 @@ public final class AgentEngine {
       sessionContext.complete(response);
     } catch (RuntimeException immediate) {
       execution.terminateExceptionally(immediate);
+      if (agentRunOp != null) {
+        agentRunOp.fail(immediate);
+      }
       outcome.completeExceptionally(immediate);
       return outcome.minimalCompletionStage();
     }
@@ -791,10 +847,16 @@ public final class AgentEngine {
             (ignored, failure) -> {
               if (failure == null) {
                 execution.terminateSuccessfully();
+                if (agentRunOp != null) {
+                  agentRunOp.close();
+                }
                 outcome.complete(response);
               } else {
                 Throwable cause = unwrap(failure);
                 execution.terminateExceptionally(cause);
+                if (agentRunOp != null) {
+                  agentRunOp.fail(cause);
+                }
                 outcome.completeExceptionally(cause);
               }
             });
@@ -830,7 +892,24 @@ public final class AgentEngine {
     if (sessionCoordinator == null || sessionContext.session() == null) {
       return CompletableFuture.completedFuture(null);
     }
-    return sessionCoordinator.save(sessionContext);
+    String sessionId = sessionContext.session().sessionId();
+    AtomicReference<TelemetryOperation> saveOpRef =
+        new AtomicReference<>(
+            telemetrySink.start(
+                TelemetryStart.builder(TelemetryOperationKind.SESSION_OPERATION, "session.save")
+                    .attribute(TelemetryAttributes.SESSION_OPERATION, "save")
+                    .attribute(TelemetryAttributes.SESSION_ID, sessionId)
+                    .build()));
+    return sessionCoordinator
+        .save(sessionContext)
+        .whenComplete(
+            (v, err) -> {
+              if (err == null) {
+                saveOpRef.get().close();
+              } else {
+                saveOpRef.get().fail(unwrap(err));
+              }
+            });
   }
 
   /**

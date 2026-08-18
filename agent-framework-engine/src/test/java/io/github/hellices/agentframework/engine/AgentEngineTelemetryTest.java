@@ -8,18 +8,21 @@ import io.github.hellices.agentframework.api.agent.Agent;
 import io.github.hellices.agentframework.api.agent.AgentBuilder;
 import io.github.hellices.agentframework.api.agent.AgentRunOptions;
 import io.github.hellices.agentframework.api.agent.AgentRunRequest;
+import io.github.hellices.agentframework.api.agent.AgentSession;
 import io.github.hellices.agentframework.api.agent.CancellationSignal;
 import io.github.hellices.agentframework.api.message.FinishReason;
 import io.github.hellices.agentframework.api.message.Message;
 import io.github.hellices.agentframework.api.message.Role;
 import io.github.hellices.agentframework.api.message.TextContent;
 import io.github.hellices.agentframework.api.message.ToolCallContent;
+import io.github.hellices.agentframework.api.session.SessionSnapshot;
 import io.github.hellices.agentframework.api.tool.FunctionTool;
 import io.github.hellices.agentframework.api.tool.ToolResult;
 import io.github.hellices.agentframework.api.value.JsonObject;
 import io.github.hellices.agentframework.api.value.JsonValues;
 import io.github.hellices.agentframework.spi.model.ModelClient;
 import io.github.hellices.agentframework.spi.model.ModelResponse;
+import io.github.hellices.agentframework.spi.session.SessionStore;
 import io.github.hellices.agentframework.spi.telemetry.TelemetryAttributes;
 import io.github.hellices.agentframework.spi.telemetry.TelemetryEvent;
 import io.github.hellices.agentframework.spi.telemetry.TelemetryOperation;
@@ -29,7 +32,10 @@ import io.github.hellices.agentframework.spi.telemetry.TelemetryStart;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.CompletionStage;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Flow;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -52,6 +58,7 @@ class AgentEngineTelemetryTest {
   private static final class RecordingSink implements TelemetrySink {
 
     final List<OperationRecord> operations = new CopyOnWriteArrayList<>();
+    final List<OperationRecord> closeOrder = new CopyOnWriteArrayList<>();
 
     @Override
     public TelemetryOperation start(TelemetryStart start) {
@@ -73,6 +80,7 @@ class AgentEngineTelemetryTest {
         @Override
         public void close() {
           record.closeCount.incrementAndGet();
+          closeOrder.add(record);
           record.closed = true;
         }
       };
@@ -80,6 +88,10 @@ class AgentEngineTelemetryTest {
 
     List<OperationRecord> ofKind(TelemetryOperationKind kind) {
       return operations.stream().filter(r -> r.start.kind() == kind).toList();
+    }
+
+    int closeIndexOf(OperationRecord record) {
+      return closeOrder.indexOf(record);
     }
   }
 
@@ -112,8 +124,26 @@ class AgentEngineTelemetryTest {
     return AgentEngine.builder().telemetrySink(sink).build();
   }
 
+  private static AgentEngine engineWithSession(RecordingSink sink) {
+    return AgentEngine.builder()
+        .telemetrySink(sink)
+        .sessionStore(
+            new io.github.hellices.agentframework.engine.session.InMemorySessionStore(
+                new io.github.hellices.agentframework.engine.session.JacksonSessionSnapshotCodec()))
+        .build();
+  }
+
   private static AgentRunRequest simpleRequest(String text) {
     return AgentRunRequest.builder()
+        .messages(Message.normalize(text))
+        .options(new AgentRunOptions())
+        .cancellationSignal(new CancellationSignal())
+        .build();
+  }
+
+  private static AgentRunRequest sessionRequest(String sessionId, String text) {
+    return AgentRunRequest.builder()
+        .session(AgentSession.builder().sessionId(sessionId).build())
         .messages(Message.normalize(text))
         .options(new AgentRunOptions())
         .cancellationSignal(new CancellationSignal())
@@ -186,6 +216,30 @@ class AgentEngineTelemetryTest {
         });
     done.join();
     return out;
+  }
+
+  private static final class FailingSessionStore implements SessionStore {
+
+    private final RuntimeException failure;
+
+    private FailingSessionStore(RuntimeException failure) {
+      this.failure = failure;
+    }
+
+    @Override
+    public CompletionStage<Optional<SessionSnapshot>> load(String sessionId) {
+      return CompletableFuture.failedFuture(failure);
+    }
+
+    @Override
+    public CompletionStage<Void> save(SessionSnapshot snapshot) {
+      return CompletableFuture.completedFuture(null);
+    }
+
+    @Override
+    public CompletionStage<Void> delete(String sessionId) {
+      return CompletableFuture.completedFuture(null);
+    }
   }
 
   // ── Tests ────────────────────────────────────────────────────────────────
@@ -520,5 +574,129 @@ class AgentEngineTelemetryTest {
     assertThat(sink.ofKind(TelemetryOperationKind.MODEL_CALL)).hasSize(2);
     assertThat(sink.ofKind(TelemetryOperationKind.TOOL_CALL)).hasSize(1);
     assertThat(sink.ofKind(TelemetryOperationKind.AGENT_RUN)).hasSize(1);
+  }
+
+  @Test
+  void sessionLoadOperationIsEmittedAndNestedInAgentRun() {
+    RecordingSink sink = new RecordingSink();
+    AgentEngine engine = engineWithSession(sink);
+    Agent agent =
+        boundBuilder(engine, req -> EngineModels.of(textResponse("hello")))
+            .id("a1")
+            .name("assistant")
+            .description("d")
+            .build();
+
+    agent.run(sessionRequest("sid-1", "hello")).response().toCompletableFuture().join();
+
+    OperationRecord agentRunRec = sink.ofKind(TelemetryOperationKind.AGENT_RUN).get(0);
+    OperationRecord loadRec =
+        sink.ofKind(TelemetryOperationKind.SESSION_OPERATION).stream()
+            .filter(
+                r ->
+                    "load"
+                        .equals(
+                            r.start.attributes().getString(TelemetryAttributes.SESSION_OPERATION)))
+            .findFirst()
+            .orElseThrow();
+
+    assertThat(loadRec.start.attributes().getString(TelemetryAttributes.SESSION_OPERATION))
+        .isEqualTo("load");
+    assertThat(loadRec.start.attributes().getString(TelemetryAttributes.SESSION_ID))
+        .isEqualTo("sid-1");
+    assertThat(loadRec.closeCount.get()).isEqualTo(1);
+    assertThat(loadRec.failCount.get()).isEqualTo(0);
+    assertThat(sink.closeIndexOf(loadRec)).isLessThan(sink.closeIndexOf(agentRunRec));
+  }
+
+  @Test
+  void sessionSaveOperationIsEmittedAndNestedInAgentRun() {
+    RecordingSink sink = new RecordingSink();
+    AgentEngine engine = engineWithSession(sink);
+    Agent agent =
+        boundBuilder(engine, req -> EngineModels.of(textResponse("hello")))
+            .id("a1")
+            .name("assistant")
+            .description("d")
+            .build();
+
+    agent.run(sessionRequest("sid-1", "hello")).response().toCompletableFuture().join();
+
+    OperationRecord agentRunRec = sink.ofKind(TelemetryOperationKind.AGENT_RUN).get(0);
+    OperationRecord saveRec =
+        sink.ofKind(TelemetryOperationKind.SESSION_OPERATION).stream()
+            .filter(
+                r ->
+                    "save"
+                        .equals(
+                            r.start.attributes().getString(TelemetryAttributes.SESSION_OPERATION)))
+            .findFirst()
+            .orElseThrow();
+
+    assertThat(saveRec.start.attributes().getString(TelemetryAttributes.SESSION_OPERATION))
+        .isEqualTo("save");
+    assertThat(saveRec.start.attributes().getString(TelemetryAttributes.SESSION_ID))
+        .isEqualTo("sid-1");
+    assertThat(saveRec.closeCount.get()).isEqualTo(1);
+    assertThat(saveRec.failCount.get()).isEqualTo(0);
+    assertThat(sink.closeIndexOf(saveRec)).isLessThan(sink.closeIndexOf(agentRunRec));
+  }
+
+  @Test
+  void sessionOperationLoadFailurePreservesRootCauseInAgentRun() {
+    RecordingSink sink = new RecordingSink();
+    RuntimeException cause = new RuntimeException("store failure");
+    AgentEngine engine =
+        AgentEngine.builder()
+            .telemetrySink(sink)
+            .sessionStore(new FailingSessionStore(cause))
+            .build();
+    Agent agent =
+        boundBuilder(engine, req -> EngineModels.of(textResponse("hello")))
+            .id("a1")
+            .name("assistant")
+            .description("d")
+            .build();
+
+    assertThatThrownBy(
+            () ->
+                agent.run(sessionRequest("sid-1", "hello")).response().toCompletableFuture().join())
+        .isInstanceOf(CompletionException.class)
+        .satisfies(failure -> assertThat(failure.getCause()).isSameAs(cause));
+
+    OperationRecord agentRunRec = sink.ofKind(TelemetryOperationKind.AGENT_RUN).get(0);
+    OperationRecord loadRec =
+        sink.ofKind(TelemetryOperationKind.SESSION_OPERATION).stream()
+            .filter(
+                r ->
+                    "load"
+                        .equals(
+                            r.start.attributes().getString(TelemetryAttributes.SESSION_OPERATION)))
+            .findFirst()
+            .orElseThrow();
+
+    assertThat(sink.ofKind(TelemetryOperationKind.SESSION_OPERATION)).hasSize(1);
+    assertThat(loadRec.failed).isTrue();
+    assertThat(loadRec.failures).containsExactly(cause);
+    assertThat(loadRec.failCount.get()).isEqualTo(1);
+    assertThat(agentRunRec.failed).isTrue();
+    assertThat(agentRunRec.failures).containsExactly(cause);
+    assertThat(agentRunRec.failCount.get()).isEqualTo(1);
+  }
+
+  @Test
+  void sessionOperationsAreNotEmittedForSessionlessRun() {
+    RecordingSink sink = new RecordingSink();
+    AgentEngine engine = engineWith(sink);
+    Agent agent =
+        boundBuilder(engine, req -> EngineModels.of(textResponse("hello")))
+            .id("a1")
+            .name("assistant")
+            .description("d")
+            .build();
+
+    agent.run(simpleRequest("hello")).response().toCompletableFuture().join();
+
+    assertThat(sink.ofKind(TelemetryOperationKind.SESSION_OPERATION)).isEmpty();
   }
 }
