@@ -26,6 +26,7 @@
 
 **Files:**
 - Create: `agent-framework-api/src/main/java/io/github/hellices/agentframework/spi/interception/AgentExecutionInterceptor.java`
+- Create: `agent-framework-api/src/main/java/io/github/hellices/agentframework/spi/interception/AgentExecution.java`
 - Create: `agent-framework-api/src/main/java/io/github/hellices/agentframework/spi/interception/ModelInvocationInterceptor.java`
 - Create: `agent-framework-api/src/main/java/io/github/hellices/agentframework/spi/interception/ToolInvocationInterceptor.java`
 - Create: `agent-framework-api/src/main/java/io/github/hellices/agentframework/spi/interception/SessionOperationInterceptor.java`
@@ -37,7 +38,7 @@
 
 ```java
 public interface AgentExecutionInterceptor {
-  AgentStreamingRun<AgentResponseUpdate> intercept(
+  AgentExecution intercept(
       AgentInvocation invocation, AgentInvocationChain next);
 }
 
@@ -72,8 +73,9 @@ invocations, typed next/result contracts, and absence of framework types.
 
 Invocation objects contain only data needed by their seam plus cancellation and typed attributes.
 They do not expose mutable engine state or a generic object bag. The agent seam wraps the
-canonical dual-view streaming run so one interception can consistently short-circuit or replace both
-updates and the final response together.
+pre-finalization update stream so one interception can consistently short-circuit or replace the
+canonical updates, while the engine still derives the final response and persists session state
+exactly once after finalization.
 
 - [ ] **Step 4: Verify GREEN and commit**
 

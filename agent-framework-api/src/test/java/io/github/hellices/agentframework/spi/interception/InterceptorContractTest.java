@@ -4,10 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.github.hellices.agentframework.api.agent.AgentDefinition;
-import io.github.hellices.agentframework.api.agent.AgentResponseUpdate;
 import io.github.hellices.agentframework.api.agent.AgentRunRequest;
 import io.github.hellices.agentframework.api.agent.AgentSession;
-import io.github.hellices.agentframework.api.agent.AgentStreamingRun;
 import io.github.hellices.agentframework.api.agent.CancellationSignal;
 import io.github.hellices.agentframework.api.context.ContextAttributes;
 import io.github.hellices.agentframework.api.context.ContextKey;
@@ -38,7 +36,7 @@ class InterceptorContractTest {
     assertInterceptorShape(
         AgentExecutionInterceptor.class,
         "intercept",
-        AgentStreamingRun.class.getName() + "<" + AgentResponseUpdate.class.getName() + ">",
+        AgentExecution.class.getName(),
         AgentInvocation.class,
         AgentInvocationChain.class);
     assertInterceptorShape(
@@ -61,9 +59,7 @@ class InterceptorContractTest {
         SessionInvocationChain.class);
 
     assertChainShape(
-        AgentInvocationChain.class,
-        AgentStreamingRun.class.getName() + "<" + AgentResponseUpdate.class.getName() + ">",
-        AgentInvocation.class);
+        AgentInvocationChain.class, AgentExecution.class.getName(), AgentInvocation.class);
     assertChainShape(
         ModelInvocationChain.class,
         "java.util.concurrent.Flow$Publisher<" + ModelResponseUpdate.class.getName() + ">",
@@ -85,6 +81,12 @@ class InterceptorContractTest {
                 SessionInvocation.class))
         .allSatisfy(type -> assertThat(type.getInterfaces()).isEmpty())
         .allSatisfy(type -> assertThat(type.getSuperclass()).isEqualTo(Object.class));
+    assertThat(findMethod(AgentExecution.class, "response")).isNull();
+    assertThat(findMethod(AgentExecution.class, "session")).isNull();
+    assertThat(findMethod(AgentExecution.class, "cancel")).isNull();
+    assertThat(AgentExecution.class.getDeclaredFields())
+        .extracting(Field::getName)
+        .containsExactlyInAnyOrder("updates", "cancellationSignal");
     assertThat(findMethod(ToolInvocation.Builder.class, "arguments")).isNull();
   }
 
@@ -292,6 +294,7 @@ class InterceptorContractTest {
         .hasMessage("operation must not be null");
 
     assertNoForbiddenTypes(AgentInvocation.class);
+    assertNoForbiddenTypes(AgentExecution.class);
     assertNoForbiddenTypes(ModelInvocation.class);
     assertNoForbiddenTypes(ToolInvocation.class);
     assertNoForbiddenTypes(SessionInvocation.class);

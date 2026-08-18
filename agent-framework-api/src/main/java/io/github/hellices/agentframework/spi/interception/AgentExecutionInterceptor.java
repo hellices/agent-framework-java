@@ -1,13 +1,13 @@
 package io.github.hellices.agentframework.spi.interception;
 
-import io.github.hellices.agentframework.api.agent.AgentResponseUpdate;
-import io.github.hellices.agentframework.api.agent.AgentStreamingRun;
-
 /**
- * Intercepts one agent execution around its updates, response, session, and cancellation handle.
+ * Intercepts one agent execution before finalization.
+ *
+ * <p>The returned {@link AgentExecution} carries only the update stream and cancellation signal.
+ * The engine derives the final {@code AgentResponse}, runs post-stream lifecycle work, and persists
+ * the session exactly once after the interceptor chain returns.
  */
 public interface AgentExecutionInterceptor {
 
-  AgentStreamingRun<AgentResponseUpdate> intercept(
-      AgentInvocation invocation, AgentInvocationChain next);
+  AgentExecution intercept(AgentInvocation invocation, AgentInvocationChain next);
 }

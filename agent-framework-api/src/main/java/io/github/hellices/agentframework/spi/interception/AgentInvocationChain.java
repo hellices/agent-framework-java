@@ -1,10 +1,12 @@
 package io.github.hellices.agentframework.spi.interception;
 
-import io.github.hellices.agentframework.api.agent.AgentResponseUpdate;
-import io.github.hellices.agentframework.api.agent.AgentStreamingRun;
-
-/** Continues an agent execution chain with an explicit invocation snapshot. */
+/**
+ * Continues an agent execution chain with an explicit pre-finalization invocation snapshot.
+ *
+ * <p>The returned {@link AgentExecution} remains pre-finalization: the engine owns final-response
+ * derivation and session persistence after the chain finishes.
+ */
 public interface AgentInvocationChain {
 
-  AgentStreamingRun<AgentResponseUpdate> proceed(AgentInvocation invocation);
+  AgentExecution proceed(AgentInvocation invocation);
 }
