@@ -129,7 +129,6 @@ public final class RunPipeline implements Flow.Publisher<AgentResponseUpdate> {
   private final RunExecution execution;
   private final ToolApprovalCoordinator approvals;
   private final CompletionStage<Void> approvalGate;
-  private final TelemetrySink telemetrySink;
   private final TelemetryOperation agentRunOp;
   private final CompletableFuture<ModelResponse> ordinaryTerminal = new CompletableFuture<>();
   private final AtomicBoolean subscribed = new AtomicBoolean();
@@ -176,7 +175,7 @@ public final class RunPipeline implements Flow.Publisher<AgentResponseUpdate> {
     this.execution = Objects.requireNonNull(execution, "execution must not be null");
     this.approvals = approvals;
     this.approvalGate = approvalGate;
-    this.telemetrySink = Objects.requireNonNull(telemetrySink, "telemetrySink must not be null");
+    Objects.requireNonNull(telemetrySink, "telemetrySink must not be null");
     this.agentRunOp = Objects.requireNonNull(agentRunOp, "agentRunOp must not be null");
     if (approvals != null && approvalGate == null) {
       throw new IllegalArgumentException(
@@ -248,6 +247,7 @@ public final class RunPipeline implements Flow.Publisher<AgentResponseUpdate> {
     private final AtomicReference<Throwable> failure = new AtomicReference<>();
     private final AtomicInteger wip = new AtomicInteger();
     private final AtomicBoolean terminated = new AtomicBoolean();
+    private final AtomicReference<ModelSubscriber> activeSubscriberRef = new AtomicReference<>();
     private final Object lock = new Object();
     private final List<Message> ordinaryMessages = new ArrayList<>();
     private volatile boolean cancelled;
@@ -445,6 +445,10 @@ public final class RunPipeline implements Flow.Publisher<AgentResponseUpdate> {
       if (active != null) {
         active.cancel();
       }
+      ModelSubscriber activeSubscriber = activeSubscriberRef.getAndSet(null);
+      if (activeSubscriber != null) {
+        activeSubscriber.cancelOperation();
+      }
     }
 
     /**
@@ -466,6 +470,7 @@ public final class RunPipeline implements Flow.Publisher<AgentResponseUpdate> {
       }
       advance(RunPhase.PREPARE_MODEL_REQUEST);
       ModelSubscriber subscriber = new ModelSubscriber(index, iterationRequest);
+      activeSubscriberRef.set(subscriber);
       try {
         Flow.Publisher<ModelResponseUpdate> publisher =
             Objects.requireNonNull(source.get(), "model client update publisher must not be null");
@@ -680,7 +685,7 @@ public final class RunPipeline implements Flow.Publisher<AgentResponseUpdate> {
       return (tool, call, ctx) -> {
         int idx = callIndex.getAndIncrement();
         TelemetryOperation toolOp =
-            telemetrySink.start(
+            agentRunOp.startChild(
                 TelemetryStart.builder(TelemetryOperationKind.TOOL_CALL, "tool.call")
                     .attribute(TelemetryAttributes.TOOL_NAME, call.name())
                     .attribute(TelemetryAttributes.TOOL_CALL_COUNT, (long) batchSize)
@@ -814,7 +819,7 @@ public final class RunPipeline implements Flow.Publisher<AgentResponseUpdate> {
         // Open the model-call telemetry operation here rather than as a local variable in
         // beginIteration, so its lifecycle is owned by this subscriber instance.
         this.modelCallOp =
-            telemetrySink.start(
+            RunPipeline.this.agentRunOp.startChild(
                 TelemetryStart.builder(TelemetryOperationKind.MODEL_CALL, "model.call")
                     .attribute(TelemetryAttributes.MODEL_ITERATION, (long) index)
                     .build());
@@ -822,7 +827,21 @@ public final class RunPipeline implements Flow.Publisher<AgentResponseUpdate> {
 
       /** Fails the model call operation; called from beginIteration when source.get() throws. */
       void failOperation(Throwable cause) {
+        if (done) {
+          return;
+        }
+        done = true;
+        activeSubscriberRef.compareAndSet(this, null);
         modelCallOp.fail(cause);
+      }
+
+      void cancelOperation() {
+        if (done) {
+          return;
+        }
+        done = true;
+        activeSubscriberRef.compareAndSet(this, null);
+        modelCallOp.fail(new CancellationException("run was cancelled"));
       }
 
       @Override
@@ -839,6 +858,7 @@ public final class RunPipeline implements Flow.Publisher<AgentResponseUpdate> {
         }
         if (initial < 0) {
           subscription.cancel();
+          cancelOperation();
           return;
         }
         if (initial > 0) {
@@ -857,6 +877,7 @@ public final class RunPipeline implements Flow.Publisher<AgentResponseUpdate> {
           rawUpdates.add(update);
         } catch (RuntimeException recordFailure) {
           done = true;
+          activeSubscriberRef.compareAndSet(this, null);
           modelCallOp.fail(unwrap(recordFailure));
           fail(recordFailure);
           return;
@@ -871,6 +892,7 @@ public final class RunPipeline implements Flow.Publisher<AgentResponseUpdate> {
           return;
         }
         done = true;
+        activeSubscriberRef.compareAndSet(this, null);
         modelCallOp.fail(unwrap(throwable));
         fail(throwable);
       }
@@ -881,6 +903,7 @@ public final class RunPipeline implements Flow.Publisher<AgentResponseUpdate> {
           return;
         }
         done = true;
+        activeSubscriberRef.compareAndSet(this, null);
         modelCallOp.close();
         completeIteration(index, iterationRequest, accumulator, rawUpdates);
       }

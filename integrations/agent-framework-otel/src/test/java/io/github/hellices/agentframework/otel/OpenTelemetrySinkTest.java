@@ -79,6 +79,34 @@ class OpenTelemetrySinkTest {
     assertThat(span.getStatus().getStatusCode()).isEqualTo(StatusCode.OK);
   }
 
+  @Test
+  void childSpanHasAgentRunAsDirectParent() {
+    OpenTelemetrySink sink = sink();
+    TelemetryOperation agentRunOp =
+        sink.start(TelemetryStart.builder(TelemetryOperationKind.AGENT_RUN, "agent.run").build());
+    TelemetryOperation modelCallOp =
+        agentRunOp.startChild(
+            TelemetryStart.builder(TelemetryOperationKind.MODEL_CALL, "model.call")
+                .attribute(TelemetryAttributes.MODEL_ITERATION, 0L)
+                .build());
+    modelCallOp.close();
+    agentRunOp.close();
+
+    List<SpanData> spans = otelExtension.getSpans();
+    assertThat(spans).hasSize(2);
+    SpanData agentRunSpan =
+        spans.stream()
+            .filter(span -> span.getName().equals("invoke_agent"))
+            .findFirst()
+            .orElseThrow();
+    SpanData modelCallSpan =
+        spans.stream().filter(span -> span.getName().equals("chat")).findFirst().orElseThrow();
+    assertThat(modelCallSpan.getParentSpanContext().getSpanId())
+        .isEqualTo(agentRunSpan.getSpanContext().getSpanId());
+    assertThat(modelCallSpan.getParentSpanContext().getTraceId())
+        .isEqualTo(agentRunSpan.getSpanContext().getTraceId());
+  }
+
   // ── Tool call ─────────────────────────────────────────────────────────────
 
   @Test

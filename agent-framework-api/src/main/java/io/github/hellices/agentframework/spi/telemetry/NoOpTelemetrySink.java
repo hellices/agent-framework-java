@@ -14,6 +14,11 @@ enum NoOpTelemetrySink implements TelemetrySink {
     INSTANCE;
 
     @Override
+    public TelemetryOperation startChild(TelemetryStart start) {
+      return INSTANCE;
+    }
+
+    @Override
     public void event(TelemetryEvent event) {}
 
     @Override

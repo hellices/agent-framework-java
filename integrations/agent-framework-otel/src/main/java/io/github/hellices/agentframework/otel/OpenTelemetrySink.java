@@ -14,6 +14,7 @@ import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.SpanKind;
 import io.opentelemetry.api.trace.StatusCode;
 import io.opentelemetry.api.trace.Tracer;
+import io.opentelemetry.context.Context;
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -76,14 +77,27 @@ public final class OpenTelemetrySink implements TelemetrySink {
   public TelemetryOperation start(TelemetryStart start) {
     Objects.requireNonNull(start, "start must not be null");
     Span span = buildSpan(start);
-    return new OtelTelemetryOperation(span);
+    return new OtelTelemetryOperation(span, tracer);
   }
 
   private Span buildSpan(TelemetryStart start) {
+    return buildSpanWithParent(tracer, start, null);
+  }
+
+  private Span buildChildSpan(TelemetryStart start, Span parentSpan) {
+    return buildSpanWithParent(tracer, start, Context.root().with(parentSpan));
+  }
+
+  private static Span buildSpanWithParent(
+      Tracer tracer, TelemetryStart start, Context parentContext) {
     TelemetryAttributeMap attrs = start.attributes();
     return switch (start.kind()) {
       case AGENT_RUN -> {
-        Span span = tracer.spanBuilder("invoke_agent").setSpanKind(SpanKind.INTERNAL).startSpan();
+        var builder = tracer.spanBuilder("invoke_agent").setSpanKind(SpanKind.INTERNAL);
+        if (parentContext != null) {
+          builder = builder.setParent(parentContext);
+        }
+        Span span = builder.startSpan();
         String agentId = attrs.getString(TelemetryAttributes.AGENT_ID);
         if (agentId != null) {
           span.setAttribute(GEN_AI_AGENT_ID, agentId);
@@ -96,7 +110,11 @@ public final class OpenTelemetrySink implements TelemetrySink {
         yield span;
       }
       case MODEL_CALL -> {
-        Span span = tracer.spanBuilder("chat").setSpanKind(SpanKind.CLIENT).startSpan();
+        var builder = tracer.spanBuilder("chat").setSpanKind(SpanKind.CLIENT);
+        if (parentContext != null) {
+          builder = builder.setParent(parentContext);
+        }
+        Span span = builder.startSpan();
         span.setAttribute(GEN_AI_OPERATION_NAME, "chat");
         Long iteration = attrs.getLong(TelemetryAttributes.MODEL_ITERATION);
         if (iteration != null) {
@@ -107,7 +125,11 @@ public final class OpenTelemetrySink implements TelemetrySink {
       case TOOL_CALL -> {
         String toolName = attrs.getString(TelemetryAttributes.TOOL_NAME);
         String spanName = toolName != null ? "execute_tool " + toolName : "execute_tool";
-        Span span = tracer.spanBuilder(spanName).setSpanKind(SpanKind.INTERNAL).startSpan();
+        var builder = tracer.spanBuilder(spanName).setSpanKind(SpanKind.INTERNAL);
+        if (parentContext != null) {
+          builder = builder.setParent(parentContext);
+        }
+        Span span = builder.startSpan();
         if (toolName != null) {
           span.setAttribute(GEN_AI_TOOL_NAME, toolName);
         }
@@ -124,7 +146,11 @@ public final class OpenTelemetrySink implements TelemetrySink {
       case SESSION_OPERATION -> {
         String operation = attrs.getString(TelemetryAttributes.SESSION_OPERATION);
         String spanName = operation != null ? "session." + operation : "session.operation";
-        Span span = tracer.spanBuilder(spanName).setSpanKind(SpanKind.INTERNAL).startSpan();
+        var builder = tracer.spanBuilder(spanName).setSpanKind(SpanKind.INTERNAL);
+        if (parentContext != null) {
+          builder = builder.setParent(parentContext);
+        }
+        Span span = builder.startSpan();
         String sessionId = attrs.getString(TelemetryAttributes.SESSION_ID);
         if (sessionId != null) {
           span.setAttribute(AttributeKey.stringKey("session.id"), sessionId);
@@ -134,13 +160,22 @@ public final class OpenTelemetrySink implements TelemetrySink {
     };
   }
 
-  private static final class OtelTelemetryOperation implements TelemetryOperation {
+  private final class OtelTelemetryOperation implements TelemetryOperation {
 
     private final Span span;
+    private final Tracer tracer;
     private final AtomicBoolean closed = new AtomicBoolean(false);
 
-    private OtelTelemetryOperation(Span span) {
+    private OtelTelemetryOperation(Span span, Tracer tracer) {
       this.span = span;
+      this.tracer = tracer;
+    }
+
+    @Override
+    public TelemetryOperation startChild(TelemetryStart start) {
+      Objects.requireNonNull(start, "start must not be null");
+      Span childSpan = buildChildSpan(start, span);
+      return new OtelTelemetryOperation(childSpan, tracer);
     }
 
     @Override

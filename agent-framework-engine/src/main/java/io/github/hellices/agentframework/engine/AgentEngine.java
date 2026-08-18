@@ -356,7 +356,8 @@ public final class AgentEngine {
           new RunEffectiveState(
               binding, RunContributionMerger.merge(binding.definition(), List.of()));
       CompletionStage<Void> gate =
-          runGateWithTelemetry(binding, sessionContext, request.cancellationSignal(), state);
+          runGateWithTelemetry(
+              binding, sessionContext, request.cancellationSignal(), state, agentRunOpRef.get());
       AtomicReference<ModelRequest> firstRequest = new AtomicReference<>();
       Function<List<Message>, Flow.Publisher<ModelResponseUpdate>> firstStream =
           appendedMessages -> {
@@ -442,12 +443,13 @@ public final class AgentEngine {
       AgentBinding binding,
       SessionContext sessionContext,
       CancellationSignal cancellationSignal,
-      RunEffectiveState state) {
+      RunEffectiveState state,
+      TelemetryOperation agentRunOp) {
     if (sessionCoordinator != null && sessionContext.session() != null) {
       String sessionId = sessionContext.session().sessionId();
       AtomicReference<TelemetryOperation> loadOpRef =
           new AtomicReference<>(
-              telemetrySink.start(
+              agentRunOp.startChild(
                   TelemetryStart.builder(TelemetryOperationKind.SESSION_OPERATION, "session.load")
                       .attribute(TelemetryAttributes.SESSION_OPERATION, "load")
                       .attribute(TelemetryAttributes.SESSION_ID, sessionId)
@@ -841,7 +843,7 @@ public final class AgentEngine {
         .thenCompose(
             ignored -> {
               execution.enterSessionPersistence();
-              return saveSession(sessionContext);
+              return saveSession(sessionContext, agentRunOp);
             })
         .whenComplete(
             (ignored, failure) -> {
@@ -888,14 +890,15 @@ public final class AgentEngine {
    * from "stored with no local state" and would accept any service handle for it. The cost is one
    * revision and one write per run of such a session.
    */
-  private CompletionStage<Void> saveSession(SessionContext sessionContext) {
+  private CompletionStage<Void> saveSession(
+      SessionContext sessionContext, TelemetryOperation agentRunOp) {
     if (sessionCoordinator == null || sessionContext.session() == null) {
       return CompletableFuture.completedFuture(null);
     }
     String sessionId = sessionContext.session().sessionId();
     AtomicReference<TelemetryOperation> saveOpRef =
         new AtomicReference<>(
-            telemetrySink.start(
+            agentRunOp.startChild(
                 TelemetryStart.builder(TelemetryOperationKind.SESSION_OPERATION, "session.save")
                     .attribute(TelemetryAttributes.SESSION_OPERATION, "save")
                     .attribute(TelemetryAttributes.SESSION_ID, sessionId)

@@ -33,6 +33,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
@@ -62,9 +63,20 @@ class AgentEngineTelemetryTest {
 
     @Override
     public TelemetryOperation start(TelemetryStart start) {
-      OperationRecord record = new OperationRecord(start);
+      OperationRecord record = new OperationRecord(start, null);
       operations.add(record);
+      return operationFor(record);
+    }
+
+    private TelemetryOperation operationFor(OperationRecord record) {
       return new TelemetryOperation() {
+        @Override
+        public TelemetryOperation startChild(TelemetryStart start) {
+          OperationRecord child = new OperationRecord(start, record);
+          operations.add(child);
+          return operationFor(child);
+        }
+
         @Override
         public void event(TelemetryEvent event) {
           record.events.add(event);
@@ -98,6 +110,7 @@ class AgentEngineTelemetryTest {
   /** Plain recording data class (not AutoCloseable) to avoid PMD CloseResource false positives. */
   private static final class OperationRecord {
     final TelemetryStart start;
+    final OperationRecord parent;
     final List<TelemetryEvent> events = new CopyOnWriteArrayList<>();
     final List<Throwable> failures = new CopyOnWriteArrayList<>();
     final AtomicInteger closeCount = new AtomicInteger(0);
@@ -105,8 +118,9 @@ class AgentEngineTelemetryTest {
     volatile boolean closed = false;
     volatile boolean failed = false;
 
-    OperationRecord(TelemetryStart start) {
+    OperationRecord(TelemetryStart start, OperationRecord parent) {
       this.start = start;
+      this.parent = parent;
     }
 
     boolean isTerminated() {
@@ -303,6 +317,52 @@ class AgentEngineTelemetryTest {
     assertThat(modelIdx).isGreaterThan(runIdx);
     // All model-call operations must be closed before the run operation is closed.
     assertThat(models.get(0).isTerminated()).isTrue();
+  }
+
+  @Test
+  void modelCallOperationIsChildOfAgentRun() {
+    RecordingSink sink = new RecordingSink();
+    AgentEngine engine = engineWith(sink);
+    Agent agent =
+        boundBuilder(engine, req -> EngineModels.of(textResponse("hi")))
+            .id("a1")
+            .name("assistant")
+            .description("d")
+            .build();
+
+    agent.run(simpleRequest("hello")).response().toCompletableFuture().join();
+
+    OperationRecord agentRunRec = sink.ofKind(TelemetryOperationKind.AGENT_RUN).get(0);
+    OperationRecord modelCallRec = sink.ofKind(TelemetryOperationKind.MODEL_CALL).get(0);
+    assertThat(modelCallRec.parent).isSameAs(agentRunRec);
+  }
+
+  @Test
+  void cancelledOrdinaryRunTerminatesActiveModelOperation() {
+    RecordingSink sink = new RecordingSink();
+    AgentEngine engine = engineWith(sink);
+    CompletableFuture<ModelResponse> pending = new CompletableFuture<>();
+    Agent agent =
+        boundBuilder(engine, req -> EngineModels.fromStage(pending))
+            .id("a1")
+            .name("assistant")
+            .description("d")
+            .build();
+
+    var run = agent.run(simpleRequest("hi"));
+    run.cancel();
+    pending.complete(textResponse("late"));
+
+    assertThatThrownBy(() -> run.response().toCompletableFuture().join())
+        .hasRootCauseInstanceOf(CancellationException.class);
+
+    List<OperationRecord> modelOps = sink.ofKind(TelemetryOperationKind.MODEL_CALL);
+    assertThat(modelOps).hasSize(1);
+    assertThat(modelOps.get(0).isTerminated()).isTrue();
+    assertThat(modelOps.get(0).failCount.get()).isEqualTo(1);
+    assertThat(modelOps.get(0).failures.get(0))
+        .isInstanceOf(CancellationException.class)
+        .hasMessage("run was cancelled");
   }
 
   @Test

@@ -42,6 +42,22 @@ public interface TelemetryOperation extends AutoCloseable {
   void fail(Throwable failure);
 
   /**
+   * Opens a child operation whose parent is this operation. The engine calls this for operations
+   * that are semantically nested within this one (for example model calls, tool calls, or session
+   * operations within an agent run).
+   *
+   * <p>The default implementation returns a no-op operation. Adapters that support explicit
+   * parent-child relationships should override this to create a child operation with an exact
+   * parent reference rather than relying on ambient context propagation.
+   *
+   * @param start descriptor for the child operation; must not be null
+   * @return a live child operation handle; never null
+   */
+  default TelemetryOperation startChild(TelemetryStart start) {
+    return TelemetrySink.noOp().start(start);
+  }
+
+  /**
    * Marks this operation as successfully closed. Has no effect if the operation was already closed.
    */
   @Override
