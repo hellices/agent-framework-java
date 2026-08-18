@@ -70,12 +70,20 @@ class ExtensionContentTest {
             TextContent.class,
             ToolCallContent.class,
             ToolResultContent.class,
+            ToolApprovalRequestContent.class,
+            ToolApprovalResponseContent.class,
             ExtensionContent.class);
     assertThat(ExtensionContent.class.isSealed()).isFalse();
     // `isSealed()` alone cannot tell a reopened permit from a closed one, because a final class and
     // a non-sealed class report the same thing. The framework owned kinds are pinned as final, so
     // widening one of them is a visible change rather than a silent one.
-    assertThat(List.of(TextContent.class, ToolCallContent.class, ToolResultContent.class))
+    assertThat(
+            List.of(
+                TextContent.class,
+                ToolCallContent.class,
+                ToolResultContent.class,
+                ToolApprovalRequestContent.class,
+                ToolApprovalResponseContent.class))
         .allSatisfy(
             permit -> {
               assertThat(Modifier.isFinal(permit.getModifiers())).isTrue();

@@ -2,6 +2,7 @@ package io.github.hellices.agentframework.engine;
 
 import io.github.hellices.agentframework.engine.internal.interception.InterceptorRegistry;
 import io.github.hellices.agentframework.engine.internal.session.SessionCoordinator;
+import io.github.hellices.agentframework.engine.internal.tool.ToolApprovalQueueStateCodec;
 import io.github.hellices.agentframework.spi.interception.AgentExecutionInterceptor;
 import io.github.hellices.agentframework.spi.interception.ModelInvocationInterceptor;
 import io.github.hellices.agentframework.spi.interception.SessionOperationInterceptor;
@@ -54,10 +55,13 @@ public final class AgentEngineBuilder {
    * Configures the state codec registry used to snapshot and restore session state for the
    * configured {@link #sessionStore(SessionStore)}.
    *
-   * <p>It is optional: an engine with a store and no registry uses {@code
-   * StateCodecRegistry.builder().build()}, which carries only the framework's built-in state types.
-   * A registry without a store is rejected at build time rather than silently ignored, because it
-   * can only mean the caller expected persistence that would never happen.
+   * <p>It is optional: an engine with a store and no registry uses the engine's own default
+   * registry, which extends {@code StateCodecRegistry.builder()} with the engine-owned tool
+   * approval queue codec so approval state (TOOL-020) persists without extra caller wiring. A
+   * caller-supplied registry is used exactly as given, so a custom registry built independently of
+   * the engine must register that codec itself to persist approval state. A registry without a
+   * store is rejected at build time rather than silently ignored, because it can only mean the
+   * caller expected persistence that would never happen.
    *
    * @param stateCodecRegistry the registry owning every persistable state type; must not be {@code
    *     null}
@@ -144,11 +148,19 @@ public final class AgentEngineBuilder {
             ? null
             : new SessionCoordinator(
                 sessionStore,
-                stateCodecRegistry == null
-                    ? StateCodecRegistry.builder().build()
-                    : stateCodecRegistry,
+                stateCodecRegistry == null ? defaultStateCodecRegistry() : stateCodecRegistry,
                 interceptorRegistry::interceptSession);
     return new AgentEngine(sessionCoordinator, interceptorRegistry);
+  }
+
+  /**
+   * The registry an engine uses when the caller configures a {@link #sessionStore(SessionStore)}
+   * but no {@link #stateCodecRegistry(StateCodecRegistry)}: the framework's own default plus the
+   * engine-owned {@link ToolApprovalQueueStateCodec}, registered explicitly under its reserved type
+   * id rather than through class names or native serialization.
+   */
+  private static StateCodecRegistry defaultStateCodecRegistry() {
+    return StateCodecRegistry.builder().register(new ToolApprovalQueueStateCodec()).build();
   }
 
   private static <T> List<T> validatedSnapshot(List<? extends T> interceptors, String label) {

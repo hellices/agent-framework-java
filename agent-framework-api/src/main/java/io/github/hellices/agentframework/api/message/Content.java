@@ -4,7 +4,12 @@ import io.github.hellices.agentframework.api.value.JsonObject;
 import java.util.Objects;
 
 public abstract sealed class Content
-    permits TextContent, ToolCallContent, ToolResultContent, ExtensionContent {
+    permits TextContent,
+        ToolCallContent,
+        ToolResultContent,
+        ToolApprovalRequestContent,
+        ToolApprovalResponseContent,
+        ExtensionContent {
 
   private final JsonObject additionalProperties;
   private final transient Object rawRepresentation;
