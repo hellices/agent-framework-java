@@ -1,6 +1,7 @@
 package io.github.hellices.agentframework.engine.internal.model;
 
 import io.github.hellices.agentframework.api.agent.AgentResponseUpdate;
+import io.github.hellices.agentframework.api.message.FinishReason;
 import io.github.hellices.agentframework.api.message.Message;
 import io.github.hellices.agentframework.api.value.JsonObject;
 import io.github.hellices.agentframework.spi.model.ModelResponseUpdate;
@@ -50,6 +51,29 @@ public record ResponseIdentity(
         .authorName(authorName)
         .createdAt(createdAt)
         .messages(messages)
+        .additionalProperties(JsonObject.empty())
+        .build();
+  }
+
+  /**
+   * The update that surfaces an approval request the run is waiting on, ending the run's assembled
+   * response at {@link io.github.hellices.agentframework.api.message.FinishReason#STOP}.
+   *
+   * <p>This is the one update the engine synthesises that does report a finish reason. A run that
+   * stops to ask for approval has not ended because the model finished a turn — the last model call
+   * it made asked for tool calls — so leaving the model's own {@code TOOL_CALLS} as the assembled
+   * outcome would tell a caller that tool calls are still in flight when the run has in fact
+   * stopped and is waiting for them. Reporting {@code STOP} here is also what makes an ordinary and
+   * a streaming run agree, since the ordinary view builds its own terminal response the same way.
+   */
+  public AgentResponseUpdate approvalRequestUpdate(Message message) {
+    return AgentResponseUpdate.builder()
+        .agentId(agentId)
+        .responseId(responseId)
+        .authorName(authorName)
+        .createdAt(createdAt)
+        .messages(List.of(message))
+        .finishReason(FinishReason.STOP)
         .additionalProperties(JsonObject.empty())
         .build();
   }

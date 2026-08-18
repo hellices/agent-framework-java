@@ -202,7 +202,8 @@ class AgentRuntimeTest {
   @Test
   void runtimeAndBindingExposeOnlyTheirExpectedFields() {
     assertThat(Arrays.stream(AgentRuntime.class.getDeclaredFields()).map(Field::getName).toList())
-        .containsExactlyInAnyOrder("modelClient", "toolBindings", "contextProviders", "attributes");
+        .containsExactlyInAnyOrder(
+            "modelClient", "toolBindings", "contextProviders", "attributes", "toolApproval");
     assertThat(Arrays.stream(ToolBinding.class.getDeclaredFields()).map(Field::getName).toList())
         .containsExactlyInAnyOrder("toolName", "handler");
   }

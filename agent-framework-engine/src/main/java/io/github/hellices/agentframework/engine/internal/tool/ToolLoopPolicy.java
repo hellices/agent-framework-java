@@ -5,6 +5,7 @@ import io.github.hellices.agentframework.api.context.ContextAttributes;
 import io.github.hellices.agentframework.api.message.Content;
 import io.github.hellices.agentframework.api.message.Message;
 import io.github.hellices.agentframework.api.message.Role;
+import io.github.hellices.agentframework.api.message.TextContent;
 import io.github.hellices.agentframework.api.message.ToolCallContent;
 import io.github.hellices.agentframework.api.message.ToolResultContent;
 import io.github.hellices.agentframework.api.tool.FunctionTool;
@@ -223,6 +224,50 @@ public final class ToolLoopPolicy {
       (tool, call, context) -> tool.execute(ToolArguments.of(call.arguments()), context);
 
   /**
+   * The exact tool-result text a denied call is answered with (TOOL-018).
+   *
+   * <p>The wording is fixed rather than derived from the tool or the caller's denial, so a model
+   * sees the same refusal for every denied call and a caller can assert on it.
+   */
+  public static final String APPROVAL_DENIED_ERROR =
+      "Error: Tool call invocation was rejected by user.";
+
+  /**
+   * One tool call together with the approval decision it carries into execution.
+   *
+   * <p>Pairing the decision with the call rather than filtering the denied calls out is what keeps
+   * a denial visible to the model: a denied call still produces a result, in its original position,
+   * without its tool body ever being looked up or run.
+   */
+  public static final class DecidedCall {
+
+    private final ToolCallContent call;
+    private final boolean approved;
+
+    public DecidedCall(ToolCallContent call, boolean approved) {
+      this.call = immutableCopy(Objects.requireNonNull(call, "call must not be null"));
+      this.approved = approved;
+    }
+
+    private static ToolCallContent immutableCopy(ToolCallContent call) {
+      return new ToolCallContent(
+          call.callId(),
+          call.name(),
+          call.arguments(),
+          call.additionalProperties(),
+          call.rawRepresentation());
+    }
+
+    public ToolCallContent call() {
+      return immutableCopy(call);
+    }
+
+    public boolean approved() {
+      return approved;
+    }
+  }
+
+  /**
    * Executes {@code calls} one after another and completes with their results in call order,
    * running each bound call directly.
    */
@@ -246,6 +291,54 @@ public final class ToolLoopPolicy {
         calls, request, Objects.requireNonNull(invoker, "invoker must not be null"), 0, List.of());
   }
 
+  /**
+   * Executes {@code decidedCalls} one after another, running the approved calls and answering the
+   * denied ones with the stable {@link #APPROVAL_DENIED_ERROR} result (TOOL-018).
+   */
+  public CompletionStage<List<Content>> executeDecidedToolCalls(
+      List<DecidedCall> decidedCalls, AgentRunRequest request, BoundToolInvoker invoker) {
+    return executeDecided(
+        List.copyOf(decidedCalls),
+        request,
+        Objects.requireNonNull(invoker, "invoker must not be null"),
+        0,
+        List.of());
+  }
+
+  private CompletionStage<List<Content>> executeDecided(
+      List<DecidedCall> decidedCalls,
+      AgentRunRequest request,
+      BoundToolInvoker invoker,
+      int index,
+      List<Content> accumulatedResults) {
+    if (index >= decidedCalls.size()) {
+      return CompletableFuture.completedFuture(accumulatedResults);
+    }
+    if (request.cancellationSignal().isCancelled()) {
+      throw new CancellationException("run was cancelled");
+    }
+    DecidedCall decided = decidedCalls.get(index);
+    ToolCallContent call = decided.call();
+    if (!decided.approved()) {
+      List<Content> nextResults = new ArrayList<>(accumulatedResults);
+      nextResults.add(
+          new ToolResultContent(
+              call.callId(),
+              call.name(),
+              List.of(new TextContent(APPROVAL_DENIED_ERROR)),
+              /* error= */ true));
+      return executeDecided(decidedCalls, request, invoker, index + 1, List.copyOf(nextResults));
+    }
+    return executeCall(call, request, invoker)
+        .thenCompose(
+            result -> {
+              List<Content> nextResults = new ArrayList<>(accumulatedResults);
+              nextResults.add(result);
+              return executeDecided(
+                  decidedCalls, request, invoker, index + 1, List.copyOf(nextResults));
+            });
+  }
+
   private CompletionStage<List<Content>> executeToolCalls(
       List<ToolCallContent> calls,
       AgentRunRequest request,
@@ -259,6 +352,17 @@ public final class ToolLoopPolicy {
       throw new CancellationException("run was cancelled");
     }
     ToolCallContent call = calls.get(index);
+    return executeCall(call, request, invoker)
+        .thenCompose(
+            result -> {
+              List<Content> nextResults = new ArrayList<>(accumulatedResults);
+              nextResults.add(result);
+              return executeToolCalls(calls, request, invoker, index + 1, List.copyOf(nextResults));
+            });
+  }
+
+  private CompletionStage<ToolResultContent> executeCall(
+      ToolCallContent call, AgentRunRequest request, BoundToolInvoker invoker) {
     FunctionTool tool = tools.get(call.name());
     if (tool == null) {
       throw new IllegalStateException("unknown tool call: " + call.name());
@@ -270,13 +374,9 @@ public final class ToolLoopPolicy {
                 call,
                 new ToolContext(request.cancellationSignal(), effectiveAttributes(request))),
             "tool handler response stage must not be null");
-    return resultStage.thenCompose(
-        result -> {
-          List<Content> nextResults = new ArrayList<>(accumulatedResults);
-          nextResults.add(
-              new ToolResultContent(call.callId(), call.name(), result.content(), result.error()));
-          return executeToolCalls(calls, request, invoker, index + 1, List.copyOf(nextResults));
-        });
+    return resultStage.thenApply(
+        result ->
+            new ToolResultContent(call.callId(), call.name(), result.content(), result.error()));
   }
 
   /** The single tool message one round of tool results is reported to the model as. */

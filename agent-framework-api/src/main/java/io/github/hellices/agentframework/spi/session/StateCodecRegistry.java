@@ -6,6 +6,8 @@ import io.github.hellices.agentframework.api.message.Message;
 import io.github.hellices.agentframework.api.message.MessageAttribution;
 import io.github.hellices.agentframework.api.message.Role;
 import io.github.hellices.agentframework.api.message.TextContent;
+import io.github.hellices.agentframework.api.message.ToolApprovalRequestContent;
+import io.github.hellices.agentframework.api.message.ToolApprovalResponseContent;
 import io.github.hellices.agentframework.api.message.ToolCallContent;
 import io.github.hellices.agentframework.api.message.ToolResultContent;
 import io.github.hellices.agentframework.api.session.MessageHistory;
@@ -386,6 +388,15 @@ public final class StateCodecRegistry {
         encoded.put("name", result.name());
         encoded.put("content", result.content().stream().map(this::encodeContent).toList());
         encoded.put("error", result.error());
+      } else if (content instanceof ToolApprovalRequestContent request) {
+        encoded.put("requestId", request.requestId());
+        encoded.put("toolCallId", request.toolCallId());
+        encoded.put("toolName", request.toolName());
+        encoded.put("arguments", encodeJsonObject(request.arguments()));
+        request.hostBoundary().ifPresent(host -> encoded.put("hostBoundary", host));
+      } else if (content instanceof ToolApprovalResponseContent response) {
+        encoded.put("requestId", response.requestId());
+        encoded.put("approved", response.approved());
       } else {
         throw new IllegalArgumentException(
             "unsupported framework message content type: "
@@ -442,6 +453,21 @@ public final class StateCodecRegistry {
               additionalProperties,
               null);
         }
+        case "tool_approval_request" ->
+            new ToolApprovalRequestContent(
+                requireString(encoded, "requestId"),
+                requireString(encoded, "toolCallId"),
+                requireString(encoded, "toolName"),
+                castObject(encoded.get("arguments"), "tool arguments"),
+                nullableString(encoded, "hostBoundary"),
+                additionalProperties,
+                null);
+        case "tool_approval_response" ->
+            new ToolApprovalResponseContent(
+                requireString(encoded, "requestId"),
+                requireBoolean(encoded, "approved"),
+                additionalProperties,
+                null);
         default -> throw new IllegalArgumentException("unsupported message content type: " + type);
       };
     }

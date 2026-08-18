@@ -37,9 +37,9 @@ public final class ToolApprovalQueueStateCodec implements StateCodec<ToolApprova
 
   @Override
   public Object encode(ToolApprovalQueueState value) {
-    List<Object> encoded = new ArrayList<>(value.pending().size());
-    for (ToolApprovalRequestContent request : value.pending()) {
-      encoded.add(encodeRequest(request));
+    List<Object> encoded = new ArrayList<>(value.entries().size());
+    for (ToolApprovalQueueState.Entry entry : value.entries()) {
+      encoded.add(encodeEntry(entry));
     }
     return encoded;
   }
@@ -49,11 +49,25 @@ public final class ToolApprovalQueueStateCodec implements StateCodec<ToolApprova
     if (!(payload instanceof List<?> entries)) {
       throw new IllegalArgumentException("tool approval queue payload must be an array");
     }
-    List<ToolApprovalRequestContent> pending = new ArrayList<>(entries.size());
+    List<ToolApprovalQueueState.Entry> decoded = new ArrayList<>(entries.size());
     for (Object entry : entries) {
-      pending.add(decodeRequest(requireMap(entry, "tool approval queue entry")));
+      decoded.add(decodeEntry(requireMap(entry, "tool approval queue entry")));
     }
-    return ToolApprovalQueueState.of(pending);
+    return ToolApprovalQueueState.ofEntries(decoded);
+  }
+
+  private static Map<String, Object> encodeEntry(ToolApprovalQueueState.Entry entry) {
+    Map<String, Object> encoded = encodeRequest(entry.request());
+    entry.decision().ifPresent(decision -> encoded.put("approved", decision));
+    return encoded;
+  }
+
+  private static ToolApprovalQueueState.Entry decodeEntry(Map<?, ?> encoded) {
+    Object approved = encoded.get("approved");
+    if (approved != null && !(approved instanceof Boolean)) {
+      throw new IllegalArgumentException("approved must be a boolean or absent");
+    }
+    return new ToolApprovalQueueState.Entry(decodeRequest(encoded), (Boolean) approved);
   }
 
   private static Map<String, Object> encodeRequest(ToolApprovalRequestContent request) {

@@ -4,7 +4,10 @@ import io.github.hellices.agentframework.api.agent.AgentResponse;
 import io.github.hellices.agentframework.api.agent.AgentResponseUpdate;
 import io.github.hellices.agentframework.api.agent.AgentRunRequest;
 import io.github.hellices.agentframework.api.message.Content;
+import io.github.hellices.agentframework.api.message.FinishReason;
 import io.github.hellices.agentframework.api.message.Message;
+import io.github.hellices.agentframework.api.message.Role;
+import io.github.hellices.agentframework.api.message.ToolApprovalRequestContent;
 import io.github.hellices.agentframework.api.message.ToolCallContent;
 import io.github.hellices.agentframework.api.message.Usage;
 import io.github.hellices.agentframework.api.value.JsonNumber;
@@ -12,6 +15,7 @@ import io.github.hellices.agentframework.api.value.JsonObject;
 import io.github.hellices.agentframework.api.value.JsonValue;
 import io.github.hellices.agentframework.engine.internal.model.ResponseIdentity;
 import io.github.hellices.agentframework.engine.internal.model.StreamingModelResponseAccumulator;
+import io.github.hellices.agentframework.engine.internal.tool.ToolApprovalCoordinator;
 import io.github.hellices.agentframework.engine.internal.tool.ToolLoopPolicy;
 import io.github.hellices.agentframework.spi.model.ModelRequest;
 import io.github.hellices.agentframework.spi.model.ModelResponse;
@@ -21,6 +25,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Queue;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
@@ -95,7 +100,7 @@ import java.util.function.Supplier;
  */
 public final class RunPipeline implements Flow.Publisher<AgentResponseUpdate> {
 
-  private final Supplier<Flow.Publisher<ModelResponseUpdate>> firstStream;
+  private final Function<List<Message>, Flow.Publisher<ModelResponseUpdate>> firstStream;
   private final Supplier<ModelRequest> firstRequest;
   private final Function<ModelRequest, Flow.Publisher<ModelResponseUpdate>> nextStream;
   private final Supplier<ToolLoopPolicy> policySupplier;
@@ -103,12 +108,16 @@ public final class RunPipeline implements Flow.Publisher<AgentResponseUpdate> {
   private final AgentRunRequest request;
   private final ResponseIdentity identity;
   private final RunExecution execution;
+  private final ToolApprovalCoordinator approvals;
+  private final CompletionStage<Void> approvalGate;
   private final CompletableFuture<ModelResponse> ordinaryTerminal = new CompletableFuture<>();
   private final AtomicBoolean subscribed = new AtomicBoolean();
 
   /**
    * @param firstStream the first model call, already decided by the engine so that a run without an
-   *     asynchronous gate keeps failing synchronously when its client does
+   *     asynchronous gate keeps failing synchronously when its client does; it is given the
+   *     messages a resolved approval queue appended before the first model call, which is empty for
+   *     every run that is not resuming one
    * @param firstRequest the request the first model call was made with, readable once that call was
    *     made
    * @param nextStream how every later model call is made
@@ -118,16 +127,22 @@ public final class RunPipeline implements Flow.Publisher<AgentResponseUpdate> {
    * @param request the run being executed, carrying its cancellation signal and attributes
    * @param identity the response every update of this run belongs to
    * @param execution the run's explicit state machine, driven through {@code FINALIZE_RESPONSE}
+   * @param approvals the run's approval state machine, or {@code null} when the agent configured no
+   *     approval settings and no tool call of this run is subject to approval
+   * @param approvalGate the stage the approval queue is readable after, so the queue is resolved
+   *     against a session that has already been loaded
    */
   public RunPipeline(
-      Supplier<Flow.Publisher<ModelResponseUpdate>> firstStream,
+      Function<List<Message>, Flow.Publisher<ModelResponseUpdate>> firstStream,
       Supplier<ModelRequest> firstRequest,
       Function<ModelRequest, Flow.Publisher<ModelResponseUpdate>> nextStream,
       Supplier<ToolLoopPolicy> policySupplier,
       ToolLoopPolicy.BoundToolInvoker toolInvoker,
       AgentRunRequest request,
       ResponseIdentity identity,
-      RunExecution execution) {
+      RunExecution execution,
+      ToolApprovalCoordinator approvals,
+      CompletionStage<Void> approvalGate) {
     this.firstStream = Objects.requireNonNull(firstStream, "firstStream must not be null");
     this.firstRequest = Objects.requireNonNull(firstRequest, "firstRequest must not be null");
     this.nextStream = Objects.requireNonNull(nextStream, "nextStream must not be null");
@@ -136,6 +151,12 @@ public final class RunPipeline implements Flow.Publisher<AgentResponseUpdate> {
     this.request = Objects.requireNonNull(request, "request must not be null");
     this.identity = Objects.requireNonNull(identity, "identity must not be null");
     this.execution = Objects.requireNonNull(execution, "execution must not be null");
+    this.approvals = approvals;
+    this.approvalGate = approvalGate;
+    if (approvals != null && approvalGate == null) {
+      throw new IllegalArgumentException(
+          "approvalGate must not be null when approvals are enabled");
+    }
   }
 
   private ToolLoopPolicy policy() {
@@ -178,8 +199,13 @@ public final class RunPipeline implements Flow.Publisher<AgentResponseUpdate> {
         : throwable;
   }
 
-  /** The iteration a finished round of tool calls left ready to start. */
-  private record PendingIteration(int index, ModelRequest request) {}
+  /**
+   * The iteration a finished round of tool calls left ready to start, together with how its model
+   * call is made — a resumed approval starts iteration 0 through the run's first model call, while
+   * every later iteration continues through {@code nextStream}.
+   */
+  private record PendingIteration(
+      int index, ModelRequest request, Supplier<Flow.Publisher<ModelResponseUpdate>> source) {}
 
   private final class LoopSubscription implements Flow.Subscription {
 
@@ -214,7 +240,126 @@ public final class RunPipeline implements Flow.Publisher<AgentResponseUpdate> {
       }
       advance(RunPhase.LOAD_SESSION);
       advance(RunPhase.PREPARE_CONTEXT);
-      beginIteration(0, null, firstStream);
+      if (approvals == null) {
+        beginIteration(0, null, () -> firstStream.apply(List.of()));
+        return;
+      }
+      approvalGate.whenComplete((ignored, gateFailure) -> resolvePending(gateFailure));
+    }
+
+    /**
+     * Resolves the approval queue this run inherited before its first model call, so a call the
+     * caller has just approved runs against the model request this run builds rather than being
+     * re-planned by another model call it never made.
+     */
+    private void resolvePending(Throwable gateFailure) {
+      if (gateFailure != null) {
+        fail(gateFailure);
+        return;
+      }
+      if (cancelled || terminated.get() || request.cancellationSignal().isCancelled()) {
+        return;
+      }
+      ToolApprovalCoordinator.Plan plan;
+      try {
+        advance(RunPhase.RESOLVE_APPROVAL);
+        plan = approvals.resolvePending();
+      } catch (RuntimeException resolveFailure) {
+        fail(resolveFailure);
+        return;
+      }
+      Optional<ToolApprovalRequestContent> waitingFor = plan.waitingFor();
+      if (waitingFor.isPresent()) {
+        waitForApproval(waitingFor.get(), null, null);
+        return;
+      }
+      Optional<List<ToolLoopPolicy.DecidedCall>> decided = plan.decided();
+      if (decided.isEmpty()) {
+        beginIteration(0, null, () -> firstStream.apply(List.of()));
+        return;
+      }
+      executeResolvedQueue(decided.get());
+    }
+
+    /**
+     * Executes the calls a fully resolved queue decided and starts the run's first model call with
+     * their results appended, so a resumed run is the same single loop as an uninterrupted one
+     * rather than a second loop of its own.
+     */
+    private void executeResolvedQueue(List<ToolLoopPolicy.DecidedCall> decided) {
+      CompletionStage<List<Content>> results;
+      try {
+        advance(RunPhase.EXECUTE_TOOL_BATCH);
+        results = policy().executeDecidedToolCalls(decided, request, toolInvoker);
+      } catch (RuntimeException executionFailure) {
+        fail(executionFailure);
+        return;
+      }
+      results.whenComplete((values, toolFailure) -> completeResolvedQueue(values, toolFailure));
+    }
+
+    private void completeResolvedQueue(List<Content> results, Throwable toolFailure) {
+      if (toolFailure != null) {
+        fail(toolFailure);
+        return;
+      }
+      if (cancelled || terminated.get() || request.cancellationSignal().isCancelled()) {
+        return;
+      }
+      try {
+        Message toolResults = ToolLoopPolicy.toolResultMessage(results);
+        for (Content result : results) {
+          queue.add(
+              identity.messageUpdate(List.of(ToolLoopPolicy.toolResultMessage(List.of(result)))));
+        }
+        ordinaryMessages.add(toolResults);
+        pending.set(new PendingIteration(0, null, () -> firstStream.apply(List.of(toolResults))));
+      } catch (RuntimeException resultFailure) {
+        fail(resultFailure);
+        return;
+      }
+      drain();
+    }
+
+    /**
+     * Ends the run at the approval request the caller has to resolve next.
+     *
+     * <p>Only the head of the queue is surfaced, so the caller answers one request at a time and
+     * every answer is unambiguous. The request is reported through the same update stream and the
+     * same accumulated ordinary messages as any other content, which is what makes an ordinary and
+     * a streaming run report an identical pending approval.
+     */
+    private void waitForApproval(
+        ToolApprovalRequestContent approvalRequest,
+        ModelResponse decision,
+        ModelResponse ordinaryResponse) {
+      advance(RunPhase.WAIT_APPROVAL);
+      Message message = new Message(Role.ASSISTANT, List.of(approvalRequest));
+      queue.add(identity.approvalRequestUpdate(message));
+      ordinaryMessages.add(message);
+      if (decision != null && !decision.metadata().isEmpty()) {
+        queue.add(identity.metadataUpdate(decision.metadata()));
+      }
+      advance(RunPhase.FINALIZE_RESPONSE);
+      completeOrdinaryTerminal(approvalTerminal(ordinaryResponse));
+      finished = true;
+      drain();
+    }
+
+    /**
+     * The terminal outcome a run that stopped for approval reports: the last model call's
+     * continuation, metadata and raw representation where there was one, but always {@code STOP},
+     * because the run has stopped and is waiting rather than still calling tools.
+     */
+    private ModelResponse approvalTerminal(ModelResponse ordinaryResponse) {
+      ModelResponse.Builder builder = ModelResponse.builder().messages(List.of());
+      if (ordinaryResponse != null) {
+        builder
+            .continuationToken(ordinaryResponse.continuationToken())
+            .metadata(ordinaryResponse.metadata())
+            .rawRepresentation(ordinaryResponse.rawRepresentation());
+      }
+      return builder.finishReason(FinishReason.STOP).build();
     }
 
     @Override
@@ -347,8 +492,20 @@ public final class RunPipeline implements Flow.Publisher<AgentResponseUpdate> {
             iterationRequest == null
                 ? Objects.requireNonNull(firstRequest.get(), "model request must not be null")
                 : iterationRequest;
-        advance(RunPhase.EXECUTE_TOOL_BATCH);
-        results = policy.executeToolCalls(calls, request, toolInvoker);
+        if (approvals != null) {
+          ToolApprovalCoordinator.Plan plan = approvals.planBatch(calls);
+          Optional<ToolApprovalRequestContent> waitingFor = plan.waitingFor();
+          if (waitingFor.isPresent()) {
+            waitForApproval(waitingFor.get(), response, ordinaryResponse);
+            return;
+          }
+          advance(RunPhase.EXECUTE_TOOL_BATCH);
+          results =
+              policy.executeDecidedToolCalls(plan.decided().orElseThrow(), request, toolInvoker);
+        } else {
+          advance(RunPhase.EXECUTE_TOOL_BATCH);
+          results = policy.executeToolCalls(calls, request, toolInvoker);
+        }
       } catch (RuntimeException iterationFailure) {
         fail(iterationFailure);
         return;
@@ -407,7 +564,7 @@ public final class RunPipeline implements Flow.Publisher<AgentResponseUpdate> {
             policy().nextRequest(current, response.messages(), calls, toolResults, index);
         ordinaryMessages.add(toolResults);
         queue.addAll(updates);
-        pending.set(new PendingIteration(index + 1, next));
+        pending.set(new PendingIteration(index + 1, next, () -> nextStream.apply(next)));
       } catch (RuntimeException resultFailure) {
         fail(resultFailure);
         return;
@@ -529,7 +686,7 @@ public final class RunPipeline implements Flow.Publisher<AgentResponseUpdate> {
       if (next == null) {
         return;
       }
-      beginIteration(next.index(), next.request(), () -> nextStream.apply(next.request()));
+      beginIteration(next.index(), next.request(), next.source());
     }
 
     /** Delivers the one terminal signal this subscription is allowed to deliver. */

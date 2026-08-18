@@ -116,14 +116,22 @@ public final class RunStateMachine {
     Map<RunPhase, EnumSet<RunPhase>> allowed = new EnumMap<>(RunPhase.class);
     allowed.put(RunPhase.VALIDATE, EnumSet.of(RunPhase.LOAD_SESSION));
     allowed.put(RunPhase.LOAD_SESSION, EnumSet.of(RunPhase.PREPARE_CONTEXT));
-    allowed.put(RunPhase.PREPARE_CONTEXT, EnumSet.of(RunPhase.PREPARE_MODEL_REQUEST));
+    allowed.put(
+        RunPhase.PREPARE_CONTEXT,
+        EnumSet.of(RunPhase.PREPARE_MODEL_REQUEST, RunPhase.RESOLVE_APPROVAL));
+    allowed.put(
+        RunPhase.RESOLVE_APPROVAL,
+        EnumSet.of(
+            RunPhase.PREPARE_MODEL_REQUEST, RunPhase.EXECUTE_TOOL_BATCH, RunPhase.WAIT_APPROVAL));
     allowed.put(RunPhase.PREPARE_MODEL_REQUEST, EnumSet.of(RunPhase.CALL_MODEL));
     allowed.put(RunPhase.CALL_MODEL, EnumSet.of(RunPhase.ACCUMULATE_MODEL_UPDATES));
     allowed.put(RunPhase.ACCUMULATE_MODEL_UPDATES, EnumSet.of(RunPhase.PLAN_TOOL_ACTION));
     allowed.put(
         RunPhase.PLAN_TOOL_ACTION,
-        EnumSet.of(RunPhase.EXECUTE_TOOL_BATCH, RunPhase.FINALIZE_RESPONSE));
+        EnumSet.of(
+            RunPhase.EXECUTE_TOOL_BATCH, RunPhase.WAIT_APPROVAL, RunPhase.FINALIZE_RESPONSE));
     allowed.put(RunPhase.EXECUTE_TOOL_BATCH, EnumSet.of(RunPhase.PREPARE_MODEL_REQUEST));
+    allowed.put(RunPhase.WAIT_APPROVAL, EnumSet.of(RunPhase.FINALIZE_RESPONSE));
     allowed.put(RunPhase.FINALIZE_RESPONSE, EnumSet.of(RunPhase.COMPLETE_CONTEXT));
     allowed.put(RunPhase.COMPLETE_CONTEXT, EnumSet.of(RunPhase.PERSIST_SESSION));
     allowed.put(RunPhase.PERSIST_SESSION, EnumSet.of(RunPhase.TERMINATED));

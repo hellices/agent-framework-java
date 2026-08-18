@@ -14,6 +14,7 @@ import io.github.hellices.agentframework.api.agent.CancellationSignal;
 import io.github.hellices.agentframework.api.agent.RunContribution;
 import io.github.hellices.agentframework.api.message.Message;
 import io.github.hellices.agentframework.api.session.SessionContext;
+import io.github.hellices.agentframework.api.tool.ToolApprovalSettings;
 import io.github.hellices.agentframework.api.tool.ToolResult;
 import io.github.hellices.agentframework.api.value.JsonObject;
 import io.github.hellices.agentframework.engine.internal.context.ContextProviderPipeline;
@@ -27,6 +28,8 @@ import io.github.hellices.agentframework.engine.internal.run.RunPhase;
 import io.github.hellices.agentframework.engine.internal.run.RunPipeline;
 import io.github.hellices.agentframework.engine.internal.run.RunState;
 import io.github.hellices.agentframework.engine.internal.session.SessionCoordinator;
+import io.github.hellices.agentframework.engine.internal.tool.ToolApprovalCoordinator;
+import io.github.hellices.agentframework.engine.internal.tool.ToolApprovalQueueState;
 import io.github.hellices.agentframework.engine.internal.tool.ToolLoopPolicy;
 import io.github.hellices.agentframework.spi.interception.AgentExecution;
 import io.github.hellices.agentframework.spi.interception.AgentInvocation;
@@ -171,6 +174,12 @@ public final class AgentEngine {
         sourceIds.add(sourceId);
       }
     }
+    if (binding.runtime().toolApproval().isPresent()) {
+      // The approval queue is engine-owned rather than provider-owned, so no provider contributes
+      // its namespace here; without adding it the run's own pending approvals would be dropped from
+      // the session it hands back.
+      sourceIds.add(ToolApprovalQueueState.STATE_ID);
+    }
     sessionContext.restrictPersistedSources(sourceIds);
     return resolved;
   }
@@ -280,6 +289,13 @@ public final class AgentEngine {
     }
     ModelClient selectedClient = request.options().resolveModelClient(binding.modelClient());
     SessionContext sessionContext = context.sessionContext();
+    ToolApprovalSettings approvalSettings = binding.runtime().toolApproval().orElse(null);
+    if (approvalSettings != null && sessionContext.session() == null) {
+      // A pending approval outlives the run that surfaced it, so there has to be somewhere to keep
+      // it. Failing here rather than at the first approval keeps the failure a property of the
+      // configuration and makes it identical for an ordinary and a streaming run (TOOL-020).
+      throw new IllegalStateException("tool approval requires a session");
+    }
     String modelAgentId = binding.id();
     String modelSessionId =
         sessionContext.session() == null ? null : sessionContext.session().sessionId();
@@ -312,34 +328,59 @@ public final class AgentEngine {
     CompletionStage<Void> gate =
         runGate(binding, sessionContext, request.cancellationSignal(), state);
     AtomicReference<ModelRequest> firstRequest = new AtomicReference<>();
-    Supplier<Flow.Publisher<ModelResponseUpdate>> firstStream =
-        () -> {
-          ModelRequest modelRequest = toModelRequest(state, request, sessionContext);
+    Function<List<Message>, Flow.Publisher<ModelResponseUpdate>> firstStream =
+        appendedMessages -> {
+          ModelRequest modelRequest =
+              toModelRequest(state, request, sessionContext, appendedMessages);
           firstRequest.set(modelRequest);
           return Objects.requireNonNull(
               invoker.apply(modelRequest), "model client update publisher must not be null");
         };
-    Flow.Publisher<ModelResponseUpdate> modelUpdates =
-        gate == null
-            ? firstStream.get()
-            : deferUntil(
-                gate,
-                request.cancellationSignal(),
-                () -> {
-                  if (request.cancellationSignal().isCancelled()) {
-                    throw new CancellationException("run was cancelled");
-                  }
-                  return firstStream.get();
-                });
+    if (approvalSettings == null) {
+      Flow.Publisher<ModelResponseUpdate> modelUpdates =
+          gate == null
+              ? firstStream.apply(List.of())
+              : deferUntil(
+                  gate,
+                  request.cancellationSignal(),
+                  () -> {
+                    if (request.cancellationSignal().isCancelled()) {
+                      throw new CancellationException("run was cancelled");
+                    }
+                    return firstStream.apply(List.of());
+                  });
+      return new RunPipeline(
+          appendedMessages -> modelUpdates,
+          firstRequest::get,
+          invoker,
+          state::toolLoop,
+          toolInvoker,
+          request,
+          identity,
+          execution,
+          null,
+          null);
+    }
+    // An approving run never starts its first model call eagerly: the pending queue has to be
+    // resolved against the loaded session first, and a resolved approval may put tool results into
+    // that very first request. The pipeline therefore waits on the same gate itself instead of the
+    // model publisher being deferred behind it.
     return new RunPipeline(
-        () -> modelUpdates,
+        appendedMessages -> {
+          if (request.cancellationSignal().isCancelled()) {
+            throw new CancellationException("run was cancelled");
+          }
+          return firstStream.apply(appendedMessages);
+        },
         firstRequest::get,
         invoker,
         state::toolLoop,
         toolInvoker,
         request,
         identity,
-        execution);
+        execution,
+        new ToolApprovalCoordinator(approvalSettings, sessionContext, request),
+        gate == null ? CompletableFuture.completedFuture(null) : gate);
   }
 
   /**
@@ -788,10 +829,15 @@ public final class AgentEngine {
    * declarations, through the run's per-run {@link ToolLoopPolicy}.
    */
   private ModelRequest toModelRequest(
-      RunEffectiveState state, AgentRunRequest request, SessionContext sessionContext) {
+      RunEffectiveState state,
+      AgentRunRequest request,
+      SessionContext sessionContext,
+      List<Message> appendedMessages) {
     RunContributionMerger merger = state.merger();
     List<Message> messages =
-        merger.assembleMessages(sessionContext.contextMessages(), request.messages());
+        new ArrayList<>(
+            merger.assembleMessages(sessionContext.contextMessages(), request.messages()));
+    messages.addAll(appendedMessages);
     return ModelRequest.builder()
         .messages(messages)
         .options(merger.options())

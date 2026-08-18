@@ -2,6 +2,7 @@ package io.github.hellices.agentframework.api.agent;
 
 import io.github.hellices.agentframework.api.context.ContextAttributes;
 import io.github.hellices.agentframework.api.session.SessionStateKey;
+import io.github.hellices.agentframework.api.tool.ToolApprovalSettings;
 import io.github.hellices.agentframework.api.tool.ToolBinding;
 import io.github.hellices.agentframework.api.tool.ToolDefinition;
 import io.github.hellices.agentframework.spi.model.ModelClient;
@@ -11,6 +12,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 
 public final class AgentRuntime {
@@ -19,6 +21,7 @@ public final class AgentRuntime {
   private final List<ToolBinding> toolBindings;
   private final List<ContextProvider> contextProviders;
   private final ContextAttributes attributes;
+  private final ToolApprovalSettings toolApproval;
 
   private AgentRuntime(Builder builder) {
     this.modelClient = Objects.requireNonNull(builder.modelClient, "modelClient must not be null");
@@ -29,6 +32,7 @@ public final class AgentRuntime {
     validateContextProviders(normalizedProviders);
     this.contextProviders = normalizedProviders;
     this.attributes = builder.attributes == null ? ContextAttributes.empty() : builder.attributes;
+    this.toolApproval = builder.toolApproval;
   }
 
   public static Builder builder() {
@@ -49,6 +53,17 @@ public final class AgentRuntime {
 
   public ContextAttributes attributes() {
     return attributes;
+  }
+
+  /**
+   * The approval configuration this agent's tool calls are subject to, when it has one.
+   *
+   * <p>Approval is a runtime concern rather than a declaration concern: the same {@link
+   * AgentDefinition} may be hosted with approval required in one deployment and with standing
+   * approvals in another. An empty value means no tool call of this agent is subject to approval.
+   */
+  public Optional<ToolApprovalSettings> toolApproval() {
+    return Optional.ofNullable(toolApproval);
   }
 
   public void validate(AgentDefinition definition) {
@@ -99,6 +114,7 @@ public final class AgentRuntime {
     private List<ToolBinding> toolBindings = new ArrayList<>();
     private List<ContextProvider> contextProviders = new ArrayList<>();
     private ContextAttributes attributes = ContextAttributes.empty();
+    private ToolApprovalSettings toolApproval;
 
     private Builder() {}
 
@@ -139,6 +155,11 @@ public final class AgentRuntime {
 
     public Builder attributes(ContextAttributes attributes) {
       this.attributes = Objects.requireNonNull(attributes, "attributes must not be null");
+      return this;
+    }
+
+    public Builder toolApproval(ToolApprovalSettings toolApproval) {
+      this.toolApproval = toolApproval;
       return this;
     }
 

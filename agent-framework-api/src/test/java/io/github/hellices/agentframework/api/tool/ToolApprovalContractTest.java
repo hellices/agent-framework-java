@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.github.hellices.agentframework.api.message.ToolApprovalRequestContent;
 import io.github.hellices.agentframework.api.message.ToolApprovalResponseContent;
+import io.github.hellices.agentframework.api.message.ToolCallContent;
 import io.github.hellices.agentframework.api.value.JsonObject;
 import io.github.hellices.agentframework.api.value.JsonValues;
 import java.util.Map;
@@ -134,6 +135,93 @@ class ToolApprovalContractTest {
         .isEqualTo(ToolApprovalDecision.REQUIRE_APPROVAL);
     assertThat(alwaysApprove.evaluate(context)).isEqualTo(ToolApprovalDecision.APPROVE);
     assertThat(alwaysDeny.evaluate(context)).isEqualTo(ToolApprovalDecision.DENY);
+  }
+
+  @Test
+  void aToolWideRuleMatchesAnyArgumentsWhileAnExactRuleMatchesOnlyItsOwn() {
+    ToolApprovalRule toolWide = ToolApprovalRule.forTool("weather");
+    ToolApprovalRule exact =
+        ToolApprovalRule.forArguments("weather", jsonObject(Map.of("city", "Seoul")));
+    ToolApprovalRule noArguments = ToolApprovalRule.forArguments("weather", JsonObject.empty());
+
+    ToolApprovalContext seoul =
+        new ToolApprovalContext("weather", jsonObject(Map.of("city", "Seoul")), null);
+    ToolApprovalContext withoutArguments =
+        new ToolApprovalContext("weather", JsonObject.empty(), null);
+
+    assertThat(toolWide.matches(seoul)).isTrue();
+    assertThat(toolWide.matches(withoutArguments)).isTrue();
+    assertThat(exact.matches(seoul)).isTrue();
+    assertThat(exact.matches(withoutArguments)).isFalse();
+    assertThat(noArguments.matches(seoul)).isFalse();
+    assertThat(noArguments.matches(withoutArguments)).isTrue();
+    assertThat(toolWide.arguments()).isEmpty();
+    assertThat(noArguments.arguments()).contains(JsonObject.empty());
+  }
+
+  @Test
+  void aRuleNeverCrossesToolNamesOrHostBoundaries() {
+    ToolApprovalRule onHostA = ToolApprovalRule.forTool("weather", "mcp-server-a");
+
+    assertThat(
+            onHostA.matches(new ToolApprovalContext("weather", JsonObject.empty(), "mcp-server-a")))
+        .isTrue();
+    assertThat(
+            onHostA.matches(new ToolApprovalContext("weather", JsonObject.empty(), "mcp-server-b")))
+        .isFalse();
+    assertThat(onHostA.matches(new ToolApprovalContext("weather", JsonObject.empty(), null)))
+        .isFalse();
+    assertThat(
+            onHostA.matches(new ToolApprovalContext("search", JsonObject.empty(), "mcp-server-a")))
+        .isFalse();
+    assertThat(
+            ToolApprovalRule.forTool("weather")
+                .matches(new ToolApprovalContext("weather", JsonObject.empty(), "mcp-server-a")))
+        .isFalse();
+  }
+
+  @Test
+  void settingsRequireApprovalByDefaultAndConsultThePolicyOnlyWithoutAStandingRule() {
+    ToolApprovalContext context = new ToolApprovalContext("weather", JsonObject.empty(), null);
+    assertThat(ToolApprovalSettings.builder().build().evaluate(context))
+        .isEqualTo(ToolApprovalDecision.REQUIRE_APPROVAL);
+
+    int[] evaluations = new int[1];
+    ToolApprovalSettings settings =
+        ToolApprovalSettings.builder()
+            .standingApproval(ToolApprovalRule.forTool("weather"))
+            .policy(
+                ignored -> {
+                  evaluations[0]++;
+                  return ToolApprovalDecision.DENY;
+                })
+            .build();
+
+    assertThat(settings.evaluate(context)).isEqualTo(ToolApprovalDecision.APPROVE);
+    assertThat(evaluations[0]).isZero();
+    assertThat(settings.evaluate(new ToolApprovalContext("search", JsonObject.empty(), null)))
+        .isEqualTo(ToolApprovalDecision.DENY);
+    assertThat(evaluations[0]).isEqualTo(1);
+  }
+
+  @Test
+  void settingsCarryABoundedAutomaticApprovalAllowanceAndAHostBoundarySeam() {
+    assertThat(ToolApprovalSettings.builder().build().maxAutomaticApprovals())
+        .isEqualTo(ToolApprovalSettings.DEFAULT_MAX_AUTOMATIC_APPROVALS);
+    assertThat(
+            ToolApprovalSettings.builder().maxAutomaticApprovals(0).build().maxAutomaticApprovals())
+        .isZero();
+    assertThatThrownBy(() -> ToolApprovalSettings.builder().maxAutomaticApprovals(-1))
+        .isInstanceOf(IllegalArgumentException.class);
+
+    ToolCallContent call = new ToolCallContent("call-1", "weather", JsonObject.empty());
+    assertThat(ToolApprovalSettings.builder().build().hostBoundary(call)).isNull();
+    assertThat(
+            ToolApprovalSettings.builder()
+                .hostBoundaryResolver(ignored -> "mcp-server-a")
+                .build()
+                .hostBoundary(call))
+        .isEqualTo("mcp-server-a");
   }
 
   private static JsonObject jsonObject(Map<String, ?> values) {
