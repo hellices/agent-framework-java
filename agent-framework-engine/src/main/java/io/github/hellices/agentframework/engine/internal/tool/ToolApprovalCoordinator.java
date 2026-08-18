@@ -164,23 +164,24 @@ public final class ToolApprovalCoordinator {
   /**
    * Applies the configured evaluation order and the automatic-approval bound.
    *
-   * <p>{@link ToolApprovalSettings#evaluate(ToolApprovalContext)} alone owns TOOL-021's fixed
-   * precedence — a matching standing approval always wins and the policy is never consulted when
-   * one matches — so this coordinator asks it first rather than re-deriving that precedence itself
-   * ahead of the call. A standing approval is the caller's own decision and is neither counted nor
-   * capped, so once {@code evaluate} approves, {@link
-   * ToolApprovalSettings#matchesStandingApproval(ToolApprovalContext)} is consulted a second time
-   * only to tell a standing approval apart from a policy approval for the automatic-approval count:
-   * only a policy approval is automatic in the sense TOOL-021 bounds, so once this run has spent
-   * its allowance the next such call is surfaced instead — which is what stops an
-   * approve-everything policy from driving an unbounded internal re-invocation chain.
+   * <p>{@link ToolApprovalSettings#evaluateWithOrigin(ToolApprovalContext)} alone owns TOOL-021's
+   * fixed precedence — a matching standing approval always wins and the policy is never consulted
+   * when one matches — so this coordinator asks it once rather than re-deriving that precedence
+   * itself, or scanning the standing rules a second time to reclassify a decision it already has. A
+   * standing approval is the caller's own decision and is neither counted nor capped, so the
+   * evaluation's {@link ToolApprovalSettings.Evaluation.Origin#STANDING_APPROVAL} tells this
+   * coordinator to approve without spending the automatic-approval budget; only an {@link
+   * ToolApprovalSettings.Evaluation.Origin#POLICY} approval is automatic in the sense TOOL-021
+   * bounds, so once this run has spent its allowance the next such call is surfaced instead — which
+   * is what stops an approve-everything policy from driving an unbounded internal re-invocation
+   * chain.
    */
   private ToolApprovalDecision decide(ToolApprovalContext context) {
-    ToolApprovalDecision decision = settings.evaluate(context);
-    if (decision != ToolApprovalDecision.APPROVE) {
-      return decision;
+    ToolApprovalSettings.Evaluation evaluation = settings.evaluateWithOrigin(context);
+    if (evaluation.decision() != ToolApprovalDecision.APPROVE) {
+      return evaluation.decision();
     }
-    if (settings.matchesStandingApproval(context)) {
+    if (evaluation.origin() == ToolApprovalSettings.Evaluation.Origin.STANDING_APPROVAL) {
       return ToolApprovalDecision.APPROVE;
     }
     return tryConsumeAutomaticApproval()

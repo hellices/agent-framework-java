@@ -390,6 +390,17 @@ class AgentEngineRunParityTest {
     assertThat(ordinaryWaiting.userInputRequests()).hasSize(1);
     assertThat(streamingWaiting.userInputRequests().get(0).toolName())
         .isEqualTo(ordinaryWaiting.userInputRequests().get(0).toolName());
+    // IM-1 (re-review): the two views must also agree on how the response's own messageId is
+    // derived, not just on messages and the typed waiting surface — a null-vs-derived-id
+    // divergence here would be invisible to every other assertion above. Ordinary and streaming
+    // are two independent runs here (separate agents, separate stores), so each mints its own
+    // random approval requestId and the two ids are not literally the same string; what must be
+    // equal is the *derivation*, so each view's messageId is asserted against its own
+    // userInputRequests() id rather than against the other view's.
+    assertThat(ordinaryWaiting.messageId())
+        .isEqualTo("tool-approval:" + ordinaryWaiting.userInputRequests().get(0).requestId());
+    assertThat(streamingWaiting.messageId())
+        .isEqualTo("tool-approval:" + streamingWaiting.userInputRequests().get(0).requestId());
 
     AgentRunRequest ordinaryResume =
         approvalResumeRequest(
@@ -464,6 +475,7 @@ class AgentEngineRunParityTest {
     assertThat(streaming.finishReason()).isEqualTo(ordinary.finishReason());
     assertThat(streaming.usage()).isEqualTo(ordinary.usage());
     assertThat(streaming.continuationToken()).isEqualTo(ordinary.continuationToken());
+    assertThat(streaming.messageId()).isEqualTo(ordinary.messageId());
   }
 
   private AgentResponse ordinary(ModelClient client, FunctionTool... tools) {

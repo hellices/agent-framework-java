@@ -24,6 +24,7 @@ public final class AgentResponseUpdate {
   private final Usage usage;
   private final JsonObject additionalProperties;
   private final transient Object rawRepresentation;
+  private final List<ToolApprovalRequestContent> userInputRequests;
 
   private AgentResponseUpdate(Builder builder) {
     this.agentId = Objects.requireNonNull(builder.agentId, "agentId must not be null");
@@ -38,6 +39,7 @@ public final class AgentResponseUpdate {
     this.additionalProperties =
         builder.additionalProperties == null ? JsonObject.empty() : builder.additionalProperties;
     this.rawRepresentation = builder.rawRepresentation;
+    this.userInputRequests = collectUserInputRequests(this.messages);
   }
 
   public static Builder builder() {
@@ -120,18 +122,13 @@ public final class AgentResponseUpdate {
    * assembled response's {@code userInputRequests()} agrees with what the updates that built it
    * already reported.
    *
+   * <p>Computed once when this update is built and returned as the same list on every call, rather
+   * than rescanned from {@link #messages()} each time (MI-2).
+   *
    * @return an immutable, possibly empty list of pending approval requests, never {@code null}
    */
   public List<ToolApprovalRequestContent> userInputRequests() {
-    List<ToolApprovalRequestContent> requests = new ArrayList<>();
-    for (Message message : messages) {
-      for (Content content : message.content()) {
-        if (content instanceof ToolApprovalRequestContent request) {
-          requests.add(request);
-        }
-      }
-    }
-    return List.copyOf(requests);
+    return List.copyOf(userInputRequests);
   }
 
   @Override
@@ -245,5 +242,17 @@ public final class AgentResponseUpdate {
     public AgentResponseUpdate build() {
       return new AgentResponseUpdate(this);
     }
+  }
+
+  private static List<ToolApprovalRequestContent> collectUserInputRequests(List<Message> messages) {
+    List<ToolApprovalRequestContent> requests = new ArrayList<>();
+    for (Message message : messages) {
+      for (Content content : message.content()) {
+        if (content instanceof ToolApprovalRequestContent request) {
+          requests.add(request);
+        }
+      }
+    }
+    return List.copyOf(requests);
   }
 }

@@ -114,6 +114,33 @@ class AgentResponseAssemblyTest {
   }
 
   @Test
+  void userInputRequestsIsCachedRatherThanRecomputedOnEveryCall() {
+    // MI-2 (re-review): both accessors previously rescanned every message and every content item
+    // on each invocation and allocated a fresh list; caching the derived list at construction means
+    // two calls on the same immutable response return the identical list instance.
+    ToolApprovalRequestContent request =
+        new ToolApprovalRequestContent("req-1", "call-1", "weather", JsonObject.empty(), null);
+    AgentResponse response =
+        AgentResponse.builder()
+            .agentId("agent-1")
+            .responseId("response-1")
+            .messages(List.of(new Message(Role.ASSISTANT, List.of(request))))
+            .finishReason(FinishReason.STOP)
+            .build();
+
+    assertThat(response.userInputRequests()).isSameAs(response.userInputRequests());
+  }
+
+  @Test
+  void updateUserInputRequestsIsCachedRatherThanRecomputedOnEveryCall() {
+    ToolApprovalRequestContent request =
+        new ToolApprovalRequestContent("req-1", "call-1", "weather", JsonObject.empty(), null);
+    AgentResponseUpdate update = update(new Message(Role.ASSISTANT, List.of(request)));
+
+    assertThat(update.userInputRequests()).isSameAs(update.userInputRequests());
+  }
+
+  @Test
   void responseAndUpdateBuildersRoundTripAndReassembleTypedMetadata() {
     JsonObject responseMetadata =
         JsonObject.builder().put("provider", JsonString.of("test")).build();

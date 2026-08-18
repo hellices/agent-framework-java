@@ -194,6 +194,65 @@ class AgentEngineToolApprovalTest {
   }
 
   @Test
+  void
+      aBatchMixingAnExecutableApprovalRequiredCallAndAnUndeclaredCallFailsClosedBeforeAnyToolRuns() {
+    // CR-1 (re-review): "weather" is declared, bound, and would require approval; "ghost" is
+    // undeclared. The model orders the executable call first — exactly the order that let
+    // RunPipeline's fallback route (taken because canExecuteAll(calls) is false once "ghost" is in
+    // the batch) execute "weather" through the sequential executeToolCalls path before it reached
+    // and failed on "ghost". An approval-required tool body ran with no approval request ever
+    // surfaced or persisted. The whole batch must fail before either call is touched, regardless of
+    // call order.
+    ApprovalFixture fixture =
+        new ApprovalFixture(
+            requireApproval(),
+            List.of(
+                modelResponse(
+                    new Message(
+                        Role.ASSISTANT,
+                        List.of(
+                            new ToolCallContent(
+                                "call-1", "weather", jsonObject(Map.of("city", "Seoul"))),
+                            new ToolCallContent("call-2", "ghost", JsonObject.empty()))),
+                    FinishReason.TOOL_CALLS)),
+            "weather");
+
+    assertThatThrownBy(() -> fixture.run("session-mixed-undeclared", userText("hi")))
+        .rootCause()
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessage("unknown tool call: ghost");
+
+    assertThat(fixture.invocations).isEmpty();
+    assertThat(fixture.store.saved).isEmpty();
+  }
+
+  @Test
+  void
+      aBatchMixingAnExecutableApprovalRequiredCallAndAnUndeclaredCallFailsClosedBeforeAnyToolRunsOnAStreamingRunToo() {
+    ApprovalFixture fixture =
+        new ApprovalFixture(
+            requireApproval(),
+            List.of(
+                modelResponse(
+                    new Message(
+                        Role.ASSISTANT,
+                        List.of(
+                            new ToolCallContent(
+                                "call-1", "weather", jsonObject(Map.of("city", "Seoul"))),
+                            new ToolCallContent("call-2", "ghost", JsonObject.empty()))),
+                    FinishReason.TOOL_CALLS)),
+            "weather");
+
+    assertThatThrownBy(() -> fixture.stream("session-mixed-undeclared-streaming", userText("hi")))
+        .rootCause()
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessage("unknown tool call: ghost");
+
+    assertThat(fixture.invocations).isEmpty();
+    assertThat(fixture.store.saved).isEmpty();
+  }
+
+  @Test
   void anApprovedResponseExecutesThePersistedCallAndResumesTheLoop() {
     ApprovalFixture fixture =
         new ApprovalFixture(
@@ -254,6 +313,33 @@ class AgentEngineToolApprovalTest {
     AgentResponse resumed =
         fixture.run(
             "session-approval-4",
+            new Message(
+                Role.USER,
+                List.of(
+                    ToolApprovalResponseContent.approve(requestId),
+                    new ToolCallContent(
+                        "call-1", "danger", jsonObject(Map.of("city", "Pyongyang"))))));
+
+    assertThat(fixture.invocations).containsExactly(invocation("weather", Map.of("city", "Seoul")));
+    assertThat(toolResults(resumed)).containsExactly("call-1:weather:false:[weather-ran]");
+  }
+
+  @Test
+  void
+      anApprovalResponseRebindsToThePersistedRequestRatherThanCallerSuppliedContentOnAStreamingRunToo() {
+    // MI-3 (re-review): the ordinary-only version of this test left the streaming path unproven
+    // that a substituted/unknown caller-supplied payload never displaces the persisted call
+    // identity and arguments that the tool actually executes with.
+    ApprovalFixture fixture =
+        new ApprovalFixture(
+            requireApproval(), List.of(weatherCall(), textResponse("It is sunny")), "weather");
+    String requestId =
+        onlyApprovalRequest(fixture.stream("session-approval-4-streaming", userText("hi")))
+            .requestId();
+
+    AgentResponse resumed =
+        fixture.stream(
+            "session-approval-4-streaming",
             new Message(
                 Role.USER,
                 List.of(
@@ -569,6 +655,58 @@ class AgentEngineToolApprovalTest {
     ToolApprovalRequestContent request = onlyApprovalRequest(response);
     assertThat(request.toolCallId()).isEqualTo("call-2");
     assertThat(fixture.modelCalls).hasValue(2);
+  }
+
+  @Test
+  void aStandingApprovalDoesNotCountAgainstTheAutomaticApprovalCapButAPolicyApprovalDoes() {
+    // MI-5 (re-review): pins TOOL-021's precedence and cap classification directly — a matching
+    // standing approval is the caller's own decision and must never be counted or capped, while a
+    // policy approval is what maxAutomaticApprovals(1) bounds. Also exercises
+    // ToolApprovalCoordinator.decide() without relying on a second scan of the standing rules to
+    // classify the origin of an APPROVE, which is what MI-5's refactor eliminates.
+    ApprovalFixture fixture =
+        new ApprovalFixture(
+            ToolApprovalSettings.builder()
+                .standingApproval(ToolApprovalRule.forTool("weather"))
+                .policy(context -> ToolApprovalDecision.APPROVE)
+                .maxAutomaticApprovals(1)
+                .build(),
+            List.of(
+                modelResponse(
+                    new Message(
+                        Role.ASSISTANT,
+                        List.of(
+                            new ToolCallContent(
+                                "call-1", "weather", jsonObject(Map.of("city", "Seoul"))),
+                            new ToolCallContent(
+                                "call-2", "search", jsonObject(Map.of("query", "news1"))),
+                            new ToolCallContent(
+                                "call-3", "search", jsonObject(Map.of("query", "news2"))))),
+                    FinishReason.TOOL_CALLS),
+                textResponse("all done")),
+            "weather",
+            "search");
+
+    AgentResponse waiting = fixture.run("session-cap-mixed", userText("hi"));
+
+    // Nothing has executed yet: TOOL-020 holds the whole batch until its last decision, and the
+    // third call is the one that lost the cap race, not the second.
+    assertThat(fixture.invocations).isEmpty();
+    ToolApprovalRequestContent surfaced = onlyApprovalRequest(waiting);
+    assertThat(surfaced.toolCallId()).isEqualTo("call-3");
+
+    AgentResponse resumed =
+        fixture.run("session-cap-mixed", approvalResponse(surfaced.requestId(), true));
+
+    // Once the caller resolves the last entry, every decided call executes in the model's order:
+    // the standing-approved weather call and both search calls, proving the standing approval
+    // never competed with the search calls for the single automatic-approval slot.
+    assertThat(fixture.invocations)
+        .containsExactly(
+            invocation("weather", Map.of("city", "Seoul")),
+            invocation("search", Map.of("query", "news1")),
+            invocation("search", Map.of("query", "news2")));
+    assertThat(resumed.text()).isEqualTo("all done");
   }
 
   @Test

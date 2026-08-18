@@ -90,6 +90,37 @@ public record ResponseIdentity(
         .build();
   }
 
+  /**
+   * The {@code messageId} an assembled response's terminal message carries, derived the same way
+   * regardless of whether that response was assembled from updates (a streaming run, or an ordinary
+   * run reconstructed from a transformed update stream) or read directly from a run's accumulated
+   * ordinary messages (an ordinary pass-through run) (IM-1).
+   *
+   * <p>This is the single place that derivation happens; callers on either path pass their
+   * response's own terminal messages here rather than each re-deriving or special-casing an
+   * approval message themselves; {@link
+   * io.github.hellices.agentframework.api.agent.AgentResponse#fromUpdates} in particular stays
+   * generic and never inspects message content for this, since a streaming run's messageId already
+   * reaches it through {@link #approvalRequestUpdate}'s update.
+   *
+   * <p>Today the only message either path ever mints an id for is the approval-wait message, and a
+   * run ends the instant it queues one, so at most one message in the whole list ever carries one;
+   * every other terminal message yields {@code null} here, exactly as it already does through
+   * {@code fromUpdates}.
+   *
+   * @param messages the response's own messages, in order
+   * @return the derived id, or {@code null} when none of {@code messages} is an approval request
+   */
+  public static String terminalMessageId(List<Message> messages) {
+    for (Message message : messages) {
+      String id = approvalMessageId(message);
+      if (id != null) {
+        return id;
+      }
+    }
+    return null;
+  }
+
   private static String approvalMessageId(Message message) {
     for (Content content : message.content()) {
       if (content instanceof ToolApprovalRequestContent request) {

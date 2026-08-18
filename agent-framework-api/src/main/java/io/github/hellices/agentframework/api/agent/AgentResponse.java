@@ -28,6 +28,7 @@ public final class AgentResponse {
   private final Usage usage;
   private final JsonObject additionalProperties;
   private final transient Object rawRepresentation;
+  private final List<ToolApprovalRequestContent> userInputRequests;
 
   private AgentResponse(Builder builder) {
     this.agentId = Objects.requireNonNull(builder.agentId, "agentId must not be null");
@@ -42,6 +43,7 @@ public final class AgentResponse {
     this.additionalProperties =
         builder.additionalProperties == null ? JsonObject.empty() : builder.additionalProperties;
     this.rawRepresentation = builder.rawRepresentation;
+    this.userInputRequests = collectUserInputRequests(this.messages);
   }
 
   public static Builder builder() {
@@ -116,26 +118,24 @@ public final class AgentResponse {
   }
 
   /**
-   * The pending tool-approval requests this response is waiting on (TOOL-016 AC-3), gathered from
-   * {@link #messages()} in order.
+   * Every {@link ToolApprovalRequestContent} carried by this response's {@link #messages()}, in
+   * order (TOOL-016 AC-3).
    *
-   * <p>A request stays a user-input-request until a matching {@link
-   * io.github.hellices.agentframework.api.message.ToolApprovalResponseContent} resolves it; a
-   * response never appears here, so this list surfaces only what still needs a caller decision,
-   * without a caller having to scan concrete message content to discover it.
+   * <p>This response type does not correlate a request with whatever {@link
+   * io.github.hellices.agentframework.api.message.ToolApprovalResponseContent} may also be present
+   * in {@link #messages()} — the engine never assembles both into one response, so today every
+   * entry here is in fact still unresolved, but that is a property of how the engine builds a
+   * response, not a filter this accessor applies. A caller that constructs its own {@code
+   * AgentResponse} containing both kinds of content will get every request back regardless of
+   * whether a matching response is also present.
    *
-   * @return an immutable, possibly empty list of pending approval requests, never {@code null}
+   * <p>Computed once when this response is built and returned as the same list on every call,
+   * rather than rescanned from {@link #messages()} each time (MI-2).
+   *
+   * @return an immutable, possibly empty list of approval requests, never {@code null}
    */
   public List<ToolApprovalRequestContent> userInputRequests() {
-    List<ToolApprovalRequestContent> requests = new ArrayList<>();
-    for (Message message : messages) {
-      for (Content content : message.content()) {
-        if (content instanceof ToolApprovalRequestContent request) {
-          requests.add(request);
-        }
-      }
-    }
-    return List.copyOf(requests);
+    return List.copyOf(userInputRequests);
   }
 
   public static AgentResponse fromUpdates(List<AgentResponseUpdate> updates) {
@@ -414,5 +414,17 @@ public final class AgentResponse {
 
   private static List<Message> immutableMessages(List<? extends Message> source) {
     return source == null ? List.of() : List.copyOf(source);
+  }
+
+  private static List<ToolApprovalRequestContent> collectUserInputRequests(List<Message> messages) {
+    List<ToolApprovalRequestContent> requests = new ArrayList<>();
+    for (Message message : messages) {
+      for (Content content : message.content()) {
+        if (content instanceof ToolApprovalRequestContent request) {
+          requests.add(request);
+        }
+      }
+    }
+    return List.copyOf(requests);
   }
 }

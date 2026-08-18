@@ -87,11 +87,78 @@ public final class ToolApprovalSettings {
    * the heuristic policy is consulted.
    */
   public ToolApprovalDecision evaluate(ToolApprovalContext context) {
+    return evaluateWithOrigin(context).decision();
+  }
+
+  /**
+   * The decision for the pending call {@code context} describes, together with which rule produced
+   * it (TOOL-021).
+   *
+   * <p>This is the one place that implements the fixed precedence order: a matching standing
+   * approval decides {@code context} and the policy is never consulted, otherwise the policy
+   * decides. {@link #evaluate(ToolApprovalContext)} is defined in terms of this method rather than
+   * duplicating the ordering, and a caller that also needs to tell a standing approval apart from a
+   * policy approval — such as one enforcing {@link #maxAutomaticApprovals()} only against policy
+   * approvals — can read {@link Evaluation#origin()} from a single evaluation instead of scanning
+   * {@link #matchesStandingApproval(ToolApprovalContext)} a second time to reclassify a decision it
+   * already obtained.
+   */
+  public Evaluation evaluateWithOrigin(ToolApprovalContext context) {
+    Objects.requireNonNull(context, "context must not be null");
     if (matchesStandingApproval(context)) {
-      return ToolApprovalDecision.APPROVE;
+      return new Evaluation(ToolApprovalDecision.APPROVE, Evaluation.Origin.STANDING_APPROVAL);
     }
     ToolApprovalDecision decision = policy.evaluate(context);
-    return decision == null ? ToolApprovalDecision.REQUIRE_APPROVAL : decision;
+    decision = decision == null ? ToolApprovalDecision.REQUIRE_APPROVAL : decision;
+    return new Evaluation(decision, Evaluation.Origin.POLICY);
+  }
+
+  /**
+   * A decision from {@link #evaluateWithOrigin(ToolApprovalContext)} together with which rule
+   * produced it.
+   */
+  public static final class Evaluation {
+
+    private final ToolApprovalDecision decision;
+    private final Origin origin;
+
+    private Evaluation(ToolApprovalDecision decision, Origin origin) {
+      this.decision = Objects.requireNonNull(decision, "decision must not be null");
+      this.origin = Objects.requireNonNull(origin, "origin must not be null");
+    }
+
+    /** The decision {@link #evaluate(ToolApprovalContext)} would also return. */
+    public ToolApprovalDecision decision() {
+      return decision;
+    }
+
+    /** Which rule produced {@link #decision()}. */
+    public Origin origin() {
+      return origin;
+    }
+
+    @Override
+    public boolean equals(Object other) {
+      return other instanceof Evaluation that && decision == that.decision && origin == that.origin;
+    }
+
+    @Override
+    public int hashCode() {
+      return Objects.hash(decision, origin);
+    }
+
+    @Override
+    public String toString() {
+      return "Evaluation[decision=" + decision + ", origin=" + origin + "]";
+    }
+
+    /** Which rule in the fixed TOOL-021 precedence order produced an {@link Evaluation}. */
+    public enum Origin {
+      /** A matching standing approval decided the call; the policy was not consulted. */
+      STANDING_APPROVAL,
+      /** No standing approval matched, so the heuristic policy decided the call. */
+      POLICY
+    }
   }
 
   public static final class Builder {

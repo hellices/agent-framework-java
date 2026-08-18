@@ -254,6 +254,7 @@ public final class AgentEngine {
                       identity.responseId(),
                       identity.authorName(),
                       identity.createdAt(),
+                      ResponseIdentity.terminalMessageId(model.messages()),
                       model))
           .thenCompose(
               agentResponse -> completeRun(binding, sessionContext, execution, agentResponse));

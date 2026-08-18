@@ -105,8 +105,8 @@ public final class ToolLoopPolicy {
    *
    * <p>This is what separates a declaration-only call, which the model was invited to make and
    * which ends the run without local execution (TOOL-006), from a call to a tool that was never
-   * declared and so never offered. The latter is a broken response, so the loops let it reach
-   * execution and fail with the existing safe error rather than ending the run on it.
+   * declared and so never offered — the latter always fails the whole batch through {@link
+   * #requireAllDeclared(List)} before either kind of call is acted on.
    */
   public boolean declaresAll(List<ToolCallContent> calls) {
     for (ToolCallContent call : calls) {
@@ -115,6 +115,30 @@ public final class ToolLoopPolicy {
       }
     }
     return true;
+  }
+
+  /**
+   * Fails the run before anything in {@code calls} executes, is planned for approval, or is
+   * persisted, when any call names a tool this agent never declared to the model (CR-1).
+   *
+   * <p>A batch's calls are never acted on one at a time in isolation: a batch that mixes an
+   * executable call with an undeclared one must fail as a whole, before the executable call's body
+   * runs and before an approval-required sibling is ever queued, so a malformed model response
+   * cannot let one of its own calls bypass the same gate its siblings would otherwise face. This is
+   * checked ahead of both {@link #canExecuteAll} and {@link #declaresAll} deciding the batch's
+   * route — including the approval-planning route — rather than being left to {@link
+   * #executeToolCalls}, whose per-call, in-order execution would otherwise run every executable
+   * call ahead of the undeclared one it eventually fails on.
+   *
+   * @throws IllegalStateException naming the first undeclared call, in the model's own order, when
+   *     {@link #declaresAll(List)} is false for {@code calls}
+   */
+  public void requireAllDeclared(List<ToolCallContent> calls) {
+    for (ToolCallContent call : calls) {
+      if (!isDeclared(call.name())) {
+        throw new IllegalStateException("unknown tool call: " + call.name());
+      }
+    }
   }
 
   private boolean isDeclared(String name) {

@@ -205,6 +205,31 @@ class ToolApprovalContractTest {
   }
 
   @Test
+  void evaluateWithOriginTellsAStandingApprovalApartFromAPolicyDecisionInOneScan() {
+    // MI-5 (re-review): evaluateWithOrigin is the single source of TOOL-021 precedence and origin
+    // classification; evaluate(context) must keep agreeing with it exactly.
+    ToolApprovalContext standingContext =
+        new ToolApprovalContext("weather", JsonObject.empty(), null);
+    ToolApprovalContext policyContext = new ToolApprovalContext("search", JsonObject.empty(), null);
+    ToolApprovalSettings settings =
+        ToolApprovalSettings.builder()
+            .standingApproval(ToolApprovalRule.forTool("weather"))
+            .policy(ignored -> ToolApprovalDecision.APPROVE)
+            .build();
+
+    ToolApprovalSettings.Evaluation standing = settings.evaluateWithOrigin(standingContext);
+    assertThat(standing.decision()).isEqualTo(ToolApprovalDecision.APPROVE);
+    assertThat(standing.origin())
+        .isEqualTo(ToolApprovalSettings.Evaluation.Origin.STANDING_APPROVAL);
+    assertThat(standing.decision()).isEqualTo(settings.evaluate(standingContext));
+
+    ToolApprovalSettings.Evaluation policyDriven = settings.evaluateWithOrigin(policyContext);
+    assertThat(policyDriven.decision()).isEqualTo(ToolApprovalDecision.APPROVE);
+    assertThat(policyDriven.origin()).isEqualTo(ToolApprovalSettings.Evaluation.Origin.POLICY);
+    assertThat(policyDriven.decision()).isEqualTo(settings.evaluate(policyContext));
+  }
+
+  @Test
   void settingsCarryABoundedAutomaticApprovalAllowanceAndAHostBoundarySeam() {
     assertThat(ToolApprovalSettings.builder().build().maxAutomaticApprovals())
         .isEqualTo(ToolApprovalSettings.DEFAULT_MAX_AUTOMATIC_APPROVALS);

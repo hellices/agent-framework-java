@@ -12,11 +12,17 @@ public final class ModelResponseMapper {
 
   private ModelResponseMapper() {}
 
+  /**
+   * @param messageId the response's own {@code messageId}, derived once by the caller (see {@link
+   *     ResponseIdentity#terminalMessageId(java.util.List)}) rather than here, since {@code
+   *     ModelResponse} is the provider-facing shape and carries no such id itself
+   */
   public static AgentResponse toAgentResponse(
       String agentId,
       String responseId,
       String authorName,
       Instant createdAt,
+      String messageId,
       ModelResponse response) {
     ModelResponse value = Objects.requireNonNull(response, "model response must not be null");
     return AgentResponse.builder()
@@ -24,6 +30,7 @@ public final class ModelResponseMapper {
         .responseId(responseId)
         .authorName(authorName)
         .createdAt(createdAt)
+        .messageId(messageId)
         .finishReason(value.finishReason())
         .continuationToken(value.continuationToken())
         .messages(value.messages())

@@ -80,13 +80,15 @@ import java.util.function.Supplier;
  *       buffered around.
  *   <li><b>Tools</b> — when the model call completes, its accumulated response decides the run:
  *       without tool calls the loop is finished, the call's metadata is queued as the stream's last
- *       update and the stream completes; with tool calls the shared {@link ToolLoopPolicy}
- *       validates the budget and, when every call is executable and approvals are configured, plans
- *       the batch against the approval coordinator instead of executing directly — moving the run
- *       to {@link RunPhase#WAIT_APPROVAL} exactly as above when a call in the batch is unresolved.
- *       A call to an undeclared tool is never handed to the approval coordinator regardless of
- *       configuration: it always executes and fails with the same safe error tool execution has
- *       always reported.
+ *       update and the stream completes; with tool calls the shared {@link ToolLoopPolicy} first
+ *       validates the budget and requires every call to name a declared tool, failing the whole
+ *       batch before anything in it is touched when one does not (CR-1) — a call to an undeclared
+ *       tool is never handed to the approval coordinator and never reaches execution, regardless of
+ *       configuration or of where in the batch it sits, so an executable sibling can never run
+ *       ahead of it. Once every call is confirmed declared, a batch where every call is also
+ *       executable plans against the approval coordinator instead of executing directly when
+ *       approvals are configured — moving the run to {@link RunPhase#WAIT_APPROVAL} exactly as
+ *       above when a call in the batch is unresolved.
  *   <li><b>Results</b> — each tool result is queued as its own update and emitted under downstream
  *       demand, in call order. The next iteration starts only after the last of them was delivered,
  *       so the model never sees a request whose results the subscriber has not seen yet.
@@ -495,6 +497,11 @@ public final class RunPipeline implements Flow.Publisher<AgentResponseUpdate> {
           throw new CancellationException("run was cancelled");
         }
         policy.requireIterationBudget(index);
+        // A call to a tool this agent never declared is a broken model response regardless of what
+        // else the batch contains: it must fail the whole batch here, before a declaration-only
+        // check, an approval decision, or any tool body — not after an executable sibling has
+        // already run through executeToolCalls' sequential, in-order execution (CR-1).
+        policy.requireAllDeclared(calls);
         if (!policy.canExecuteAll(calls) && policy.declaresAll(calls)) {
           // A declaration-only tool was invoked: it is declared and offered to the model but has
           // no local body, so the run ends with the reassembled response — whose tool-call updates
@@ -518,11 +525,10 @@ public final class RunPipeline implements Flow.Publisher<AgentResponseUpdate> {
           results =
               policy.executeDecidedToolCalls(plan.decided().orElseThrow(), request, toolInvoker);
         } else {
-          // Either approvals are not configured, or a call to an undeclared tool is present: that
-          // call can never run regardless of approval, so it must fail closed through the ordinary
-          // execution path's existing safe error (I-2) rather than reach queue planning or
-          // persistence — an approval request must never be surfaced or persisted for a tool call
-          // that cannot execute.
+          // Approvals are not configured for this run: every call in the batch was already
+          // confirmed declared and executable-or-declaration-only above, so this is the ordinary,
+          // approval-free execution path (I-2's fail-closed guarantee is enforced earlier by
+          // requireAllDeclared, not by this branch).
           advance(RunPhase.EXECUTE_TOOL_BATCH);
           results = policy.executeToolCalls(calls, request, toolInvoker);
         }
