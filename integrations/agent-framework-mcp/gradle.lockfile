@@ -2,9 +2,9 @@
 # Manual edits can break the build and are not advised.
 # This file is expected to be part of source control.
 # To regenerate this file, run: ./gradlew :integrations:agent-framework-mcp:dependencies --write-locks
-com.fasterxml.jackson.core:jackson-annotations:2.20=compileClasspath,runtimeClasspath,testCompileClasspath,testRuntimeClasspath
-io.modelcontextprotocol.sdk:mcp-bom:2.0.0=compileClasspath,runtimeClasspath,testCompileClasspath,testRuntimeClasspath
-io.modelcontextprotocol.sdk:mcp-core:2.0.0=compileClasspath,runtimeClasspath,testCompileClasspath,testRuntimeClasspath
+com.fasterxml.jackson.core:jackson-annotations:2.21=compileClasspath,runtimeClasspath,testCompileClasspath,testRuntimeClasspath
+io.modelcontextprotocol.sdk:mcp-bom:2.0.1=compileClasspath,runtimeClasspath,testCompileClasspath,testRuntimeClasspath
+io.modelcontextprotocol.sdk:mcp-core:2.0.1=compileClasspath,runtimeClasspath,testCompileClasspath,testRuntimeClasspath
 io.projectreactor:reactor-core:3.7.0=compileClasspath,runtimeClasspath,testCompileClasspath,testRuntimeClasspath
 net.bytebuddy:byte-buddy:1.18.3=testCompileClasspath,testRuntimeClasspath
 org.apiguardian:apiguardian-api:1.1.2=testCompileClasspath
