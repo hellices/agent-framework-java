@@ -4,10 +4,10 @@
 # To regenerate this file, run: ./gradlew :build-tools:harness-policy:dependencies --write-locks
 com.ethlo.time:itu:1.14.0=testCompileClasspath,testRuntimeClasspath
 com.fasterxml.jackson.core:jackson-annotations:2.22=testCompileClasspath,testRuntimeClasspath
-com.fasterxml.jackson.core:jackson-core:2.22.1=testCompileClasspath,testRuntimeClasspath
-com.fasterxml.jackson.core:jackson-databind:2.22.1=testCompileClasspath,testRuntimeClasspath
-com.fasterxml.jackson.dataformat:jackson-dataformat-yaml:2.22.1=testCompileClasspath,testRuntimeClasspath
-com.fasterxml.jackson:jackson-bom:2.22.1=testCompileClasspath,testRuntimeClasspath
+com.fasterxml.jackson.core:jackson-core:2.22.2=testCompileClasspath,testRuntimeClasspath
+com.fasterxml.jackson.core:jackson-databind:2.22.2=testCompileClasspath,testRuntimeClasspath
+com.fasterxml.jackson.dataformat:jackson-dataformat-yaml:2.22.2=testCompileClasspath,testRuntimeClasspath
+com.fasterxml.jackson:jackson-bom:2.22.2=testCompileClasspath,testRuntimeClasspath
 com.networknt:json-schema-validator:3.0.6=testCompileClasspath,testRuntimeClasspath
 net.bytebuddy:byte-buddy:1.18.3=testCompileClasspath,testRuntimeClasspath
 org.apiguardian:apiguardian-api:1.1.2=testCompileClasspath
