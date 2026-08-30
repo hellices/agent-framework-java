@@ -3,12 +3,12 @@
 # This file is expected to be part of source control.
 # To regenerate this file, run: ./gradlew :providers:agent-framework-openai:dependencies --write-locks
 com.fasterxml.jackson.core:jackson-annotations:2.22=compileClasspath,runtimeClasspath,testCompileClasspath,testRuntimeClasspath
-com.fasterxml.jackson.core:jackson-core:2.22.1=compileClasspath,runtimeClasspath,testCompileClasspath,testRuntimeClasspath
-com.fasterxml.jackson.core:jackson-databind:2.22.1=compileClasspath,runtimeClasspath,testCompileClasspath,testRuntimeClasspath
-com.fasterxml.jackson.datatype:jackson-datatype-jdk8:2.22.1=runtimeClasspath,testRuntimeClasspath
-com.fasterxml.jackson.datatype:jackson-datatype-jsr310:2.22.1=runtimeClasspath,testRuntimeClasspath
-com.fasterxml.jackson.module:jackson-module-kotlin:2.22.1=runtimeClasspath,testRuntimeClasspath
-com.fasterxml.jackson:jackson-bom:2.22.1=compileClasspath,runtimeClasspath,testCompileClasspath,testRuntimeClasspath
+com.fasterxml.jackson.core:jackson-core:2.22.2=compileClasspath,runtimeClasspath,testCompileClasspath,testRuntimeClasspath
+com.fasterxml.jackson.core:jackson-databind:2.22.2=compileClasspath,runtimeClasspath,testCompileClasspath,testRuntimeClasspath
+com.fasterxml.jackson.datatype:jackson-datatype-jdk8:2.22.2=runtimeClasspath,testRuntimeClasspath
+com.fasterxml.jackson.datatype:jackson-datatype-jsr310:2.22.2=runtimeClasspath,testRuntimeClasspath
+com.fasterxml.jackson.module:jackson-module-kotlin:2.22.2=runtimeClasspath,testRuntimeClasspath
+com.fasterxml.jackson:jackson-bom:2.22.2=compileClasspath,runtimeClasspath,testCompileClasspath,testRuntimeClasspath
 com.fasterxml:classmate:1.7.0=runtimeClasspath,testRuntimeClasspath
 com.github.victools:jsonschema-generator:4.38.0=runtimeClasspath,testRuntimeClasspath
 com.github.victools:jsonschema-module-jackson:4.38.0=runtimeClasspath,testRuntimeClasspath
